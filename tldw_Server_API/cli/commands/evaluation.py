@@ -9,16 +9,22 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any, Optional
 
 import click
 from loguru import logger
 
-from tldw_Server_API.cli.utils.output import (
-    print_error, print_success, print_info, print_evaluation_results,
-    print_json, print_table, print_progress_bar, format_timestamp
-)
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.cli.utils.output import (
+    format_timestamp,
+    print_error,
+    print_evaluation_results,
+    print_info,
+    print_json,
+    print_progress_bar,
+    print_success,
+    print_table,
+)
 
 
 @click.group()
@@ -600,7 +606,7 @@ def _load_text_content(input_str: str) -> str:
 
 
 def _run_geval_assessment(text: str, summary: str, provider: str, model: str,
-                         api_key: str, save: bool, config: Dict[str, Any]) -> Dict[str, Any]:
+                         api_key: str, save: bool, config: dict[str, Any]) -> dict[str, Any]:
     """Run G-Eval assessment."""
     try:
         from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
@@ -633,7 +639,7 @@ def _run_geval_assessment(text: str, summary: str, provider: str, model: str,
 
 
 def _run_rag_evaluation(query: str, context: str, response: str, provider: str,
-                       model: str, api_key: str, save: bool, config: Dict[str, Any]) -> Dict[str, Any]:
+                       model: str, api_key: str, save: bool, config: dict[str, Any]) -> dict[str, Any]:
     """Run RAG evaluation."""
     try:
         from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
@@ -667,8 +673,8 @@ def _run_rag_evaluation(query: str, context: str, response: str, provider: str,
 
 
 def _run_quality_evaluation(text: str, response: str, provider: str, model: str,
-                           api_key: str, criteria: Optional[List[str]], save: bool,
-                           config: Dict[str, Any]) -> Dict[str, Any]:
+                           api_key: str, criteria: Optional[list[str]], save: bool,
+                           config: dict[str, Any]) -> dict[str, Any]:
     """Run response quality evaluation."""
     try:
         from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import ResponseQualityEvaluator
@@ -702,7 +708,7 @@ def _run_quality_evaluation(text: str, response: str, provider: str, model: str,
 
 
 def _run_custom_evaluation(metric_name: str, text: str, prompt: str, provider: str,
-                          model: str, api_key: str, save: bool, config: Dict[str, Any]) -> Dict[str, Any]:
+                          model: str, api_key: str, save: bool, config: dict[str, Any]) -> dict[str, Any]:
     """Run custom metric evaluation."""
     try:
         from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
@@ -738,7 +744,7 @@ def _run_custom_evaluation(metric_name: str, text: str, prompt: str, provider: s
         raise
 
 
-def _load_batch_input(input_file: Path) -> List[Dict[str, Any]]:
+def _load_batch_input(input_file: Path) -> list[dict[str, Any]]:
     """Load batch input from file."""
     try:
         content = input_file.read_text(encoding='utf-8')
@@ -768,9 +774,9 @@ def _load_batch_input(input_file: Path) -> List[Dict[str, Any]]:
         raise click.ClickException(f"Failed to load batch input file: {e}")
 
 
-def _run_batch_evaluation(batch_data: List[Dict[str, Any]], default_provider: str,
+def _run_batch_evaluation(batch_data: list[dict[str, Any]], default_provider: str,
                          default_model: str, default_api_key: str, parallel: int,
-                         config: Dict[str, Any], show_progress: bool) -> List[Dict[str, Any]]:
+                         config: dict[str, Any], show_progress: bool) -> list[dict[str, Any]]:
     """Run batch evaluation with progress tracking."""
     results = []
 
@@ -809,7 +815,7 @@ def _run_batch_evaluation(batch_data: List[Dict[str, Any]], default_provider: st
     return results
 
 
-def _load_items_file(path: Path) -> List[Dict[str, Any]]:
+def _load_items_file(path: Path) -> list[dict[str, Any]]:
     """Load items for OCR evaluation from JSON or JSONL file."""
     try:
         content = path.read_text(encoding='utf-8')
@@ -827,8 +833,8 @@ def _load_items_file(path: Path) -> List[Dict[str, Any]]:
         raise click.ClickException(f"Failed to load items file {path}: {e}")
 
 
-def _run_single_evaluation(eval_spec: Dict[str, Any], default_provider: str,
-                          default_model: str, default_api_key: str, config: Dict[str, Any]) -> Dict[str, Any]:
+def _run_single_evaluation(eval_spec: dict[str, Any], default_provider: str,
+                          default_model: str, default_api_key: str, config: dict[str, Any]) -> dict[str, Any]:
     """Run a single evaluation from specification."""
     eval_type = eval_spec.get('type')
     provider = eval_spec.get('provider', default_provider)
@@ -860,7 +866,7 @@ def _run_single_evaluation(eval_spec: Dict[str, Any], default_provider: str,
         raise ValueError(f"Unknown evaluation type: {eval_type}")
 
 
-def _save_batch_results(results: List[Dict[str, Any]], output_file: Path):
+def _save_batch_results(results: list[dict[str, Any]], output_file: Path):
     """Save batch results to file."""
     try:
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -872,7 +878,7 @@ def _save_batch_results(results: List[Dict[str, Any]], output_file: Path):
         raise click.ClickException(f"Failed to save results to {output_file}: {e}")
 
 
-def _display_batch_summary(results: List[Dict[str, Any]]):
+def _display_batch_summary(results: list[dict[str, Any]]):
     """Display batch evaluation summary."""
     successful = sum(1 for r in results if r.get('status') != 'failed')
     failed = len(results) - successful
@@ -890,7 +896,7 @@ def _display_batch_summary(results: List[Dict[str, Any]]):
         print_info(f"Check logs for details on {failed} failed evaluation(s)")
 
 
-def _get_api_key_from_config(config: Dict[str, Any], provider: str) -> Optional[str]:
+def _get_api_key_from_config(config: dict[str, Any], provider: str) -> Optional[str]:
     """Extract API key for provider from config."""
     # This is a simplified version - in reality, you'd access the config properly
     # Based on how the main config system works
@@ -944,7 +950,7 @@ def ocr_eval(ctx, items_file, pdfs, ground_truths_file, ground_truths_pages_file
     try:
         cli_context.load_config()
 
-        items: List[Dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         if items_file:
             items = _load_items_file(items_file)
         elif pdfs:

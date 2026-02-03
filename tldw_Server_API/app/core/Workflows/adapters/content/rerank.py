@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any
 
 from loguru import logger
 
@@ -24,7 +24,7 @@ from tldw_Server_API.app.core.Workflows.adapters.content._config import RerankCo
     tags=["content", "ranking"],
     config_model=RerankConfig,
 )
-async def run_rerank_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_rerank_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Rerank documents using various scoring strategies.
 
     Config:
@@ -62,7 +62,7 @@ async def run_rerank_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
 
     # Get documents
     documents_raw = config.get("documents")
-    documents: List[Dict[str, Any]] = []
+    documents: list[dict[str, Any]] = []
 
     if documents_raw:
         # Template if it's a string reference
@@ -115,12 +115,12 @@ async def run_rerank_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
 
     try:
         from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import (
-            create_reranker,
             RerankingConfig,
             RerankingStrategy,
             ScoredDocument,
+            create_reranker,
         )
-        from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
+        from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
 
         # Map strategy string to enum
         strategy_enum_map = {
@@ -147,7 +147,7 @@ async def run_rerank_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
         )
 
         # Convert input documents to Document objects
-        doc_objects: List[Document] = []
+        doc_objects: list[Document] = []
         for i, doc in enumerate(documents):
             content = doc.get("content") or doc.get("text") or str(doc)
             doc_obj = Document(
@@ -161,7 +161,7 @@ async def run_rerank_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
 
         # Create reranker and run
         reranker = create_reranker(strategy_enum, rerank_config)
-        scored_docs: List[ScoredDocument] = await reranker.rerank(query, doc_objects)
+        scored_docs: list[ScoredDocument] = await reranker.rerank(query, doc_objects)
 
         # Convert results
         output_docs = []

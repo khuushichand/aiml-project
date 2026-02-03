@@ -3,19 +3,20 @@
 #
 # Imports
 import base64
-import secrets
-import json
 import hashlib
 import hmac
+import json
+import secrets
 import string
-from io import BytesIO
 from datetime import datetime, timezone
-from typing import Optional, List, Tuple, Dict, Any
+from io import BytesIO
+from typing import Any, Optional
+
 #
 # 3rd-party imports
 import pyotp
-from loguru import logger
 from cryptography.fernet import Fernet
+from loguru import logger
 
 try:
     import qrcode
@@ -28,15 +29,11 @@ else:
     _FALLBACK_QR_PNG = None
 #
 # Local imports
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
-from tldw_Server_API.app.core.AuthNZ.exceptions import (
-    AuthenticationError,
-    InvalidTokenError,
-    DatabaseError
-)
+from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError
 from tldw_Server_API.app.core.AuthNZ.repos.mfa_repo import AuthnzMfaRepo
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 
 _DB_POOL_NOT_INITIALIZED = "MFAService database pool not initialized"
 
@@ -68,8 +65,8 @@ class MFAService:
         self._initialized = False
         self._repo: Optional[AuthnzMfaRepo] = repo
         self._cipher: Optional[Fernet] = None
-        self._cipher_candidates: List[Fernet] = []
-        self._cipher_key_material: Tuple[bytes, ...] = tuple()
+        self._cipher_candidates: list[Fernet] = []
+        self._cipher_key_material: tuple[bytes, ...] = tuple()
 
         # TOTP configuration
         self.issuer_name = self.settings.APP_NAME if hasattr(self.settings, 'APP_NAME') else "TLDW Server"
@@ -110,13 +107,13 @@ class MFAService:
         self._repo = AuthnzMfaRepo(self._ensure_db_pool())
         return self._repo
 
-    def _ensure_cipher_candidates(self) -> List[Fernet]:
+    def _ensure_cipher_candidates(self) -> list[Fernet]:
         """Return Fernet instances for all active/legacy key materials."""
         key_candidates = tuple(derive_hmac_key_candidates(self.settings))
         if not key_candidates:
             raise ValueError("No HMAC key material available for MFA encryption")
         if self._cipher_key_material != key_candidates:
-            cipher_list: List[Fernet] = []
+            cipher_list: list[Fernet] = []
             for material in key_candidates:
                 cipher_list.append(Fernet(base64.urlsafe_b64encode(material)))
             self._cipher_candidates = cipher_list
@@ -162,9 +159,9 @@ class MFAService:
             raise ValueError("No HMAC key material available for backup codes")
         return candidates[0]
 
-    def _hash_backup_code_candidates(self, user_id: int, code: str) -> List[str]:
+    def _hash_backup_code_candidates(self, user_id: int, code: str) -> list[str]:
         """Return hash candidates for a backup code across current/legacy keys."""
-        digests: List[str] = []
+        digests: list[str] = []
         normalized = self._normalize_backup_code(code)
         message = f"{user_id}:{normalized}".encode("utf-8")
         for key in derive_hmac_key_candidates(self.settings):
@@ -243,7 +240,7 @@ class MFAService:
         img.save(buffer, format='PNG')
         return buffer.getvalue()
 
-    def generate_backup_codes(self, count: Optional[int] = None) -> List[str]:
+    def generate_backup_codes(self, count: Optional[int] = None) -> list[str]:
         """
         Generate backup codes for account recovery
 
@@ -308,7 +305,7 @@ class MFAService:
         self,
         user_id: int,
         secret: str,
-        backup_codes: List[str]
+        backup_codes: list[str]
     ) -> bool:
         """
         Enable MFA for a user
@@ -389,7 +386,7 @@ class MFAService:
                 logger.error(f"Failed to load MFA secret for user {user_id}: {exc}")
             raise DatabaseError("Failed to load MFA secret") from exc
 
-    async def get_user_mfa_status(self, user_id: int) -> Dict[str, Any]:
+    async def get_user_mfa_status(self, user_id: int) -> dict[str, Any]:
         """
         Get MFA status for a user
 
@@ -488,7 +485,7 @@ class MFAService:
                 return False
 
             # Ensure remaining codes are stored as hashed values
-            normalized_codes: List[str] = []
+            normalized_codes: list[str] = []
             for candidate in backup_codes:
                 if not isinstance(candidate, str):
                     continue
@@ -522,7 +519,7 @@ class MFAService:
     async def regenerate_backup_codes(
         self,
         user_id: int
-    ) -> Optional[List[str]]:
+    ) -> Optional[list[str]]:
         """
         Generate new backup codes for a user
 

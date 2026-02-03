@@ -1,26 +1,27 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import csv
 import io
 import json
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
 
 
 @dataclass
 class ReadingImportItem:
     url: str
-    title: Optional[str]
-    tags: List[str]
-    status: Optional[str]
+    title: str | None
+    tags: list[str]
+    status: str | None
     favorite: bool
-    notes: Optional[str]
-    read_at: Optional[str]
-    metadata: Dict[str, Any]
+    notes: str | None
+    read_at: str | None
+    metadata: dict[str, Any]
 
 
-def detect_import_source(filename: Optional[str], raw_bytes: bytes) -> str:
+def detect_import_source(filename: str | None, raw_bytes: bytes) -> str:
     if filename:
         lowered = filename.lower()
         if lowered.endswith(".json"):
@@ -34,7 +35,7 @@ def detect_import_source(filename: Optional[str], raw_bytes: bytes) -> str:
         return "instapaper"
 
 
-def parse_reading_import(raw_bytes: bytes, *, source: str, filename: Optional[str] = None) -> List[ReadingImportItem]:
+def parse_reading_import(raw_bytes: bytes, *, source: str, filename: str | None = None) -> list[ReadingImportItem]:
     if source == "auto":
         source = detect_import_source(filename, raw_bytes)
     if source == "pocket":
@@ -44,7 +45,7 @@ def parse_reading_import(raw_bytes: bytes, *, source: str, filename: Optional[st
     raise ValueError("unsupported_import_source")
 
 
-def parse_pocket_export(raw_bytes: bytes) -> List[ReadingImportItem]:
+def parse_pocket_export(raw_bytes: bytes) -> list[ReadingImportItem]:
     text = raw_bytes.decode("utf-8", errors="replace")
     payload = json.loads(text)
     items_obj = payload.get("list")
@@ -55,7 +56,7 @@ def parse_pocket_export(raw_bytes: bytes) -> List[ReadingImportItem]:
     else:
         items = []
 
-    parsed: List[ReadingImportItem] = []
+    parsed: list[ReadingImportItem] = []
     for entry in items:
         if not isinstance(entry, dict):
             continue
@@ -72,7 +73,7 @@ def parse_pocket_export(raw_bytes: bytes) -> List[ReadingImportItem]:
         if read_at:
             status = "read"
         notes = entry.get("excerpt") or entry.get("note") or None
-        metadata: Dict[str, Any] = {
+        metadata: dict[str, Any] = {
             "import_source": "pocket",
         }
         added_at = _parse_epoch(entry.get("time_added"))
@@ -93,10 +94,10 @@ def parse_pocket_export(raw_bytes: bytes) -> List[ReadingImportItem]:
     return parsed
 
 
-def parse_instapaper_export(raw_bytes: bytes) -> List[ReadingImportItem]:
+def parse_instapaper_export(raw_bytes: bytes) -> list[ReadingImportItem]:
     text = raw_bytes.decode("utf-8-sig", errors="replace")
     reader = csv.DictReader(io.StringIO(text))
-    parsed: List[ReadingImportItem] = []
+    parsed: list[ReadingImportItem] = []
     for row in reader:
         if not row:
             continue
@@ -110,7 +111,7 @@ def parse_instapaper_export(raw_bytes: bytes) -> List[ReadingImportItem]:
         folder = (normalized.get("folder") or normalized.get("state") or "").lower()
         status = "archived" if "archive" in folder else "saved"
         favorite = "star" in folder
-        metadata: Dict[str, Any] = {
+        metadata: dict[str, Any] = {
             "import_source": "instapaper",
         }
         added_raw = normalized.get("added") or normalized.get("timestamp") or normalized.get("time")
@@ -135,14 +136,14 @@ def _normalize_header(value: str) -> str:
     return value.strip().lower()
 
 
-def _split_tags(value: Optional[str]) -> List[str]:
+def _split_tags(value: str | None) -> list[str]:
     if not value:
         return []
     parts = [p.strip() for p in value.replace(";", ",").split(",")]
     return [p for p in parts if p]
 
 
-def _normalize_tags(value: Any) -> List[str]:
+def _normalize_tags(value: Any) -> list[str]:
     if not value:
         return []
     if isinstance(value, list):
@@ -162,7 +163,7 @@ def _normalize_tags(value: Any) -> List[str]:
     return []
 
 
-def _map_pocket_status(value: Any) -> Optional[str]:
+def _map_pocket_status(value: Any) -> str | None:
     if value is None:
         return None
     text = str(value)
@@ -175,7 +176,7 @@ def _map_pocket_status(value: Any) -> Optional[str]:
     return "saved"
 
 
-def _parse_epoch(value: Any) -> Optional[str]:
+def _parse_epoch(value: Any) -> str | None:
     if value is None:
         return None
     try:
@@ -196,5 +197,5 @@ def _truthy(value: Any) -> bool:
     return text in {"1", "true", "yes"}
 
 
-def normalize_import_items(items: Iterable[ReadingImportItem]) -> List[ReadingImportItem]:
+def normalize_import_items(items: Iterable[ReadingImportItem]) -> list[ReadingImportItem]:
     return [item for item in items if item.url]

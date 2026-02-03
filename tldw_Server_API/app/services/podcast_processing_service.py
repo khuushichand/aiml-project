@@ -2,11 +2,12 @@
 
 # FIXME - File is dummy code, needs to be updated
 
+from fastapi import HTTPException
+
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.logging import logger
 from tldw_Server_API.app.core.Utils.Utils import convert_to_seconds, extract_text_from_segments
-from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from fastapi import HTTPException
+
 # Hypothetical library that does the actual podcast ingestion/transcription:
 # e.g. from App_Function_Libraries.Audio.Audio_Files import process_podcast
 # or define your own function here

@@ -8,39 +8,31 @@ Provides CRUD operations for Kanban checklists and checklist items including:
 - Reorder checklists and items
 - Check/uncheck items
 """
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
-    KanbanDB,
-    KanbanDBError,
-    InputError,
-    ConflictError,
-    NotFoundError,
-)
-from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
-    ChecklistCreate,
-    ChecklistUpdate,
-    ChecklistResponse,
-    ChecklistsListResponse,
-    ChecklistReorderRequest,
-    ChecklistItemCreate,
-    ChecklistItemUpdate,
-    ChecklistItemResponse,
-    ChecklistItemsListResponse,
-    ChecklistItemReorderRequest,
-    ChecklistWithItemsResponse,
-    DetailResponse,
-    ToggleAllChecklistItemsRequest,
-)
 from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     get_kanban_db_for_user,
     handle_kanban_db_error,
     kanban_rate_limit,
 )
-
+from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
+    ChecklistCreate,
+    ChecklistItemCreate,
+    ChecklistItemReorderRequest,
+    ChecklistItemResponse,
+    ChecklistItemsListResponse,
+    ChecklistItemUpdate,
+    ChecklistReorderRequest,
+    ChecklistResponse,
+    ChecklistsListResponse,
+    ChecklistUpdate,
+    ChecklistWithItemsResponse,
+    ToggleAllChecklistItemsRequest,
+)
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
+    KanbanDB,
+)
 
 router = APIRouter(tags=["Kanban Checklists"])
 

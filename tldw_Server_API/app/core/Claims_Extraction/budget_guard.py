@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import threading
-from typing import Any, Dict, Optional
-
+from dataclasses import dataclass, field
+from typing import Any
 
 _TRUTHY = {"1", "true", "yes", "y", "on"}
 
 
-def _as_optional_int(value: Any) -> Optional[int]:
+def _as_optional_int(value: Any) -> int | None:
     try:
         if value is None or value == "":
             return None
@@ -18,7 +17,7 @@ def _as_optional_int(value: Any) -> Optional[int]:
         return None
 
 
-def _as_optional_float(value: Any) -> Optional[float]:
+def _as_optional_float(value: Any) -> float | None:
     try:
         if value is None or value == "":
             return None
@@ -45,21 +44,21 @@ def estimate_claims_tokens(text: str) -> int:
 
 @dataclass
 class ClaimsJobContext:
-    user_id: Optional[int] = None
-    api_key_id: Optional[int] = None
-    request_id: Optional[str] = None
-    endpoint: Optional[str] = None
+    user_id: int | None = None
+    api_key_id: int | None = None
+    request_id: str | None = None
+    endpoint: str | None = None
 
 
 @dataclass
 class ClaimsJobBudget:
-    max_cost_usd: Optional[float] = None
-    max_tokens: Optional[int] = None
+    max_cost_usd: float | None = None
+    max_tokens: int | None = None
     strict: bool = False
     used_cost_usd: float = 0.0
     used_tokens: int = 0
     exhausted: bool = False
-    exhausted_reason: Optional[str] = None
+    exhausted_reason: str | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def _normalize(self) -> None:
@@ -68,7 +67,7 @@ class ClaimsJobBudget:
         if self.max_tokens is not None and self.max_tokens <= 0:
             self.max_tokens = None
 
-    def reserve(self, *, cost_usd: Optional[float] = None, tokens: Optional[int] = None) -> bool:
+    def reserve(self, *, cost_usd: float | None = None, tokens: int | None = None) -> bool:
         cost_val = max(0.0, float(cost_usd or 0.0))
         token_val = max(0, int(tokens or 0))
         if cost_val <= 0 and token_val <= 0:
@@ -89,7 +88,7 @@ class ClaimsJobBudget:
             self.used_tokens = next_tokens
             return True
 
-    def add_usage(self, *, cost_usd: Optional[float] = None, tokens: Optional[int] = None) -> None:
+    def add_usage(self, *, cost_usd: float | None = None, tokens: int | None = None) -> None:
         cost_val = max(0.0, float(cost_usd or 0.0))
         token_val = max(0, int(tokens or 0))
         if cost_val <= 0 and token_val <= 0:
@@ -98,19 +97,19 @@ class ClaimsJobBudget:
             self.used_cost_usd += cost_val
             self.used_tokens += token_val
 
-    def remaining_cost_usd(self) -> Optional[float]:
+    def remaining_cost_usd(self) -> float | None:
         self._normalize()
         if self.max_cost_usd is None:
             return None
         return max(0.0, float(self.max_cost_usd) - float(self.used_cost_usd))
 
-    def remaining_tokens(self) -> Optional[int]:
+    def remaining_tokens(self) -> int | None:
         self._normalize()
         if self.max_tokens is None:
             return None
         return max(0, int(self.max_tokens) - int(self.used_tokens))
 
-    def remaining_ratio(self) -> Optional[float]:
+    def remaining_ratio(self) -> float | None:
         ratios = []
         cost_remain = self.remaining_cost_usd()
         if cost_remain is not None and self.max_cost_usd:
@@ -122,7 +121,7 @@ class ClaimsJobBudget:
             return None
         return min(ratios)
 
-    def snapshot(self) -> Dict[str, Any]:
+    def snapshot(self) -> dict[str, Any]:
         return {
             "max_cost_usd": self.max_cost_usd,
             "max_tokens": self.max_tokens,
@@ -138,11 +137,11 @@ class ClaimsJobBudget:
 
 def resolve_claims_job_budget(
     *,
-    settings: Optional[Dict[str, Any]] = None,
-    max_cost_usd: Optional[float] = None,
-    max_tokens: Optional[int] = None,
-    strict: Optional[bool] = None,
-) -> Optional[ClaimsJobBudget]:
+    settings: dict[str, Any] | None = None,
+    max_cost_usd: float | None = None,
+    max_tokens: int | None = None,
+    strict: bool | None = None,
+) -> ClaimsJobBudget | None:
     cfg = settings or {}
     enabled = _as_bool(cfg.get("CLAIMS_JOB_BUDGET_ENABLED"), False)
     if not enabled and max_cost_usd is None and max_tokens is None:

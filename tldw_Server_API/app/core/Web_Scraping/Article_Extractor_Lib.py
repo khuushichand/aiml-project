@@ -13,67 +13,64 @@
 ####################
 #
 # Import necessary libraries
+#
+# 3rd-Party Imports
+import asyncio
+import hashlib
+import ipaddress
+import json
+import math
+import os
+import random
+import re
+import sys
+import tempfile
+import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime
-import hashlib
-import json
-import os
-import random
-import sys
-import time
-import re
-import ipaddress
-import math
-import tempfile
+from pathlib import Path
 from threading import BoundedSemaphore, Lock
-from typing import Any, Dict, List, Union, Optional, Tuple, Callable
-#
-# 3rd-Party Imports
-import asyncio
-from urllib.parse import (
-    urljoin,
-    urlparse
-)
-from defusedxml import minidom
-from defusedxml import ElementTree as xET
-from defusedxml.common import DefusedXmlException
+from typing import Any, Callable, Optional, Union
+from urllib.parse import urljoin, urlparse
+from urllib.robotparser import RobotFileParser
+
+import pandas as pd
+import trafilatura
 
 # External Libraries
 from bs4 import BeautifulSoup
-import pandas as pd
+from defusedxml import ElementTree as xET
+from defusedxml import minidom
+from defusedxml.common import DefusedXmlException
 from loguru import logger
-from playwright.async_api import (
-    TimeoutError,
-    async_playwright
-)
+from playwright.async_api import TimeoutError, async_playwright
 from playwright.sync_api import sync_playwright
-import trafilatura
 from tqdm import tqdm
 
-from tldw_Server_API.app.core.DB_Management.DB_Manager import ingest_article_to_db, create_media_database
+from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database, ingest_article_to_db
+from tldw_Server_API.app.core.http_client import afetch
+from tldw_Server_API.app.core.http_client import fetch as http_fetch
+
 #
 # Import Local
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_histogram, log_counter
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Utils.Utils import logging
-from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import RateLimiter
-from tldw_Server_API.app.core.Web_Scraping.scraper_router import ScraperRouter, DEFAULT_HANDLER
+from tldw_Server_API.app.core.Web_Scraping.filters import (
+    ContentTypeFilter,
+    FilterChain,
+    URLPatternFilter,
+)
 from tldw_Server_API.app.core.Web_Scraping.handlers import resolve_handler
+from tldw_Server_API.app.core.Web_Scraping.scraper_router import ScraperRouter
 from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
     build_browser_headers,
     pick_ua_profile,
-)
-from tldw_Server_API.app.core.http_client import afetch, fetch as http_fetch
-from urllib.robotparser import RobotFileParser
-from pathlib import Path
-from tldw_Server_API.app.core.Web_Scraping.filters import (
-    FilterChain,
-    URLPatternFilter,
-    ContentTypeFilter,
 )
 
 #
@@ -92,8 +89,8 @@ def _default_rules_path() -> str:
     return str(project_root / "tldw_Server_API" / "Config_Files" / "custom_scrapers.yaml")
 
 
-def _merge_cookie_list_to_map(custom_cookies: Optional[List[Dict[str, Any]]]) -> Dict[str, str]:
-    cookies: Dict[str, str] = {}
+def _merge_cookie_list_to_map(custom_cookies: Optional[list[dict[str, Any]]]) -> dict[str, str]:
+    cookies: dict[str, str] = {}
     if not custom_cookies:
         return cookies
     for c in custom_cookies:
@@ -124,7 +121,7 @@ _JS_REQUIRED_DOMAINS = {
 }
 
 
-def _js_required(html: str, headers: Dict[str, Any], url: Optional[str] = None) -> bool:
+def _js_required(html: str, headers: dict[str, Any], url: Optional[str] = None) -> bool:
     """Heuristics to detect pages that require JS rendering.
 
     Signals fallback to Playwright when:
@@ -238,12 +235,12 @@ def _resp_get(resp: Any, key: str, default: Any = None) -> Any:
 def _fetch_with_curl(
     url: str,
     *,
-    headers: Dict[str, Any],
-    cookies: Optional[Dict[str, str]],
+    headers: dict[str, Any],
+    cookies: Optional[dict[str, str]],
     timeout: float,
     impersonate: Optional[str],
-    proxies: Optional[Dict[str, str]],
-) -> Dict[str, Any]:
+    proxies: Optional[dict[str, str]],
+) -> dict[str, Any]:
     """Fetch HTML using curl_cffi via the centralized http_client."""
     from tldw_Server_API.app.core.http_client import fetch as http_fetch
 
@@ -335,10 +332,10 @@ def _strip_boilerplate_sections(text: str) -> str:
             return False
         return any(regex.search(stripped) for regex in _BOILERPLATE_REGEXES)
 
-    filtered_lines: List[str] = [line for line in lines if not _is_boilerplate(line)]
+    filtered_lines: list[str] = [line for line in lines if not _is_boilerplate(line)]
 
     # Collapse consecutive blank lines introduced by removals.
-    collapsed: List[str] = []
+    collapsed: list[str] = []
     previous_blank = False
     for line in filtered_lines:
         if line.strip():
@@ -413,7 +410,7 @@ _JSONLD_SECONDARY_TYPES = {
     "creativework",
     "blog",
 }
-_REGEX_CATALOG: List[Tuple[str, re.Pattern[str]]] = [
+_REGEX_CATALOG: list[tuple[str, re.Pattern[str]]] = [
     ("email", re.compile(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b")),
     ("phone", re.compile(r"\b(?:\+?\d{1,3}[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b")),
     ("phone", re.compile(r"\b\+?\d[\d\s().-]{7,}\d\b")),
@@ -442,25 +439,25 @@ _CLUSTER_MIN_WORDS = 8
 _CLUSTER_MAX_BLOCKS = 60
 _CLUSTER_LINKAGE = "average"
 _CLUSTER_TAG_TOP_K = 3
-_DEFAULT_CLUSTER_TAG_KEYWORDS: Dict[str, List[str]] = {
+_DEFAULT_CLUSTER_TAG_KEYWORDS: dict[str, list[str]] = {
     "marketing": ["subscribe", "newsletter", "promotion", "marketing"],
     "commerce": ["price", "pricing", "cost", "$"],
     "product": ["feature", "release", "roadmap", "product"],
     "research": ["study", "research", "paper", "dataset"],
     "security": ["security", "encrypt", "token", "oauth"],
 }
-_CLUSTER_EMBED_CACHE: "OrderedDict[str, List[float]]" = OrderedDict()
+_CLUSTER_EMBED_CACHE: "OrderedDict[str, list[float]]" = OrderedDict()
 _CLUSTER_CACHE_LOCK = Lock()
 _SCHEMA_RESULT_CACHE_MAX = 128
-_SCHEMA_RESULT_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+_SCHEMA_RESULT_CACHE: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
 _SCHEMA_CACHE_LOCK = Lock()
-_LLM_PROVIDER_LIMITS: Dict[str, Tuple[int, BoundedSemaphore]] = {}
+_LLM_PROVIDER_LIMITS: dict[str, tuple[int, BoundedSemaphore]] = {}
 _LLM_PROVIDER_LIMITS_LOCK = Lock()
-_LLM_PROVIDER_LAST_CALL: Dict[str, float] = {}
+_LLM_PROVIDER_LAST_CALL: dict[str, float] = {}
 _LLM_PROVIDER_LAST_CALL_LOCK = Lock()
 
 
-def get_extraction_cache_stats() -> Dict[str, int]:
+def get_extraction_cache_stats() -> dict[str, int]:
     with _CLUSTER_CACHE_LOCK:
         cluster_size = len(_CLUSTER_EMBED_CACHE)
     with _SCHEMA_CACHE_LOCK:
@@ -506,7 +503,7 @@ def clear_extraction_caches() -> None:
         pass
 
 
-def _schema_cache_key(html_text: str, url: str, schema_rules: Dict[str, Any]) -> str:
+def _schema_cache_key(html_text: str, url: str, schema_rules: dict[str, Any]) -> str:
     html_hash = hashlib.sha1(html_text.encode("utf-8", errors="ignore")).hexdigest()
     try:
         rules_repr = json.dumps(schema_rules, sort_keys=True, ensure_ascii=True)
@@ -516,7 +513,7 @@ def _schema_cache_key(html_text: str, url: str, schema_rules: Dict[str, Any]) ->
     return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
 
 
-def _schema_cache_get(key: str) -> Optional[Dict[str, Any]]:
+def _schema_cache_get(key: str) -> Optional[dict[str, Any]]:
     with _SCHEMA_CACHE_LOCK:
         value = _SCHEMA_RESULT_CACHE.get(key)
         if value is None:
@@ -525,7 +522,7 @@ def _schema_cache_get(key: str) -> Optional[Dict[str, Any]]:
         return dict(value)
 
 
-def _schema_cache_put(key: str, value: Dict[str, Any]) -> None:
+def _schema_cache_put(key: str, value: dict[str, Any]) -> None:
     with _SCHEMA_CACHE_LOCK:
         _SCHEMA_RESULT_CACHE[key] = dict(value)
         _SCHEMA_RESULT_CACHE.move_to_end(key)
@@ -533,7 +530,7 @@ def _schema_cache_put(key: str, value: Dict[str, Any]) -> None:
             _SCHEMA_RESULT_CACHE.popitem(last=False)
 
 
-def _cluster_cache_get(key: str) -> Optional[List[float]]:
+def _cluster_cache_get(key: str) -> Optional[list[float]]:
     with _CLUSTER_CACHE_LOCK:
         value = _CLUSTER_EMBED_CACHE.get(key)
         if value is None:
@@ -556,7 +553,7 @@ def _cluster_cache_get(key: str) -> Optional[List[float]]:
     return value
 
 
-def _cluster_cache_put(key: str, value: List[float]) -> None:
+def _cluster_cache_put(key: str, value: list[float]) -> None:
     with _CLUSTER_CACHE_LOCK:
         _CLUSTER_EMBED_CACHE[key] = value
         _CLUSTER_EMBED_CACHE.move_to_end(key)
@@ -565,14 +562,14 @@ def _cluster_cache_put(key: str, value: List[float]) -> None:
 
 
 def _normalize_strategy_order(
-    strategy_order: Optional[List[str]],
-) -> Tuple[List[str], List[str]]:
+    strategy_order: Optional[list[str]],
+) -> tuple[list[str], list[str]]:
     if strategy_order:
         raw = strategy_order
     else:
         return list(DEFAULT_EXTRACTION_STRATEGY_ORDER), []
-    normalized: List[str] = []
-    unknown: List[str] = []
+    normalized: list[str] = []
+    unknown: list[str] = []
     for item in raw:
         if not isinstance(item, str):
             continue
@@ -590,7 +587,7 @@ def _normalize_strategy_order(
     return normalized, unknown
 
 
-def _trace_entry(strategy: str, status: str, reason: str, detail: Optional[str] = None) -> Dict[str, Any]:
+def _trace_entry(strategy: str, status: str, reason: str, detail: Optional[str] = None) -> dict[str, Any]:
     try:
         log_counter("extraction_strategy_total", labels={"strategy": strategy, "status": status})
     except Exception:
@@ -605,7 +602,7 @@ def _record_strategy_metrics(
     strategy: str,
     status: str,
     duration_s: float,
-    result: Optional[Dict[str, Any]] = None,
+    result: Optional[dict[str, Any]] = None,
 ) -> None:
     try:
         observe_histogram(
@@ -630,18 +627,18 @@ def _record_strategy_metrics(
 
 
 def _attach_trace(
-    result: Dict[str, Any],
-    trace: List[Dict[str, Any]],
+    result: dict[str, Any],
+    trace: list[dict[str, Any]],
     strategy: Optional[str],
-    strategy_order: List[str],
-) -> Dict[str, Any]:
+    strategy_order: list[str],
+) -> dict[str, Any]:
     result["extraction_trace"] = trace
     result["extraction_strategy"] = strategy
     result["extraction_strategy_order"] = strategy_order
     return result
 
 
-def _extract_with_trafilatura(html: str, url: str) -> Dict[str, Any]:
+def _extract_with_trafilatura(html: str, url: str) -> dict[str, Any]:
     """Extract article metadata and body from raw HTML."""
     logging.info(f"Extracting article data from HTML for {url}")
     downloaded = trafilatura.extract(
@@ -653,7 +650,7 @@ def _extract_with_trafilatura(html: str, url: str) -> Dict[str, Any]:
     downloaded = _strip_boilerplate_sections(downloaded)
     metadata = trafilatura.extract_metadata(html)
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "title": "N/A",
         "author": "N/A",
         "content": "",
@@ -718,7 +715,7 @@ def _env_float(name: str) -> Optional[float]:
         return None
 
 
-def _regex_mask_override(settings: Optional[Dict[str, Any]]) -> Optional[bool]:
+def _regex_mask_override(settings: Optional[dict[str, Any]]) -> Optional[bool]:
     if not isinstance(settings, dict):
         return None
     for key in ("mask_pii", "pii_mask"):
@@ -750,7 +747,7 @@ def _should_clear_caches(stage: str) -> bool:
     return False
 
 
-_STRATEGY_LIMITS: Dict[str, Tuple[int, BoundedSemaphore]] = {}
+_STRATEGY_LIMITS: dict[str, tuple[int, BoundedSemaphore]] = {}
 _STRATEGY_LIMITS_LOCK = Lock()
 
 
@@ -821,8 +818,8 @@ def extract_regex_entities(
     url: str,
     *,
     mask_pii: Optional[bool] = None,
-) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "url": url,
         "title": "N/A",
         "author": "N/A",
@@ -849,11 +846,11 @@ def extract_regex_entities(
     if mask_pii is None:
         mask_pii = _regex_pii_mask_enabled()
 
-    matches: List[Dict[str, Any]] = []
+    matches: list[dict[str, Any]] = []
     seen_spans: set[tuple[str, int, int]] = set()
-    occupied: List[Tuple[int, int]] = []
+    occupied: list[tuple[int, int]] = []
     total_count = 0
-    per_label_counts: Dict[str, int] = {}
+    per_label_counts: dict[str, int] = {}
 
     for label, pattern in _REGEX_CATALOG:
         per_label_limit = _MAX_REGEX_MATCHES_PER_LABEL.get(label, _MAX_REGEX_TOTAL_MATCHES)
@@ -903,8 +900,8 @@ def extract_regex_entities(
     return result
 
 
-def _jsonld_type_tokens(value: Any) -> List[str]:
-    tokens: List[str] = []
+def _jsonld_type_tokens(value: Any) -> list[str]:
+    tokens: list[str] = []
     if isinstance(value, list):
         for item in value:
             tokens.extend(_jsonld_type_tokens(item))
@@ -924,11 +921,11 @@ def _jsonld_type_tokens(value: Any) -> List[str]:
     return tokens
 
 
-def _jsonld_type_set(node: Dict[str, Any]) -> set[str]:
+def _jsonld_type_set(node: dict[str, Any]) -> set[str]:
     return set(_jsonld_type_tokens(node.get("@type") or node.get("type")))
 
 
-def _jsonld_collect_text(value: Any) -> List[str]:
+def _jsonld_collect_text(value: Any) -> list[str]:
     if value is None:
         return []
     if isinstance(value, (int, float)):
@@ -937,7 +934,7 @@ def _jsonld_collect_text(value: Any) -> List[str]:
         text = value.strip()
         return [text] if text else []
     if isinstance(value, list):
-        parts: List[str] = []
+        parts: list[str] = []
         for item in value:
             parts.extend(_jsonld_collect_text(item))
         return parts
@@ -959,14 +956,14 @@ def _jsonld_join_text(value: Any, join_with: str) -> str:
     return join_with.join(parts)
 
 
-def _jsonld_extract_author(node: Dict[str, Any]) -> Optional[str]:
+def _jsonld_extract_author(node: dict[str, Any]) -> Optional[str]:
     for key in ("author", "creator", "publisher"):
         if key not in node:
             continue
         names = _jsonld_collect_text(node.get(key))
         if not names:
             continue
-        unique: List[str] = []
+        unique: list[str] = []
         seen: set[str] = set()
         for name in names:
             if name not in seen:
@@ -977,7 +974,7 @@ def _jsonld_extract_author(node: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _jsonld_score_candidate(node: Dict[str, Any]) -> Tuple[int, int]:
+def _jsonld_score_candidate(node: dict[str, Any]) -> tuple[int, int]:
     types = _jsonld_type_set(node)
     score = 0
     if types & _JSONLD_PRIMARY_TYPES:
@@ -1000,7 +997,7 @@ def _jsonld_score_candidate(node: Dict[str, Any]) -> Tuple[int, int]:
     return score, content_len
 
 
-def _jsonld_has_content(result: Dict[str, Any]) -> bool:
+def _jsonld_has_content(result: dict[str, Any]) -> bool:
     content = result.get("content")
     summary = result.get("summary")
     for value in (content, summary):
@@ -1009,8 +1006,8 @@ def _jsonld_has_content(result: Dict[str, Any]) -> bool:
     return False
 
 
-def _collect_jsonld_nodes(data: Any) -> List[Dict[str, Any]]:
-    nodes: List[Dict[str, Any]] = []
+def _collect_jsonld_nodes(data: Any) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
     if isinstance(data, list):
         for item in data:
             nodes.extend(_collect_jsonld_nodes(item))
@@ -1026,8 +1023,8 @@ def _collect_jsonld_nodes(data: Any) -> List[Dict[str, Any]]:
     return nodes
 
 
-def _resolve_jsonld_refs(value: Any, id_map: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-    resolved: List[Dict[str, Any]] = []
+def _resolve_jsonld_refs(value: Any, id_map: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    resolved: list[dict[str, Any]] = []
     if isinstance(value, list):
         for item in value:
             resolved.extend(_resolve_jsonld_refs(item, id_map))
@@ -1066,12 +1063,12 @@ def _microdata_prop_value(tag: Any) -> Optional[str]:
     return text or None
 
 
-def _extract_microdata_items(soup: BeautifulSoup) -> List[Dict[str, Any]]:
-    items: List[Dict[str, Any]] = []
+def _extract_microdata_items(soup: BeautifulSoup) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
     if soup is None:
         return items
     for scope in soup.find_all(attrs={"itemscope": True}):
-        props: Dict[str, Any] = {}
+        props: dict[str, Any] = {}
         for prop in scope.find_all(attrs={"itemprop": True}):
             parent_scope = prop.find_parent(attrs={"itemscope": True})
             if parent_scope is not None and parent_scope is not scope:
@@ -1091,7 +1088,7 @@ def _extract_microdata_items(soup: BeautifulSoup) -> List[Dict[str, Any]]:
                 props[prop_name] = [existing, value]
         if not props:
             continue
-        item: Dict[str, Any] = dict(props)
+        item: dict[str, Any] = dict(props)
         item_type = scope.get("itemtype")
         item_id = scope.get("itemid")
         if item_type:
@@ -1102,8 +1099,8 @@ def _extract_microdata_items(soup: BeautifulSoup) -> List[Dict[str, Any]]:
     return items
 
 
-def extract_jsonld_entities(html_text: str, url: str) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
+def extract_jsonld_entities(html_text: str, url: str) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "url": url,
         "title": "N/A",
         "author": "N/A",
@@ -1114,8 +1111,8 @@ def extract_jsonld_entities(html_text: str, url: str) -> Dict[str, Any]:
     if not html_text:
         return result
     soup = BeautifulSoup(html_text, "html.parser")
-    nodes: List[Dict[str, Any]] = []
-    errors: List[str] = []
+    nodes: list[dict[str, Any]] = []
+    errors: list[str] = []
 
     scripts = soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.IGNORECASE)})
     for script in scripts:
@@ -1142,7 +1139,7 @@ def extract_jsonld_entities(html_text: str, url: str) -> Dict[str, Any]:
             result["jsonld_error"] = "; ".join(errors[:3])
         return result
 
-    id_map: Dict[str, Dict[str, Any]] = {}
+    id_map: dict[str, dict[str, Any]] = {}
     for node in nodes:
         node_id = node.get("@id")
         if isinstance(node_id, str):
@@ -1154,7 +1151,7 @@ def extract_jsonld_entities(html_text: str, url: str) -> Dict[str, Any]:
             expanded_nodes.extend(_resolve_jsonld_refs(node.get(ref_key), id_map))
 
     seen_ids: set[int] = set()
-    unique_nodes: List[Dict[str, Any]] = []
+    unique_nodes: list[dict[str, Any]] = []
     for node in expanded_nodes:
         node_id = id(node)
         if node_id in seen_ids:
@@ -1162,8 +1159,8 @@ def extract_jsonld_entities(html_text: str, url: str) -> Dict[str, Any]:
         seen_ids.add(node_id)
         unique_nodes.append(node)
 
-    best_node: Optional[Dict[str, Any]] = None
-    best_score: Tuple[int, int] = (-1, -1)
+    best_node: Optional[dict[str, Any]] = None
+    best_score: tuple[int, int] = (-1, -1)
     for node in unique_nodes:
         score = _jsonld_score_candidate(node)
         if score > best_score:
@@ -1213,7 +1210,7 @@ def extract_jsonld_entities(html_text: str, url: str) -> Dict[str, Any]:
     return result
 
 
-def _tokenize_cluster_text(text: str) -> List[str]:
+def _tokenize_cluster_text(text: str) -> list[str]:
     return re.findall(r"\b[\w'-]+\b", text.lower())
 
 
@@ -1221,7 +1218,7 @@ def _cluster_word_count(text: str) -> int:
     return len(_tokenize_cluster_text(text))
 
 
-def _normalize_vector(vec: List[float]) -> List[float]:
+def _normalize_vector(vec: list[float]) -> list[float]:
     if not vec:
         return vec
     norm = math.sqrt(sum(val * val for val in vec))
@@ -1230,7 +1227,7 @@ def _normalize_vector(vec: List[float]) -> List[float]:
     return [val / norm for val in vec]
 
 
-def _hash_embedding(text: str, dims: int) -> List[float]:
+def _hash_embedding(text: str, dims: int) -> list[float]:
     tokens = _tokenize_cluster_text(text)
     if not tokens:
         return [0.0] * dims
@@ -1242,7 +1239,7 @@ def _hash_embedding(text: str, dims: int) -> List[float]:
     return _normalize_vector(vec)
 
 
-def _cluster_embedding(text: str, dims: int) -> List[float]:
+def _cluster_embedding(text: str, dims: int) -> list[float]:
     key = hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()
     cached = _cluster_cache_get(key)
     if cached is not None:
@@ -1252,7 +1249,7 @@ def _cluster_embedding(text: str, dims: int) -> List[float]:
     return vec
 
 
-def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
+def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     if not vec_a or not vec_b:
         return 0.0
     dot = sum(a * b for a, b in zip(vec_a, vec_b))
@@ -1265,7 +1262,7 @@ def _extract_cluster_blocks(
     min_block_chars: int,
     min_word_count: int,
     max_blocks: int,
-) -> List[str]:
+) -> list[str]:
     if not html_text:
         return []
     soup = BeautifulSoup(html_text, "html.parser")
@@ -1302,11 +1299,11 @@ def _extract_cluster_title(html_text: str) -> Optional[str]:
 
 
 def _cluster_assignments_hierarchical(
-    vectors: List[List[float]],
+    vectors: list[list[float]],
     *,
     similarity_threshold: float,
     linkage: str,
-) -> Optional[List[int]]:
+) -> Optional[list[int]]:
     if not vectors:
         return None
     if len(vectors) == 1:
@@ -1343,10 +1340,10 @@ def _cluster_assignments_hierarchical(
 
 
 def _build_clusters_from_assignments(
-    assignments: List[int],
-    items: List[Tuple[int, str, List[float], float]],
-) -> List[Dict[str, Any]]:
-    clusters: Dict[int, Dict[str, Any]] = {}
+    assignments: list[int],
+    items: list[tuple[int, str, list[float], float]],
+) -> list[dict[str, Any]]:
+    clusters: dict[int, dict[str, Any]] = {}
     for label, item in zip(assignments, items):
         idx, block, vec, sim_to_doc = item
         cluster = clusters.get(label)
@@ -1367,11 +1364,11 @@ def _build_clusters_from_assignments(
 
 
 def _cluster_blocks_greedy(
-    items: List[Tuple[int, str, List[float], float]],
+    items: list[tuple[int, str, list[float], float]],
     *,
     cluster_threshold: float,
-) -> List[Dict[str, Any]]:
-    clusters: List[Dict[str, Any]] = []
+) -> list[dict[str, Any]]:
+    clusters: list[dict[str, Any]] = []
     for idx, block, vec, sim_to_doc in items:
         best_idx = None
         best_sim = -1.0
@@ -1401,13 +1398,13 @@ def _cluster_blocks_greedy(
 def _tag_cluster_text(
     text: str,
     *,
-    tag_keywords: Dict[str, List[str]],
+    tag_keywords: dict[str, list[str]],
     top_k: int,
-) -> Tuple[List[str], Dict[str, int]]:
+) -> tuple[list[str], dict[str, int]]:
     if top_k <= 0 or not text:
         return [], {}
     text_lower = text.lower()
-    scores: Dict[str, int] = {}
+    scores: dict[str, int] = {}
     for tag, keywords in tag_keywords.items():
         if not keywords:
             continue
@@ -1429,9 +1426,9 @@ def extract_cluster_entities(
     html_text: str,
     url: str,
     *,
-    cluster_settings: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
+    cluster_settings: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "url": url,
         "title": "N/A",
         "author": "N/A",
@@ -1495,7 +1492,7 @@ def extract_cluster_entities(
         return result
 
     doc_vec = _cluster_embedding(" ".join(blocks), embed_dims)
-    scored_blocks: List[Tuple[int, str, List[float], float]] = []
+    scored_blocks: list[tuple[int, str, list[float], float]] = []
     for idx, block in enumerate(blocks):
         vec = _cluster_embedding(block, embed_dims)
         sim = _cosine_similarity(vec, doc_vec)
@@ -1505,7 +1502,7 @@ def extract_cluster_entities(
     if not kept:
         kept = sorted(scored_blocks, key=lambda item: item[3], reverse=True)[: min(2, len(scored_blocks))]
 
-    clusters: List[Dict[str, Any]] = []
+    clusters: list[dict[str, Any]] = []
     cluster_method = method
     if method == "hierarchical":
         assignments = _cluster_assignments_hierarchical(
@@ -1530,7 +1527,7 @@ def extract_cluster_entities(
             pass
         return result
 
-    def _cluster_score(cluster: Dict[str, Any]) -> Tuple[int, int]:
+    def _cluster_score(cluster: dict[str, Any]) -> tuple[int, int]:
         return (int(cluster.get("total_chars", 0)), len(cluster.get("members", [])))
 
     best_cluster = max(clusters, key=_cluster_score)
@@ -1596,7 +1593,7 @@ def _coerce_non_negative_float(value: Any, default: float = 0.0) -> float:
     return parsed if parsed >= 0.0 else default
 
 
-def _resolve_llm_throttle_settings(settings: Dict[str, Any]) -> Tuple[Optional[int], float, float]:
+def _resolve_llm_throttle_settings(settings: dict[str, Any]) -> tuple[Optional[int], float, float]:
     max_concurrency = _coerce_positive_int(
         settings.get("max_concurrency") if "max_concurrency" in settings else os.getenv("LLM_MAX_CONCURRENCY")
     )
@@ -1615,7 +1612,7 @@ def _resolve_llm_throttle_settings(settings: Dict[str, Any]) -> Tuple[Optional[i
     return max_concurrency, delay_ms, jitter_ms
 
 
-def _extractor_retry_settings() -> Tuple[int, float, float]:
+def _extractor_retry_settings() -> tuple[int, float, float]:
     max_retries = _coerce_positive_int(os.getenv("EXTRACTOR_MAX_RETRIES")) or 0
     base_delay_ms = _coerce_non_negative_float(os.getenv("EXTRACTOR_RETRY_BASE_MS"), default=0.0)
     jitter_ms = _coerce_non_negative_float(os.getenv("EXTRACTOR_RETRY_JITTER_MS"), default=0.0)
@@ -1623,10 +1620,10 @@ def _extractor_retry_settings() -> Tuple[int, float, float]:
 
 
 def _run_with_retries(
-    func: Callable[[], Dict[str, Any]],
+    func: Callable[[], dict[str, Any]],
     *,
     strategy: str,
-) -> Tuple[Optional[Dict[str, Any]], Optional[Exception], int]:
+) -> tuple[Optional[dict[str, Any]], Optional[Exception], int]:
     max_retries, base_delay_ms, jitter_ms = _extractor_retry_settings()
     attempts = 0
     while True:
@@ -1677,7 +1674,7 @@ def _apply_llm_delay(provider: str, delay_ms: float, jitter_ms: float) -> None:
 
 
 @contextmanager
-def _llm_throttle(provider: str, settings: Dict[str, Any]):
+def _llm_throttle(provider: str, settings: dict[str, Any]):
     max_concurrency, delay_ms, jitter_ms = _resolve_llm_throttle_settings(settings)
     semaphore = _get_llm_semaphore(provider, max_concurrency) if max_concurrency else None
     if semaphore is not None:
@@ -1705,7 +1702,7 @@ def _split_llm_chunks(
     chunk_token_threshold: int,
     overlap_rate: float,
     word_token_rate: float,
-) -> List[str]:
+) -> list[str]:
     if not text:
         return []
     words = text.split()
@@ -1718,7 +1715,7 @@ def _split_llm_chunks(
     chunk_words = max(50, int(chunk_token_threshold / rate))
     overlap = max(0, min(int(chunk_words * max(0.0, min(overlap_rate, 0.9))), chunk_words - 1))
     step = max(1, chunk_words - overlap)
-    chunks: List[str] = []
+    chunks: list[str] = []
     for start in range(0, len(words), step):
         chunk = words[start : start + chunk_words]
         if not chunk:
@@ -1750,13 +1747,13 @@ def _extract_llm_response_text(resp: Any) -> str:
     return ""
 
 
-def _extract_usage_from_response(resp: Any) -> Dict[str, int]:
+def _extract_usage_from_response(resp: Any) -> dict[str, int]:
     if not isinstance(resp, dict):
         return {}
     usage = resp.get("usage")
     if not isinstance(usage, dict):
         return {}
-    out: Dict[str, int] = {}
+    out: dict[str, int] = {}
     for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
         val = usage.get(key)
         if isinstance(val, (int, float)):
@@ -1764,7 +1761,7 @@ def _extract_usage_from_response(resp: Any) -> Dict[str, int]:
     return out
 
 
-def _record_llm_usage_metrics(usage: Dict[str, int], *, provider: str, model: str) -> None:
+def _record_llm_usage_metrics(usage: dict[str, int], *, provider: str, model: str) -> None:
     pt = usage.get("prompt_tokens")
     ct = usage.get("completion_tokens")
     if pt:
@@ -1800,8 +1797,8 @@ def _strip_code_fences(text: str) -> str:
     return stripped
 
 
-def _extract_json_candidates(text: str) -> List[str]:
-    candidates: List[str] = []
+def _extract_json_candidates(text: str) -> list[str]:
+    candidates: list[str] = []
     if not text:
         return candidates
     for match in re.finditer(r"```(?:json)?\\s*(.*?)```", text, re.IGNORECASE | re.DOTALL):
@@ -1816,11 +1813,11 @@ def _extract_json_candidates(text: str) -> List[str]:
     return candidates
 
 
-def _decode_all_json(payload: str) -> List[Any]:
+def _decode_all_json(payload: str) -> list[Any]:
     decoder = json.JSONDecoder()
     idx = 0
     length = len(payload)
-    objects: List[Any] = []
+    objects: list[Any] = []
     while idx < length:
         brace = payload.find("{", idx)
         bracket = payload.find("[", idx)
@@ -1840,8 +1837,8 @@ def _decode_all_json(payload: str) -> List[Any]:
     return objects
 
 
-def _parse_llm_json(text: str, *, strict: bool) -> Tuple[Optional[Any], Dict[str, Any]]:
-    meta: Dict[str, Any] = {"objects": []}
+def _parse_llm_json(text: str, *, strict: bool) -> tuple[Optional[Any], dict[str, Any]]:
+    meta: dict[str, Any] = {"objects": []}
     if not text:
         return None, meta
     payload = text.strip()
@@ -1868,7 +1865,7 @@ def _parse_llm_json(text: str, *, strict: bool) -> Tuple[Optional[Any], Dict[str
     return None, meta
 
 
-def _resolve_llm_provider(settings: Dict[str, Any]) -> Tuple[str, Optional[Dict[str, Any]]]:
+def _resolve_llm_provider(settings: dict[str, Any]) -> tuple[str, Optional[dict[str, Any]]]:
     provider = str(settings.get("provider") or "").strip().lower()
     app_config = None
     if not provider:
@@ -1934,7 +1931,7 @@ def _llm_prompt_for_regex_generation(
     url: str,
     label: Optional[str],
     query: Optional[str],
-    examples: Optional[List[str]],
+    examples: Optional[list[str]],
 ) -> str:
     snippet = html_text.strip()
     if len(snippet) > 8000:
@@ -1958,11 +1955,11 @@ def generate_schema_rules_from_llm(
     html_text: str,
     url: str,
     *,
-    llm_settings: Optional[Dict[str, Any]] = None,
+    llm_settings: Optional[dict[str, Any]] = None,
     query: Optional[str] = None,
     example_json: Optional[str] = None,
-) -> Dict[str, Any]:
-    result: Dict[str, Any] = {"success": False}
+) -> dict[str, Any]:
+    result: dict[str, Any] = {"success": False}
     if not html_text:
         result["error"] = "schema_llm_empty_html"
         return result
@@ -2023,7 +2020,7 @@ def generate_schema_rules_from_llm(
         result["error"] = meta.get("error") or "schema_llm_parse_failed"
         return result
 
-    schema_obj: Optional[Dict[str, Any]] = None
+    schema_obj: Optional[dict[str, Any]] = None
     if isinstance(obj, dict):
         if isinstance(obj.get("schema"), dict):
             schema_obj = obj.get("schema")
@@ -2050,12 +2047,12 @@ def generate_regex_pattern_from_llm(
     html_text: str,
     url: str,
     *,
-    llm_settings: Optional[Dict[str, Any]] = None,
+    llm_settings: Optional[dict[str, Any]] = None,
     label: Optional[str] = None,
     query: Optional[str] = None,
-    examples: Optional[List[str]] = None,
-) -> Dict[str, Any]:
-    result: Dict[str, Any] = {"success": False}
+    examples: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {"success": False}
     if not html_text:
         result["error"] = "regex_llm_empty_html"
         return result
@@ -2152,16 +2149,16 @@ def generate_regex_pattern_from_llm(
     return result
 
 
-def _schema_rules_to_field_specs(schema_rules: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _schema_rules_to_field_specs(schema_rules: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
     if not isinstance(schema_rules, dict):
         return []
-    fields: List[Dict[str, Any]] = []
+    fields: list[dict[str, Any]] = []
     if isinstance(schema_rules.get("fields"), list) or isinstance(schema_rules.get("baseFields"), (list, dict)):
-        def _normalize_field_definitions(raw: Any) -> List[Dict[str, Any]]:
+        def _normalize_field_definitions(raw: Any) -> list[dict[str, Any]]:
             if isinstance(raw, list):
                 return [f for f in raw if isinstance(f, dict)]
             if isinstance(raw, dict):
-                normalized: List[Dict[str, Any]] = []
+                normalized: list[dict[str, Any]] = []
                 for name, spec in raw.items():
                     if isinstance(spec, dict):
                         entry = dict(spec)
@@ -2196,10 +2193,10 @@ def _schema_rules_to_field_specs(schema_rules: Optional[Dict[str, Any]]) -> List
     return fields
 
 
-def _schema_rule_keys(schema_rules: Optional[Dict[str, Any]]) -> List[str]:
+def _schema_rule_keys(schema_rules: Optional[dict[str, Any]]) -> list[str]:
     if not isinstance(schema_rules, dict):
         return []
-    keys: List[str] = []
+    keys: list[str] = []
     if any(schema_rules.get(key) for key in ("baseSelector", "base_selector", "baseXpath", "base_xpath")):
         keys.append("baseSelector")
     fields = _schema_rules_to_field_specs(schema_rules)
@@ -2232,7 +2229,7 @@ def _llm_prompt_for_mode(
     mode: str,
     chunk: str,
     url: str,
-    fields: List[Dict[str, Any]],
+    fields: list[dict[str, Any]],
     chunk_index: int,
     chunk_count: int,
     extra_instructions: Optional[str],
@@ -2266,7 +2263,7 @@ def _llm_prompt_for_mode(
     return f"{prompt}\n\nContent:\n{chunk}"
 
 
-def _merge_llm_data(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_llm_data(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     for key, value in incoming.items():
         if key not in base or base[key] in (None, "", [], {}):
             base[key] = value
@@ -2276,9 +2273,9 @@ def _merge_llm_data(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str,
     return base
 
 
-def _merge_llm_results(objs: List[Dict[str, Any]], mode: str) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
-    merged: Dict[str, Any] = {}
-    schema: Optional[Dict[str, Any]] = None
+def _merge_llm_results(objs: list[dict[str, Any]], mode: str) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    merged: dict[str, Any] = {}
+    schema: Optional[dict[str, Any]] = None
     for obj in objs:
         if not isinstance(obj, dict):
             continue
@@ -2292,7 +2289,7 @@ def _merge_llm_results(objs: List[Dict[str, Any]], mode: str) -> Tuple[Dict[str,
     return merged, schema
 
 
-def _llm_has_content(data: Dict[str, Any]) -> bool:
+def _llm_has_content(data: dict[str, Any]) -> bool:
     for key, value in data.items():
         if value is None:
             continue
@@ -2309,10 +2306,10 @@ def extract_llm_entities(
     html_text: str,
     url: str,
     *,
-    llm_settings: Optional[Dict[str, Any]] = None,
-    schema_rules: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
+    llm_settings: Optional[dict[str, Any]] = None,
+    schema_rules: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "url": url,
         "title": "N/A",
         "author": "N/A",
@@ -2383,9 +2380,9 @@ def extract_llm_entities(
     if strict_json and response_format is None:
         response_format = {"type": "json_object"}
 
-    parsed_objects: List[Dict[str, Any]] = []
+    parsed_objects: list[dict[str, Any]] = []
     usage_total = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    llm_errors: List[str] = []
+    llm_errors: list[str] = []
     for idx, chunk in enumerate(chunks):
         prompt = _llm_prompt_for_mode(
             mode=mode,
@@ -2467,24 +2464,24 @@ def extract_article_with_pipeline(
     html: str,
     url: str,
     *,
-    strategy_order: Optional[List[str]] = None,
-    handler: Optional[Callable[[str, str], Dict[str, Any]]] = None,
-    fallback_extractor: Optional[Callable[[str, str], Dict[str, Any]]] = None,
-    schema_rules: Optional[Dict[str, Any]] = None,
-    llm_settings: Optional[Dict[str, Any]] = None,
-    regex_settings: Optional[Dict[str, Any]] = None,
-    cluster_settings: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    trace: List[Dict[str, Any]] = []
+    strategy_order: Optional[list[str]] = None,
+    handler: Optional[Callable[[str, str], dict[str, Any]]] = None,
+    fallback_extractor: Optional[Callable[[str, str], dict[str, Any]]] = None,
+    schema_rules: Optional[dict[str, Any]] = None,
+    llm_settings: Optional[dict[str, Any]] = None,
+    regex_settings: Optional[dict[str, Any]] = None,
+    cluster_settings: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    trace: list[dict[str, Any]] = []
     order, unknown = _normalize_strategy_order(strategy_order)
     if _should_clear_caches("start"):
         clear_extraction_caches()
 
     def _finalize_result(
-        result: Dict[str, Any],
+        result: dict[str, Any],
         *,
         strategy: Optional[str],
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         final = _attach_trace(result, trace, strategy, order)
         if _should_clear_caches("end"):
             clear_extraction_caches()
@@ -2492,7 +2489,7 @@ def extract_article_with_pipeline(
     for strategy in unknown:
         trace.append(_trace_entry(strategy, "skipped", "unknown_strategy"))
 
-    last_result: Optional[Dict[str, Any]] = None
+    last_result: Optional[dict[str, Any]] = None
     for strategy in order:
         start = time.perf_counter()
         if strategy == "jsonld":
@@ -2555,7 +2552,7 @@ def extract_article_with_pipeline(
                 if warning_detail:
                     result["schema_selector_warnings"] = warnings
                 if isinstance(selector_counts, dict):
-                    normalized_counts: Dict[str, int] = {}
+                    normalized_counts: dict[str, int] = {}
                     for key, count in selector_counts.items():
                         if not isinstance(key, str):
                             continue
@@ -2666,13 +2663,13 @@ def extract_article_with_pipeline(
 def extract_article_data_from_html(
     html: str,
     url: str,
-    strategy_order: Optional[List[str]] = None,
-    handler: Optional[Callable[[str, str], Dict[str, Any]]] = None,
-    schema_rules: Optional[Dict[str, Any]] = None,
-    llm_settings: Optional[Dict[str, Any]] = None,
-    regex_settings: Optional[Dict[str, Any]] = None,
-    cluster_settings: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    strategy_order: Optional[list[str]] = None,
+    handler: Optional[Callable[[str, str], dict[str, Any]]] = None,
+    schema_rules: Optional[dict[str, Any]] = None,
+    llm_settings: Optional[dict[str, Any]] = None,
+    regex_settings: Optional[dict[str, Any]] = None,
+    cluster_settings: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     """Extract article metadata and body from raw HTML."""
     return extract_article_with_pipeline(
         html,
@@ -2707,7 +2704,7 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
-async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+async def scrape_article(url: str, custom_cookies: Optional[list[dict[str, Any]]] = None) -> dict[str, Any]:
     logging.info(f"Scraping article from URL: {url}")
     # Enforce centralized egress/SSRF policy before any network access
     try:
@@ -2736,7 +2733,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             "error": "Egress policy evaluation failed. Please contact system administrator."
         }
     # Resolve scraper plan via router (configurable via YAML)
-    ws_cfg: Dict[str, Any] = {}
+    ws_cfg: dict[str, Any] = {}
     try:
         cfg = load_and_log_configs() or {}
         ws_cfg = cfg.get('web_scraper', {}) or {}
@@ -2786,7 +2783,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                 backend_choice = "auto"
 
     preflight_analysis = None
-    preflight_notes: List[str] = []
+    preflight_notes: list[str] = []
     preflight_method = "auto"
     if _as_bool(ws_cfg.get("web_scraper_preflight_analyzers", False), False):
         find_all = _as_bool(ws_cfg.get("web_scraper_preflight_find_all_waf", False), False)
@@ -2849,7 +2846,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             },
         }
 
-    def _attach_preflight(result: Dict[str, Any]) -> Dict[str, Any]:
+    def _attach_preflight(result: dict[str, Any]) -> dict[str, Any]:
         if preflight_payload and isinstance(result, dict):
             result.setdefault("preflight_analysis", preflight_payload)
         return result
@@ -3088,7 +3085,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
     return _attach_preflight(article_data)
 
 
-def scrape_article_blocking(url: str, custom_cookies: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+def scrape_article_blocking(url: str, custom_cookies: Optional[list[dict[str, Any]]] = None) -> dict[str, Any]:
     """Blocking scraper for synchronous code paths.
 
     Fetches HTML with http_client using a desktop-like user agent and optional cookies,
@@ -3151,9 +3148,9 @@ async def scrape_and_summarize_multiple(
     custom_article_titles: Optional[str],
     system_message: Optional[str] = None,
     summarize_checkbox: bool = False,
-    custom_cookies: Optional[List[Dict[str, Any]]] = None,
+    custom_cookies: Optional[list[dict[str, Any]]] = None,
     temperature: float = 0.7
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     urls_list = [url.strip() for url in urls.split('\n') if url.strip()]
     custom_titles = custom_article_titles.split('\n') if custom_article_titles else []
 
@@ -3371,7 +3368,7 @@ def scrape_and_convert_with_filter(source: str, output_file: str, filter_functio
     logging.info(f"Scraped and filtered content saved to {output_file}")
 
 
-async def scrape_entire_site(base_url: str) -> List[Dict]:
+async def scrape_entire_site(base_url: str) -> list[dict]:
     """
     Scrape the entire site by generating a temporary sitemap and extracting content from each page.
 
@@ -3647,7 +3644,7 @@ def generate_temp_sitemap_from_links(links: set) -> str:
     return temp_file_path
 
 
-def generate_sitemap_for_url(url: str) -> List[Dict[str, str]]:
+def generate_sitemap_for_url(url: str) -> list[dict[str, str]]:
     """
     Generate a sitemap for the given URL using the create_filtered_sitemap function.
 
@@ -3714,18 +3711,18 @@ def convert_to_markdown(articles: list) -> str:
 def compute_content_hash(content: str) -> str:
     return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
-def load_hashes(filename: str) -> Dict[str, str]:
+def load_hashes(filename: str) -> dict[str, str]:
     if os.path.exists(filename):
         with open(filename, 'r') as f:
             return json.load(f)
     else:
         return {}
 
-def save_hashes(hashes: Dict[str, str], filename: str):
+def save_hashes(hashes: dict[str, str], filename: str):
     with open(filename, 'w') as f:
         json.dump(hashes, f)
 
-def has_page_changed(url: str, new_hash: str, stored_hashes: Dict[str, str]) -> bool:
+def has_page_changed(url: str, new_hash: str, stored_hashes: dict[str, str]) -> bool:
     old_hash = stored_hashes.get(url)
     return old_hash != new_hash
 
@@ -3736,7 +3733,7 @@ def has_page_changed(url: str, new_hash: str, stored_hashes: Dict[str, str]) -> 
 #
 # Bookmark Parsing Functions
 
-def parse_chromium_bookmarks(json_data: dict) -> Dict[str, Union[str, List[str]]]:
+def parse_chromium_bookmarks(json_data: dict) -> dict[str, Union[str, list[str]]]:
     """
     Parse Chromium-based browser bookmarks from JSON data.
 
@@ -3772,7 +3769,7 @@ def parse_chromium_bookmarks(json_data: dict) -> Dict[str, Union[str, List[str]]
     return bookmarks
 
 
-def parse_firefox_bookmarks(html_content: str) -> Dict[str, Union[str, List[str]]]:
+def parse_firefox_bookmarks(html_content: str) -> dict[str, Union[str, list[str]]]:
     """
     Parse Firefox bookmarks from HTML content.
 
@@ -3798,7 +3795,7 @@ def parse_firefox_bookmarks(html_content: str) -> Dict[str, Union[str, List[str]
     return bookmarks
 
 
-def load_bookmarks(file_path: str) -> Dict[str, Union[str, List[str]]]:
+def load_bookmarks(file_path: str) -> dict[str, Union[str, list[str]]]:
     """
     Load bookmarks from a file (JSON for Chrome/Edge or HTML for Firefox).
 
@@ -3836,7 +3833,7 @@ def load_bookmarks(file_path: str) -> Dict[str, Union[str, List[str]]]:
         raise ValueError("Unsupported file format for bookmarks.")
 
 
-def collect_bookmarks(file_path: str) -> Dict[str, Union[str, List[str]]]:
+def collect_bookmarks(file_path: str) -> dict[str, Union[str, list[str]]]:
     """
     Collect bookmarks from the provided bookmarks file and return a dictionary.
 
@@ -3852,7 +3849,7 @@ def collect_bookmarks(file_path: str) -> Dict[str, Union[str, List[str]]]:
         return {}
 
 
-def parse_csv_urls(file_path: str) -> Dict[str, Union[str, List[str]]]:
+def parse_csv_urls(file_path: str) -> dict[str, Union[str, list[str]]]:
     """
     Parse URLs from a CSV file. The CSV should have at minimum a 'url' column,
     and optionally a 'title' or 'name' column.
@@ -3902,7 +3899,7 @@ def parse_csv_urls(file_path: str) -> Dict[str, Union[str, List[str]]]:
         return {}
 
 
-def collect_urls_from_file(file_path: str) -> Dict[str, Union[str, List[str]]]:
+def collect_urls_from_file(file_path: str) -> dict[str, Union[str, list[str]]]:
     """
     Unified function to collect URLs from either bookmarks or CSV files.
 
@@ -3959,7 +3956,7 @@ class ContentMetadataHandler:
             url: str,
             content: str,
             pipeline: str = "Trafilatura",
-            additional_metadata: Optional[Dict[str, Any]] = None
+            additional_metadata: Optional[dict[str, Any]] = None
     ) -> str:
         """
         Format content with metadata header.
@@ -3993,7 +3990,7 @@ class ContentMetadataHandler:
         return formatted_content
 
     @staticmethod
-    def extract_metadata(content: str) -> Tuple[Dict[str, Any], str]:
+    def extract_metadata(content: str) -> tuple[dict[str, Any], str]:
         """
         Extract metadata and content separately.
 
@@ -4102,9 +4099,9 @@ async def recursive_scrape(
         delay: float = 1.0,
         resume_file: str = 'scrape_progress.json',
         user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
-        custom_cookies: Optional[List[Dict[str, Any]]] = None,
+        custom_cookies: Optional[list[dict[str, Any]]] = None,
         progress_callback: Optional[callable] = None
-) -> List[Dict]:
+) -> list[dict]:
     async def save_progress():
         temp_file = resume_file + ".tmp"
         with open(temp_file, 'w') as f:
@@ -4204,7 +4201,7 @@ async def recursive_scrape(
 
         return scraped_articles
 
-async def scrape_article_async(context, url: str) -> Dict[str, Any]:
+async def scrape_article_async(context, url: str) -> dict[str, Any]:
     page = await context.new_page()
     try:
         await page.goto(url)
@@ -4229,7 +4226,7 @@ async def scrape_article_async(context, url: str) -> Dict[str, Any]:
     finally:
         await page.close()
 
-def scrape_article_sync(url: str) -> Dict[str, Any]:
+def scrape_article_sync(url: str) -> dict[str, Any]:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()

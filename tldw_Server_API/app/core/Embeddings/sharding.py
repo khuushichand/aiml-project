@@ -2,16 +2,15 @@
 # Sharding implementation for distributed embedding storage and retrieval
 
 import hashlib
-import json
-from typing import Dict, Any, List, Optional, Tuple
-from dataclasses import dataclass
-from pathlib import Path
 import threading
 from collections import defaultdict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Optional
 
-from loguru import logger
 import chromadb
 from chromadb.config import Settings
+from loguru import logger
 
 
 @dataclass
@@ -41,8 +40,8 @@ class ConsistentHashRing:
             virtual_nodes: Number of virtual nodes per shard for better distribution
         """
         self.virtual_nodes = virtual_nodes
-        self.ring: Dict[int, int] = {}  # hash -> shard_id
-        self.shards: Dict[int, ShardInfo] = {}  # shard_id -> ShardInfo
+        self.ring: dict[int, int] = {}  # hash -> shard_id
+        self.shards: dict[int, ShardInfo] = {}  # shard_id -> ShardInfo
         self._lock = threading.RLock()
 
     def add_shard(self, shard: ShardInfo):
@@ -101,7 +100,7 @@ class ConsistentHashRing:
         """Generate hash for a key"""
         return int(hashlib.md5(key.encode()).hexdigest(), 16)
 
-    def get_shard_distribution(self) -> Dict[int, int]:
+    def get_shard_distribution(self) -> dict[int, int]:
         """Get current distribution of keys across shards"""
         distribution = defaultdict(int)
         for shard_id in self.ring.values():
@@ -220,8 +219,8 @@ class EmbeddingShardManager:
         self,
         collection_name: str,
         embedding_id: str,
-        embedding: List[float],
-        metadata: Dict[str, Any],
+        embedding: list[float],
+        metadata: dict[str, Any],
         document: str
     ) -> str:
         """
@@ -273,10 +272,10 @@ class EmbeddingShardManager:
     def query_embedding(
         self,
         collection_name: str,
-        query_embedding: List[float],
+        query_embedding: list[float],
         n_results: int = 10,
-        where: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        where: Optional[dict[str, Any]] = None
+    ) -> dict[str, Any]:
         """
         Query embeddings across shards.
 
@@ -416,7 +415,7 @@ class EmbeddingShardManager:
 
         self.stats['rebalances'] += 1
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get sharding statistics"""
         shard_stats = []
 

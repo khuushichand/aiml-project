@@ -2,21 +2,22 @@
 # Request batching for improved throughput
 
 import asyncio
-import time
-import json
 import hashlib
-from typing import List, Dict, Any, Optional, Tuple, Callable
-from dataclasses import dataclass
-from collections import deque
-import uuid
+import json
 import threading
+import time
+import uuid
 import weakref
+from collections import deque
+from dataclasses import dataclass
+from typing import Any, Optional
 
 from loguru import logger
 from pydantic import BaseModel
-from tldw_Server_API.app.core.Embeddings.simplified_config import get_config, ProviderConfig
+
 from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
 from tldw_Server_API.app.core.Embeddings.rate_limiter import get_async_rate_limiter
+from tldw_Server_API.app.core.Embeddings.simplified_config import ProviderConfig, get_config
 from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens
 
 
@@ -41,7 +42,7 @@ def _resolve_model_spec(
     models: Any,
     model_id: str,
     model: str,
-) -> Tuple[Optional[str], Optional[Any]]:
+) -> tuple[Optional[str], Optional[Any]]:
     """Resolve a model spec from a mapping, returning the key and spec."""
     if not isinstance(models, dict):
         return None, None
@@ -63,10 +64,10 @@ class BatchRequest:
     text: str
     model: str
     provider: str
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
     future: asyncio.Future
     timestamp: float
-    config_override: Optional[Dict[str, Any]] = None
+    config_override: Optional[dict[str, Any]] = None
 
 
 class RequestBatcher:
@@ -93,8 +94,8 @@ class RequestBatcher:
         self.adaptive_batching = self.config.batching.adaptive_batching
 
         # Request queues per model
-        self.queues: Dict[Tuple[str, str, str], deque] = {}
-        self.processing_tasks: Dict[Tuple[str, str, str], asyncio.Task] = {}
+        self.queues: dict[tuple[str, str, str], deque] = {}
+        self.processing_tasks: dict[tuple[str, str, str], asyncio.Task] = {}
 
         # Statistics
         self.stats = {
@@ -124,7 +125,7 @@ class RequestBatcher:
             f"timeout={self.batch_timeout_ms}ms"
         )
 
-    def _start_processing_task(self, queue_key: Tuple[str, str, str]) -> Optional[asyncio.Task]:
+    def _start_processing_task(self, queue_key: tuple[str, str, str]) -> Optional[asyncio.Task]:
         """Start a processing task for the queue if we're not shutting down."""
         if self._shutdown_requested:
             return None
@@ -136,7 +137,7 @@ class RequestBatcher:
         )
         return new_task
 
-    def _handle_task_done(self, queue_key: Tuple[str, str, str], completed: asyncio.Task) -> None:
+    def _handle_task_done(self, queue_key: tuple[str, str, str], completed: asyncio.Task) -> None:
         """Cleanup task tracking and restart processing if work arrived during idle exit."""
         if self.processing_tasks.get(queue_key) is completed:
             self.processing_tasks.pop(queue_key, None)
@@ -153,8 +154,8 @@ class RequestBatcher:
         text: str,
         model: str,
         provider: str,
-        metadata: Optional[Dict[str, Any]] = None,
-        config_override: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None,
+        config_override: Optional[dict[str, Any]] = None
     ) -> Any:
         """
         Submit a request for batching.
@@ -297,7 +298,7 @@ class RequestBatcher:
                 # Don't crash the processing task
                 await asyncio.sleep(0.1)
 
-    async def _collect_batch(self, queue: deque) -> List[BatchRequest]:
+    async def _collect_batch(self, queue: deque) -> list[BatchRequest]:
         """
         Collect requests into a batch.
 
@@ -350,7 +351,7 @@ class RequestBatcher:
 
     async def _process_batch(
         self,
-        batch: List[BatchRequest],
+        batch: list[BatchRequest],
         provider: str,
         model: str
     ):
@@ -445,8 +446,8 @@ class RequestBatcher:
         text: str,
         model: str,
         provider: str,
-        metadata: Optional[Dict[str, Any]] = None,
-        config_override: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        config_override: Optional[dict[str, Any]] = None,
         rate_limit_applied: bool = False,
     ) -> Any:
         """
@@ -542,9 +543,9 @@ class RequestBatcher:
 
     async def _create_local_embeddings(
         self,
-        texts: List[str],
+        texts: list[str],
         model: str,
-    ) -> List[List[float]]:
+    ) -> list[list[float]]:
         """Create local (in-process) embeddings without HTTP delegation."""
         from tldw_Server_API.app.core.Embeddings.async_embeddings import get_async_embedding_service
 
@@ -562,7 +563,7 @@ class RequestBatcher:
         self,
         provider: str,
         model: str,
-        config_override: Optional[Dict[str, Any]],
+        config_override: Optional[dict[str, Any]],
     ) -> str:
         """Resolve provider name, mapping local to local_api when configured."""
         if not provider:
@@ -582,7 +583,7 @@ class RequestBatcher:
         self,
         provider: str,
         model: str,
-        config_override: Optional[Dict[str, Any]],
+        config_override: Optional[dict[str, Any]],
     ) -> Optional[str]:
         """Resolve API URL for local provider overrides."""
         if isinstance(config_override, dict):
@@ -608,7 +609,7 @@ class RequestBatcher:
             return provider_config.api_url
         return None
 
-    def _build_user_app_config(self, provider: str, model: str) -> Dict[str, Any]:
+    def _build_user_app_config(self, provider: str, model: str) -> dict[str, Any]:
         """Construct full user app config for embeddings executor."""
         provider_config = None
         candidates = {
@@ -630,7 +631,7 @@ class RequestBatcher:
 
         normalized_provider = self._normalize_provider_name(provider)
 
-        model_entry: Dict[str, Any] = {
+        model_entry: dict[str, Any] = {
             "provider": normalized_provider,
             "model_name_or_path": model
         }
@@ -639,7 +640,7 @@ class RequestBatcher:
         if provider_config.api_url:
             model_entry["api_url"] = provider_config.api_url
 
-        user_app_config: Dict[str, Any] = {
+        user_app_config: dict[str, Any] = {
             "embedding_config": {
                 "default_model_id": model_id,
                 "models": {
@@ -672,7 +673,7 @@ class RequestBatcher:
         return mapping.get(provider.lower())
 
     @staticmethod
-    def _fingerprint_config(config: Optional[Dict[str, Any]]) -> str:
+    def _fingerprint_config(config: Optional[dict[str, Any]]) -> str:
         """Return a stable fingerprint for a config override."""
         if config is None:
             return "__default__"
@@ -705,19 +706,19 @@ class RequestBatcher:
         self,
         provider: str,
         model: str,
-        config_override: Optional[Dict[str, Any]],
-    ) -> Tuple[str, str, str]:
+        config_override: Optional[dict[str, Any]],
+    ) -> tuple[str, str, str]:
         """Build queue key incorporating provider, model, and config override."""
         return (provider, model, self._fingerprint_config(config_override))
 
     @staticmethod
-    def _queue_label(queue_key: Tuple[str, str, str]) -> str:
+    def _queue_label(queue_key: tuple[str, str, str]) -> str:
         """Readable label for queue keys (for logging/tests)."""
         provider, model, fingerprint = queue_key
         return f"{provider}:{model}:{fingerprint}"
 
     @staticmethod
-    def _build_provider_section(provider_config: ProviderConfig) -> Optional[Dict[str, Any]]:
+    def _build_provider_section(provider_config: ProviderConfig) -> Optional[dict[str, Any]]:
         """Build provider-specific top-level config payload (e.g., API keys)."""
         section_key_map = {
             "openai": "openai_api",
@@ -730,7 +731,7 @@ class RequestBatcher:
         if not section_key:
             return None
 
-        section_payload: Dict[str, Any] = {}
+        section_payload: dict[str, Any] = {}
         if provider_config.api_key:
             section_payload["api_key"] = provider_config.api_key
         if provider_config.api_url:
@@ -808,7 +809,7 @@ class RequestBatcher:
 
         return len(empty_keys)
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get batching statistics"""
         # Opportunistically clean up empty queues during status check
         self.cleanup_empty_queues()
@@ -844,7 +845,7 @@ class RequestBatcher:
 
         # Cancel processing tasks
         current_loop = asyncio.get_running_loop()
-        tasks_to_await: List[asyncio.Task] = []
+        tasks_to_await: list[asyncio.Task] = []
         for task in list(self.processing_tasks.values()):
             task_loop = task.get_loop()
             if task_loop is current_loop:
@@ -901,9 +902,9 @@ def get_batcher() -> RequestBatcher:
 
 
 def _resolve_provider_model(
-    config: Dict[str, Any],
+    config: dict[str, Any],
     model_id_override: Optional[str],
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     """Resolve provider/model from override or embedding_config defaults."""
     emb_cfg = (config or {}).get("embedding_config", {}) or {}
     models = emb_cfg.get("models", {}) or {}
@@ -934,11 +935,11 @@ def _resolve_provider_model(
 
 # Convenience function for batched requests
 async def create_embeddings_batch_async(
-    texts: List[str],
-    config: Dict[str, Any],
+    texts: list[str],
+    config: dict[str, Any],
     model_id_override: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None
-) -> List[List[float]]:
+    metadata: Optional[dict[str, Any]] = None
+) -> list[list[float]]:
     """
     Create embeddings with automatic batching.
 

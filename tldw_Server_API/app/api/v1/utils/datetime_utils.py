@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
-from typing import Any, Optional
+from typing import Any
 
 from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import TimedEffects
 
@@ -47,7 +47,7 @@ def coerce_datetime(value: Any) -> _dt.datetime:
     return _dt.datetime.now(_dt.timezone.utc)
 
 
-def parse_timed_effects(value: Any) -> Optional[TimedEffects]:
+def parse_timed_effects(value: Any) -> TimedEffects | None:
     """
     Normalize various representations into a TimedEffects instance.
 

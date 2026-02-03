@@ -9,22 +9,19 @@ import asyncio
 import functools
 import time
 import traceback
-from typing import Any, Callable, Dict, Optional, TypeVar, Union, List
 from dataclasses import dataclass
-import inspect
-import json
+from typing import Any, Callable, Optional, TypeVar
 
 from loguru import logger
 
 from .metrics_manager import (
+    MetricDefinition,
+    MetricType,
     get_metrics_registry,
     increment_counter,
     observe_histogram,
     set_gauge,
-    MetricDefinition,
-    MetricType,
 )
-from .traces import get_tracing_manager
 
 # Import OpenTelemetry types conditionally
 try:
@@ -48,7 +45,7 @@ class MetricConfig:
     call_metric: Optional[str] = None
     error_metric: Optional[str] = None
     success_metric: Optional[str] = None
-    labels: Optional[Dict[str, str]] = None
+    labels: Optional[dict[str, str]] = None
     label_extractor: Optional[Callable] = None
     include_args: bool = False
     include_result: bool = False
@@ -59,7 +56,7 @@ _DEFAULT_DURATION_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5
 
 def track_metrics(
     name: Optional[str] = None,
-    labels: Optional[Dict[str, str]] = None,
+    labels: Optional[dict[str, str]] = None,
     track_duration: bool = True,
     track_calls: bool = True,
     track_errors: bool = True,
@@ -229,8 +226,8 @@ def track_metrics(
 
 def measure_latency(
     metric_name: Optional[str] = None,
-    labels: Optional[Dict[str, str]] = None,
-    buckets: Optional[List[float]] = None
+    labels: Optional[dict[str, str]] = None,
+    buckets: Optional[list[float]] = None
 ) -> Callable[[F], F]:
     """
     Decorator to measure function latency.
@@ -289,7 +286,7 @@ def measure_latency(
 
 def count_calls(
     metric_name: Optional[str] = None,
-    labels: Optional[Dict[str, str]] = None,
+    labels: Optional[dict[str, str]] = None,
     label_extractor: Optional[Callable] = None
 ) -> Callable[[F], F]:
     """
@@ -356,7 +353,7 @@ def count_calls(
 
 def track_errors(
     metric_name: Optional[str] = None,
-    labels: Optional[Dict[str, str]] = None,
+    labels: Optional[dict[str, str]] = None,
     include_traceback: bool = False
 ) -> Callable[[F], F]:
     """

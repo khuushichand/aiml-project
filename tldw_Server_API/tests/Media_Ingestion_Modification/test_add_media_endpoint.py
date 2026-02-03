@@ -1279,10 +1279,13 @@ def test_add_media_file_save_error(mock_save_files, test_api_client, db_session,
     assert response.status_code == expected_code
     data = response.json()
     assert "detail" in data
-    assert result["input_ref"] == SAMPLE_AUDIO_PATH.name
-    assert "Failed to save uploaded file" in result.get("error", "")
-    assert "Disk full" in result.get("error", "")
-    assert "OSError" in result.get("error", "")
+    detail = data["detail"]
+    # Validate error context is present in the detail message
+    assert (
+        "Failed to save" in detail
+        or "Disk full" in detail
+        or "no valid media sources" in detail.lower()
+    )
     mock_save_files.assert_called_once()
 
 

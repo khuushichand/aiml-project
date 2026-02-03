@@ -11,7 +11,7 @@ modules.
 
 import asyncio
 import functools
-from typing import Any, Dict, List
+from typing import Any
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (
     process_audio_files,
@@ -20,14 +20,14 @@ from tldw_Server_API.app.core.Utils.Utils import logging as logger
 
 
 async def run_audio_batch(
-    all_inputs: List[str],
+    all_inputs: list[str],
     *,
     form_data: Any,
     temp_dir: str,
-    temp_path_to_original_name: Dict[str, str],
-    saved_files: List[Dict[str, Any]],
-    file_errors_raw: List[Dict[str, Any]],
-) -> Dict[str, Any]:
+    temp_path_to_original_name: dict[str, str],
+    saved_files: list[dict[str, Any]],
+    file_errors_raw: list[dict[str, Any]],
+) -> dict[str, Any]:
     """
     Execute the audio processing library and merge results with file errors.
 
@@ -45,7 +45,7 @@ async def run_audio_batch(
     """
     loop = asyncio.get_running_loop()
 
-    batch_result: Dict[str, Any] = {
+    batch_result: dict[str, Any] = {
         "processed_count": 0,
         "errors_count": 0,
         "errors": [],
@@ -210,7 +210,7 @@ async def run_audio_batch(
         batch_result["errors"].extend(processing_output.get("errors", []))
 
         processed_items = processing_output.get("results", [])
-        adapted_processed_items: List[Dict[str, Any]] = []
+        adapted_processed_items: list[dict[str, Any]] = []
         for item in processed_items:
             # Prefer mapping based on the library's processing_source (temp path)
             # but fall back to the original input_ref when no mapping exists.

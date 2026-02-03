@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
 import asyncio
 import os
+from typing import Any
 
-from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import normalize_provider_name
 from tldw_Server_API.app.core.AuthNZ.byok_config import build_app_config_overrides
+from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import normalize_provider_name
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAPIError,
     ChatAuthenticationError,
@@ -13,11 +13,10 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatProviderError,
 )
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
-from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-from tldw_Server_API.app.core.LLM_Calls.provider_metadata import list_registered_providers
-from tldw_Server_API.app.core.LLM_Calls.adapter_utils import normalize_provider
 from tldw_Server_API.app.core.config import load_comprehensive_config
-
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import normalize_provider
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import list_registered_providers
 
 _INVALID_TEST_KEY_PREFIXES = ("invalid-", "test-invalid-", "bad-key-", "dummy-invalid-")
 
@@ -37,11 +36,11 @@ def is_obviously_invalid_key(api_key: str) -> bool:
     return any(lowered.startswith(prefix) for prefix in _INVALID_TEST_KEY_PREFIXES)
 
 
-def resolve_default_model_for_provider(provider: str) -> Optional[str]:
+def resolve_default_model_for_provider(provider: str) -> str | None:
     try:
         from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
-            get_override_default_model,
             get_llm_provider_override,
+            get_override_default_model,
         )
 
         override_default = get_override_default_model(provider)
@@ -77,7 +76,7 @@ def resolve_default_model_for_provider(provider: str) -> Optional[str]:
     return None
 
 
-def build_app_config_for_provider(provider: str, credential_fields: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def build_app_config_for_provider(provider: str, credential_fields: dict[str, Any] | None) -> dict[str, Any]:
     return build_app_config_overrides(provider, credential_fields)
 
 
@@ -85,8 +84,8 @@ async def test_provider_credentials(
     *,
     provider: str,
     api_key: str,
-    credential_fields: Optional[Dict[str, Any]] = None,
-    model: Optional[str] = None,
+    credential_fields: dict[str, Any] | None = None,
+    model: str | None = None,
 ) -> str:
     provider_norm = normalize_provider_name(provider)
     provider_registry_name = normalize_provider(provider_norm)

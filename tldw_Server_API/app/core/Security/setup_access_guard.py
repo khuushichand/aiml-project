@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import ipaddress
-from typing import Callable, Optional
+import os
+from typing import Callable
 
 from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response, PlainTextResponse
+from starlette.responses import PlainTextResponse, Response
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
-import os
 
 
 def _env_true(name: str) -> bool:
@@ -20,14 +20,14 @@ def _env_true(name: str) -> bool:
 
 
 
-def _get_peer_ip(request: Request) -> Optional[str]:
+def _get_peer_ip(request: Request) -> str | None:
     try:
         return request.client.host if request.client else None
     except Exception:
         return None
 
 
-def _is_loopback(ip_str: Optional[str]) -> bool:
+def _is_loopback(ip_str: str | None) -> bool:
     if not ip_str:
         return False
     if ip_str in {"testclient", "localhost"}:
@@ -60,7 +60,7 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
       - [Setup] allow_remote_setup_access=true in Config_Files/config.txt
     """
 
-    def _parse_allowlist(self, raw: Optional[str]) -> list[ipaddress._BaseNetwork]:
+    def _parse_allowlist(self, raw: str | None) -> list[ipaddress._BaseNetwork]:
         nets: list[ipaddress._BaseNetwork] = []
         if not raw:
             return nets
@@ -91,7 +91,7 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
             pass
         return []
 
-    def _resolve_client_ip(self, request: Request, trusted_proxies: list[ipaddress._BaseNetwork]) -> Optional[str]:
+    def _resolve_client_ip(self, request: Request, trusted_proxies: list[ipaddress._BaseNetwork]) -> str | None:
         """Resolve client IP using X-Forwarded-For only when the peer is a trusted proxy.
 
         - If remote peer is in trusted_proxies and XFF present, use the first (leftmost) XFF IP.
@@ -103,7 +103,7 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
             peer_ip_obj = ipaddress.ip_address(peer) if peer else None
         except Exception:
             peer_ip_obj = None
-        def _is_trusted(ip: Optional[ipaddress._BaseAddress]) -> bool:
+        def _is_trusted(ip: ipaddress._BaseAddress | None) -> bool:
             return bool(ip and any(ip in net for net in trusted_proxies))
 
         if _is_trusted(peer_ip_obj):
@@ -140,7 +140,7 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Convert client_ip to ip_address object for membership checks
-        client_ip_obj: Optional[ipaddress._BaseAddress] = None
+        client_ip_obj: ipaddress._BaseAddress | None = None
         try:
             client_ip_obj = ipaddress.ip_address(client_ip) if client_ip else None
         except Exception:

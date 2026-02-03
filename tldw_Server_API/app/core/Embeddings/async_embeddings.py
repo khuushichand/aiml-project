@@ -2,27 +2,28 @@
 # Async implementation of embeddings creation and management
 
 import asyncio
-import hashlib
-import time
 import atexit
+import hashlib
 import threading
+import time
 import weakref
-from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
-import numpy as np
+from typing import Any, Optional
 
+import numpy as np
 from loguru import logger
+
 from tldw_Server_API.app.core.Embeddings.connection_pool import get_pool_manager
-from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
 from tldw_Server_API.app.core.Embeddings.error_recovery import get_recovery_manager
-from tldw_Server_API.app.core.Embeddings.rate_limiter import get_async_rate_limiter
+from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
 from tldw_Server_API.app.core.Embeddings.multi_tier_cache import get_multi_tier_cache
+from tldw_Server_API.app.core.Embeddings.rate_limiter import get_async_rate_limiter
 from tldw_Server_API.app.core.Embeddings.request_batching import get_batcher
 from tldw_Server_API.app.core.Embeddings.simplified_config import get_config
 from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens
 
 
-def _normalize_embedding_response(payload: Any) -> List[float]:
+def _normalize_embedding_response(payload: Any) -> list[float]:
     """Normalize embedding payloads into a single vector."""
     if isinstance(payload, dict):
         if "error" in payload:
@@ -65,16 +66,16 @@ class AsyncEmbeddingProvider:
         text: str,
         model: str,
         user_id: Optional[str] = None
-    ) -> List[float]:
+    ) -> list[float]:
         """Create embedding asynchronously"""
         raise NotImplementedError
 
     async def create_embeddings_batch(
         self,
-        texts: List[str],
+        texts: list[str],
         model: str,
         user_id: Optional[str] = None
-    ) -> List[List[float]]:
+    ) -> list[list[float]]:
         """Create embeddings for multiple texts"""
         tasks = [
             self.create_embedding(text, model, user_id)
@@ -102,7 +103,7 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
         model: str = "text-embedding-3-small",
         user_id: Optional[str] = None,
         base_url_override: Optional[str] = None,
-    ) -> List[float]:
+    ) -> list[float]:
         """Create embedding using OpenAI API"""
         import time as _time
         t0 = _time.perf_counter()
@@ -184,7 +185,7 @@ class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
         model: str = "sentence-transformers/all-MiniLM-L6-v2",
         user_id: Optional[str] = None,
         base_url_override: Optional[str] = None,
-    ) -> List[float]:
+    ) -> list[float]:
         """Create embedding using HuggingFace API"""
 
         # Check rate limit
@@ -251,7 +252,7 @@ class AsyncLocalAPIProvider(AsyncEmbeddingProvider):
         text: str,
         model: str,
         user_id: Optional[str] = None,
-    ) -> List[float]:
+    ) -> list[float]:
         import time as _time
         t0 = _time.perf_counter()
         status = "success"
@@ -310,13 +311,13 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
 
     def __init__(self, max_models_in_memory: int = 3, model_ttl_seconds: int = 3600):
         super().__init__("local", None)
-        self.models: Dict[str, Any] = {}
-        self.model_last_used: Dict[str, float] = {}
-        self.model_in_use: Dict[str, int] = {}
+        self.models: dict[str, Any] = {}
+        self.model_last_used: dict[str, float] = {}
+        self.model_in_use: dict[str, int] = {}
         self.max_models_in_memory = max(1, int(max_models_in_memory))
         self.model_ttl_seconds = max(0, int(model_ttl_seconds)) if model_ttl_seconds is not None else 0
         self.executor = ThreadPoolExecutor(max_workers=2)
-        self._model_locks: Dict[str, asyncio.Lock] = {}
+        self._model_locks: dict[str, asyncio.Lock] = {}
         self._model_locks_guard = asyncio.Lock()
         self._models_guard = asyncio.Lock()
 
@@ -412,7 +413,7 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
         text: str,
         model: str = "all-MiniLM-L6-v2",
         user_id: Optional[str] = None
-    ) -> List[float]:
+    ) -> list[float]:
         """Create embedding using local model"""
 
         # Load model if needed
@@ -514,7 +515,7 @@ class AsyncEmbeddingService:
         user_id: Optional[str] = None,
         use_cache: bool = True,
         use_batching: bool = True
-    ) -> List[float]:
+    ) -> list[float]:
         """
         Create embedding with full async pipeline.
 
@@ -609,12 +610,12 @@ class AsyncEmbeddingService:
 
     async def create_embeddings_batch(
         self,
-        texts: List[str],
+        texts: list[str],
         model: Optional[str] = None,
         provider: Optional[str] = None,
         user_id: Optional[str] = None,
         parallel: bool = True
-    ) -> List[List[float]]:
+    ) -> list[list[float]]:
         """
         Create embeddings for multiple texts.
 
@@ -652,7 +653,7 @@ class AsyncEmbeddingService:
         failed_provider: str,
         user_id: Optional[str],
         original_error: Exception
-    ) -> Tuple[List[float], str, str]:
+    ) -> tuple[list[float], str, str]:
         """Try fallback providers when primary fails"""
 
         # Get provider config
@@ -721,7 +722,7 @@ class AsyncEmbeddingService:
             except Exception as e:
                 logger.warning(f"Failed to warmup provider {provider_name}: {e}")
 
-    async def get_provider_status(self) -> Dict[str, Any]:
+    async def get_provider_status(self) -> dict[str, Any]:
         """Get status of all providers"""
         status = {}
 
@@ -910,7 +911,7 @@ async def create_embedding_async(
     model: Optional[str] = None,
     provider: Optional[str] = None,
     user_id: Optional[str] = None
-) -> List[float]:
+) -> list[float]:
     """
     Create a single embedding asynchronously.
 
@@ -928,11 +929,11 @@ async def create_embedding_async(
 
 
 async def create_embeddings_batch_async(
-    texts: List[str],
+    texts: list[str],
     model: Optional[str] = None,
     provider: Optional[str] = None,
     user_id: Optional[str] = None
-) -> List[List[float]]:
+) -> list[list[float]]:
     """
     Create embeddings for multiple texts asynchronously.
 

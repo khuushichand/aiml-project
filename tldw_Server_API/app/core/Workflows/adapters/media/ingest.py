@@ -12,13 +12,12 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.exceptions import AdapterError
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
-from tldw_Server_API.app.core.Workflows.subprocess_utils import start_process, terminate_process
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     resolve_workflow_file_uri,
 )
@@ -27,6 +26,7 @@ from tldw_Server_API.app.core.Workflows.adapters.media._config import (
     MediaIngestConfig,
     ProcessMediaConfig,
 )
+from tldw_Server_API.app.core.Workflows.subprocess_utils import start_process, terminate_process
 
 
 @registry.register(
@@ -37,7 +37,7 @@ from tldw_Server_API.app.core.Workflows.adapters.media._config import (
     tags=["media", "ingest"],
     config_model=MediaIngestConfig,
 )
-async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_media_ingest_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Media ingestion step (v0.1 minimal) with optional yt-dlp/ffmpeg integration.
 
     Config:
@@ -93,7 +93,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
             if extracted_text:
                 out["text"] = (out.get("text") or "") + ("\n\n" if out.get("text") else "") + extracted_text
 
-            chunks_desc: List[Dict[str, Any]] = []
+            chunks_desc: list[dict[str, Any]] = []
             try:
                 from tldw_Server_API.app.core.Chunking import Chunker
                 chunker = Chunker()
@@ -428,8 +428,8 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
             # Persist artifacts for downloaded files
             try:
                 if callable(context.get("add_artifact")):
-                    import mimetypes
                     import hashlib
+                    import mimetypes
                     for fp in step_dir.glob("*.*"):
                         # Skip log files
                         if fp.name in {"stdout.log", "stderr.log"} or fp.parent.name == "logs":
@@ -473,7 +473,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
     tags=["media", "processing"],
     config_model=ProcessMediaConfig,
 )
-async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_process_media_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Process media ephemerally using internal services (no persistence).
 
     Supports kinds:
@@ -488,12 +488,12 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
     outputs (e.g., first article summary/content, or extracted text), so
     downstream steps like `prompt` and `tts` can use `last.text` directly.
     """
-    def _emit(out: Dict[str, Any]) -> Dict[str, Any]:
+    def _emit(out: dict[str, Any]) -> dict[str, Any]:
         # Attach best-effort text for chaining convenience
         try:
             if "text" not in out or not out.get("text"):
                 # Try to find first rich text content
-                txt: Optional[str] = None
+                txt: str | None = None
                 # Web scraping shape: results -> list of {content, summary}
                 results = out.get("results") if isinstance(out, dict) else None
                 if isinstance(results, list) and results:

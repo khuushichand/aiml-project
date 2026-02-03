@@ -1,7 +1,7 @@
 # tldw_Server_API/app/api/v1/API_Deps/validation_deps.py
-from tldw_Server_API.app.core.config import settings, MAGIC_FILE_PATH, YARA_RULES_PATH
+from tldw_Server_API.app.core.config import YARA_RULES_PATH
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
-from tldw_Server_API.app.core.Utils.Utils import logging # Your logger
+
 #
 ########################################################################################################################
 #

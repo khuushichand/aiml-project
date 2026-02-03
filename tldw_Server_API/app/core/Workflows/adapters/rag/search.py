@@ -10,14 +10,14 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
-from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.rag._config import (
     RAGSearchConfig,
@@ -34,7 +34,7 @@ from tldw_Server_API.app.core.Workflows.adapters.rag._config import (
     tags=["rag", "search"],
     config_model=RAGSearchConfig,
 )
-async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_rag_search_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Execute a RAG search via the unified pipeline.
 
     Config:
@@ -99,7 +99,7 @@ async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
         # quick wins
         "highlight_results", "highlight_query_terms", "track_cost",
     }
-    kwargs: Dict[str, Any] = {k: v for k, v in (config or {}).items() if k in passthrough_keys}
+    kwargs: dict[str, Any] = {k: v for k, v in (config or {}).items() if k in passthrough_keys}
 
     result = await unified_rag_pipeline(
         query=rendered_query,
@@ -128,7 +128,7 @@ async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
                 doc_dict = {"id": "unknown", "content": str(d)}
             docs.append(doc_dict)
 
-    out: Dict[str, Any] = {
+    out: dict[str, Any] = {
         "documents": docs,
         "metadata": result.metadata,
         "timings": result.timings,
@@ -148,7 +148,7 @@ async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
     tags=["rag", "search", "web"],
     config_model=WebSearchConfig,
 )
-async def run_web_search_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_web_search_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Perform web search using various search engines.
 
     Config:
@@ -241,7 +241,7 @@ async def run_web_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
         # Combine snippets into text for downstream steps
         text = "\n".join([f"- {r['title']}: {r['snippet']}" for r in formatted_results if r.get("title")])
 
-        out: Dict[str, Any] = {
+        out: dict[str, Any] = {
             "results": formatted_results,
             "count": len(formatted_results),
             "query": query,
@@ -281,7 +281,7 @@ async def run_web_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
     tags=["rag", "feed"],
     config_model=RSSFetchConfig,
 )
-async def run_rss_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_rss_fetch_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Fetch RSS/Atom feeds and return items.
 
     Config:
@@ -392,7 +392,7 @@ async def run_rss_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any])
     tags=["rag", "feed"],
     config_model=RSSFetchConfig,
 )
-async def run_atom_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_atom_fetch_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Fetch Atom feeds (alias for rss_fetch).
 
     Config:

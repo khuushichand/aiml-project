@@ -8,21 +8,25 @@ to support v0.1 engine scaffolding.
 from __future__ import annotations
 
 import json
-import sqlite3
-from dataclasses import dataclass
 import os
+import sqlite3
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
 from .backends.base import (
     BackendType,
     DatabaseBackend,
-    DatabaseError as BackendDatabaseError,
     QueryResult,
+)
+from .backends.base import (
+    DatabaseError as BackendDatabaseError,
 )
 from .backends.query_utils import (
     prepare_backend_many_statement,
@@ -197,7 +201,7 @@ class WorkflowRowAdapter:
 
     __slots__ = ("_mapping", "_columns")
 
-    def __init__(self, mapping: Dict[str, Any], columns: Tuple[str, ...]):
+    def __init__(self, mapping: dict[str, Any], columns: tuple[str, ...]):
         self._mapping = mapping
         self._columns = columns
 
@@ -214,13 +218,13 @@ class WorkflowRowAdapter:
         for column in self._columns:
             yield column, self._mapping.get(column)
 
-    def keys(self) -> Tuple[str, ...]:
+    def keys(self) -> tuple[str, ...]:
         return self._columns
 
     def get(self, key: str, default: Any = None) -> Any:
         return self._mapping.get(key, default)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return dict(self._mapping)
 
 
@@ -233,9 +237,9 @@ class WorkflowsBackendCursorAdapter:
         self._index = 0
         self.description = result.description or []
 
-    def _build_rows(self, result: QueryResult) -> List[WorkflowRowAdapter]:
-        rows: List[WorkflowRowAdapter] = []
-        columns: Tuple[str, ...] = tuple()
+    def _build_rows(self, result: QueryResult) -> list[WorkflowRowAdapter]:
+        rows: list[WorkflowRowAdapter] = []
+        columns: tuple[str, ...] = tuple()
         if result.description:
             columns = tuple(desc[0] for desc in result.description if desc)
         for mapping in result.rows:
@@ -245,21 +249,21 @@ class WorkflowsBackendCursorAdapter:
             rows.append(WorkflowRowAdapter(mapping_dict, columns))
         return rows
 
-    def fetchone(self) -> Optional[WorkflowRowAdapter]:
+    def fetchone(self) -> WorkflowRowAdapter | None:
         if self._index >= len(self._rows):
             return None
         row = self._rows[self._index]
         self._index += 1
         return row
 
-    def fetchall(self) -> List[WorkflowRowAdapter]:
+    def fetchall(self) -> list[WorkflowRowAdapter]:
         if self._index >= len(self._rows):
             return []
         rows = self._rows[self._index :]
         self._index = len(self._rows)
         return rows
 
-    def fetchmany(self, size: Optional[int] = None) -> List[WorkflowRowAdapter]:
+    def fetchmany(self, size: int | None = None) -> list[WorkflowRowAdapter]:
         if size is None or size <= 0:
             size = len(self._rows) - self._index
         rows = self._rows[self._index : self._index + size]
@@ -276,16 +280,16 @@ class WorkflowsBackendCursor:
 
     def __init__(self, db: 'WorkflowsDatabase'):
         self._db = db
-        self._adapter: Optional[WorkflowsBackendCursorAdapter] = None
+        self._adapter: WorkflowsBackendCursorAdapter | None = None
         self.rowcount: int = -1
-        self.lastrowid: Optional[int] = None
+        self.lastrowid: int | None = None
         self.description = None
 
     def _requires_returning(self, query: str) -> bool:
         stripped = query.lstrip().upper()
         return stripped.startswith("INSERT")
 
-    def execute(self, query: str, params: Optional[Any] = None):
+    def execute(self, query: str, params: Any | None = None):
         backend = self._db.backend
         if backend is None:
             raise RuntimeError("Backend cursor cannot execute without a backend instance")
@@ -313,7 +317,7 @@ class WorkflowsBackendCursor:
         self.description = result.description
         return self
 
-    def executemany(self, query: str, params_list: List[Any]):
+    def executemany(self, query: str, params_list: list[Any]):
         backend = self._db.backend
         if backend is None:
             raise RuntimeError("Backend cursor cannot execute without a backend instance")
@@ -349,7 +353,7 @@ class WorkflowsBackendCursor:
             return []
         return self._adapter.fetchall()
 
-    def fetchmany(self, size: Optional[int] = None):
+    def fetchmany(self, size: int | None = None):
         if not self._adapter:
             return []
         return self._adapter.fetchmany(size)
@@ -373,11 +377,11 @@ class WorkflowsBackendConnection:
     def cursor(self) -> WorkflowsBackendCursor:
         return WorkflowsBackendCursor(self._db)
 
-    def execute(self, query: str, params: Optional[Any] = None):
+    def execute(self, query: str, params: Any | None = None):
         cursor = self.cursor()
         return cursor.execute(query, params)
 
-    def executemany(self, query: str, params_list: List[Any]):
+    def executemany(self, query: str, params_list: list[Any]):
         cursor = self.cursor()
         return cursor.executemany(query, params_list)
 
@@ -399,8 +403,8 @@ class WorkflowDefinition:
     version: int
     owner_id: str
     visibility: str
-    description: Optional[str]
-    tags: Optional[str]
+    description: str | None
+    tags: str | None
     definition_json: str
     created_at: str
     updated_at: str
@@ -411,27 +415,27 @@ class WorkflowDefinition:
 class WorkflowRun:
     run_id: str
     tenant_id: str
-    workflow_id: Optional[int]
+    workflow_id: int | None
     status: str
-    status_reason: Optional[str]
+    status_reason: str | None
     user_id: str
     inputs_json: str
-    outputs_json: Optional[str]
-    error: Optional[str]
-    duration_ms: Optional[int]
+    outputs_json: str | None
+    error: str | None
+    duration_ms: int | None
     created_at: str
-    started_at: Optional[str]
-    ended_at: Optional[str]
-    definition_version: Optional[int]
-    definition_snapshot_json: Optional[str]
-    idempotency_key: Optional[str]
-    session_id: Optional[str]
-    cancel_requested: Optional[int] = 0
+    started_at: str | None
+    ended_at: str | None
+    definition_version: int | None
+    definition_snapshot_json: str | None
+    idempotency_key: str | None
+    session_id: str | None
+    cancel_requested: int | None = 0
     # Accounting fields (nullable)
-    tokens_input: Optional[int] = None
-    tokens_output: Optional[int] = None
-    cost_usd: Optional[float] = None
-    validation_mode: Optional[str] = "block"
+    tokens_input: int | None = None
+    tokens_output: int | None = None
+    cost_usd: float | None = None
+    validation_mode: str | None = "block"
 
 
 class WorkflowsDatabase:
@@ -440,11 +444,11 @@ class WorkflowsDatabase:
 
     def __init__(
         self,
-        db_path: Optional[str] = None,
+        db_path: str | None = None,
         *,
-        backend: Optional[DatabaseBackend] = None,
+        backend: DatabaseBackend | None = None,
     ) -> None:
-        self.backend: Optional[DatabaseBackend] = None
+        self.backend: DatabaseBackend | None = None
         self.backend_type: BackendType = BackendType.SQLITE
 
         if backend and backend.backend_type == BackendType.POSTGRESQL:
@@ -483,7 +487,7 @@ class WorkflowsDatabase:
             pool_size = int(os.getenv("WORKFLOWS_SQLITE_POOL_SIZE", "0"))
         except Exception:
             pool_size = 0
-        self._sqlite_pool: List[sqlite3.Connection] = []
+        self._sqlite_pool: list[sqlite3.Connection] = []
         if pool_size and pool_size > 0:
             for _ in range(max(0, pool_size - 1)):
                 c = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -509,7 +513,7 @@ class WorkflowsDatabase:
     def _execute_backend(
         self,
         query: str,
-        params: Optional[Any] = None,
+        params: Any | None = None,
         *,
         connection: Any = None,
         ensure_returning: bool = False,
@@ -553,21 +557,21 @@ class WorkflowsDatabase:
         )
 
     @staticmethod
-    def _rows_from_result(result: QueryResult) -> List[WorkflowRowAdapter]:
+    def _rows_from_result(result: QueryResult) -> list[WorkflowRowAdapter]:
         adapter = WorkflowsBackendCursorAdapter(result)
         rows = adapter.fetchall()
         adapter.close()
         return rows
 
     @staticmethod
-    def _row_from_result(result: QueryResult) -> Optional[WorkflowRowAdapter]:
+    def _row_from_result(result: QueryResult) -> WorkflowRowAdapter | None:
         adapter = WorkflowsBackendCursorAdapter(result)
         row = adapter.fetchone()
         adapter.close()
         return row
 
     @staticmethod
-    def _row_to_dict(row: Any) -> Dict[str, Any]:
+    def _row_to_dict(row: Any) -> dict[str, Any]:
         if isinstance(row, WorkflowRowAdapter):
             return row.to_dict()
         return dict(row)
@@ -1157,7 +1161,7 @@ class WorkflowsDatabase:
     # ---------- Definitions ----------
 
     # SQLite write helpers with backoff to mitigate 'database is locked' under bursts
-    def _sqlite_retry_execute(self, query: str, params: Optional[Any] = None, *, max_tries: int = 5) -> None:
+    def _sqlite_retry_execute(self, query: str, params: Any | None = None, *, max_tries: int = 5) -> None:
         import time as _time
         tries = 0
         while True:
@@ -1210,9 +1214,9 @@ class WorkflowsDatabase:
         version: int,
         owner_id: str,
         visibility: str,
-        description: Optional[str],
-        tags: Optional[List[str]],
-        definition: Dict[str, Any],
+        description: str | None,
+        tags: list[str] | None,
+        definition: dict[str, Any],
         is_active: bool = True,
     ) -> int:
         now = _utcnow_iso()
@@ -1262,7 +1266,7 @@ class WorkflowsDatabase:
         self._conn.commit()
         return int(cur.lastrowid)
 
-    def get_definition(self, workflow_id: int) -> Optional[WorkflowDefinition]:
+    def get_definition(self, workflow_id: int) -> WorkflowDefinition | None:
         if self._using_backend():
             with self.backend.transaction() as conn:  # type: ignore[union-attr]
                 result = self._execute_backend(
@@ -1281,10 +1285,10 @@ class WorkflowsDatabase:
         return WorkflowDefinition(**dict(row))
 
     def list_definitions(
-        self, tenant_id: Optional[str] = None, owner_id: Optional[str] = None, include_inactive: bool = False
-    ) -> List[WorkflowDefinition]:
+        self, tenant_id: str | None = None, owner_id: str | None = None, include_inactive: bool = False
+    ) -> list[WorkflowDefinition]:
         sql = "SELECT * FROM workflows WHERE 1=1"
-        params: List[Any] = []
+        params: list[Any] = []
         if tenant_id:
             sql += " AND tenant_id = ?"
             params.append(tenant_id)
@@ -1325,12 +1329,12 @@ class WorkflowsDatabase:
         run_id: str,
         tenant_id: str,
         user_id: str,
-        inputs: Dict[str, Any],
-        workflow_id: Optional[int] = None,
-        definition_version: Optional[int] = None,
-        definition_snapshot: Optional[Dict[str, Any]] = None,
-        idempotency_key: Optional[str] = None,
-        session_id: Optional[str] = None,
+        inputs: dict[str, Any],
+        workflow_id: int | None = None,
+        definition_version: int | None = None,
+        definition_snapshot: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+        session_id: str | None = None,
         validation_mode: str = "block",
     ) -> None:
         params = (
@@ -1371,7 +1375,7 @@ class WorkflowsDatabase:
             else:
                 raise
 
-    def get_run(self, run_id: str) -> Optional[WorkflowRun]:
+    def get_run(self, run_id: str) -> WorkflowRun | None:
         # Defensive conversion to avoid sqlite binding errors when callers pass UUID/None
         run_id_param = "" if run_id is None else str(run_id)
         if self._using_backend():
@@ -1395,20 +1399,20 @@ class WorkflowsDatabase:
         self,
         *,
         tenant_id: str,
-        user_id: Optional[str] = None,
-        statuses: Optional[List[str]] = None,
-        workflow_id: Optional[int] = None,
-        created_after: Optional[str] = None,
-        created_before: Optional[str] = None,
-        cursor_ts: Optional[str] = None,
-        cursor_id: Optional[str] = None,
+        user_id: str | None = None,
+        statuses: list[str] | None = None,
+        workflow_id: int | None = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
+        cursor_ts: str | None = None,
+        cursor_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
         order_by: str = "created_at",
         order_desc: bool = True,
-    ) -> List[WorkflowRun]:
+    ) -> list[WorkflowRun]:
         sql = "SELECT * FROM workflow_runs WHERE tenant_id = ?"
-        params: List[Any] = [tenant_id]
+        params: list[Any] = [tenant_id]
         if user_id:
             sql += " AND user_id = ?"
             params.append(user_id)
@@ -1460,11 +1464,11 @@ class WorkflowsDatabase:
         tenant_id: str,
         user_id: str,
         window_start_iso: str,
-        window_end_iso: Optional[str] = None,
+        window_end_iso: str | None = None,
     ) -> int:
         """Count runs created by a user within an ISO time window [start, end]."""
         sql = "SELECT COUNT(*) AS c FROM workflow_runs WHERE tenant_id = ? AND user_id = ? AND created_at >= ?"
-        params: List[Any] = [tenant_id, user_id, window_start_iso]
+        params: list[Any] = [tenant_id, user_id, window_start_iso]
         if window_end_iso:
             sql += " AND created_at < ?"
             params.append(window_end_iso)
@@ -1495,11 +1499,11 @@ class WorkflowsDatabase:
         *,
         tenant_id: str,
         window_start_iso: str,
-        window_end_iso: Optional[str] = None,
+        window_end_iso: str | None = None,
     ) -> int:
         """Count runs created within a tenant over a time window."""
         sql = "SELECT COUNT(*) AS c FROM workflow_runs WHERE tenant_id = ? AND created_at >= ?"
-        params: List[Any] = [tenant_id, window_start_iso]
+        params: list[Any] = [tenant_id, window_start_iso]
         if window_end_iso:
             sql += " AND created_at < ?"
             params.append(window_end_iso)
@@ -1529,15 +1533,15 @@ class WorkflowsDatabase:
         self,
         run_id: str,
         status: str,
-        status_reason: Optional[str] = None,
-        outputs: Optional[Dict[str, Any]] = None,
-        error: Optional[str] = None,
-        started_at: Optional[str] = None,
-        ended_at: Optional[str] = None,
-        duration_ms: Optional[int] = None,
-        tokens_input: Optional[int] = None,
-        tokens_output: Optional[int] = None,
-        cost_usd: Optional[float] = None,
+        status_reason: str | None = None,
+        outputs: dict[str, Any] | None = None,
+        error: str | None = None,
+        started_at: str | None = None,
+        ended_at: str | None = None,
+        duration_ms: int | None = None,
+        tokens_input: int | None = None,
+        tokens_output: int | None = None,
+        cost_usd: float | None = None,
         *,
         connection: Any = None,
     ) -> None:
@@ -1633,8 +1637,8 @@ class WorkflowsDatabase:
         tenant_id: str,
         run_id: str,
         event_type: str,
-        payload: Optional[Dict[str, Any]] = None,
-        step_run_id: Optional[str] = None,
+        payload: dict[str, Any] | None = None,
+        step_run_id: str | None = None,
         *,
         connection: Any = None,
     ) -> int:
@@ -1753,9 +1757,9 @@ class WorkflowsDatabase:
         self._release_sqlite(conn)
         return next_seq
 
-    def get_events(self, run_id: str, since: Optional[int] = None, limit: int = 500, types: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def get_events(self, run_id: str, since: int | None = None, limit: int = 500, types: list[str] | None = None) -> list[dict[str, Any]]:
         sql = "SELECT * FROM workflow_events WHERE run_id = ?"
-        params: List[Any] = [run_id]
+        params: list[Any] = [run_id]
         if since is not None:
             sql += " AND event_seq > ?"
             params.append(int(since))
@@ -1777,7 +1781,7 @@ class WorkflowsDatabase:
             finally:
                 self._release_sqlite(conn)
 
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for r in rows:
             data = self._row_to_dict(r)
             try:
@@ -1798,8 +1802,8 @@ class WorkflowsDatabase:
         name: str,
         step_type: str,
         status: str = "running",
-        inputs: Optional[Dict[str, Any]] = None,
-        assigned_to: Optional[str] = None,
+        inputs: dict[str, Any] | None = None,
+        assigned_to: str | None = None,
     ) -> None:
         params = (
             step_run_id,
@@ -1840,8 +1844,8 @@ class WorkflowsDatabase:
         *,
         step_run_id: str,
         status: str = "succeeded",
-        outputs: Optional[Dict[str, Any]] = None,
-        error: Optional[str] = None,
+        outputs: dict[str, Any] | None = None,
+        error: str | None = None,
     ) -> None:
         params = (
             status,
@@ -1871,7 +1875,7 @@ class WorkflowsDatabase:
             else:
                 raise
 
-    def get_latest_step_run(self, *, run_id: str, step_id: str) -> Optional[Dict[str, Any]]:
+    def get_latest_step_run(self, *, run_id: str, step_id: str) -> dict[str, Any] | None:
         """Return the most recent step run for a run/step_id pair."""
         query = """
             SELECT * FROM workflow_step_runs
@@ -1918,7 +1922,7 @@ class WorkflowsDatabase:
             else:
                 raise
 
-    def get_last_failed_step_id(self, run_id: str) -> Optional[str]:
+    def get_last_failed_step_id(self, run_id: str) -> str | None:
         query = (
             "SELECT step_id FROM workflow_step_runs WHERE run_id = ? AND status = 'failed' "
             "ORDER BY ended_at DESC LIMIT 1"
@@ -1936,11 +1940,11 @@ class WorkflowsDatabase:
         self,
         *,
         run_id: str,
-        before_ts: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        before_ts: str | None = None,
+    ) -> dict[str, Any] | None:
         """Return the most recent succeeded step run, optionally before a timestamp."""
         query = "SELECT * FROM workflow_step_runs WHERE run_id = ? AND status = 'succeeded'"
-        params: List[Any] = [str(run_id)]
+        params: list[Any] = [str(run_id)]
         if before_ts:
             query += " AND ended_at IS NOT NULL AND ended_at < ?"
             params.append(str(before_ts))
@@ -1954,10 +1958,10 @@ class WorkflowsDatabase:
         row = self._conn.cursor().execute(query, params).fetchone()
         return dict(row) if row else None
 
-    def aggregate_run_token_usage(self, run_id: str) -> Tuple[Optional[int], Optional[int], Optional[float]]:
+    def aggregate_run_token_usage(self, run_id: str) -> tuple[int | None, int | None, float | None]:
         """Aggregate token usage and cost across step outputs for a run."""
         query = "SELECT outputs_json FROM workflow_step_runs WHERE run_id = ? AND outputs_json IS NOT NULL"
-        rows: List[Any]
+        rows: list[Any]
         if self._using_backend():
             with self.backend.transaction() as conn:  # type: ignore[union-attr]
                 result = self._execute_backend(query, (str(run_id),), connection=conn)
@@ -1971,7 +1975,7 @@ class WorkflowsDatabase:
         have_tokens = False
         have_cost = False
 
-        def _as_int(val: Any) -> Optional[int]:
+        def _as_int(val: Any) -> int | None:
             try:
                 if val is None:
                     return None
@@ -1979,7 +1983,7 @@ class WorkflowsDatabase:
             except Exception:
                 return None
 
-        def _as_float(val: Any) -> Optional[float]:
+        def _as_float(val: Any) -> float | None:
             try:
                 if val is None:
                     return None
@@ -2045,7 +2049,7 @@ class WorkflowsDatabase:
             total_cost if have_cost else None,
         )
 
-    def get_run_by_idempotency(self, tenant_id: str, user_id: str, idempotency_key: str) -> Optional[WorkflowRun]:
+    def get_run_by_idempotency(self, tenant_id: str, user_id: str, idempotency_key: str) -> WorkflowRun | None:
         ttl_hours = _workflows_idempotency_ttl_hours()
         try:
             from datetime import timedelta
@@ -2072,8 +2076,8 @@ class WorkflowsDatabase:
         self,
         *,
         step_run_id: str,
-        locked_by: Optional[str] = None,
-        lock_ttl_seconds: Optional[int] = None,
+        locked_by: str | None = None,
+        lock_ttl_seconds: int | None = None,
     ) -> None:
         now = datetime.utcnow().replace(tzinfo=timezone.utc)
         locked_at = now.isoformat()
@@ -2113,7 +2117,7 @@ class WorkflowsDatabase:
         except Exception:
             pass
 
-    def find_orphan_step_runs(self, cutoff_iso: str) -> List[Dict[str, Any]]:
+    def find_orphan_step_runs(self, cutoff_iso: str) -> list[dict[str, Any]]:
         sql = (
             "SELECT * FROM workflow_step_runs WHERE status = 'running' AND (heartbeat_at IS NULL OR heartbeat_at < ?)"
         )
@@ -2130,11 +2134,11 @@ class WorkflowsDatabase:
         self,
         *,
         step_run_id: str,
-        pid: Optional[int] = None,
-        pgid: Optional[int] = None,
-        workdir: Optional[str] = None,
-        stdout_path: Optional[str] = None,
-        stderr_path: Optional[str] = None,
+        pid: int | None = None,
+        pgid: int | None = None,
+        workdir: str | None = None,
+        stdout_path: str | None = None,
+        stderr_path: str | None = None,
     ) -> None:
         params = (
             pid,
@@ -2166,7 +2170,7 @@ class WorkflowsDatabase:
             else:
                 raise
 
-    def find_running_subprocesses_for_run(self, run_id: str) -> List[Dict[str, Any]]:
+    def find_running_subprocesses_for_run(self, run_id: str) -> list[dict[str, Any]]:
         sql = (
             "SELECT step_run_id, pid, pgid, workdir, stdout_path, stderr_path FROM workflow_step_runs "
             "WHERE run_id = ? AND status = 'running' AND (pid IS NOT NULL OR pgid IS NOT NULL)"
@@ -2186,15 +2190,15 @@ class WorkflowsDatabase:
         artifact_id: str,
         tenant_id: str,
         run_id: str,
-        step_run_id: Optional[str],
+        step_run_id: str | None,
         type: str,
         uri: str,
-        size_bytes: Optional[int] = None,
-        mime_type: Optional[str] = None,
-        checksum_sha256: Optional[str] = None,
-        encryption: Optional[str] = None,
-        owned_by: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        size_bytes: int | None = None,
+        mime_type: str | None = None,
+        checksum_sha256: str | None = None,
+        encryption: str | None = None,
+        owned_by: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         params = (
             artifact_id,
@@ -2233,7 +2237,7 @@ class WorkflowsDatabase:
             else:
                 raise
 
-    def list_artifacts_for_run(self, run_id: str) -> List[Dict[str, Any]]:
+    def list_artifacts_for_run(self, run_id: str) -> list[dict[str, Any]]:
         sql = "SELECT * FROM workflow_artifacts WHERE run_id = ? ORDER BY created_at ASC"
         if self._using_backend():
             with self.backend.transaction() as conn:  # type: ignore[union-attr]
@@ -2242,11 +2246,11 @@ class WorkflowsDatabase:
         else:
             rows = self._conn.cursor().execute(sql, (run_id,)).fetchall()
 
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for r in rows:
             data = self._row_to_dict(r)
             # Decode metadata_json; attempt to decrypt if envelope present and key available
-            md: Dict[str, Any] = {}
+            md: dict[str, Any] = {}
             try:
                 md = json.loads(data.get("metadata_json") or "{}")
                 if isinstance(md, dict) and "_encrypted" in md:
@@ -2266,7 +2270,7 @@ class WorkflowsDatabase:
             out.append(data)
         return out
 
-    def get_artifact(self, artifact_id: str) -> Optional[Dict[str, Any]]:
+    def get_artifact(self, artifact_id: str) -> dict[str, Any] | None:
         query = "SELECT * FROM workflow_artifacts WHERE artifact_id = ?"
         if self._using_backend():
             with self.backend.transaction() as conn:  # type: ignore[union-attr]
@@ -2314,16 +2318,16 @@ class WorkflowsDatabase:
             else:
                 raise
 
-    def list_artifacts_older_than(self, cutoff_iso: str) -> List[Dict[str, Any]]:
+    def list_artifacts_older_than(self, cutoff_iso: str) -> list[dict[str, Any]]:
         sql = "SELECT * FROM workflow_artifacts WHERE created_at < ?"
-        rows: List[Any]
+        rows: list[Any]
         if self._using_backend():
             with self.backend.transaction() as conn:  # type: ignore[union-attr]
                 result = self._execute_backend(sql, (cutoff_iso,), connection=conn)
             rows = self._rows_from_result(result)
         else:
             rows = self._conn.cursor().execute(sql, (cutoff_iso,)).fetchall()
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for r in rows:
             out.append(self._row_to_dict(r))
         return out
@@ -2335,7 +2339,7 @@ class WorkflowsDatabase:
         run_id: str,
         step_id: str,
         approved_by: str,
-        comment: Optional[str] = None,
+        comment: str | None = None,
     ) -> None:
         """Mark step decision approved and set final status to succeeded for matching rows.
 
@@ -2362,7 +2366,7 @@ class WorkflowsDatabase:
                 raise
 
     # ---------- Webhook DLQ ----------
-    def enqueue_webhook_dlq(self, *, tenant_id: str, run_id: str, url: str, body: Optional[Dict[str, Any]] = None, last_error: Optional[str] = None) -> None:
+    def enqueue_webhook_dlq(self, *, tenant_id: str, run_id: str, url: str, body: dict[str, Any] | None = None, last_error: str | None = None) -> None:
         params = (
             tenant_id,
             run_id,
@@ -2393,7 +2397,7 @@ class WorkflowsDatabase:
             else:
                 raise
 
-    def list_webhook_dlq_due(self, *, limit: int = 50) -> List[Dict[str, Any]]:
+    def list_webhook_dlq_due(self, *, limit: int = 50) -> list[dict[str, Any]]:
         """Return DLQ rows that are due for retry (next_attempt_at is null or <= now).
 
         Results are ordered by next_attempt_at (nulls first via COALESCE to created_at) then id for stability.
@@ -2424,7 +2428,7 @@ class WorkflowsDatabase:
             (limit,),
         )
         rows = cur.fetchall()
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for r in rows or []:
             try:
                 out.append({
@@ -2462,7 +2466,7 @@ class WorkflowsDatabase:
         cur.execute("DELETE FROM workflow_webhook_dlq WHERE id = ?", (dlq_id,))
         self._conn.commit()
 
-    def update_webhook_dlq_failure(self, *, dlq_id: int, last_error: str, next_attempt_at_iso: Optional[str], attempts: Optional[int] = None) -> None:
+    def update_webhook_dlq_failure(self, *, dlq_id: int, last_error: str, next_attempt_at_iso: str | None, attempts: int | None = None) -> None:
         """Update DLQ row after a failed attempt.
 
         If attempts is provided, set to that value; else increment by 1.
@@ -2494,7 +2498,7 @@ class WorkflowsDatabase:
             )
         self._conn.commit()
 
-    def list_webhook_dlq_all(self, *, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def list_webhook_dlq_all(self, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         """List all DLQ rows with stable ordering (admin UI)."""
         if self._using_backend():
             query = (
@@ -2518,7 +2522,7 @@ class WorkflowsDatabase:
             (int(limit), int(offset)),
         )
         rows = cur.fetchall()
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for r in rows or []:
             try:
                 out.append({
@@ -2552,7 +2556,7 @@ class WorkflowsDatabase:
         run_id: str,
         step_id: str,
         approved_by: str,
-        comment: Optional[str] = None,
+        comment: str | None = None,
         connection: Any = None,
     ) -> None:
         """Mark step decision rejected and set status to failed for matching rows."""

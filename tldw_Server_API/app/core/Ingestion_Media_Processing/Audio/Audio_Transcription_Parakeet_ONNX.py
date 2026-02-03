@@ -15,14 +15,13 @@
 #
 ####################
 
-import os
 import json
-from loguru import logger
-import tempfile
 from pathlib import Path
-from typing import Optional, Union, List, Tuple, Callable, Dict, Any
+from typing import Any, Callable, Optional, Union
+
 import numpy as np
 import soundfile as sf
+from loguru import logger
 
 try:
     import onnxruntime as ort
@@ -37,7 +36,7 @@ except ImportError:
     logger.warning("huggingface_hub not installed. Install with: pip install huggingface_hub")
 
 # Global cache for model and tokenizer
-_onnx_model_cache: Dict[str, Any] = {}
+_onnx_model_cache: dict[str, Any] = {}
 
 logger = logger
 
@@ -45,10 +44,10 @@ logger = logger
 class ParakeetONNXTokenizer:
     """Simple tokenizer for Parakeet ONNX models."""
 
-    def __init__(self, vocab_path: Union[Path, Dict[str, int]]):
+    def __init__(self, vocab_path: Union[Path, dict[str, int]]):
         """Load vocabulary from file or use provided mapping."""
-        self.vocab: Dict[str, int] = {}
-        self.inv_vocab: Dict[int, str] = {}
+        self.vocab: dict[str, int] = {}
+        self.inv_vocab: dict[int, str] = {}
 
         # If a dict is provided directly, use it
         if isinstance(vocab_path, dict):
@@ -131,7 +130,7 @@ class ParakeetONNXTokenizer:
         self.inv_vocab = {v: k for k, v in self.vocab.items()}
         logger.info(f"Created default vocabulary with {len(self.vocab)} tokens")
 
-    def decode(self, token_ids: List[int]) -> str:
+    def decode(self, token_ids: list[int]) -> str:
         """Decode token IDs to text."""
         tokens = []
         for token_id in token_ids:
@@ -595,7 +594,7 @@ def transcribe_chunked_onnx(
     return result.strip() if result else "[No speech detected]"
 
 
-def merge_with_overlap_removal(transcripts: List[str]) -> str:
+def merge_with_overlap_removal(transcripts: list[str]) -> str:
     """
     Merge transcripts by removing duplicate words at boundaries.
 

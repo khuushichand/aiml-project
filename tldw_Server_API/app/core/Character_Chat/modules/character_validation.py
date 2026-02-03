@@ -5,13 +5,12 @@ This module contains functions for validating and parsing different character ca
 """
 
 import hashlib
-import json
-from typing import Dict, List, Optional, Tuple, Any, Set, Union
+from typing import Any, Optional, Union
 
 from loguru import logger
 
 
-def parse_character_book(book_data: Dict[str, Any]) -> Dict[str, Any]:
+def parse_character_book(book_data: dict[str, Any]) -> dict[str, Any]:
     """Parses character book data from a V2 character card structure.
 
     This function processes the 'character_book' section of a character card,
@@ -45,7 +44,7 @@ def parse_character_book(book_data: Dict[str, Any]) -> Dict[str, Any]:
     raw_entries = book_data.get('entries', [])
     total_entries = len(raw_entries)
     skipped_count = 0
-    skip_reasons: List[str] = []
+    skip_reasons: list[str] = []
 
     for idx, entry_raw in enumerate(raw_entries):
         if not isinstance(entry_raw, dict):
@@ -110,7 +109,7 @@ def parse_character_book(book_data: Dict[str, Any]) -> Dict[str, Any]:
     return parsed_book
 
 
-def parse_v2_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def parse_v2_card(card_data_json: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Parses a V2 character card (spec_version '2.0') JSON data.
 
     This function takes a dictionary representing a V2 character card,
@@ -195,7 +194,7 @@ def parse_v2_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def parse_v1_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def parse_v1_card(card_data_json: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Parses a V1 character card (flat JSON) into a V2-like structure.
 
     This function converts a V1 character card, which has a flat JSON structure,
@@ -261,7 +260,7 @@ def parse_v1_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def parse_pygmalion_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def parse_pygmalion_card(card_data_json: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Parse Pygmalion format character card."""
     try:
         # Create a copy to avoid mutating the input
@@ -304,7 +303,7 @@ def parse_pygmalion_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, A
         return None
 
 
-def parse_textgen_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def parse_textgen_card(card_data_json: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Parse TextGen format character card."""
     try:
         # Create a copy to avoid mutating the input
@@ -346,7 +345,7 @@ def parse_textgen_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any
         return None
 
 
-def parse_alpaca_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def parse_alpaca_card(card_data_json: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Parse Alpaca format character card."""
     try:
         # Create a copy to avoid mutating the input
@@ -403,7 +402,7 @@ def parse_alpaca_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]
         return None
 
 
-def validate_character_book(book_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
+def validate_character_book(book_data: dict[str, Any]) -> tuple[bool, list[str]]:
     """Validates the structure and content of a 'character_book' dictionary.
 
     Checks for required fields, correct data types, and valid values within
@@ -449,7 +448,7 @@ def validate_character_book(book_data: Dict[str, Any]) -> Tuple[bool, List[str]]
 
     # Validate each entry in 'entries'
     entries = book_data.get('entries', [])
-    entry_ids: Set[Union[int, float]] = set()  # Store IDs to check for uniqueness
+    entry_ids: set[Union[int, float]] = set()  # Store IDs to check for uniqueness
     for idx, entry in enumerate(entries):
         if not isinstance(entry, dict):
             validation_messages.append(f"Entry {idx} in 'character_book.entries' is not a dictionary.")
@@ -462,8 +461,8 @@ def validate_character_book(book_data: Dict[str, Any]) -> Tuple[bool, List[str]]
     return is_valid, validation_messages
 
 
-def validate_character_book_entry(entry: Dict[str, Any], idx: int, entry_ids: Set[Union[int, float]]) -> Tuple[
-    bool, List[str]]:
+def validate_character_book_entry(entry: dict[str, Any], idx: int, entry_ids: set[Union[int, float]]) -> tuple[
+    bool, list[str]]:
     """Validates a single entry within a character book.
 
     Checks for required fields, correct data types, and valid values for
@@ -551,10 +550,10 @@ def validate_character_book_entry(entry: Dict[str, Any], idx: int, entry_ids: Se
 
 
 def validate_v2_card(
-    card_data: Dict[str, Any],
+    card_data: dict[str, Any],
     *,
     strict_spec: bool = True,
-) -> Tuple[bool, List[str]]:
+) -> tuple[bool, list[str]]:
     """Validates a V2 character card structure and content.
 
     Performs comprehensive validation of a V2 character card, checking for

@@ -8,14 +8,14 @@ import json
 import os
 import re
 from collections import Counter
-from typing import Any, Dict, List, NoReturn, Optional, Tuple
+from typing import Any, NoReturn
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
-from loguru import logger
 from fastapi.responses import JSONResponse
+from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep, rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.endpoints.llm_providers import get_configured_providers_async
 from tldw_Server_API.app.api.v1.schemas.writing_schemas import (
     WritingCapabilitiesResponse,
@@ -38,20 +38,20 @@ from tldw_Server_API.app.api.v1.schemas.writing_schemas import (
     WritingThemeUpdate,
     WritingTokenCountRequest,
     WritingTokenCountResponse,
+    WritingTokenizeMeta,
     WritingTokenizeRequest,
     WritingTokenizeResponse,
-    WritingTokenizeMeta,
     WritingTokenizerSupport,
+    WritingVersionResponse,
     WritingWordcloudMeta,
     WritingWordcloudOptions,
     WritingWordcloudRequest,
     WritingWordcloudResponse,
     WritingWordcloudResult,
     WritingWordcloudWord,
-    WritingVersionResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -60,7 +60,6 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 from tldw_Server_API.app.core.exceptions import TokenizerUnavailable
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import get_allowed_fields
-
 
 router = APIRouter()
 
@@ -130,7 +129,7 @@ def _resolve_tiktoken_encoding(model: str) -> Any:
         raise TokenizerUnavailable("Tokenizer not available for provider/model") from exc
 
 
-def _resolve_tokenizer(provider: str, model: str) -> Tuple[Any, str]:
+def _resolve_tokenizer(provider: str, model: str) -> tuple[Any, str]:
     """Resolve a tokenizer using tiktoken (OpenAI-style model mappings only).
 
     Provider is validated but not used for resolution; non-OpenAI models may be unavailable.
@@ -144,7 +143,7 @@ def _resolve_tokenizer(provider: str, model: str) -> Tuple[Any, str]:
     return encoding, f"tiktoken:{tokenizer_name}"
 
 
-def _provider_features(provider: str) -> Dict[str, bool]:
+def _provider_features(provider: str) -> dict[str, bool]:
     """Build a provider feature map from allowed capability fields."""
     fields = get_allowed_fields(provider)
     return {
@@ -163,7 +162,7 @@ def _provider_features(provider: str) -> Dict[str, bool]:
     }
 
 
-def _coerce_model_name(model: Any) -> Optional[str]:
+def _coerce_model_name(model: Any) -> str | None:
     """Coerce a provider model payload into a normalized model name."""
     if isinstance(model, str):
         return model.strip() or None
@@ -175,7 +174,7 @@ def _coerce_model_name(model: Any) -> Optional[str]:
     return None
 
 
-def _normalize_theme_response(theme: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_theme_response(theme: dict[str, Any]) -> dict[str, Any]:
     """Normalize DB theme dict to API response format."""
     theme["order"] = theme.pop("order_index", 0)
     return theme
@@ -329,11 +328,11 @@ def _is_test_mode() -> bool:
     return bool(os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TEST_MODE", "").lower() == "true")
 
 
-def _normalize_wordcloud_options(options: Optional[WritingWordcloudOptions]) -> WritingWordcloudOptions:
+def _normalize_wordcloud_options(options: WritingWordcloudOptions | None) -> WritingWordcloudOptions:
     return options or WritingWordcloudOptions()
 
 
-def _wordcloud_options_payload(options: WritingWordcloudOptions) -> Dict[str, Any]:
+def _wordcloud_options_payload(options: WritingWordcloudOptions) -> dict[str, Any]:
     payload = options.model_dump() if hasattr(options, "model_dump") else options.dict()
     payload["algo_version"] = WORDCLOUD_ALGO_VERSION
     return payload
@@ -346,7 +345,7 @@ def _resolve_stopwords(options: WritingWordcloudOptions) -> set[str]:
     return custom
 
 
-def _hash_wordcloud_input(text: str, options_payload: Dict[str, Any]) -> Tuple[str, str]:
+def _hash_wordcloud_input(text: str, options_payload: dict[str, Any]) -> tuple[str, str]:
     options_json = json.dumps(options_payload, sort_keys=True, ensure_ascii=True)
     digest = hashlib.sha256()
     digest.update(text.encode("utf-8"))
@@ -355,7 +354,7 @@ def _hash_wordcloud_input(text: str, options_payload: Dict[str, Any]) -> Tuple[s
     return digest.hexdigest(), options_json
 
 
-def _compute_wordcloud(text: str, options: WritingWordcloudOptions) -> Tuple[List[WritingWordcloudWord], WritingWordcloudMeta]:
+def _compute_wordcloud(text: str, options: WritingWordcloudOptions) -> tuple[list[WritingWordcloudWord], WritingWordcloudMeta]:
     normalized = text.casefold()
     tokens = WORDCLOUD_TOKEN_RE.findall(normalized)
     stopwords = _resolve_stopwords(options)
@@ -381,7 +380,7 @@ def _compute_wordcloud(text: str, options: WritingWordcloudOptions) -> Tuple[Lis
     return words, meta
 
 
-def _model_dump(obj: Any) -> Dict[str, Any]:
+def _model_dump(obj: Any) -> dict[str, Any]:
     dump = getattr(obj, "model_dump", None)
     if callable(dump):
         return dump()
@@ -421,7 +420,7 @@ def _run_wordcloud_job(
             logger.exception("Failed to persist wordcloud failure for {}", wordcloud_id)
 
 
-def _build_wordcloud_response_from_row(row: Dict[str, Any], *, cached: bool) -> WritingWordcloudResponse:
+def _build_wordcloud_response_from_row(row: dict[str, Any], *, cached: bool) -> WritingWordcloudResponse:
     status_value = row.get("status") or WORDCLOUD_STATUS_QUEUED
     result = None
     words_payload = row.get("words")
@@ -462,8 +461,8 @@ async def get_writing_version(
     tags=["writing"],
 )
 async def get_writing_capabilities(
-    provider: Optional[str] = Query(None, description="Optional provider to resolve"),
-    model: Optional[str] = Query(None, description="Optional model to resolve"),
+    provider: str | None = Query(None, description="Optional provider to resolve"),
+    model: str | None = Query(None, description="Optional model to resolve"),
     include_providers: bool = Query(True, description="Include configured providers list"),
     include_deprecated: bool = Query(False, description="Include deprecated models"),
     rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
@@ -482,7 +481,7 @@ async def get_writing_capabilities(
         wordclouds=True,
     )
 
-    providers_payload: Optional[List[WritingProviderCapabilities]] = None
+    providers_payload: list[WritingProviderCapabilities] | None = None
     default_provider = None
     if include_providers:
         providers_info = await get_configured_providers_async(include_deprecated=include_deprecated)
@@ -491,7 +490,7 @@ async def get_writing_capabilities(
         for provider_info in providers_info.get("providers", []):
             name = provider_info.get("name") or "unknown"
             raw_models = provider_info.get("models") or []
-            models: List[str] = []
+            models: list[str] = []
             for raw_model in raw_models:
                 model_name = _coerce_model_name(raw_model)
                 if model_name:
@@ -512,7 +511,7 @@ async def get_writing_capabilities(
                 )
             )
 
-    requested: Optional[WritingRequestedCapabilities] = None
+    requested: WritingRequestedCapabilities | None = None
     if provider or model:
         provider_name = (provider or "").strip()
         model_name = (model or "").strip() or None
@@ -649,7 +648,7 @@ async def update_writing_session(
 ) -> WritingSessionResponse:
     """Update a writing session with optimistic locking."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.sessions.update")
-    update_data: Dict[str, Any] = {}
+    update_data: dict[str, Any] = {}
     if payload.name is not None:
         update_data["name"] = payload.name.strip()
         if not update_data["name"]:
@@ -827,7 +826,7 @@ async def update_writing_template(
 ) -> WritingTemplateResponse:
     """Update a writing template with optimistic locking."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.templates.update")
-    update_data: Dict[str, Any] = {}
+    update_data: dict[str, Any] = {}
     if payload.name is not None:
         update_data["name"] = payload.name.strip()
         if not update_data["name"]:
@@ -986,7 +985,7 @@ async def update_writing_theme(
 ) -> WritingThemeResponse:
     """Update a writing theme with optimistic locking."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.themes.update")
-    update_data: Dict[str, Any] = {}
+    update_data: dict[str, Any] = {}
     if payload.name is not None:
         update_data["name"] = payload.name.strip()
         if not update_data["name"]:

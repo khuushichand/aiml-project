@@ -11,17 +11,15 @@ import asyncio
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
-    AuthnzGeneratedFilesRepo,
     FILE_CATEGORY_VOICE_CLONE,
+    AuthnzGeneratedFilesRepo,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.services.storage_quota_service import get_storage_service
-
 
 # Default configuration
 DEFAULT_CLEANUP_INTERVAL_SEC = 3600  # 1 hour
@@ -30,10 +28,10 @@ DEFAULT_BATCH_SIZE = 100
 
 
 def _safe_resolve_user_path(
-    user_id: Optional[int],
+    user_id: int | None,
     storage_path: str,
-    file_category: Optional[str] = None,
-) -> Optional[Path]:
+    file_category: str | None = None,
+) -> Path | None:
     """Resolve a stored path and ensure it stays within the user's allowed directory."""
     if not user_id or not storage_path:
         return None
@@ -236,8 +234,8 @@ async def run_storage_cleanup_cycle(
 
 
 async def run_storage_cleanup_loop(
-    stop_event: Optional[asyncio.Event] = None,
-    interval_seconds: Optional[int] = None,
+    stop_event: asyncio.Event | None = None,
+    interval_seconds: int | None = None,
     temp_retention_hours: int = 24,
 ) -> None:
     """
@@ -301,7 +299,7 @@ class StorageCleanupService:
     Provides start/stop methods for integration with FastAPI lifespan.
     """
 
-    def __init__(self, interval_seconds: Optional[int] = None, temp_retention_hours: int = 24):
+    def __init__(self, interval_seconds: int | None = None, temp_retention_hours: int = 24):
         """
         Initialize the cleanup service.
 
@@ -311,8 +309,8 @@ class StorageCleanupService:
         """
         self.interval = interval_seconds
         self.temp_retention_hours = temp_retention_hours
-        self._task: Optional[asyncio.Task] = None
-        self._stop_event: Optional[asyncio.Event] = None
+        self._task: asyncio.Task | None = None
+        self._stop_event: asyncio.Event | None = None
         self._running = False
 
     async def start(self):
@@ -348,11 +346,11 @@ class StorageCleanupService:
 
 
 # Singleton
-_cleanup_service: Optional[StorageCleanupService] = None
+_cleanup_service: StorageCleanupService | None = None
 
 
 def get_cleanup_service(
-    interval_seconds: Optional[int] = None,
+    interval_seconds: int | None = None,
     temp_retention_hours: int = 24,
 ) -> StorageCleanupService:
     """Get or create the storage cleanup service singleton."""

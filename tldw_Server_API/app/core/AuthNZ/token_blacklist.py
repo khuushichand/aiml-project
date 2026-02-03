@@ -2,25 +2,29 @@
 # Description: Token blacklist service for JWT revocation and invalidation
 #
 # Imports
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any, List
-from collections import deque
-import json
 import asyncio
+import json
+from collections import deque
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+from loguru import logger
+
 #
 # 3rd-party imports
 from redis import asyncio as redis_async
 from redis.exceptions import RedisError
-from loguru import logger
-#
-# Local imports
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool, reset_db_pool
-from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError
+from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError
+from tldw_Server_API.app.core.AuthNZ.repos.sessions_repo import AuthnzSessionsRepo
 from tldw_Server_API.app.core.AuthNZ.repos.token_blacklist_repo import (
     AuthnzTokenBlacklistRepo,
 )
-from tldw_Server_API.app.core.AuthNZ.repos.sessions_repo import AuthnzSessionsRepo
+
+#
+# Local imports
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 
 #######################################################################################################################
 #
@@ -48,7 +52,7 @@ class TokenBlacklist:
         self._initialized = False
 
         # In-memory LRU cache of recently seen blacklisted JTIs mapped to expiry
-        self._local_cache: Dict[str, datetime] = {}
+        self._local_cache: dict[str, datetime] = {}
         self._local_order: deque[str] = deque()
         self._cache_size_limit = 1000
         self._ensured_session_columns = False
@@ -554,7 +558,7 @@ class TokenBlacklist:
             logger.error(f"Failed to cleanup expired tokens: {e}")
             return 0
 
-    async def get_blacklist_stats(self, user_id: Optional[int] = None) -> Dict[str, Any]:
+    async def get_blacklist_stats(self, user_id: Optional[int] = None) -> dict[str, Any]:
         """
         Get statistics about blacklisted tokens
 

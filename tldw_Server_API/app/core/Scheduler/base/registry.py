@@ -3,9 +3,11 @@ Type-safe task handler registry.
 Manages registration and validation of task handlers.
 """
 
-from typing import Callable, Dict, Any, Optional, Union, Awaitable, List
 import inspect
+from collections.abc import Awaitable
 from functools import wraps
+from typing import Any, Callable, Optional, Union
+
 from loguru import logger
 
 
@@ -19,8 +21,8 @@ class TaskRegistry:
 
     def __init__(self):
         """Initialize the registry"""
-        self._handlers: Dict[str, Callable] = {}
-        self._metadata: Dict[str, Dict[str, Any]] = {}
+        self._handlers: dict[str, Callable] = {}
+        self._metadata: dict[str, dict[str, Any]] = {}
         self._validated = False
 
     def task(self,
@@ -153,7 +155,7 @@ class TaskRegistry:
             )
         return self._handlers[name]
 
-    def get_metadata(self, name: str) -> Dict[str, Any]:
+    def get_metadata(self, name: str) -> dict[str, Any]:
         """
         Get metadata for a handler.
 
@@ -167,7 +169,7 @@ class TaskRegistry:
             raise ValueError(f"Handler '{name}' not registered")
         return self._metadata[name]
 
-    def list_handlers(self) -> List[str]:
+    def list_handlers(self) -> list[str]:
         """
         List all registered handler names.
 

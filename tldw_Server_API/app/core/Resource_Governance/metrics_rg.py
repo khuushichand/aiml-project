@@ -8,7 +8,6 @@ registered once and are safe to call multiple times.
 """
 
 import os
-from typing import Dict, Optional
 
 from loguru import logger
 
@@ -17,7 +16,6 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import (
     MetricType,
     get_metrics_registry,
 )
-
 
 _RG_METRICS_REGISTERED = False
 
@@ -119,12 +117,12 @@ def _labels(
     *,
     category: str,
     scope: str,
-    backend: Optional[str] = None,
-    result: Optional[str] = None,
-    policy_id: Optional[str] = None,
-    reason: Optional[str] = None,
-) -> Dict[str, str]:
-    labels: Dict[str, str] = {
+    backend: str | None = None,
+    result: str | None = None,
+    policy_id: str | None = None,
+    reason: str | None = None,
+) -> dict[str, str]:
+    labels: dict[str, str] = {
         "category": category,
         "scope": scope,
     }

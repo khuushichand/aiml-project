@@ -5,12 +5,13 @@
 import asyncio
 import json
 import time
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
+from collections.abc import AsyncGenerator
+from typing import Any, Optional
 from uuid import uuid4
 
 from loguru import logger
 
-from .schemas import ActionResult, ActionType, VoiceIntent, VoiceSessionContext
+from .schemas import ActionResult, ActionType, VoiceSessionContext
 
 
 class WorkflowProgressEvent:
@@ -20,7 +21,7 @@ class WorkflowProgressEvent:
         self,
         event_type: str,
         run_id: str,
-        data: Optional[Dict[str, Any]] = None,
+        data: Optional[dict[str, Any]] = None,
         message: Optional[str] = None,
         is_terminal: bool = False,
     ):
@@ -31,7 +32,7 @@ class WorkflowProgressEvent:
         self.is_terminal = is_terminal
         self.timestamp = time.time()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "run_id": self.run_id,
@@ -90,8 +91,8 @@ class VoiceWorkflowHandler:
     async def execute_workflow(
         self,
         workflow_id: Optional[int],
-        workflow_definition: Optional[Dict[str, Any]],
-        inputs: Dict[str, Any],
+        workflow_definition: Optional[dict[str, Any]],
+        inputs: dict[str, Any],
         user_id: int,
         session: VoiceSessionContext,
         sync: bool = True,
@@ -342,7 +343,7 @@ class VoiceWorkflowHandler:
         self,
         run_id: str,
         user_id: int,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         """
         Get current workflow status.
 
@@ -405,9 +406,9 @@ class VoiceWorkflowHandler:
 
     def _generate_workflow_response(
         self,
-        definition: Optional[Dict[str, Any]],
+        definition: Optional[dict[str, Any]],
         status: str,
-        outputs: Dict[str, Any],
+        outputs: dict[str, Any],
         error: Optional[str],
     ) -> str:
         """Generate a TTS-friendly response from workflow results."""
@@ -437,7 +438,7 @@ class VoiceWorkflowHandler:
         else:
             return f"The workflow is {status}."
 
-    def _event_to_message(self, event: Dict[str, Any]) -> str:
+    def _event_to_message(self, event: dict[str, Any]) -> str:
         """Convert a workflow event to a human-readable message."""
         event_type = event.get("event_type", "")
         payload = json.loads(event.get("payload_json", "{}")) if event.get("payload_json") else {}
@@ -466,7 +467,7 @@ class VoiceWorkflowHandler:
 
         return event_type.replace("_", " ").capitalize()
 
-    def get_voice_workflow_templates(self) -> Dict[str, Dict[str, Any]]:
+    def get_voice_workflow_templates(self) -> dict[str, dict[str, Any]]:
         """
         Get pre-defined workflow templates for common voice commands.
 

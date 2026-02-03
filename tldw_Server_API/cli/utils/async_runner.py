@@ -4,7 +4,7 @@ Async command execution wrapper for CLI commands.
 
 import asyncio
 import functools
-from typing import Callable, Any
+from typing import Any, Callable
 
 
 def run_async(func: Callable) -> Callable:

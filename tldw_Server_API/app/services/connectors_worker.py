@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
-from typing import Optional
+from typing import Any
 
 from loguru import logger
-import hashlib
-import tempfile
-from pathlib import Path
-from typing import Dict, Any, List
 
 try:
     from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -19,7 +16,7 @@ except Exception:  # pragma: no cover - optional
 DOMAIN = "connectors"
 
 
-async def run_connectors_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_connectors_worker(stop_event: asyncio.Event | None = None) -> None:
     """Minimal worker that acknowledges and completes connector jobs.
 
     Scaffold behavior: picks up jobs with domain 'connectors' and completes them
@@ -45,7 +42,7 @@ async def run_connectors_worker(stop_event: Optional[asyncio.Event] = None) -> N
             lease_id = str(job.get("lease_id")) if job.get("lease_id") else None
             try:
                 # Process import job
-                payload: Dict[str, Any] = job.get("payload") or {}
+                payload: dict[str, Any] = job.get("payload") or {}
                 source_id = int(payload.get("source_id")) if payload.get("source_id") is not None else None
                 user_id = int(payload.get("user_id")) if payload.get("user_id") is not None else None
                 if not source_id or not user_id:
@@ -57,7 +54,7 @@ async def run_connectors_worker(stop_event: Optional[asyncio.Event] = None) -> N
             await asyncio.sleep(poll_sleep)
 
 
-async def start_connectors_worker() -> Optional[asyncio.Task]:
+async def start_connectors_worker() -> asyncio.Task | None:
     enabled = os.getenv("CONNECTORS_WORKER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     if not enabled:
         return None
@@ -66,20 +63,20 @@ async def start_connectors_worker() -> Optional[asyncio.Task]:
     return task
 
 
-async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: str, source_id: int, user_id: int) -> None:
+async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str, source_id: int, user_id: int) -> None:
     """Fetch source/account, enumerate items, and ingest into Media DB."""
     # DB access
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+    from tldw_Server_API.app.core.External_Sources import get_connector_by_name
     from tldw_Server_API.app.core.External_Sources.connectors_service import (
         get_account_tokens,
         get_source_by_id,
-        should_ingest_item,
         record_ingested_item,
+        should_ingest_item,
         update_account_tokens,
     )
-    from tldw_Server_API.app.core.External_Sources import get_connector_by_name
-    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
     pool = await get_db_pool()
     async with pool.transaction() as db:
@@ -95,8 +92,8 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
         # Load org policy for this user (best-effort)
         try:
             from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
-            from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
             from tldw_Server_API.app.core.External_Sources.connectors_service import get_policy as get_org_policy
+            from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
             memberships = await list_memberships_for_user(user_id)
             org_id = int((memberships[0] or {}).get("org_id") if memberships else 1)
             policy = await get_org_policy(db, org_id)
@@ -157,13 +154,13 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
             except Exception:
                 raise
     # Determine listing function
-    async def _enumerate_items() -> List[Dict[str, Any]]:
-        items: List[Dict[str, Any]] = []
+    async def _enumerate_items() -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
         page_size = 100
         recursive = bool(options.get("recursive", True))
         if provider == "drive":
             # BFS traversal when recursive; otherwise single level
-            queue: List[str] = [remote_id or "root"]
+            queue: list[str] = [remote_id or "root"]
             visited: set[str] = set()
             while queue:
                 parent = queue.pop(0)
@@ -211,6 +208,7 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
     processed = 0
     # Policy helpers
     from fnmatch import fnmatch
+
     from tldw_Server_API.app.core.External_Sources.policy import is_file_type_allowed
     allowed_export_formats = [str(f).lower() for f in (policy.get("allowed_export_formats") or [])]
     allowed_export_set = set(allowed_export_formats)

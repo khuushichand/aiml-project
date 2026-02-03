@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
@@ -9,17 +9,17 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_use
 from tldw_Server_API.app.api.v1.schemas.user_keys import (
     ProviderKeyTestRequest,
     ProviderKeyTestResponse,
-    UserProviderKeyUpsertRequest,
     UserProviderKeyResponse,
-    UserProviderKeyStatusItem,
     UserProviderKeysResponse,
+    UserProviderKeyStatusItem,
+    UserProviderKeyUpsertRequest,
 )
 from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
     is_byok_enabled,
     is_provider_allowlisted,
+    is_trusted_base_url_request,
     resolve_byok_allowlist,
     resolve_server_default_key,
-    is_trusted_base_url_request,
     validate_base_url_override,
     validate_credential_fields,
 )
@@ -32,17 +32,16 @@ from tldw_Server_API.app.core.AuthNZ.repos.org_provider_secrets_repo import (
 from tldw_Server_API.app.core.AuthNZ.repos.user_provider_secrets_repo import (
     AuthnzUserProviderSecretsRepo,
 )
-from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     build_secret_payload,
     decrypt_byok_payload,
-    encrypt_byok_payload,
     dumps_envelope,
+    encrypt_byok_payload,
     key_hint_for_api_key,
     loads_envelope,
     normalize_provider_name,
 )
-
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -99,7 +98,7 @@ async def _touch_user_last_used_if_match(
 async def upsert_user_provider_key(
     payload: UserProviderKeyUpsertRequest,
     request: Request,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ) -> UserProviderKeyResponse:
     _require_byok_enabled()
     provider_norm = normalize_provider_name(payload.provider)
@@ -185,7 +184,7 @@ async def upsert_user_provider_key(
 @router.get("/keys", response_model=UserProviderKeysResponse)
 async def list_user_provider_keys(
     request: Request,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ) -> UserProviderKeysResponse:
     _require_byok_enabled()
     user_id = int(current_user["id"])
@@ -201,7 +200,7 @@ async def list_user_provider_keys(
     team_ids = sorted({m.get("team_id") for m in memberships if m.get("team_id") is not None})
     org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
 
-    def _filter_scopes(ids: List[int], active_id: Any) -> List[int]:
+    def _filter_scopes(ids: list[int], active_id: Any) -> list[int]:
         if not ids:
             return []
         if active_id is None:
@@ -217,8 +216,8 @@ async def list_user_provider_keys(
     team_scope_ids = _filter_scopes(team_ids, active_team_id)
     org_scope_ids = _filter_scopes(org_ids, active_org_id)
 
-    shared_keys: Dict[str, Dict[str, Any]] = {}
-    shared_sources: Dict[str, str] = {}
+    shared_keys: dict[str, dict[str, Any]] = {}
+    shared_sources: dict[str, str] = {}
     for team_id in team_scope_ids:
         rows = await org_repo.list_secrets(scope_type="team", scope_id=int(team_id))
         for row in rows:
@@ -235,7 +234,7 @@ async def list_user_provider_keys(
                 shared_sources[provider] = "org"
 
     providers = sorted(set(allowlist) | set(user_keys.keys()) | set(shared_keys.keys()))
-    items: List[UserProviderKeyStatusItem] = []
+    items: list[UserProviderKeyStatusItem] = []
     for provider in providers:
         allowed = provider in allowlist
         user_row = user_keys.get(provider)
@@ -299,7 +298,7 @@ async def list_user_provider_keys(
 async def test_user_provider_key(
     payload: ProviderKeyTestRequest,
     request: Request,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ) -> ProviderKeyTestResponse:
     _require_byok_enabled()
     provider_norm = normalize_provider_name(payload.provider)
@@ -379,7 +378,7 @@ async def test_user_provider_key(
 )
 async def delete_user_provider_key(
     provider: str,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ) -> Response:
     _require_byok_enabled()
     provider_norm = normalize_provider_name(provider)

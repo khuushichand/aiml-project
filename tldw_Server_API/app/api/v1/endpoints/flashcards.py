@@ -1,37 +1,36 @@
 # flashcards.py
 # REST endpoints for Flashcards/Decks backed by ChaChaNotes DB (schema v5)
 
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+import json
+import os
+import re
+from typing import Optional
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from loguru import logger
-import re
-import os
 
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from tldw_Server_API.app.core.AuthNZ.permissions import FLASHCARDS_ADMIN
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.schemas.flashcards import (
+    Deck,
+    DeckCreate,
+    Flashcard,
+    FlashcardCreate,
+    FlashcardListResponse,
+    FlashcardReviewRequest,
+    FlashcardReviewResponse,
+    FlashcardsImportRequest,
+    FlashcardTagsUpdate,
+    FlashcardUpdate,
+)
+from tldw_Server_API.app.core.AuthNZ.permissions import FLASHCARDS_ADMIN
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
     ConflictError,
 )
-from tldw_Server_API.app.api.v1.schemas.flashcards import (
-    DeckCreate,
-    Deck,
-    FlashcardCreate,
-    Flashcard,
-    FlashcardListResponse,
-    FlashcardReviewRequest,
-    FlashcardReviewResponse,
-    FlashcardQuery,
-    FlashcardUpdate,
-    FlashcardTagsUpdate,
-    FlashcardsImportRequest,
-)
-import json
-
 from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
 
 router = APIRouter(prefix="/flashcards", tags=["flashcards"])
@@ -115,7 +114,7 @@ def create_deck(payload: DeckCreate, db: CharactersRAGDB = Depends(get_chacha_db
         raise HTTPException(status_code=500, detail="Failed to create deck")
 
 
-@router.get("/decks", response_model=List[Deck])
+@router.get("/decks", response_model=list[Deck])
 def list_decks(db: CharactersRAGDB = Depends(get_chacha_db_for_user), include_deleted: bool = False,
                limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)):
     try:
@@ -174,11 +173,11 @@ def create_flashcard(payload: FlashcardCreate, db: CharactersRAGDB = Depends(get
 
 
 @router.post("/bulk", response_model=FlashcardListResponse)
-def create_flashcards_bulk(payload: List[FlashcardCreate], db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
+def create_flashcards_bulk(payload: list[FlashcardCreate], db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
         card_dicts = []
         raw_list = []
-        tag_lists: List[Optional[List[str]]] = []
+        tag_lists: list[Optional[list[str]]] = []
         deck_ids_to_validate: set[int] = set()
         for item in payload:
             data = item.model_dump()
@@ -202,7 +201,7 @@ def create_flashcards_bulk(payload: List[FlashcardCreate], db: CharactersRAGDB =
             data["reverse"] = eff_reverse
             raw_list.append(data)
         # Validate all referenced deck IDs before inserting; collect all invalids
-        invalid_deck_ids: List[int] = []
+        invalid_deck_ids: list[int] = []
         for did in deck_ids_to_validate:
             d = db.get_deck(did)
             if not d or bool(d.get("deleted")):

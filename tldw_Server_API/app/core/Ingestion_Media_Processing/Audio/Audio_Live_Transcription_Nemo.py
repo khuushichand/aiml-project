@@ -16,13 +16,18 @@
 import queue
 import threading
 import time
-from loguru import logger
-import numpy as np
-from typing import Optional, Callable, List, Dict, Any, Union
 from dataclasses import dataclass
 from enum import Enum
+from typing import Callable, Optional
+
+import numpy as np
 import pyaudio
-import torch
+from loguru import logger
+
+from tldw_Server_API.app.core.config import load_and_log_configs, loaded_config_data
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+    is_transcription_error_message,
+)
 
 # Import Nemo transcription functions
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
@@ -30,10 +35,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcripti
     load_parakeet_model,
     transcribe_with_nemo,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
-    is_transcription_error_message,
-)
-from tldw_Server_API.app.core.config import load_and_log_configs, loaded_config_data
 
 
 class TranscriptionMode(Enum):
@@ -331,7 +332,7 @@ class NemoLiveTranscriber:
             # Speech detected, reset silence timer
             self.silence_start_time = None
 
-    def _process_buffer(self, buffer: List[np.ndarray]):
+    def _process_buffer(self, buffer: list[np.ndarray]):
         """Process audio buffer for transcription."""
         if not buffer:
             return

@@ -21,20 +21,21 @@ import threading
 import time
 import uuid
 from collections import deque
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Deque, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.monitoring_schemas import Watchlist, WatchlistRule
+from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import (
     TopicAlert,
     TopicMonitoringDB,
     WatchlistRecord,
     WatchlistRuleRecord,
 )
-from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Monitoring.notification_service import get_notification_service
 
 
@@ -42,10 +43,10 @@ from tldw_Server_API.app.core.Monitoring.notification_service import get_notific
 class CompiledRule:
     rule_id: str
     regex: re.Pattern
-    category: Optional[str]
-    severity: Optional[str]
+    category: str | None
+    severity: str | None
     pattern_text: str  # original pattern or regex body
-    note: Optional[str] = None
+    note: str | None = None
 
 
 def _find_project_root(start: Path) -> Path | None:
@@ -84,10 +85,10 @@ class TopicMonitoringService:
         )
         self._watchlists_path, self._db_path = self._resolve_paths(monitoring_cfg)
         self._db = TopicMonitoringDB(db_path=self._db_path)
-        self._watchlists: Dict[str, Watchlist] = {}
-        self._compiled: Dict[str, List[CompiledRule]] = {}
-        self._dedupe_state: Dict[str, Dict[str, Deque[Tuple[float, int]]]] = {}
-        self._dedupe_stream_last_seen: Dict[str, float] = {}
+        self._watchlists: dict[str, Watchlist] = {}
+        self._compiled: dict[str, list[CompiledRule]] = {}
+        self._dedupe_state: dict[str, dict[str, deque[tuple[float, int]]]] = {}
+        self._dedupe_stream_last_seen: dict[str, float] = {}
         self._dedupe_last_cleanup: float = 0.0
         self._seed_watchlists_from_file()
         self._load_watchlists_from_db()
@@ -101,7 +102,7 @@ class TopicMonitoringService:
         except (TypeError, ValueError):
             return default
 
-    def _resolve_enabled(self, monitoring_cfg: Dict[str, Any]) -> bool:
+    def _resolve_enabled(self, monitoring_cfg: dict[str, Any]) -> bool:
         raw = monitoring_cfg.get("enabled") if isinstance(monitoring_cfg, dict) else None
         if raw is None:
             raw = os.getenv("MONITORING_ENABLED", "false")
@@ -120,7 +121,7 @@ class TopicMonitoringService:
             raw = os.getenv("TOPIC_MONITOR_MAX_SCAN_CHARS", str(default))
         return self._coerce_int(raw, default)
 
-    def _resolve_paths(self, monitoring_cfg: Dict[str, Any]) -> Tuple[str, str]:
+    def _resolve_paths(self, monitoring_cfg: dict[str, Any]) -> tuple[str, str]:
         configured_watchlists = monitoring_cfg.get("watchlists_file") if isinstance(monitoring_cfg, dict) else None
         if configured_watchlists:
             raw_watchlists = configured_watchlists
@@ -188,7 +189,7 @@ class TopicMonitoringService:
         return str(wl_p), str(db_p)
 
     # --------------------- File I/O (seed/import) ---------------------
-    def _load_watchlists_file(self) -> Optional[List[Watchlist]]:
+    def _load_watchlists_file(self) -> list[Watchlist] | None:
         try:
             if not self._watchlists_path or not os.path.exists(self._watchlists_path):
                 logger.info(
@@ -201,7 +202,7 @@ class TopicMonitoringService:
             raw = data.get("watchlists") if isinstance(data, dict) else data
             if not isinstance(raw, list):
                 raw = []
-            watchlists: List[Watchlist] = []
+            watchlists: list[Watchlist] = []
             for it in raw:
                 try:
                     wl = Watchlist(**it)
@@ -214,7 +215,7 @@ class TopicMonitoringService:
             return None
 
     @staticmethod
-    def _normalize_scope(scope_type: str, scope_id: Optional[str]) -> Tuple[str, Optional[str]]:
+    def _normalize_scope(scope_type: str, scope_id: str | None) -> tuple[str, str | None]:
         st = (scope_type or "user").strip().lower()
         if st not in TopicMonitoringService._ALLOWED_SCOPE_TYPES:
             raise ValueError(f"Unsupported scope_type '{scope_type}'")
@@ -223,7 +224,7 @@ class TopicMonitoringService:
         return st, str(scope_id) if scope_id is not None else None
 
     @staticmethod
-    def _normalize_tags(tags: Optional[Iterable[str]]) -> List[str]:
+    def _normalize_tags(tags: Iterable[str] | None) -> list[str]:
         if tags is None:
             return []
         cleaned = {str(tag).strip() for tag in tags if tag is not None and str(tag).strip()}
@@ -259,11 +260,11 @@ class TopicMonitoringService:
     def _coerce_rule_records(
         self,
         wl_id: str,
-        rules: List[WatchlistRule],
+        rules: list[WatchlistRule],
         *,
         strict: bool = False,
-    ) -> List[WatchlistRuleRecord]:
-        out: List[WatchlistRuleRecord] = []
+    ) -> list[WatchlistRuleRecord]:
+        out: list[WatchlistRuleRecord] = []
         seen: set[str] = set()
         for rule in rules:
             severity = (rule.severity or "info").strip().lower()
@@ -363,7 +364,7 @@ class TopicMonitoringService:
 
     def _load_watchlists_from_db(self) -> None:
         rows = self._db.list_watchlists(include_rules=True)
-        watchlists: Dict[str, Watchlist] = {}
+        watchlists: dict[str, Watchlist] = {}
         wl_fields = {"id", "name", "description", "enabled", "scope_type", "scope_id", "managed_by"}
         rule_fields = {"rule_id", "pattern", "category", "severity", "note", "tags"}
         for row in rows:
@@ -372,7 +373,7 @@ class TopicMonitoringService:
             wl_data["enabled"] = bool(wl_data.get("enabled", True))
             if wl_data.get("scope_type") in {"global", "all"}:
                 wl_data["scope_id"] = None
-            rules: List[WatchlistRule] = []
+            rules: list[WatchlistRule] = []
             for rule in rules_raw:
                 try:
                     rule_data = {k: rule.get(k) for k in rule_fields}
@@ -411,7 +412,7 @@ class TopicMonitoringService:
             return True
         return False
 
-    def _compile_rule(self, rule: WatchlistRule) -> Optional[CompiledRule]:
+    def _compile_rule(self, rule: WatchlistRule) -> CompiledRule | None:
         pat_text = (rule.pattern or "").strip()
         if not pat_text:
             logger.warning("Topic monitor: skipped empty pattern")
@@ -463,7 +464,7 @@ class TopicMonitoringService:
     def _recompile_all(self) -> None:
         self._compiled = {}
         for wid, wl in self._watchlists.items():
-            compiled: List[CompiledRule] = []
+            compiled: list[CompiledRule] = []
             for r in wl.rules or []:
                 cr = self._compile_rule(r)
                 if cr is not None:
@@ -471,7 +472,7 @@ class TopicMonitoringService:
             self._compiled[wid] = compiled
 
     # --------------------- Public CRUD ---------------------
-    def list_watchlists(self) -> List[Watchlist]:
+    def list_watchlists(self) -> list[Watchlist]:
         with self._lock:
             return list(self._watchlists.values())
 
@@ -548,7 +549,7 @@ class TopicMonitoringService:
         e = min(len(text), s + max_len)
         return text[s:e]
 
-    def _iter_scan_chunks(self, text: str) -> Iterable[Tuple[int, int]]:
+    def _iter_scan_chunks(self, text: str) -> Iterable[tuple[int, int]]:
         if not text:
             return
         chunk_size = max(1, int(self._max_scan_chars))
@@ -568,7 +569,7 @@ class TopicMonitoringService:
                 break
             start += step
 
-    def _find_match_span(self, pat: re.Pattern, text: str) -> Optional[Tuple[int, int]]:
+    def _find_match_span(self, pat: re.Pattern, text: str) -> tuple[int, int] | None:
         for start, end in self._iter_scan_chunks(text):
             try:
                 m = pat.search(text, start, end)
@@ -580,12 +581,12 @@ class TopicMonitoringService:
 
     def _applicable_watchlists(
         self,
-        user_id: Optional[str],
-        team_ids: Optional[List[str]] = None,
-        org_ids: Optional[List[str]] = None,
-    ) -> List[Tuple[str, Watchlist]]:
-        out_global: List[Tuple[str, Watchlist]] = []
-        out_scoped: List[Tuple[str, Watchlist]] = []
+        user_id: str | None,
+        team_ids: list[str] | None = None,
+        org_ids: list[str] | None = None,
+    ) -> list[tuple[str, Watchlist]]:
+        out_global: list[tuple[str, Watchlist]] = []
+        out_scoped: list[tuple[str, Watchlist]] = []
         with self._lock:
             items = list(self._watchlists.items())
         for wid, wl in items:
@@ -618,7 +619,7 @@ class TopicMonitoringService:
         return out_global + out_scoped
 
     @staticmethod
-    def _word_ngrams(words: List[str], n: int = 3) -> List[str]:
+    def _word_ngrams(words: list[str], n: int = 3) -> list[str]:
         if not words:
             return []
         if len(words) < n:
@@ -670,7 +671,7 @@ class TopicMonitoringService:
         stream_id: str,
         rule_id: str,
         text: str,
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> tuple[bool, dict[str, Any]]:
         now = time.monotonic()
         simhash = self._simhash(text)
         simhash_hex = f"{simhash:016x}"
@@ -704,18 +705,18 @@ class TopicMonitoringService:
 
     def evaluate_and_alert(
         self,
-        user_id: Optional[str],
-        text: Optional[str],
+        user_id: str | None,
+        text: str | None,
         source: str,
         *,
         scope_type: str = "user",
-        scope_id: Optional[str] = None,
-        team_ids: Optional[List[str]] = None,
-        org_ids: Optional[List[str]] = None,
-        source_id: Optional[str] = None,
-        chunk_id: Optional[str] = None,
-        chunk_seq: Optional[int] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        scope_id: str | None = None,
+        team_ids: list[str] | None = None,
+        org_ids: list[str] | None = None,
+        source_id: str | None = None,
+        chunk_id: str | None = None,
+        chunk_seq: int | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> int:
         """Scan text for any watchlist matches and emit alerts.
         Returns count of alerts created.
@@ -766,7 +767,7 @@ class TopicMonitoringService:
                     dedupe_meta = {}
                 snippet = self._snippet_around(text, match_span[0], match_span[1], max_len=200)
                 # Scope reflects the matched watchlist's scope
-                combined_meta: Dict[str, Any] = {}
+                combined_meta: dict[str, Any] = {}
                 if metadata:
                     combined_meta.update(metadata)
                 if cr.note:
@@ -809,17 +810,17 @@ class TopicMonitoringService:
     def schedule_evaluate_and_alert(
         self,
         *,
-        user_id: Optional[str],
-        text: Optional[str],
+        user_id: str | None,
+        text: str | None,
         source: str,
         scope_type: str = "user",
-        scope_id: Optional[str] = None,
-        team_ids: Optional[List[str]] = None,
-        org_ids: Optional[List[str]] = None,
-        source_id: Optional[str] = None,
-        chunk_id: Optional[str] = None,
-        chunk_seq: Optional[int] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        scope_id: str | None = None,
+        team_ids: list[str] | None = None,
+        org_ids: list[str] | None = None,
+        source_id: str | None = None,
+        chunk_id: str | None = None,
+        chunk_seq: int | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Run evaluate_and_alert in the background to avoid blocking the caller."""
         if not text:
@@ -862,7 +863,7 @@ class TopicMonitoringService:
         loop.create_task(_runner())
 
 
-_service_singleton: Optional[TopicMonitoringService] = None
+_service_singleton: TopicMonitoringService | None = None
 
 
 def get_topic_monitoring_service() -> TopicMonitoringService:

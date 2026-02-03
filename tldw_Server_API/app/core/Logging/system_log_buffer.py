@@ -1,25 +1,24 @@
 from __future__ import annotations
 
+import json
+import os
+import time
 from collections import deque
 from contextlib import contextmanager
 from datetime import datetime
-import json
-from threading import Lock
-from typing import Any, Dict, List, Optional, Tuple
-import os
-import time
 from pathlib import Path
+from threading import Lock
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Utils.Utils import get_database_dir
 
-
 _DEFAULT_BUFFER_SIZE = 2000
 _BUFFER_SIZE = max(100, int(os.getenv("SYSTEM_LOG_BUFFER_SIZE", str(_DEFAULT_BUFFER_SIZE))))
-_BUFFER: deque[Dict[str, Any]] = deque(maxlen=_BUFFER_SIZE)
+_BUFFER: deque[dict[str, Any]] = deque(maxlen=_BUFFER_SIZE)
 _BUFFER_LOCK = Lock()
-_SINK_ID: Optional[int] = None
+_SINK_ID: int | None = None
 
 _DEFAULT_LOG_FILE_ENTRIES = 5000
 _LOG_FILE_SETTINGS_LOCK = Lock()
@@ -47,7 +46,7 @@ _EXTRA_FIELDS = {
 }
 
 
-def _coerce_optional_int(value: Any) -> Optional[int]:
+def _coerce_optional_int(value: Any) -> int | None:
     if value is None:
         return None
     try:
@@ -56,14 +55,14 @@ def _coerce_optional_int(value: Any) -> Optional[int]:
         return None
 
 
-def _coerce_bool(value: Optional[str], default: bool) -> bool:
+def _coerce_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _extract_extra(extra: Dict[str, Any]) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {}
+def _extract_extra(extra: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
     for key in _EXTRA_FIELDS:
         if key not in extra:
             continue
@@ -184,7 +183,7 @@ def _log_file_lock(timeout: float = _LOG_FILE_LOCK_TIMEOUT):
                 pass
 
 
-def _coerce_timestamp(value: Any) -> Optional[datetime]:
+def _coerce_timestamp(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value
     if isinstance(value, str):
@@ -196,7 +195,7 @@ def _coerce_timestamp(value: Any) -> Optional[datetime]:
     return None
 
 
-def _append_log_file(entry: Dict[str, Any]) -> None:
+def _append_log_file(entry: dict[str, Any]) -> None:
     _init_log_file_settings()
     if not _LOG_FILE_ENABLED:
         return
@@ -223,13 +222,13 @@ def _append_log_file(entry: Dict[str, Any]) -> None:
         logger.debug("Failed to append system log file: {}", exc)
 
 
-def _read_log_file_entries() -> List[Dict[str, Any]]:
+def _read_log_file_entries() -> list[dict[str, Any]]:
     _init_log_file_settings()
     if not _LOG_FILE_ENABLED:
         return []
     if not _LOG_FILE_PATH.exists():
         return []
-    entries: List[Dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
     try:
         with _log_file_lock():
             lines = _LOG_FILE_PATH.read_text(encoding="utf-8").splitlines()
@@ -309,17 +308,17 @@ def ensure_system_log_buffer() -> None:
 
 def query_system_logs(
     *,
-    start: Optional[datetime] = None,
-    end: Optional[datetime] = None,
-    level: Optional[str] = None,
-    service: Optional[str] = None,
-    query: Optional[str] = None,
-    org_id: Optional[int] = None,
-    org_ids: Optional[List[int]] = None,
-    user_id: Optional[int] = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    level: str | None = None,
+    service: str | None = None,
+    query: str | None = None,
+    org_id: int | None = None,
+    org_ids: list[int] | None = None,
+    user_id: int | None = None,
     limit: int = 100,
     offset: int = 0,
-) -> Tuple[List[Dict[str, Any]], int]:
+) -> tuple[list[dict[str, Any]], int]:
     ensure_system_log_buffer()
     level_norm = level.strip().upper() if level else None
     service_norm = service.strip().lower() if service else None
@@ -330,7 +329,7 @@ def query_system_logs(
         with _BUFFER_LOCK:
             entries = list(_BUFFER)
 
-    filtered: List[Dict[str, Any]] = []
+    filtered: list[dict[str, Any]] = []
     org_id_set = {org_id} if org_id is not None else set(org_ids or [])
     for entry in entries:
         timestamp = _coerce_timestamp(entry.get("timestamp"))

@@ -28,13 +28,13 @@ import asyncio
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chatbooks.chatbook_models import (
-    ContentType,
     ConflictResolution,
+    ContentType,
     ExportStatus,
     ImportStatus,
 )
@@ -42,8 +42,7 @@ from tldw_Server_API.app.core.Chatbooks.chatbook_service import ChatbookService
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerSDK, WorkerConfig
-
+from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
 
 _CHATBOOKS_DOMAIN = "chatbooks"
 
@@ -54,15 +53,15 @@ if os.getenv("CHATBOOKS_JOBS_BACKEND") not in {"", "core"}:
 
 
 class ChatbooksJobError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: Optional[int] = None) -> None:
+    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: int | None = None) -> None:
         super().__init__(message)
         self.retryable = retryable
         if backoff_seconds is not None:
             self.backoff_seconds = backoff_seconds
 
 
-_SERVICE_CACHE: Dict[str, ChatbookService] = {}
-_DB_CACHE: Dict[str, CharactersRAGDB] = {}
+_SERVICE_CACHE: dict[str, ChatbookService] = {}
+_DB_CACHE: dict[str, CharactersRAGDB] = {}
 
 
 def _jobs_manager() -> JobManager:
@@ -90,7 +89,7 @@ def _get_db(user_id: str) -> CharactersRAGDB:
     cached = _DB_CACHE.get(user_id)
     if cached is not None:
         return cached
-    user_id_int: Optional[int]
+    user_id_int: int | None
     try:
         user_id_int = int(user_id)
     except (TypeError, ValueError):
@@ -114,8 +113,8 @@ def _get_service(user_id: str) -> ChatbookService:
     return service
 
 
-def _map_content_selections(raw: Any) -> Dict[ContentType, list]:
-    selections: Dict[ContentType, list] = {}
+def _map_content_selections(raw: Any) -> dict[ContentType, list]:
+    selections: dict[ContentType, list] = {}
     if not isinstance(raw, dict):
         return selections
     for key, value in raw.items():
@@ -135,7 +134,7 @@ def _parse_conflict_resolution(raw: Any) -> ConflictResolution:
         return ConflictResolution.SKIP
 
 
-async def _handle_export(service: ChatbookService, payload: Dict[str, Any], job_id: str) -> Dict[str, Any]:
+async def _handle_export(service: ChatbookService, payload: dict[str, Any], job_id: str) -> dict[str, Any]:
     if not service._claim_export_job(job_id):
         existing = service._get_export_job(job_id)
         if existing and existing.status in {ExportStatus.COMPLETED, ExportStatus.FAILED, ExportStatus.CANCELLED}:
@@ -185,7 +184,7 @@ async def _handle_export(service: ChatbookService, payload: Dict[str, Any], job_
     return {"path": file_path, "download_url": download_url}
 
 
-async def _handle_import(service: ChatbookService, payload: Dict[str, Any], job_id: str) -> Dict[str, Any]:
+async def _handle_import(service: ChatbookService, payload: dict[str, Any], job_id: str) -> dict[str, Any]:
     if not service._claim_import_job(job_id):
         existing = service._get_import_job(job_id)
         if existing and existing.status in {ImportStatus.COMPLETED, ImportStatus.FAILED, ImportStatus.CANCELLED}:
@@ -237,7 +236,7 @@ async def _handle_import(service: ChatbookService, payload: Dict[str, Any], job_
     raise ChatbooksJobError(str(msg), retryable=False)
 
 
-async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
+async def _handle_job(job: dict[str, Any]) -> dict[str, Any]:
     payload = job.get("payload") or {}
     if not isinstance(payload, dict):
         payload = {}

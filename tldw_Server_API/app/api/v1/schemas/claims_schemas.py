@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Optional, List, Dict, Literal
+from typing import Literal
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ClaimsSettingsResponse(BaseModel):
@@ -34,22 +34,22 @@ class ClaimsSettingsUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enable_ingestion_claims: Optional[bool] = Field(default=None)
-    claim_extractor_mode: Optional[str] = Field(default=None)
-    claims_max_per_chunk: Optional[int] = Field(default=None, ge=1, le=100)
-    claims_embed: Optional[bool] = Field(default=None)
-    claims_embed_model_id: Optional[str] = Field(default=None)
-    claims_cluster_method: Optional[str] = Field(default=None)
-    claims_cluster_similarity_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    claims_cluster_batch_size: Optional[int] = Field(default=None, ge=1, le=10000)
-    claims_llm_provider: Optional[str] = Field(default=None)
-    claims_llm_temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
-    claims_llm_model: Optional[str] = Field(default=None)
-    claims_rebuild_enabled: Optional[bool] = Field(default=None)
-    claims_rebuild_interval_sec: Optional[int] = Field(default=None, ge=60, le=604800)
-    claims_rebuild_policy: Optional[str] = Field(default=None)
-    claims_stale_days: Optional[int] = Field(default=None, ge=1, le=3650)
-    persist: Optional[bool] = Field(default=None, description="Persist updates to config.txt.")
+    enable_ingestion_claims: bool | None = Field(default=None)
+    claim_extractor_mode: str | None = Field(default=None)
+    claims_max_per_chunk: int | None = Field(default=None, ge=1, le=100)
+    claims_embed: bool | None = Field(default=None)
+    claims_embed_model_id: str | None = Field(default=None)
+    claims_cluster_method: str | None = Field(default=None)
+    claims_cluster_similarity_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    claims_cluster_batch_size: int | None = Field(default=None, ge=1, le=10000)
+    claims_llm_provider: str | None = Field(default=None)
+    claims_llm_temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    claims_llm_model: str | None = Field(default=None)
+    claims_rebuild_enabled: bool | None = Field(default=None)
+    claims_rebuild_interval_sec: int | None = Field(default=None, ge=60, le=604800)
+    claims_rebuild_policy: str | None = Field(default=None)
+    claims_stale_days: int | None = Field(default=None, ge=1, le=3650)
+    persist: bool | None = Field(default=None, description="Persist updates to config.txt.")
 
 
 class ClaimsExtractorCatalogItem(BaseModel):
@@ -61,9 +61,9 @@ class ClaimsExtractorCatalogItem(BaseModel):
     label: str
     description: str
     execution: str
-    supports_languages: Optional[List[str]] = None
-    providers: Optional[List[str]] = None
-    auto_selectable: Optional[bool] = None
+    supports_languages: list[str] | None = None
+    providers: list[str] | None = None
+    auto_selectable: bool | None = None
 
 
 class ClaimsExtractorCatalogResponse(BaseModel):
@@ -71,7 +71,7 @@ class ClaimsExtractorCatalogResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    extractors: List[ClaimsExtractorCatalogItem] = Field(default_factory=list)
+    extractors: list[ClaimsExtractorCatalogItem] = Field(default_factory=list)
     default_mode: str
     auto_mode: str
 
@@ -81,13 +81,13 @@ class ClaimUpdateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    claim_text: Optional[str] = Field(default=None)
-    span_start: Optional[int] = Field(default=None, ge=0)
-    span_end: Optional[int] = Field(default=None, ge=0)
-    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    extractor: Optional[str] = Field(default=None)
-    extractor_version: Optional[str] = Field(default=None)
-    deleted: Optional[bool] = Field(default=None)
+    claim_text: str | None = Field(default=None)
+    span_start: int | None = Field(default=None, ge=0)
+    span_end: int | None = Field(default=None, ge=0)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    extractor: str | None = Field(default=None)
+    extractor_version: str | None = Field(default=None)
+    deleted: bool | None = Field(default=None)
 
 
 class ClaimsSearchResult(BaseModel):
@@ -99,8 +99,8 @@ class ClaimsSearchResult(BaseModel):
     media_id: int
     chunk_index: int
     claim_text: str
-    claim_cluster_id: Optional[int] = None
-    relevance_score: Optional[float] = None
+    claim_cluster_id: int | None = None
+    relevance_score: float | None = None
 
 
 class ClaimsSearchClusterResult(BaseModel):
@@ -109,9 +109,9 @@ class ClaimsSearchClusterResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     cluster_id: int
-    canonical_claim_text: Optional[str] = None
-    representative_claim_id: Optional[int] = None
-    watchlist_count: Optional[int] = None
+    canonical_claim_text: str | None = None
+    representative_claim_id: int | None = None
+    watchlist_count: int | None = None
     match_count: int
     top_claim: ClaimsSearchResult
 
@@ -124,9 +124,9 @@ class ClaimsSearchResponse(BaseModel):
     query: str
     group_by_cluster: bool
     total: int
-    results: List[ClaimsSearchResult] = Field(default_factory=list)
-    clusters: Optional[List[ClaimsSearchClusterResult]] = None
-    orphaned: Optional[List[ClaimsSearchResult]] = None
+    results: list[ClaimsSearchResult] = Field(default_factory=list)
+    clusters: list[ClaimsSearchClusterResult] | None = None
+    orphaned: list[ClaimsSearchResult] | None = None
 
 
 class ClaimsClusterLinkCreate(BaseModel):
@@ -135,7 +135,7 @@ class ClaimsClusterLinkCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     child_cluster_id: int
-    relation_type: Optional[str] = Field(default=None)
+    relation_type: str | None = Field(default=None)
 
 
 class ClaimsClusterLinkResponse(BaseModel):
@@ -145,9 +145,9 @@ class ClaimsClusterLinkResponse(BaseModel):
 
     parent_cluster_id: int
     child_cluster_id: int
-    relation_type: Optional[str] = None
-    created_at: Optional[str] = None
-    direction: Optional[str] = None
+    relation_type: str | None = None
+    created_at: str | None = None
+    direction: str | None = None
 
 
 class ClaimsMonitoringSettingsResponse(BaseModel):
@@ -158,13 +158,13 @@ class ClaimsMonitoringSettingsResponse(BaseModel):
     id: int
     user_id: str
     threshold_ratio: float = Field(..., ge=0.0, le=1.0)
-    baseline_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    slack_webhook_url: Optional[str] = Field(default=None)
-    webhook_url: Optional[str] = Field(default=None)
-    email_recipients: List[str] = Field(default_factory=list)
+    baseline_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
+    slack_webhook_url: str | None = Field(default=None)
+    webhook_url: str | None = Field(default=None)
+    email_recipients: list[str] = Field(default_factory=list)
     enabled: bool
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class ClaimsMonitoringSettingsUpdate(BaseModel):
@@ -172,13 +172,13 @@ class ClaimsMonitoringSettingsUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    threshold_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    baseline_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    slack_webhook_url: Optional[str] = Field(default=None)
-    webhook_url: Optional[str] = Field(default=None)
-    email_recipients: Optional[List[str]] = Field(default=None)
-    enabled: Optional[bool] = Field(default=None)
-    persist: Optional[bool] = Field(default=None, description="Legacy no-op.")
+    threshold_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
+    baseline_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
+    slack_webhook_url: str | None = Field(default=None)
+    webhook_url: str | None = Field(default=None)
+    email_recipients: list[str] | None = Field(default=None)
+    enabled: bool | None = Field(default=None)
+    persist: bool | None = Field(default=None, description="Legacy no-op.")
 
 
 class ClaimsAlertConfigResponse(BaseModel):
@@ -190,15 +190,15 @@ class ClaimsAlertConfigResponse(BaseModel):
     user_id: str
     name: str
     alert_type: str
-    threshold_ratio: Optional[float] = None
-    baseline_ratio: Optional[float] = None
-    channels: Dict[str, bool] = Field(default_factory=dict)
-    slack_webhook_url: Optional[str] = None
-    webhook_url: Optional[str] = None
-    email_recipients: List[str] = Field(default_factory=list)
+    threshold_ratio: float | None = None
+    baseline_ratio: float | None = None
+    channels: dict[str, bool] = Field(default_factory=dict)
+    slack_webhook_url: str | None = None
+    webhook_url: str | None = None
+    email_recipients: list[str] = Field(default_factory=list)
     enabled: bool
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class ClaimsAlertConfigCreate(BaseModel):
@@ -208,13 +208,13 @@ class ClaimsAlertConfigCreate(BaseModel):
 
     name: str = Field(..., min_length=1)
     alert_type: str = Field(..., min_length=1)
-    threshold_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    baseline_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    channels: Dict[str, bool] = Field(default_factory=dict)
-    slack_webhook_url: Optional[str] = Field(default=None)
-    webhook_url: Optional[str] = Field(default=None)
-    email_recipients: Optional[List[str]] = Field(default=None)
-    enabled: Optional[bool] = Field(default=None)
+    threshold_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
+    baseline_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
+    channels: dict[str, bool] = Field(default_factory=dict)
+    slack_webhook_url: str | None = Field(default=None)
+    webhook_url: str | None = Field(default=None)
+    email_recipients: list[str] | None = Field(default=None)
+    enabled: bool | None = Field(default=None)
 
 
 class ClaimsAlertConfigUpdate(BaseModel):
@@ -222,15 +222,15 @@ class ClaimsAlertConfigUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: Optional[str] = Field(default=None, min_length=1)
-    alert_type: Optional[str] = Field(default=None, min_length=1)
-    threshold_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    baseline_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    channels: Optional[Dict[str, bool]] = Field(default=None)
-    slack_webhook_url: Optional[str] = Field(default=None)
-    webhook_url: Optional[str] = Field(default=None)
-    email_recipients: Optional[List[str]] = Field(default=None)
-    enabled: Optional[bool] = Field(default=None)
+    name: str | None = Field(default=None, min_length=1)
+    alert_type: str | None = Field(default=None, min_length=1)
+    threshold_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
+    baseline_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
+    channels: dict[str, bool] | None = Field(default=None)
+    slack_webhook_url: str | None = Field(default=None)
+    webhook_url: str | None = Field(default=None)
+    email_recipients: list[str] | None = Field(default=None)
+    enabled: bool | None = Field(default=None)
 
 
 class ClaimNotificationResponse(BaseModel):
@@ -241,13 +241,13 @@ class ClaimNotificationResponse(BaseModel):
     id: int
     user_id: str
     kind: str
-    target_user_id: Optional[str] = None
-    target_review_group: Optional[str] = None
-    resource_type: Optional[str] = None
-    resource_id: Optional[str] = None
-    payload: Dict[str, object] = Field(default_factory=dict)
-    created_at: Optional[str] = None
-    delivered_at: Optional[str] = None
+    target_user_id: str | None = None
+    target_review_group: str | None = None
+    resource_type: str | None = None
+    resource_id: str | None = None
+    payload: dict[str, object] = Field(default_factory=dict)
+    created_at: str | None = None
+    delivered_at: str | None = None
 
 
 class ClaimNotificationsAckRequest(BaseModel):
@@ -255,7 +255,7 @@ class ClaimNotificationsAckRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    ids: List[int] = Field(..., min_length=1)
+    ids: list[int] = Field(..., min_length=1)
 
 
 class ClaimNotificationsDigestResponse(BaseModel):
@@ -264,10 +264,10 @@ class ClaimNotificationsDigestResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     total: int
-    counts_by_kind: Dict[str, int] = Field(default_factory=dict)
-    counts_by_target_user: Dict[str, int] = Field(default_factory=dict)
-    counts_by_review_group: Dict[str, int] = Field(default_factory=dict)
-    notifications: Optional[List[ClaimNotificationResponse]] = None
+    counts_by_kind: dict[str, int] = Field(default_factory=dict)
+    counts_by_target_user: dict[str, int] = Field(default_factory=dict)
+    counts_by_review_group: dict[str, int] = Field(default_factory=dict)
+    notifications: list[ClaimNotificationResponse] | None = None
 
 
 class ClaimReviewRequest(BaseModel):
@@ -277,11 +277,11 @@ class ClaimReviewRequest(BaseModel):
 
     status: str = Field(..., description="New review status.")
     review_version: int = Field(..., ge=1)
-    notes: Optional[str] = Field(default=None)
-    corrected_text: Optional[str] = Field(default=None)
-    reason_code: Optional[str] = Field(default=None)
-    reviewer_id: Optional[int] = Field(default=None)
-    review_group: Optional[str] = Field(default=None)
+    notes: str | None = Field(default=None)
+    corrected_text: str | None = Field(default=None)
+    reason_code: str | None = Field(default=None)
+    reviewer_id: int | None = Field(default=None)
+    review_group: str | None = Field(default=None)
 
 
 class ClaimReviewBulkRequest(BaseModel):
@@ -289,12 +289,12 @@ class ClaimReviewBulkRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    claim_ids: List[int] = Field(..., min_length=1)
+    claim_ids: list[int] = Field(..., min_length=1)
     status: str = Field(..., description="Review status for all claims.")
-    notes: Optional[str] = Field(default=None)
-    reason_code: Optional[str] = Field(default=None)
-    reviewer_id: Optional[int] = Field(default=None)
-    review_group: Optional[str] = Field(default=None)
+    notes: str | None = Field(default=None)
+    reason_code: str | None = Field(default=None)
+    reviewer_id: int | None = Field(default=None)
+    review_group: str | None = Field(default=None)
 
 
 class ClaimReviewRuleCreate(BaseModel):
@@ -303,10 +303,10 @@ class ClaimReviewRuleCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     priority: int = Field(default=0)
-    predicate_json: Dict[str, object] = Field(default_factory=dict)
-    reviewer_id: Optional[int] = Field(default=None)
-    review_group: Optional[str] = Field(default=None)
-    active: Optional[bool] = Field(default=None)
+    predicate_json: dict[str, object] = Field(default_factory=dict)
+    reviewer_id: int | None = Field(default=None)
+    review_group: str | None = Field(default=None)
+    active: bool | None = Field(default=None)
 
 
 class ClaimReviewRuleUpdate(BaseModel):
@@ -314,11 +314,11 @@ class ClaimReviewRuleUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    priority: Optional[int] = Field(default=None)
-    predicate_json: Optional[Dict[str, object]] = Field(default=None)
-    reviewer_id: Optional[int] = Field(default=None)
-    review_group: Optional[str] = Field(default=None)
-    active: Optional[bool] = Field(default=None)
+    priority: int | None = Field(default=None)
+    predicate_json: dict[str, object] | None = Field(default=None)
+    reviewer_id: int | None = Field(default=None)
+    review_group: str | None = Field(default=None)
+    active: bool | None = Field(default=None)
 
 
 class ClaimsAnalyticsExportFilters(BaseModel):
@@ -326,13 +326,13 @@ class ClaimsAnalyticsExportFilters(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    workspace_id: Optional[str] = Field(default=None)
-    event_type: Optional[str] = Field(default=None)
-    severity: Optional[str] = Field(default=None)
-    provider: Optional[str] = Field(default=None)
-    model: Optional[str] = Field(default=None)
-    start_time: Optional[str] = Field(default=None)
-    end_time: Optional[str] = Field(default=None)
+    workspace_id: str | None = Field(default=None)
+    event_type: str | None = Field(default=None)
+    severity: str | None = Field(default=None)
+    provider: str | None = Field(default=None)
+    model: str | None = Field(default=None)
+    start_time: str | None = Field(default=None)
+    end_time: str | None = Field(default=None)
 
 
 class ClaimsAnalyticsExportPagination(BaseModel):
@@ -340,8 +340,8 @@ class ClaimsAnalyticsExportPagination(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    limit: Optional[int] = Field(default=1000, ge=1, le=10000)
-    offset: Optional[int] = Field(default=0, ge=0)
+    limit: int | None = Field(default=1000, ge=1, le=10000)
+    offset: int | None = Field(default=0, ge=0)
 
 
 class ClaimsAnalyticsExportRequest(BaseModel):
@@ -350,8 +350,8 @@ class ClaimsAnalyticsExportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     format: Literal["json", "csv"]
-    filters: Optional[ClaimsAnalyticsExportFilters] = Field(default=None)
-    pagination: Optional[ClaimsAnalyticsExportPagination] = Field(default=None)
+    filters: ClaimsAnalyticsExportFilters | None = Field(default=None)
+    pagination: ClaimsAnalyticsExportPagination | None = Field(default=None)
 
 
 class ClaimsAnalyticsExportResponse(BaseModel):
@@ -362,8 +362,8 @@ class ClaimsAnalyticsExportResponse(BaseModel):
     export_id: str
     format: Literal["json", "csv"]
     status: str
-    download_url: Optional[str] = None
-    created_at: Optional[str] = None
+    download_url: str | None = None
+    created_at: str | None = None
 
 
 class ClaimsAnalyticsExportPaginationMeta(BaseModel):
@@ -371,9 +371,9 @@ class ClaimsAnalyticsExportPaginationMeta(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    limit: Optional[int] = None
-    offset: Optional[int] = None
-    total: Optional[int] = None
+    limit: int | None = None
+    offset: int | None = None
+    total: int | None = None
 
 
 class ClaimsAnalyticsExportListItem(BaseModel):
@@ -384,12 +384,12 @@ class ClaimsAnalyticsExportListItem(BaseModel):
     export_id: str
     format: Literal["json", "csv"]
     status: str
-    download_url: Optional[str] = None
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
-    filters: Optional[ClaimsAnalyticsExportFilters] = None
-    pagination: Optional[ClaimsAnalyticsExportPaginationMeta] = None
-    error_message: Optional[str] = None
+    download_url: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    filters: ClaimsAnalyticsExportFilters | None = None
+    pagination: ClaimsAnalyticsExportPaginationMeta | None = None
+    error_message: str | None = None
 
 
 class ClaimsAnalyticsExportListResponse(BaseModel):
@@ -397,7 +397,7 @@ class ClaimsAnalyticsExportListResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    exports: List[ClaimsAnalyticsExportListItem] = Field(default_factory=list)
+    exports: list[ClaimsAnalyticsExportListItem] = Field(default_factory=list)
     total: int
     limit: int
     offset: int
@@ -417,9 +417,9 @@ class ClaimsAnalyticsPerMediaStats(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    mean: Optional[float] = None
-    p95: Optional[int] = None
-    max: Optional[int] = None
+    mean: float | None = None
+    p95: int | None = None
+    max: int | None = None
 
 
 class ClaimsAnalyticsReviewThroughputPoint(BaseModel):
@@ -438,7 +438,7 @@ class ClaimsAnalyticsReviewThroughput(BaseModel):
 
     window_days: int
     total: int
-    daily: List[ClaimsAnalyticsReviewThroughputPoint] = Field(default_factory=list)
+    daily: list[ClaimsAnalyticsReviewThroughputPoint] = Field(default_factory=list)
 
 
 class ClaimsAnalyticsReviewStatusTrendPoint(BaseModel):
@@ -448,7 +448,7 @@ class ClaimsAnalyticsReviewStatusTrendPoint(BaseModel):
 
     date: str
     total: int
-    status_counts: Dict[str, int] = Field(default_factory=dict)
+    status_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class ClaimsAnalyticsReviewStatusTrends(BaseModel):
@@ -457,7 +457,7 @@ class ClaimsAnalyticsReviewStatusTrends(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     window_days: int
-    daily: List[ClaimsAnalyticsReviewStatusTrendPoint] = Field(default_factory=list)
+    daily: list[ClaimsAnalyticsReviewStatusTrendPoint] = Field(default_factory=list)
 
 
 class ClaimsReviewExtractorMetricsDaily(BaseModel):
@@ -465,7 +465,7 @@ class ClaimsReviewExtractorMetricsDaily(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: Optional[int] = None
+    id: int | None = None
     user_id: str
     report_date: str
     extractor: str
@@ -476,9 +476,9 @@ class ClaimsReviewExtractorMetricsDaily(BaseModel):
     flagged_count: int
     reassigned_count: int
     edited_count: int
-    reason_code_counts: Dict[str, int] = Field(default_factory=dict)
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    reason_code_counts: dict[str, int] = Field(default_factory=dict)
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class ClaimsReviewExtractorMetricsResponse(BaseModel):
@@ -486,7 +486,7 @@ class ClaimsReviewExtractorMetricsResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    items: List[ClaimsReviewExtractorMetricsDaily] = Field(default_factory=list)
+    items: list[ClaimsReviewExtractorMetricsDaily] = Field(default_factory=list)
     total: int
 
 
@@ -498,8 +498,8 @@ class ClaimsAnalyticsClusterSummary(BaseModel):
     cluster_id: int
     member_count: int
     watchlist_count: int
-    canonical_claim_text: Optional[str] = None
-    updated_at: Optional[str] = None
+    canonical_claim_text: str | None = None
+    updated_at: str | None = None
 
 
 class ClaimsAnalyticsClusterHotspot(BaseModel):
@@ -510,10 +510,10 @@ class ClaimsAnalyticsClusterHotspot(BaseModel):
     cluster_id: int
     member_count: int
     issue_count: int
-    issue_ratio: Optional[float] = None
+    issue_ratio: float | None = None
     watchlist_count: int
-    canonical_claim_text: Optional[str] = None
-    updated_at: Optional[str] = None
+    canonical_claim_text: str | None = None
+    updated_at: str | None = None
 
 
 class ClaimsAnalyticsClusterStats(BaseModel):
@@ -524,12 +524,12 @@ class ClaimsAnalyticsClusterStats(BaseModel):
     total_clusters: int
     clusters_with_members: int
     total_members: int
-    avg_member_count: Optional[float] = None
-    p95_member_count: Optional[int] = None
-    max_member_count: Optional[int] = None
+    avg_member_count: float | None = None
+    p95_member_count: int | None = None
+    max_member_count: int | None = None
     orphan_claims: int
-    top_clusters: List[ClaimsAnalyticsClusterSummary] = Field(default_factory=list)
-    hotspots: List[ClaimsAnalyticsClusterHotspot] = Field(default_factory=list)
+    top_clusters: list[ClaimsAnalyticsClusterSummary] = Field(default_factory=list)
+    hotspots: list[ClaimsAnalyticsClusterHotspot] = Field(default_factory=list)
 
 
 class ClaimsAnalyticsUnsupportedRatios(BaseModel):
@@ -539,8 +539,8 @@ class ClaimsAnalyticsUnsupportedRatios(BaseModel):
 
     window_sec: int
     baseline_sec: int
-    window_ratio: Optional[float] = None
-    baseline_ratio: Optional[float] = None
+    window_ratio: float | None = None
+    baseline_ratio: float | None = None
 
 
 class ClaimsAnalyticsProviderUsage(BaseModel):
@@ -555,8 +555,8 @@ class ClaimsAnalyticsProviderUsage(BaseModel):
     errors: int
     total_tokens: int
     total_cost_usd: float
-    latency_avg_ms: Optional[float] = None
-    latency_p95_ms: Optional[float] = None
+    latency_avg_ms: float | None = None
+    latency_p95_ms: float | None = None
 
 
 class ClaimsAnalyticsRebuildHealth(BaseModel):
@@ -568,9 +568,9 @@ class ClaimsAnalyticsRebuildHealth(BaseModel):
     queue_length: int
     workers: int
     last_heartbeat_ts: float
-    heartbeat_age_sec: Optional[float] = None
-    last_processed_ts: Optional[float] = None
-    last_failure: Optional[Dict[str, object]] = None
+    heartbeat_age_sec: float | None = None
+    last_processed_ts: float | None = None
+    last_failure: dict[str, object] | None = None
     stale: bool
 
 
@@ -580,16 +580,16 @@ class ClaimsAnalyticsDashboardResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     total_claims: int
-    status_counts: Dict[str, int]
-    avg_review_latency_sec: Optional[float] = None
-    p95_review_latency_sec: Optional[float] = None
+    status_counts: dict[str, int]
+    avg_review_latency_sec: float | None = None
+    p95_review_latency_sec: float | None = None
     review_backlog: int
-    claims_per_media_top: List[ClaimsAnalyticsPerMediaCount] = Field(default_factory=list)
+    claims_per_media_top: list[ClaimsAnalyticsPerMediaCount] = Field(default_factory=list)
     claims_per_media_stats: ClaimsAnalyticsPerMediaStats
     review_throughput: ClaimsAnalyticsReviewThroughput
     review_status_trends: ClaimsAnalyticsReviewStatusTrends
-    review_extractor_metrics: Optional[List[ClaimsReviewExtractorMetricsDaily]] = None
+    review_extractor_metrics: list[ClaimsReviewExtractorMetricsDaily] | None = None
     clusters: ClaimsAnalyticsClusterStats
     unsupported_ratios: ClaimsAnalyticsUnsupportedRatios
-    provider_usage: List[ClaimsAnalyticsProviderUsage] = Field(default_factory=list)
-    rebuild_health: Optional[ClaimsAnalyticsRebuildHealth] = None
+    provider_usage: list[ClaimsAnalyticsProviderUsage] = Field(default_factory=list)
+    rebuild_health: ClaimsAnalyticsRebuildHealth | None = None

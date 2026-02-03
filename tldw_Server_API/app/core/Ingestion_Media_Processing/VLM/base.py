@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -18,17 +18,17 @@ class VLMDetection:
     """
     label: str
     score: float
-    bbox: List[float]
-    metadata: Dict[str, Any]
+    bbox: list[float]
+    metadata: dict[str, Any]
 
 
 @dataclass
 class VLMResult:
     """Structured result containing detections and any optional text summaries."""
-    detections: List[VLMDetection]
+    detections: list[VLMDetection]
     # Optional textual outputs (e.g., captions) - empty for detectors-only backends
-    texts: Optional[List[str]] = None
-    extra: Optional[Dict[str, Any]] = None
+    texts: list[str] | None = None
+    extra: dict[str, Any] | None = None
 
 
 class VLMBackend(ABC):
@@ -45,7 +45,7 @@ class VLMBackend(ABC):
         """Return True if the backend can run in the current environment."""
         return True
 
-    def describe(self) -> Dict[str, Any]:
+    def describe(self) -> dict[str, Any]:
         """Lightweight descriptor for endpoint health checks and listing."""
         return {"name": getattr(self, "name", self.__class__.__name__)}
 
@@ -54,8 +54,8 @@ class VLMBackend(ABC):
         self,
         image_bytes: bytes,
         *,
-        mime_type: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None,
+        mime_type: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> VLMResult:
         """
         Process image bytes and return detections/captions.

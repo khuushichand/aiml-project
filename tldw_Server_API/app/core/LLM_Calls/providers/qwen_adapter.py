@@ -1,22 +1,24 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
 import asyncio
 import os
+from collections.abc import AsyncIterator, Iterable
+from typing import Any
 
-from .base import ChatProvider
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
-from tldw_Server_API.app.core.LLM_Calls.sse import (
-    normalize_provider_line,
-    is_done_line,
-    sse_done,
-    finalize_stream,
-)
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    finalize_stream,
+    is_done_line,
+    normalize_provider_line,
+    sse_done,
+)
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
+
+from .base import ChatProvider
 
 # Expose a patchable factory for tests; production uses the centralized client
 http_client_factory = _hc_create_client
@@ -25,7 +27,7 @@ http_client_factory = _hc_create_client
 class QwenAdapter(ChatProvider):
     name = "qwen"
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "supports_streaming": True,
             "supports_tools": True,
@@ -33,7 +35,7 @@ class QwenAdapter(ChatProvider):
             "max_output_tokens_default": 8192,
         }
 
-    def _to_handler_args(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any]) -> dict[str, Any]:
         streaming_raw = request.get("stream")
         if streaming_raw is None:
             streaming_raw = request.get("streaming")
@@ -63,7 +65,7 @@ class QwenAdapter(ChatProvider):
             "app_config": request.get("app_config"),
         }
 
-    def _apply_config_defaults(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def _apply_config_defaults(self, request: dict[str, Any]) -> dict[str, Any]:
         merged = dict(request)
         cfg = (merged.get("app_config") or {}).get("qwen_api", {})
         if merged.get("api_key") is None and cfg.get("api_key") is not None:
@@ -102,7 +104,7 @@ class QwenAdapter(ChatProvider):
             merged["top_logprobs"] = cfg.get("top_logprobs")
         return merged
 
-    def _base_url(self, cfg: Optional[Dict[str, Any]], request: Optional[Dict[str, Any]] = None) -> str:
+    def _base_url(self, cfg: dict[str, Any] | None, request: dict[str, Any] | None = None) -> str:
         # DashScope OpenAI-compatible endpoint
         override = (request or {}).get("base_url")
         if isinstance(override, str) and override.strip():
@@ -113,7 +115,7 @@ class QwenAdapter(ChatProvider):
             api_base = ((cfg.get("qwen_api") or {}).get("api_base_url"))
         return (os.getenv("QWEN_BASE_URL") or api_base or default_base).rstrip("/")
 
-    def _resolve_timeout(self, request: Dict[str, Any], fallback: Optional[float]) -> float:
+    def _resolve_timeout(self, request: dict[str, Any], fallback: float | None) -> float:
         try:
             cfg = request.get("app_config") or {}
             qcfg = cfg.get("qwen_api") or {}
@@ -129,20 +131,20 @@ class QwenAdapter(ChatProvider):
             return float(fallback)
         return float(self.capabilities().get("default_timeout_seconds", 90))
 
-    def _headers(self, api_key: Optional[str]) -> Dict[str, str]:
+    def _headers(self, api_key: str | None) -> dict[str, str]:
         h = {"Content-Type": "application/json", "Accept": "application/json"}
         if api_key:
             h["Authorization"] = f"Bearer {api_key}"
         return h
 
-    def _build_payload(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        messages: List[Dict[str, Any]] = request.get("messages") or []
+    def _build_payload(self, request: dict[str, Any]) -> dict[str, Any]:
+        messages: list[dict[str, Any]] = request.get("messages") or []
         system_message = request.get("system_message")
-        payload_messages: List[Dict[str, Any]] = []
+        payload_messages: list[dict[str, Any]] = []
         if system_message and not any((m.get("role") == "system") for m in messages):
             payload_messages.append({"role": "system", "content": system_message})
         payload_messages.extend(messages)
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "model": request.get("model"),
             "messages": payload_messages,
         }
@@ -171,7 +173,7 @@ class QwenAdapter(ChatProvider):
             payload["response_format"] = request.get("response_format")
         return payload
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         request = self._apply_config_defaults(request or {})
         request = validate_payload(self.name, request or {})
         api_key = request.get("api_key")
@@ -194,7 +196,7 @@ class QwenAdapter(ChatProvider):
         except Exception as e:
             raise self.normalize_error(e)
 
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = self._apply_config_defaults(request or {})
         request = validate_payload(self.name, request or {})
         api_key = request.get("api_key")
@@ -237,18 +239,18 @@ class QwenAdapter(ChatProvider):
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
         from tldw_Server_API.app.core.LLM_Calls.error_utils import (
-            get_http_status_from_exception,
             get_http_error_text,
+            get_http_status_from_exception,
             is_http_status_error,
             log_http_400_body,
         )
         if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
-                ChatBadRequestError,
-                ChatAuthenticationError,
-                ChatRateLimitError,
-                ChatProviderError,
                 ChatAPIError,
+                ChatAuthenticationError,
+                ChatBadRequestError,
+                ChatProviderError,
+                ChatRateLimitError,
             )
             resp = getattr(exc, "response", None)
             status = get_http_status_from_exception(exc)
@@ -277,9 +279,9 @@ class QwenAdapter(ChatProvider):
             return ChatAPIError(provider=self.name, message=str(detail), status_code=status or 500)
         return super().normalize_error(exc)
 
-    async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
-    async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
+    async def astream(self, request: dict[str, Any], *, timeout: float | None = None) -> AsyncIterator[str]:
         async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):
             yield item

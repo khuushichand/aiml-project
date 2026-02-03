@@ -6,14 +6,14 @@ from __future__ import annotations
 import argparse
 import logging
 import sqlite3
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
+from typing import Any
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseBackend, DatabaseConfig
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
-
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +24,11 @@ class TableMeta:
 
     name: str
     source_name: str
-    columns: List[str]
-    pg_columns: List[str]
-    pk_columns: List[str]
-    sequence_columns: List[str]
-    dependencies: Set[str] = field(default_factory=set)
+    columns: list[str]
+    pg_columns: list[str]
+    pk_columns: list[str]
+    sequence_columns: list[str]
+    dependencies: set[str] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self.name = self.name.lower()
@@ -52,9 +52,9 @@ def migrate_sqlite_to_postgres(
     postgres_config: DatabaseConfig,
     *,
     batch_size: int = 500,
-    skip_tables: Optional[Iterable[str]] = None,
+    skip_tables: Iterable[str] | None = None,
     label: str = 'content',
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
 ) -> None:
     """Copy rows from a SQLite database into a PostgreSQL database.
 
@@ -225,10 +225,10 @@ def migrate_workflows_sqlite_to_postgres(
 
 def _introspect_sqlite_schema(
     conn: sqlite3.Connection,
-    skip_tables: Optional[Iterable[str]] = None,
-) -> Dict[str, TableMeta]:
+    skip_tables: Iterable[str] | None = None,
+) -> dict[str, TableMeta]:
     configured_skips = {name.lower() for name in (skip_tables or [])}
-    tables: Dict[str, TableMeta] = {}
+    tables: dict[str, TableMeta] = {}
 
     cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     table_names = [row[0] for row in cursor.fetchall()]
@@ -273,9 +273,9 @@ def _introspect_sqlite_schema(
     return tables
 
 
-def _topological_sort(tables: Dict[str, TableMeta]) -> List[str]:
-    indegree: Dict[str, int] = {name: 0 for name in tables}
-    adjacency: Dict[str, Set[str]] = {name: set() for name in tables}
+def _topological_sort(tables: dict[str, TableMeta]) -> list[str]:
+    indegree: dict[str, int] = {name: 0 for name in tables}
+    adjacency: dict[str, set[str]] = {name: set() for name in tables}
 
     for table in tables.values():
         for dep in table.dependencies:
@@ -284,8 +284,8 @@ def _topological_sort(tables: Dict[str, TableMeta]) -> List[str]:
             indegree[table.name] += 1
             adjacency.setdefault(dep, set()).add(table.name)
 
-    queue: List[str] = [name for name, degree in indegree.items() if degree == 0]
-    order: List[str] = []
+    queue: list[str] = [name for name, degree in indegree.items() if degree == 0]
+    order: list[str] = []
 
     while queue:
         current = queue.pop(0)
@@ -306,8 +306,8 @@ def _truncate_tables(
     backend: DatabaseBackend,
     pg_conn,
     insertion_order: Sequence[str],
-    tables: Dict[str, TableMeta],
-    user_id: Optional[str] = None,
+    tables: dict[str, TableMeta],
+    user_id: str | None = None,
 ) -> None:
     for table_name in reversed(list(insertion_order)):
         meta = tables.get(table_name)
@@ -336,11 +336,11 @@ def _copy_table(
     pg_conn,
     meta: TableMeta,
     batch_size: int,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
 ) -> None:
     column_list = ', '.join([f'"{col}"' for col in meta.columns])
     select_sql = f'SELECT {column_list} FROM "{meta.source_name}"'
-    select_params: Tuple[Any, ...] = ()
+    select_params: tuple[Any, ...] = ()
     has_user_id = any(col.lower() == "user_id" for col in meta.columns)
     if user_id and has_user_id:
         select_sql = f'{select_sql} WHERE "user_id" = ?'
@@ -369,9 +369,9 @@ def _copy_table(
         rows = cursor.fetchmany(batch_size)
         if not rows:
             break
-        converted_params: List[Tuple] = []
+        converted_params: list[tuple] = []
         for row in rows:
-            values: List = []
+            values: list = []
             for col in meta.columns:
                 val = row[col]
                 if col.lower() in boolean_columns and val is not None:
@@ -400,7 +400,7 @@ def _copy_table(
 def _sync_sequences(
     backend: DatabaseBackend,
     pg_conn,
-    tables: Dict[str, TableMeta],
+    tables: dict[str, TableMeta],
 ) -> None:
     for meta in tables.values():
         for column in meta.sequence_columns:
@@ -430,7 +430,7 @@ def _build_postgres_config_from_args(args: argparse.Namespace) -> DatabaseConfig
     )
 
 
-def _iter_migration_targets(args: argparse.Namespace) -> Iterator[Tuple[str, Path]]:
+def _iter_migration_targets(args: argparse.Namespace) -> Iterator[tuple[str, Path]]:
     if args.content_sqlite:
         yield 'content', Path(args.content_sqlite)
     if args.chacha_sqlite:
@@ -441,7 +441,7 @@ def _iter_migration_targets(args: argparse.Namespace) -> Iterator[Tuple[str, Pat
         yield 'evaluations', Path(args.evaluations_sqlite)
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='Migrate SQLite databases to PostgreSQL.')
     parser.add_argument('--content-sqlite', help='Path to Media_DB_v2.db to migrate')
     parser.add_argument('--chacha-sqlite', help='Path to ChaChaNotes.db to migrate (optional)')

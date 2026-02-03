@@ -7,58 +7,98 @@
 import configparser
 import os
 from pathlib import Path
-from typing import List, Tuple, Union, Dict, Optional
+from typing import Optional, Union
+
+from loguru import logger
+
 #
 # 3rd-Party Libraries
 #from elasticsearch import Elasticsearch
 #
 # Local Imports
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseBackend
+
+# ChaChaNotes database
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
 #from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
-    #list_prompts as sqlite_list_prompts,
-    #fetch_prompt_details as sqlite_fetch_prompt_details,
-    #add_prompt as sqlite_add_prompt,
-    #search_prompts as sqlite_search_prompts,
-    #add_or_update_prompt as sqlite_add_or_update_prompt,
-    #load_prompt_details as sqlite_load_prompt_details,
-    # insert_prompt_to_db as sqlite_insert_prompt_to_db,
-    #delete_prompt as sqlite_delete_prompt
+#list_prompts as sqlite_list_prompts,
+#fetch_prompt_details as sqlite_fetch_prompt_details,
+#add_prompt as sqlite_add_prompt,
+#search_prompts as sqlite_search_prompts,
+#add_or_update_prompt as sqlite_add_or_update_prompt,
+#load_prompt_details as sqlite_load_prompt_details,
+# insert_prompt_to_db as sqlite_insert_prompt_to_db,
+#delete_prompt as sqlite_delete_prompt
 #)
 from tldw_Server_API.app.core.DB_Management.content_backend import (
     ContentDatabaseSettings,
-    load_content_db_settings,
     get_content_backend,
+    load_content_db_settings,
 )
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseBackend
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
-    import_obsidian_note_to_db as sqlite_import_obsidian_note_to_db,
-    empty_trash as sqlite_empty_trash,
-    create_automated_backup as sqlite_create_automated_backup,
-    check_media_and_whisper_model as sqlite_check_media_and_whisper_model, \
-    get_document_version as sqlite_get_document_version,
-    get_media_transcripts as sqlite_get_media_transcripts,
-    get_specific_transcript as sqlite_get_specific_transcript, \
-    get_specific_analysis as sqlite_get_specific_analysis, \
-    get_media_prompts as sqlite_get_media_prompts,
-    get_specific_prompt as sqlite_get_specific_prompt, \
-    fetch_keywords_for_media as sqlite_fetch_keywords_for_media, \
-    check_media_exists as sqlite_check_media_exists, \
-    get_all_content_from_database as sqlite_get_all_content_from_database, \
-    get_latest_transcription as sqlite_get_latest_transcription, \
-    mark_media_as_processed as sqlite_mark_media_as_processed,
-    get_full_media_details as sqlite_get_full_media_details, \
-    get_full_media_details_rich as sqlite_get_full_media_details_rich, \
-    ingest_article_to_db_new as sqlite_ingest_article_to_db, \
-    get_unprocessed_media as sqlite_get_unprocessed_media,\
 )
-# ChaChaNotes database
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    check_media_and_whisper_model as sqlite_check_media_and_whisper_model,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    check_media_exists as sqlite_check_media_exists,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    create_automated_backup as sqlite_create_automated_backup,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    empty_trash as sqlite_empty_trash,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    fetch_keywords_for_media as sqlite_fetch_keywords_for_media,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_all_content_from_database as sqlite_get_all_content_from_database,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_document_version as sqlite_get_document_version,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_full_media_details as sqlite_get_full_media_details,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_full_media_details_rich as sqlite_get_full_media_details_rich,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_latest_transcription as sqlite_get_latest_transcription,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_media_prompts as sqlite_get_media_prompts,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_media_transcripts as sqlite_get_media_transcripts,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_specific_prompt as sqlite_get_specific_prompt,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_specific_transcript as sqlite_get_specific_transcript,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_unprocessed_media as sqlite_get_unprocessed_media,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    import_obsidian_note_to_db as sqlite_import_obsidian_note_to_db,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    ingest_article_to_db_new as sqlite_ingest_article_to_db,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    mark_media_as_processed as sqlite_mark_media_as_processed,
+)
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
-from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from loguru import logger
+
 #
 # End of imports
 ############################################################################################################
@@ -850,7 +890,7 @@ def fetch_paginated_data(*args, **kwargs):
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
 
-def get_media_transcripts(*args, **kwargs) -> List[Dict]:
+def get_media_transcripts(*args, **kwargs) -> list[dict]:
     if db_type in SQL_CONTENT_BACKENDS:
         return sqlite_get_media_transcripts(*args, **kwargs)
     elif db_type == 'elasticsearch':
@@ -858,7 +898,7 @@ def get_media_transcripts(*args, **kwargs) -> List[Dict]:
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
 
-def get_specific_transcript(*args, **kwargs) -> Dict:
+def get_specific_transcript(*args, **kwargs) -> dict:
     if db_type in SQL_CONTENT_BACKENDS:
         return sqlite_get_specific_transcript(*args, **kwargs)
     elif db_type == 'elasticsearch':
@@ -903,7 +943,7 @@ def get_all_document_versions(db_instance: MediaDatabase, media_id: int, **kwarg
 #
 # Prompt Functions:
 
-def get_media_prompts(*args, **kwargs) -> List[Dict]:
+def get_media_prompts(*args, **kwargs) -> list[dict]:
     if db_type in SQL_CONTENT_BACKENDS:
         return sqlite_get_media_prompts(*args, **kwargs)
     elif db_type == 'elasticsearch':
@@ -911,7 +951,7 @@ def get_media_prompts(*args, **kwargs) -> List[Dict]:
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
 
-def get_specific_prompt(*args, **kwargs) -> Dict:
+def get_specific_prompt(*args, **kwargs) -> dict:
     if db_type in SQL_CONTENT_BACKENDS:
         return sqlite_get_specific_prompt(*args, **kwargs)
     elif db_type == 'elasticsearch':
@@ -1276,7 +1316,7 @@ def empty_trash(*args, **kwargs):
         raise ValueError(f"Unsupported database type: {db_type}")
 
 
-def fetch_item_details(*args, **kwargs) -> Tuple[str, str, str]:
+def fetch_item_details(*args, **kwargs) -> tuple[str, str, str]:
     """
     Fetch basic details of a media item including content, prompt, and summary.
 

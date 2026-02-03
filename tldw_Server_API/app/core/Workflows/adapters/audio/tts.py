@@ -7,14 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any, Dict
+from typing import Any
 
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters._common import (
-    resolve_artifacts_dir,
-    resolve_artifact_filename,
     AsyncFileWriter,
+    resolve_artifact_filename,
+    resolve_artifacts_dir,
 )
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.audio._config import TTSConfig
 
 
@@ -26,7 +26,7 @@ from tldw_Server_API.app.core.Workflows.adapters.audio._config import TTSConfig
     config_model=TTSConfig,
     tags=["audio", "speech"],
 )
-async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Synthesize speech from text using the internal TTS service.
 
     Config:
@@ -41,7 +41,7 @@ async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
          "voice": str, "size_bytes": int}
     """
     try:
-        from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest, NormalizationOptions
+        from tldw_Server_API.app.api.v1.schemas.audio_schemas import NormalizationOptions, OpenAISpeechRequest
         from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
     except Exception:
         return {"error": "tts_unavailable"}
@@ -226,7 +226,7 @@ async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
         normalized = False
 
     # Prepare outputs and optional artifacts
-    outputs: Dict[str, Any] = {
+    outputs: dict[str, Any] = {
         "audio_uri": f"file://{normalized_path}",
         "format": ext,
         "model": model,

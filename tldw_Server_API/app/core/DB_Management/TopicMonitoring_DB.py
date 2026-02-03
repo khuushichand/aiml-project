@@ -36,10 +36,11 @@ import json
 import os
 import sqlite3
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
@@ -50,36 +51,36 @@ def _utcnow_iso() -> str:
 
 @dataclass
 class TopicAlert:
-    user_id: Optional[str]
+    user_id: str | None
     scope_type: str
-    scope_id: Optional[str]
+    scope_id: str | None
     source: str
     watchlist_id: str
-    rule_id: Optional[str] = None
-    rule_category: Optional[str] = None
-    rule_severity: Optional[str] = None
+    rule_id: str | None = None
+    rule_category: str | None = None
+    rule_severity: str | None = None
     pattern: str = ""
-    source_id: Optional[str] = None
-    chunk_id: Optional[str] = None
-    chunk_seq: Optional[int] = None
+    source_id: str | None = None
+    chunk_id: str | None = None
+    chunk_seq: int | None = None
     text_snippet: str = ""
-    metadata: Optional[Dict[str, Any]] = None
-    created_at: Optional[str] = None
+    metadata: dict[str, Any] | None = None
+    created_at: str | None = None
     is_read: int = 0
-    read_at: Optional[str] = None
+    read_at: str | None = None
 
 
 @dataclass
 class WatchlistRecord:
     id: str
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     enabled: bool = True
     scope_type: str = "user"
-    scope_id: Optional[str] = None
+    scope_id: str | None = None
     managed_by: str = "api"
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 @dataclass
@@ -87,12 +88,12 @@ class WatchlistRuleRecord:
     rule_id: str
     watchlist_id: str
     pattern: str
-    category: Optional[str] = None
-    severity: Optional[str] = None
-    note: Optional[str] = None
-    tags: Optional[List[str]] = None
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    category: str | None = None
+    severity: str | None = None
+    note: str | None = None
+    tags: list[str] | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class TopicMonitoringDB:
@@ -275,14 +276,14 @@ class TopicMonitoringDB:
             raise
 
     @staticmethod
-    def _normalize_tags(tags: Optional[Iterable[str]]) -> Optional[List[str]]:
+    def _normalize_tags(tags: Iterable[str] | None) -> list[str] | None:
         if tags is None:
             return None
         cleaned = {str(tag).strip() for tag in tags if tag is not None and str(tag).strip()}
         return sorted(cleaned) if cleaned else []
 
     @staticmethod
-    def _serialize_tags(tags: Optional[Iterable[str]]) -> Optional[str]:
+    def _serialize_tags(tags: Iterable[str] | None) -> str | None:
         norm = TopicMonitoringDB._normalize_tags(tags)
         if norm is None:
             return None
@@ -292,7 +293,7 @@ class TopicMonitoringDB:
             return None
 
     @staticmethod
-    def _deserialize_tags(raw: Optional[str]) -> Optional[List[str]]:
+    def _deserialize_tags(raw: str | None) -> list[str] | None:
         if raw is None:
             return None
         if not isinstance(raw, str) or not raw.strip():
@@ -310,7 +311,7 @@ class TopicMonitoringDB:
         *,
         include_rules: bool = True,
         enabled_only: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         with self._lock:
             conn = self._connect()
             try:
@@ -323,7 +324,7 @@ class TopicMonitoringDB:
                     ORDER BY name COLLATE NOCASE
                     """
                 ).fetchall()
-                watchlists: List[Dict[str, Any]] = []
+                watchlists: list[dict[str, Any]] = []
                 for row in rows:
                     watchlists.append({k: row[k] for k in row.keys()})
                 if not include_rules or not watchlists:
@@ -341,7 +342,7 @@ class TopicMonitoringDB:
                     """,
                     ids,
                 ).fetchall()
-                rules_by_watchlist: Dict[str, List[Dict[str, Any]]] = {}
+                rules_by_watchlist: dict[str, list[dict[str, Any]]] = {}
                 for row in rule_rows:
                     item = {k: row[k] for k in row.keys()}
                     item["tags"] = self._deserialize_tags(item.get("tags"))
@@ -352,7 +353,7 @@ class TopicMonitoringDB:
             finally:
                 conn.close()
 
-    def get_watchlist(self, watchlist_id: str) -> Optional[Dict[str, Any]]:
+    def get_watchlist(self, watchlist_id: str) -> dict[str, Any] | None:
         with self._lock:
             conn = self._connect()
             try:
@@ -375,8 +376,8 @@ class TopicMonitoringDB:
         self,
         name: str,
         scope_type: str,
-        scope_id: Optional[str],
-    ) -> Optional[Dict[str, Any]]:
+        scope_id: str | None,
+    ) -> dict[str, Any] | None:
         with self._lock:
             conn = self._connect()
             try:
@@ -472,7 +473,7 @@ class TopicMonitoringDB:
     def replace_watchlist_rules(
         self,
         watchlist_id: str,
-        rules: List[WatchlistRuleRecord],
+        rules: list[WatchlistRuleRecord],
     ) -> None:
         with self._lock:
             conn = self._connect()
@@ -555,13 +556,13 @@ class TopicMonitoringDB:
 
     def recent_duplicate_exists(
         self,
-        user_id: Optional[str],
+        user_id: str | None,
         watchlist_id: str,
         source: str,
         *,
-        pattern: Optional[str] = None,
-        rule_id: Optional[str] = None,
-        source_id: Optional[str] = None,
+        pattern: str | None = None,
+        rule_id: str | None = None,
+        source_id: str | None = None,
         window_seconds: int = 300,
     ) -> bool:
         """Check if an alert for the same (user, watchlist, rule/pattern, source) exists in recent window."""
@@ -571,7 +572,7 @@ class TopicMonitoringDB:
             conn = self._connect()
             try:
                 clauses = ["watchlist_id = ?", "source = ?", "created_at >= ?"]
-                params: List[Any] = [str(watchlist_id), str(source), threshold]
+                params: list[Any] = [str(watchlist_id), str(source), threshold]
                 if user_id is None:
                     clauses.append("user_id IS NULL")
                 else:
@@ -598,19 +599,19 @@ class TopicMonitoringDB:
 
     def list_alerts(
         self,
-        user_id: Optional[str] = None,
-        source: Optional[str] = None,
-        rule_category: Optional[str] = None,
-        rule_severity: Optional[str] = None,
-        scope_type: Optional[str] = None,
-        scope_id: Optional[str] = None,
-        since_iso: Optional[str] = None,
+        user_id: str | None = None,
+        source: str | None = None,
+        rule_category: str | None = None,
+        rule_severity: str | None = None,
+        scope_type: str | None = None,
+        scope_id: str | None = None,
+        since_iso: str | None = None,
         unread_only: bool = False,
         limit: int = 100,
         offset: int = 0,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         clauses = []
-        params: List[Any] = []
+        params: list[Any] = []
         if user_id is not None:
             clauses.append("user_id = ?")
             params.append(str(user_id))
@@ -650,7 +651,7 @@ class TopicMonitoringDB:
             try:
                 cur = conn.execute(sql, params)
                 rows = cur.fetchall()
-                out: List[Dict[str, Any]] = []
+                out: list[dict[str, Any]] = []
                 for r in rows:
                     item = {k: r[k] for k in r.keys()}
                     out.append(item)

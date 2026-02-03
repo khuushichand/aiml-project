@@ -3,17 +3,15 @@
 Test suite for database migration functionality.
 """
 
+import json
 import os
+import shutil
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-import json
-import shutil
 
-from tldw_Server_API.app.core.DB_Management.db_migration import (
-    Migration, DatabaseMigrator, MigrationError
-)
+from tldw_Server_API.app.core.DB_Management.db_migration import DatabaseMigrator, Migration, MigrationError
 
 
 class TestMigrations(unittest.TestCase):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..base import VLMBackend, VLMDetection, VLMResult
 
@@ -43,7 +43,7 @@ class DoclingVLMBackend(VLMBackend):
         self._converter = DocumentConverter()
         self._loaded = True
 
-    def describe(self) -> Dict[str, Any]:
+    def describe(self) -> dict[str, Any]:
         return {"name": self.name, "available": self.available()}
 
     # Interface requirement (not used for docling).
@@ -51,8 +51,8 @@ class DoclingVLMBackend(VLMBackend):
         self,
         image_bytes: bytes,
         *,
-        mime_type: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None,
+        mime_type: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> VLMResult:
         return VLMResult(detections=[], texts=None, extra={("page" if context else "ctx"): (context or {})})
 
@@ -61,7 +61,7 @@ class DoclingVLMBackend(VLMBackend):
         self,
         pdf_path: str,
         *,
-        max_pages: Optional[int] = None,
+        max_pages: int | None = None,
     ) -> VLMResult:
         self._lazy_load()
         # Parse PDF via docling
@@ -71,8 +71,8 @@ class DoclingVLMBackend(VLMBackend):
         # Best-effort extraction strategy:
         # 1) Structured: try to read tables and figures/images from document attributes.
         # 2) Fallback: export to markdown and detect markdown tables and images.
-        detections: List[VLMDetection] = []
-        by_page: List[Dict[str, Any]] = []
+        detections: list[VLMDetection] = []
+        by_page: list[dict[str, Any]] = []
 
         # Structured access (tables, figures/images)
         structured_any = False
@@ -82,7 +82,7 @@ class DoclingVLMBackend(VLMBackend):
             if isinstance(tables, list) and tables:
                 structured_any = True
                 for t in tables:
-                    md: Dict[str, Any] = {}
+                    md: dict[str, Any] = {}
                     page = getattr(t, "page", None) or getattr(t, "page_number", None)
                     if page is not None:
                         md["page"] = int(page)
@@ -100,7 +100,7 @@ class DoclingVLMBackend(VLMBackend):
                 if isinstance(items, list) and items:
                     structured_any = True
                     for it in items:
-                        md: Dict[str, Any] = {}
+                        md: dict[str, Any] = {}
                         page = getattr(it, "page", None) or getattr(it, "page_number", None)
                         if page is not None:
                             md["page"] = int(page)
@@ -110,7 +110,7 @@ class DoclingVLMBackend(VLMBackend):
 
             # Group by page for summary (structured)
             if structured_any and detections:
-                page_map: Dict[int, List[Dict[str, Any]]] = {}
+                page_map: dict[int, list[dict[str, Any]]] = {}
                 for d in detections:
                     p = int(d.metadata.get("page")) if d.metadata.get("page") is not None else -1
                     page_map.setdefault(p, []).append({"label": d.label, "score": d.score, "bbox": d.bbox})

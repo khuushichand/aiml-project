@@ -5,10 +5,10 @@ This module provides functionality to run WordBench evaluations,
 capturing and analyzing next token predictions and their probabilities.
 """
 
-import json
 import asyncio
-from typing import List, Dict, Any, Optional
-from pathlib import Path
+import json
+from typing import Any, Optional
+
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
@@ -45,7 +45,7 @@ class WordBenchRunner:
         self.model = model
         self.capture = NextTokenCapture(top_k=10)
 
-    async def analyze_prompt(self, prompt: str) -> Dict[str, Any]:
+    async def analyze_prompt(self, prompt: str) -> dict[str, Any]:
         """Analyze a single prompt for next token predictions.
 
         Args:
@@ -88,7 +88,7 @@ class WordBenchRunner:
         provider = normalize_provider(self.api_name)
         return _PROVIDER_ALIASES.get(provider, provider)
 
-    async def _call_provider(self, provider: str, request: Dict[str, Any]) -> Dict[str, Any]:
+    async def _call_provider(self, provider: str, request: dict[str, Any]) -> dict[str, Any]:
         """Call an adapter-backed provider with logprob capture enabled."""
         adapter = get_adapter_or_raise(provider)
         app_config = ensure_app_config()
@@ -125,8 +125,8 @@ class WordBenchRunner:
         except NotImplementedError:
             return await asyncio.to_thread(adapter.chat, payload)
 
-    async def run_benchmark(self, prompts: List[str],
-                           output_file: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def run_benchmark(self, prompts: list[str],
+                           output_file: Optional[str] = None) -> list[dict[str, Any]]:
         """Run WordBench on a list of prompts.
 
         Args:
@@ -153,7 +153,7 @@ class WordBenchRunner:
 
         return results
 
-    def _save_results(self, results: List[Dict[str, Any]], output_file: str):
+    def _save_results(self, results: list[dict[str, Any]], output_file: str):
         """Save results to file.
 
         Args:
@@ -186,7 +186,7 @@ class WordBenchRunner:
         logger.info(f"Results saved to {output_file}")
 
     @staticmethod
-    def load_prompts_from_file(file_path: str) -> List[str]:
+    def load_prompts_from_file(file_path: str) -> list[str]:
         """Load prompts from a text file.
 
         Args:
@@ -204,7 +204,7 @@ class WordBenchRunner:
         return prompts
 
     @staticmethod
-    def compare_distributions(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def compare_distributions(results: list[dict[str, Any]]) -> dict[str, Any]:
         """Compare token distributions across multiple prompts.
 
         Args:

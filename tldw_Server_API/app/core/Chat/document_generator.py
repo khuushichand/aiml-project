@@ -25,21 +25,18 @@ Key Adaptations from Single-User:
 import base64
 import json
 import time
-from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional, Union, Tuple
+from datetime import datetime
 from enum import Enum
+from typing import Any, Optional, Union
 
 from loguru import logger
 
-# Local imports
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
-    CharactersRAGDB,
-    CharactersRAGDBError,
-    InputError
-)
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call as chat_api_call
+
+# Local imports
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError
 
 
 class DocumentType(Enum):
@@ -141,7 +138,7 @@ class DocumentGeneratorService:
         self._init_tables()
 
         # Request-scoped cache for prompts
-        self._prompt_cache: Dict[DocumentType, Dict[str, Any]] = {}
+        self._prompt_cache: dict[DocumentType, dict[str, Any]] = {}
 
         # No longer need provider mapping - using adapter registry
     @staticmethod
@@ -234,7 +231,7 @@ class DocumentGeneratorService:
         conversation_id: str,
         limit: int = 50,
         include_system: bool = False
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get conversation context including recent messages.
 
@@ -258,7 +255,7 @@ class DocumentGeneratorService:
             logger.error(f"Failed to get conversation context: {exc}")
             return []
 
-        messages: List[Dict[str, Any]] = []
+        messages: list[dict[str, Any]] = []
         for db_msg in raw_history:
             sender = (db_msg.get("sender") or "").strip().lower()
             if sender == "system" and not include_system:
@@ -270,7 +267,7 @@ class DocumentGeneratorService:
             else:
                 role = "assistant"
 
-            msg_parts: List[Dict[str, Any]] = []
+            msg_parts: list[dict[str, Any]] = []
 
             text_content = db_msg.get("content") or ""
             if text_content:
@@ -311,7 +308,7 @@ class DocumentGeneratorService:
             if not msg_parts:
                 continue
 
-            message_entry: Dict[str, Any] = {"role": role}
+            message_entry: dict[str, Any] = {"role": role}
             if len(msg_parts) == 1 and msg_parts[0].get("type") == "text":
                 message_entry["content"] = msg_parts[0].get("text", "")
             else:
@@ -336,7 +333,7 @@ class DocumentGeneratorService:
 
     def format_context_for_llm(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         specific_message: Optional[str] = None,
         max_context_length: int = 8000
     ) -> str:
@@ -383,7 +380,7 @@ class DocumentGeneratorService:
 
         return context
 
-    def get_user_prompt_config(self, document_type: DocumentType) -> Dict[str, Any]:
+    def get_user_prompt_config(self, document_type: DocumentType) -> dict[str, Any]:
         """
         Get user-specific prompt configuration or default.
 
@@ -485,11 +482,11 @@ class DocumentGeneratorService:
         provider: str,
         model: str,
         api_key: str,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
         specific_message: Optional[str] = None,
         custom_prompt: Optional[str] = None,
         stream: bool = False
-    ) -> Union[str, Dict[str, Any]]:
+    ) -> Union[str, dict[str, Any]]:
         """
         Generate a document from conversation.
 
@@ -598,7 +595,7 @@ class DocumentGeneratorService:
         api_key: str,
         system_prompt: str,
         user_prompt: str,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
         temperature: float = 0.7,
         max_tokens: int = 2000,
         stream: bool = False
@@ -749,7 +746,7 @@ class DocumentGeneratorService:
         title: str,
         content: str,
         document_type: DocumentType = DocumentType.BRIEFING,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
         provider: str = "watchlists",
         model: str = "watchlists",
         conversation_id: Optional[Union[str, int]] = None,
@@ -785,7 +782,7 @@ class DocumentGeneratorService:
         conversation_id: Optional[Union[str, int]] = None,
         document_type: Optional[DocumentType] = None,
         limit: int = 50
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get previously generated documents.
 
@@ -840,7 +837,7 @@ class DocumentGeneratorService:
             logger.error(f"Failed to get generated documents: {e}")
             return []
 
-    def get_generated_document_by_id(self, document_id: int) -> Optional[Dict[str, Any]]:
+    def get_generated_document_by_id(self, document_id: int) -> Optional[dict[str, Any]]:
         """
         Retrieve a single generated document by its identifier.
 
@@ -915,7 +912,7 @@ class DocumentGeneratorService:
         document_type: DocumentType,
         provider: str,
         model: str,
-        prompt_config: Dict[str, Any]
+        prompt_config: dict[str, Any]
     ) -> str:
         """
         Create a job for async document generation.
@@ -954,7 +951,7 @@ class DocumentGeneratorService:
             logger.error(f"Failed to create generation job: {e}")
             raise CharactersRAGDBError(f"Failed to create job: {e}")
 
-    def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
+    def get_job_status(self, job_id: str) -> Optional[dict[str, Any]]:
         """
         Get the status of a generation job.
 
@@ -1080,7 +1077,7 @@ class DocumentGeneratorService:
             logger.error(f"Error cancelling job: {e}")
             return False
 
-    def get_document(self, document_id: str) -> Optional[Dict[str, Any]]:
+    def get_document(self, document_id: str) -> Optional[dict[str, Any]]:
         """
         Get a generated document.
 
@@ -1116,7 +1113,7 @@ class DocumentGeneratorService:
         self,
         conversation_id: Optional[str] = None,
         document_type: Optional[DocumentType] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         List generated documents.
 
@@ -1161,7 +1158,7 @@ class DocumentGeneratorService:
         """
         return self.delete_generated_document(document_id)
 
-    def save_prompt_config(self, config: Dict[DocumentType, str]) -> bool:
+    def save_prompt_config(self, config: dict[DocumentType, str]) -> bool:
         """
         Save custom prompt configuration.
 
@@ -1220,8 +1217,8 @@ class DocumentGeneratorService:
     async def bulk_generate(
         self,
         conversation_id: str,
-        document_types: List[DocumentType]
-    ) -> List[Dict[str, Any]]:
+        document_types: list[DocumentType]
+    ) -> list[dict[str, Any]]:
         """
         Generate multiple document types at once.
 
@@ -1243,7 +1240,7 @@ class DocumentGeneratorService:
             results.append(result)
         return results
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """
         Get document generation statistics.
 

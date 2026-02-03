@@ -7,32 +7,36 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
-from typing import Optional, List, Dict, Any, Awaitable, Callable
+from typing import Any, Optional
+
 #
 # Third-party Libraries
 from fastapi import HTTPException
-#
-# Local Imports
-from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+
+from tldw_Server_API.app.api.v1.schemas.media_request_models import ScrapeMethod
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+
+# Keep legacy imports for fallback
+from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
+    recursive_scrape,
+    scrape_and_summarize_multiple,
+    scrape_article,
+    scrape_by_url_level,
+    scrape_from_sitemap,
+)
+
 # Import the enhanced service
 from tldw_Server_API.app.services.enhanced_web_scraping_service import (
     get_web_scraping_service,
-    shutdown_web_scraping_service,
 )
-# Keep legacy imports for fallback
-from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
-    scrape_and_summarize_multiple,
-    scrape_article,
-    scrape_from_sitemap,
-    scrape_by_url_level,
-    recursive_scrape,
-)
-from tldw_Server_API.app.api.v1.schemas.media_request_models import ScrapeMethod
+
+#
+# Local Imports
+from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
+
 #
 ########################################################################################################################
 #
@@ -52,16 +56,16 @@ async def process_web_scraping_task(
     custom_titles: Optional[str],
     system_prompt: Optional[str],
     temperature: float,
-    custom_cookies: Optional[List[Dict[str, Any]]],
+    custom_cookies: Optional[list[dict[str, Any]]],
     mode: str = "persist",
     user_id: Optional[int] = None,
     user_agent: Optional[str] = None,
-    custom_headers: Optional[Dict[str, str]] = None,
+    custom_headers: Optional[dict[str, str]] = None,
     # Crawl overrides from UI / WebScrapingRequest
     crawl_strategy: Optional[str] = None,
     include_external: Optional[bool] = None,
     score_threshold: Optional[float] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Enhanced web scraping with production features:
     - Concurrent scraping with rate limiting
@@ -220,7 +224,7 @@ async def process_web_scraping_task(
                 # Call the existing async recursive_scrape implementation.
                 # It returns a list of dicts:
                 # { url, title, content, extraction_successful, ... }
-                recursive_kwargs: Dict[str, Any] = {
+                recursive_kwargs: dict[str, Any] = {
                     "base_url": url_input,
                     "max_pages": max_pages,
                     "max_depth": max_depth,
@@ -383,7 +387,7 @@ async def ingest_web_content_orchestrate(
     request: Any,
     db: Any,
     usage_log: Any,
-) -> Optional[List[Dict[str, Any]]]:
+) -> Optional[list[dict[str, Any]]]:
     """
     Shared helper for `/media/ingest-web-content` side effects and, for
     selected scrape methods, the scraping + summarization:
@@ -438,7 +442,7 @@ async def ingest_web_content_orchestrate(
 
     scrape_method = getattr(request, "scrape_method", None)
 
-    async def maybe_summarize_one(article: Dict[str, Any]) -> Dict[str, Any]:
+    async def maybe_summarize_one(article: dict[str, Any]) -> dict[str, Any]:
         """
         Shared summarization helper for sitemap/individual scraping.
         Mirrors the legacy `_legacy_media.ingest_web_content` behaviour.
@@ -470,14 +474,14 @@ async def ingest_web_content_orchestrate(
 
         return article
 
-    def parse_cookies() -> Optional[List[Dict[str, Any]]]:
+    def parse_cookies() -> Optional[list[dict[str, Any]]]:
         """
         Parse cookies from the request when `use_cookies` is enabled.
         Mirrors the legacy JSON parsing + 400 semantics, but ensures that
         malformed or incorrectly-typed cookie payloads yield a 400 instead
         of bubbling up as a 500 error.
         """
-        custom_cookies_list: Optional[List[Dict[str, Any]]] = None
+        custom_cookies_list: Optional[list[dict[str, Any]]] = None
         if getattr(request, "use_cookies", False) and getattr(
             request, "cookies", None
         ):
@@ -524,7 +528,7 @@ async def ingest_web_content_orchestrate(
 
         custom_cookies_list = parse_cookies()
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for i, url in enumerate(urls):
             title_ = titles[i]
             author_ = authors[i]
@@ -552,7 +556,7 @@ async def ingest_web_content_orchestrate(
 
         sitemap_url = urls[0]
 
-        def scrape_in_thread() -> List[Dict[str, Any]]:
+        def scrape_in_thread() -> list[dict[str, Any]]:
             return scrape_from_sitemap(sitemap_url)
 
         loop = asyncio.get_running_loop()
@@ -562,7 +566,7 @@ async def ingest_web_content_orchestrate(
             logging.warning("No articles returned from sitemap scraping.")
             return []
 
-        summarized: List[Dict[str, Any]] = []
+        summarized: list[dict[str, Any]] = []
         for r in results:
             # Legacy path expects dict-like articles; skip anything else defensively.
             if not isinstance(r, dict):
@@ -621,7 +625,7 @@ async def ingest_web_content_orchestrate(
                 include_external=getattr(request, "include_external", None),
                 score_threshold=getattr(request, "score_threshold", None),
             )
-            articles: List[Dict[str, Any]] = []
+            articles: list[dict[str, Any]] = []
             if isinstance(service_result, dict):
                 if service_result.get("articles"):
                     articles = service_result["articles"]
@@ -691,7 +695,7 @@ async def ingest_web_content_orchestrate(
                 include_external=getattr(request, "include_external", None),
                 score_threshold=getattr(request, "score_threshold", None),
             )
-            articles: List[Dict[str, Any]] = []
+            articles: list[dict[str, Any]] = []
             if isinstance(service_result, list):
                 articles = service_result
             elif isinstance(service_result, dict):

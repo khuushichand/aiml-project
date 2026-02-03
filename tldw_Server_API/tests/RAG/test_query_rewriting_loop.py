@@ -91,12 +91,7 @@ class TestQueryRewriterImproveForRetrieval:
 
         # At least one rewrite should incorporate info from failed docs
         rewrite_texts = [r.rewritten_query for r in rewrites]
-        # Check if any entity from docs was incorporated
-        has_entity_based = any(
-            "Machine" in text or "Python" in text or "Natural" in text or "TensorFlow" in text
-            for text in rewrite_texts
-        )
-        # This may or may not succeed depending on extraction, but we should get SOME rewrites
+        # Entity incorporation may vary, but we should get SOME rewrites
         assert len(rewrite_texts) > 0
 
     def test_remove_modifiers(self, rewriter):
@@ -126,12 +121,6 @@ class TestQueryRewriterImproveForRetrieval:
             strategies=["improve_for_retrieval"],
         )
 
-        # Check if any rewrite has added focus terms
-        rewrite_texts = [r.rewritten_query.lower() for r in rewrites]
-        has_focus = any(
-            "software" in text or "development" in text or "programming" in text
-            for text in rewrite_texts
-        )
         # This depends on domain detection, but we should get some rewrites
         assert len(rewrites) > 0
 
@@ -229,7 +218,6 @@ class TestQueryRewriterStrategyCombinations:
 
         # Should have rewrites from both strategies
         improve_rewrites = [r for r in rewrites if r.rewrite_type == "improve_for_retrieval"]
-        synonym_rewrites = [r for r in rewrites if r.rewrite_type == "synonym"]
 
         assert len(improve_rewrites) > 0
         # Synonym rewrites depend on WordNet availability
@@ -245,7 +233,6 @@ class TestQueryRewriterStrategyCombinations:
 
         # Should have rewrites from improve_for_retrieval
         improve_rewrites = [r for r in rewrites if r.rewrite_type == "improve_for_retrieval"]
-        decompose_rewrites = [r for r in rewrites if r.rewrite_type == "decompose"]
 
         assert len(improve_rewrites) > 0
         # Complex query may produce decomposition depending on complexity detection

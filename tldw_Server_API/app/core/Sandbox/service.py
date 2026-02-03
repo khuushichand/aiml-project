@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+import asyncio
 import base64
-import uuid
-from datetime import datetime, timedelta
 import os
-from typing import List, Optional
-import hashlib
+import threading
+from datetime import datetime
 
 from loguru import logger
+
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditContext,
+    AuditEventCategory,
+    AuditEventType,
+    AuditSeverity,
+    UnifiedAuditService,
+)
+from tldw_Server_API.app.core.config import settings as app_settings
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Metrics import observe_histogram
 
 from .models import (
     RunPhase,
@@ -16,30 +26,14 @@ from .models import (
     RuntimeType,
     Session,
     SessionSpec,
-    TrustLevel,
 )
+from .orchestrator import SandboxOrchestrator
 from .policy import SandboxPolicy, SandboxPolicyConfig, compute_policy_hash
-from .store import get_store_mode
-from .orchestrator import SandboxOrchestrator, IdempotencyConflict
-from .runners.docker_runner import docker_available
-from .runners.firecracker_runner import firecracker_available, firecracker_real_enabled
-from .runners.lima_runner import lima_available, lima_version, LimaRunner
-from .runners.docker_runner import DockerRunner
-from .runners.firecracker_runner import FirecrackerRunner
+from .runners.docker_runner import DockerRunner, docker_available
+from .runners.firecracker_runner import FirecrackerRunner, firecracker_available, firecracker_real_enabled
+from .runners.lima_runner import LimaRunner, lima_available
 from .snapshots import SnapshotManager
-from tldw_Server_API.app.core.config import settings as app_settings
-import threading
-import asyncio
-
-from tldw_Server_API.app.core.Audit.unified_audit_service import (
-    UnifiedAuditService,
-    AuditEventType,
-    AuditEventCategory,
-    AuditSeverity,
-    AuditContext,
-)
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.Metrics import observe_histogram
+from .store import get_store_mode
 from .streams import get_hub
 
 
@@ -50,7 +44,7 @@ class SandboxService:
     Actual execution is intentionally not implemented at this stage.
     """
 
-    def __init__(self, policy: Optional[SandboxPolicy] = None) -> None:
+    def __init__(self, policy: SandboxPolicy | None = None) -> None:
         cfg = SandboxPolicyConfig.from_settings()
         self.policy = policy or SandboxPolicy(cfg)
         self._orch = SandboxOrchestrator(self.policy)
@@ -82,7 +76,7 @@ class SandboxService:
 
         errors: dict[str, str] = {}
         base_image = getattr(spec, "base_image", None)
-        rootfs_path: Optional[str] = None
+        rootfs_path: str | None = None
         if base_image:
             try:
                 if os.path.exists(str(base_image)):
@@ -119,7 +113,7 @@ class SandboxService:
                 },
             )
 
-    def _validate_spec_version(self, spec_version: Optional[str]) -> None:
+    def _validate_spec_version(self, spec_version: str | None) -> None:
         if not spec_version:
             return
         if spec_version not in self._supported_specs:
@@ -322,7 +316,7 @@ class SandboxService:
             logger.debug(f"audit(run.completion) failed: {e}")
         # (rest of method continues)
 
-    def create_session(self, user_id: str | int, spec: SessionSpec, spec_version: str, idem_key: Optional[str], raw_body: dict) -> Session:
+    def create_session(self, user_id: str | int, spec: SessionSpec, spec_version: str, idem_key: str | None, raw_body: dict) -> Session:
         # Validate requested spec version
         self._validate_spec_version(spec_version)
         fc_ok = firecracker_available()
@@ -341,7 +335,7 @@ class SandboxService:
             logger.debug(f"destroy_session failed: {e}")
             return False
 
-    def parse_inline_files(self, files: Optional[List[dict]]) -> list[tuple[str, bytes]]:
+    def parse_inline_files(self, files: list[dict] | None) -> list[tuple[str, bytes]]:
         results: list[tuple[str, bytes]] = []
         if not files:
             return results
@@ -355,7 +349,7 @@ class SandboxService:
                 logger.warning(f"Failed to parse inline file: {e}")
         return results
 
-    def start_run_scaffold(self, user_id: str | int, spec: RunSpec, spec_version: str, idem_key: Optional[str], raw_body: dict) -> RunStatus:
+    def start_run_scaffold(self, user_id: str | int, spec: RunSpec, spec_version: str, idem_key: str | None, raw_body: dict) -> RunStatus:
         # Validate requested spec version
         self._validate_spec_version(spec_version)
         # Apply policy then enqueue via orchestrator (idempotency-aware)
@@ -698,10 +692,10 @@ class SandboxService:
             status.message = "Sandbox scaffold: execution not implemented"
         return status
 
-    def get_run(self, run_id: str) -> Optional[RunStatus]:
+    def get_run(self, run_id: str) -> RunStatus | None:
         return self._orch.get_run(run_id)
 
-    def get_session_workspace_path(self, session_id: str) -> Optional[str]:
+    def get_session_workspace_path(self, session_id: str) -> str | None:
         return self._orch.get_session_workspace_path(session_id)
 
     def cancel_run(self, run_id: str) -> bool:
@@ -777,7 +771,7 @@ class SandboxService:
             raise ValueError("Session not found or no workspace")
         return self._snapshots.restore_snapshot(session_id, snapshot_id, ws)
 
-    def clone_session(self, session_id: str, new_name: Optional[str] = None) -> Session:
+    def clone_session(self, session_id: str, new_name: str | None = None) -> Session:
         """Clone a session including its workspace.
 
         Args:
@@ -855,7 +849,7 @@ class SandboxService:
         """
         return self._snapshots.delete_snapshot(session_id, snapshot_id)
 
-    def get_snapshot_info(self, session_id: str, snapshot_id: str) -> Optional[dict]:
+    def get_snapshot_info(self, session_id: str, snapshot_id: str) -> dict | None:
         """Get information about a specific snapshot.
 
         Args:

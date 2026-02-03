@@ -8,14 +8,15 @@ bespoke implementations.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from collections.abc import Sequence
+from typing import Any, Optional, Union
 
 from .base import BackendType
 
-ParamsType = Optional[Union[Tuple[Any, ...], List[Any], Dict[str, Any], Any]]
+ParamsType = Optional[Union[tuple[Any, ...], list[Any], dict[str, Any], Any]]
 
 
-def normalise_params(params: ParamsType) -> Optional[Union[Tuple[Any, ...], Dict[str, Any]]]:
+def normalise_params(params: ParamsType) -> Union[tuple[Any, ...], dict[str, Any]] | None:
     """Normalize parameter containers for backend execution.
 
     Rules:
@@ -40,7 +41,7 @@ def convert_sqlite_placeholders_to_postgres(query: str) -> str:
     if "?" not in query:
         return query
 
-    result: List[str] = []
+    result: list[str] = []
     in_single = False
     in_double = False
     i = 0
@@ -296,10 +297,10 @@ def _ensure_returning_id(query: str) -> str:
         return f"{stripped} RETURNING *{trailing_semicolon}"
     return f"{stripped} RETURNING id{trailing_semicolon}"
 
-def _split_csv_ignoring_quotes_and_parens(text: str) -> List[str]:
+def _split_csv_ignoring_quotes_and_parens(text: str) -> list[str]:
     """Split a comma-separated list, ignoring commas in quotes/parentheses."""
-    parts: List[str] = []
-    buf: List[str] = []
+    parts: list[str] = []
+    buf: list[str] = []
     depth = 0
     in_single = False
     in_double = False
@@ -484,8 +485,8 @@ def _replace_boolean_comparisons(query: str) -> str:
     if "=" not in query:
         return query
 
-    result: List[str] = []
-    buf: List[str] = []
+    result: list[str] = []
+    buf: list[str] = []
     in_single = False
     in_double = False
     in_line_comment = False
@@ -604,10 +605,10 @@ def prepare_backend_statement(
     query: str,
     params: ParamsType = None,
     *,
-    transformer: Optional[Any] = None,
+    transformer: Any | None = None,
     apply_default_transform: bool = False,
     ensure_returning: bool = False,
-) -> Tuple[str, Optional[Union[Tuple[Any, ...], Dict[str, Any]]]]:
+) -> tuple[str, Union[tuple[Any, ...], dict[str, Any]] | None]:
     """Prepare a query/params pair for execution on the configured backend."""
     if backend_type != BackendType.POSTGRESQL:
         return query, params
@@ -635,10 +636,10 @@ def prepare_backend_many_statement(
     query: str,
     params_list: Sequence[ParamsType],
     *,
-    transformer: Optional[Any] = None,
+    transformer: Any | None = None,
     apply_default_transform: bool = False,
     ensure_returning: bool = False,
-) -> Tuple[str, List[Optional[Union[Tuple[Any, ...], Dict[str, Any]]]]]:
+) -> tuple[str, list[Union[tuple[Any, ...], dict[str, Any]] | None]]:
     """Prepare a batch query/params list for execution on the configured backend."""
     if backend_type != BackendType.POSTGRESQL:
         return query, list(params_list)

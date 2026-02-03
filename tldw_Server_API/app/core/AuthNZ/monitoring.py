@@ -2,16 +2,18 @@
 # Description: Monitoring and metrics collection for AuthNZ module
 #
 # Imports
-from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta, timezone
-from enum import Enum
 import json
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from enum import Enum
+from typing import Any, Optional
+
 #
 # 3rd-party imports
 from loguru import logger
+
 try:
-    from prometheus_client import Counter, Histogram, Gauge, Summary
+    from prometheus_client import Counter, Gauge, Histogram, Summary
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
@@ -19,8 +21,8 @@ except ImportError:
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import AuthnzMonitoringRepo
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 #######################################################################################################################
 #
@@ -118,7 +120,7 @@ if PROMETHEUS_AVAILABLE:
     )
 
     def update_security_alert_metrics(
-        statuses: Dict[str, Optional[bool]],
+        statuses: dict[str, Optional[bool]],
         last_success: Optional[bool]
     ) -> None:
         """Update Prometheus gauges for security alert delivery channels."""
@@ -129,7 +131,7 @@ if PROMETHEUS_AVAILABLE:
             security_alert_last_success.set(1 if last_success else 0)
 else:
     def update_security_alert_metrics(
-        statuses: Dict[str, Optional[bool]],
+        statuses: dict[str, Optional[bool]],
         last_success: Optional[bool]
     ) -> None:  # pragma: no cover - metrics disabled without prometheus_client
         return
@@ -158,8 +160,8 @@ class AuthNZMonitor:
         self,
         metric_type: MetricType,
         value: float = 1.0,
-        labels: Optional[Dict[str, str]] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        labels: Optional[dict[str, str]] = None,
+        metadata: Optional[dict[str, Any]] = None
     ):
         """
         Record a metric
@@ -190,7 +192,7 @@ class AuthNZMonitor:
         self,
         metric_type: MetricType,
         value: float,
-        labels: Optional[Dict[str, str]] = None
+        labels: Optional[dict[str, str]] = None
     ):
         """Update Prometheus metrics"""
         if not PROMETHEUS_AVAILABLE:
@@ -223,8 +225,8 @@ class AuthNZMonitor:
         self,
         metric_type: MetricType,
         value: float,
-        labels: Optional[Dict[str, str]] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        labels: Optional[dict[str, str]] = None,
+        metadata: Optional[dict[str, Any]] = None
     ):
         """Store metric in database for historical analysis"""
         try:
@@ -252,7 +254,7 @@ class AuthNZMonitor:
         self,
         metric_type: MetricType,
         value: float,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ):
         """Check if metric triggers alert conditions"""
         # Add to buffer for rate calculations
@@ -348,7 +350,7 @@ class AuthNZMonitor:
         alert_type: str,
         message: str,
         severity: str = 'medium',
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ):
         """
         Trigger a security alert
@@ -382,7 +384,7 @@ class AuthNZMonitor:
     async def get_metrics_summary(
         self,
         time_range_minutes: int = 60
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get a summary of metrics for the specified time range
 
@@ -435,7 +437,7 @@ class AuthNZMonitor:
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }
 
-    async def get_security_dashboard(self) -> Dict[str, Any]:
+    async def get_security_dashboard(self) -> dict[str, Any]:
         """
         Get a comprehensive security dashboard
 
@@ -480,7 +482,7 @@ class AuthNZMonitor:
                 'timestamp': datetime.now(timezone.utc).isoformat()
             }
 
-    def _calculate_health_status(self, metrics: Dict[str, Any]) -> str:
+    def _calculate_health_status(self, metrics: dict[str, Any]) -> str:
         """Calculate overall health status based on metrics"""
         if 'error' in metrics:
             return 'unknown'

@@ -2,8 +2,9 @@
 # Description: Custom exception hierarchy for TTS module
 #
 # Imports
-from typing import Optional, Dict, Any
 from datetime import datetime
+from typing import Any, Optional
+
 #
 #######################################################################################################################
 #
@@ -17,7 +18,7 @@ class TTSError(Exception):
         message: str,
         provider: Optional[str] = None,
         error_code: Optional[str] = None,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[dict[str, Any]] = None
     ):
         """
         Initialize TTS error.
@@ -35,7 +36,7 @@ class TTSError(Exception):
         self.details = details or {}
         self.timestamp = datetime.utcnow()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert exception to dictionary for API responses"""
         return {
             "error_type": self.__class__.__name__,

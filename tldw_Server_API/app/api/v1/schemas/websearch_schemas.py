@@ -1,5 +1,7 @@
-from typing import Optional, List, Dict, Any
+from typing import Any, Optional
+
 from pydantic import BaseModel, Field
+
 try:
     from pydantic import field_validator
 except Exception:
@@ -39,7 +41,7 @@ class WebSearchRequest(BaseModel):
     output_lang: str = Field("en")
     date_range: Optional[str] = None
     safesearch: Optional[str] = None
-    site_blacklist: Optional[List[str]] = None
+    site_blacklist: Optional[list[str]] = None
     exactTerms: Optional[str] = None
     excludeTerms: Optional[str] = None
     filter: Optional[str] = None
@@ -71,21 +73,21 @@ class WebSearchRequest(BaseModel):
 
 class WebSearchFinalAnswer(BaseModel):
     text: str = Field(..., description="Aggregated answer generated from web results")
-    evidence: List[Dict[str, Any]] = Field(default_factory=list, description="Relevant snippets backing the answer")
+    evidence: list[dict[str, Any]] = Field(default_factory=list, description="Relevant snippets backing the answer")
     confidence: float = Field(..., ge=0.0, le=1.0)
-    chunks: List[Dict[str, Any]] = Field(
+    chunks: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Intermediate chunk summaries used during aggregation"
     )
 
 
 class WebSearchRawResponse(BaseModel):
-    web_search_results_dict: Dict[str, Any]
-    sub_query_dict: Dict[str, Any]
+    web_search_results_dict: dict[str, Any]
+    sub_query_dict: dict[str, Any]
 
 
 class WebSearchAggregateResponse(BaseModel):
     final_answer: Optional[WebSearchFinalAnswer]
-    relevant_results: Optional[Dict[str, Any]]
-    web_search_results_dict: Dict[str, Any]
-    sub_query_dict: Dict[str, Any]
+    relevant_results: Optional[dict[str, Any]]
+    web_search_results_dict: dict[str, Any]
+    sub_query_dict: dict[str, Any]

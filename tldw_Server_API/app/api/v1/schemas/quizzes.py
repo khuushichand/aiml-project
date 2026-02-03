@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Optional
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -48,19 +48,19 @@ class QuizResponse(BaseModel):
 
 
 class QuizListResponse(BaseModel):
-    items: List[QuizResponse]
+    items: list[QuizResponse]
     count: int
 
 
 class QuestionCreate(BaseModel):
     question_type: QuestionType
     question_text: str
-    options: Optional[List[str]] = Field(None, description="Multiple choice options")
+    options: Optional[list[str]] = Field(None, description="Multiple choice options")
     correct_answer: int | str
     explanation: Optional[str] = None
     points: int = Field(1, ge=0)
     order_index: int = 0
-    tags: Optional[List[str]] = None
+    tags: Optional[list[str]] = None
 
 
 class QuestionUpdate(BaseModel):
@@ -68,12 +68,12 @@ class QuestionUpdate(BaseModel):
 
     question_type: Optional[QuestionType] = None
     question_text: Optional[str] = None
-    options: Optional[List[str]] = None
+    options: Optional[list[str]] = None
     correct_answer: Optional[int | str] = None
     explanation: Optional[str] = None
     points: Optional[int] = Field(None, ge=0)
     order_index: Optional[int] = None
-    tags: Optional[List[str]] = None
+    tags: Optional[list[str]] = None
     expected_version: Optional[int] = None
 
 
@@ -82,10 +82,10 @@ class QuestionPublicResponse(BaseModel):
     quiz_id: int
     question_type: QuestionType
     question_text: str
-    options: Optional[List[str]] = None
+    options: Optional[list[str]] = None
     points: int
     order_index: int
-    tags: Optional[List[str]] = None
+    tags: Optional[list[str]] = None
     deleted: bool
     client_id: str
     version: int
@@ -99,7 +99,7 @@ class QuestionAdminResponse(QuestionPublicResponse):
 
 
 class QuestionListResponse(BaseModel):
-    items: List[QuestionPublicResponse | QuestionAdminResponse]
+    items: list[QuestionPublicResponse | QuestionAdminResponse]
     count: int
 
 
@@ -110,7 +110,7 @@ class QuizAnswerInput(BaseModel):
 
 
 class AttemptSubmitRequest(BaseModel):
-    answers: List[QuizAnswerInput]
+    answers: list[QuizAnswerInput]
 
 
 class AttemptAnswer(BaseModel):
@@ -131,25 +131,25 @@ class AttemptResponse(BaseModel):
     score: Optional[int] = None
     total_possible: int
     time_spent_seconds: Optional[int] = None
-    answers: List[AttemptAnswer] = Field(default_factory=list)
-    questions: Optional[List[QuestionPublicResponse]] = None
+    answers: list[AttemptAnswer] = Field(default_factory=list)
+    questions: Optional[list[QuestionPublicResponse]] = None
 
 
 class AttemptListResponse(BaseModel):
-    items: List[AttemptResponse]
+    items: list[AttemptResponse]
     count: int
 
 
 class QuizGenerateRequest(BaseModel):
     media_id: int
     num_questions: int = Field(10, ge=1, le=100)
-    question_types: Optional[List[QuestionType]] = None
+    question_types: Optional[list[QuestionType]] = None
     difficulty: str = Field("mixed", description="easy, medium, hard, mixed")
-    focus_topics: Optional[List[str]] = None
+    focus_topics: Optional[list[str]] = None
     model: Optional[str] = None
     workspace_tag: Optional[str] = Field(None, description="Optional workspace tag (e.g., 'workspace:<slug-or-id>')")
 
 
 class QuizGenerateResponse(BaseModel):
     quiz: QuizResponse
-    questions: List[QuestionAdminResponse]
+    questions: list[QuestionAdminResponse]

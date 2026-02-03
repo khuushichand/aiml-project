@@ -19,21 +19,18 @@ This scaffolding records intent locally so operators can forward to their system
 
 import json
 import os
+import smtplib
 import threading
-from dataclasses import asdict
 from datetime import datetime, timezone
+from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-import threading
-import smtplib
-from email.mime.text import MIMEText
+from tenacity import retry, stop_after_attempt, wait_exponential
 
-from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicAlert
 from tldw_Server_API.app.core.config import load_and_log_configs
-
+from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicAlert
 
 _SEVERITY_ORDER = {"info": 0, "warning": 1, "critical": 2}
 
@@ -107,7 +104,7 @@ class NotificationService:
             return str(fallback_root / str(raw_file))
 
     @staticmethod
-    def _parse_email_recipients(raw: Optional[str]) -> list[str]:
+    def _parse_email_recipients(raw: str | None) -> list[str]:
         if not raw:
             return []
         if isinstance(raw, (list, tuple, set)):
@@ -119,7 +116,7 @@ class NotificationService:
         """Return the path to the notification JSONL file."""
         return self.file_path or None
 
-    def get_settings(self) -> Dict[str, Any]:
+    def get_settings(self) -> dict[str, Any]:
         return {
             "enabled": self.enabled,
             "min_severity": self.min_severity,
@@ -136,18 +133,18 @@ class NotificationService:
     def update_settings(
         self,
         *,
-        enabled: Optional[bool] = None,
-        min_severity: Optional[str] = None,
-        file: Optional[str] = None,
-        webhook_url: Optional[str] = None,
-        email_to: Optional[str] = None,
-        smtp_host: Optional[str] = None,
-        smtp_port: Optional[int] = None,
-        smtp_starttls: Optional[bool] = None,
-        smtp_user: Optional[str] = None,
-        smtp_password: Optional[str] = None,
-        email_from: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        enabled: bool | None = None,
+        min_severity: str | None = None,
+        file: str | None = None,
+        webhook_url: str | None = None,
+        email_to: str | None = None,
+        smtp_host: str | None = None,
+        smtp_port: int | None = None,
+        smtp_starttls: bool | None = None,
+        smtp_user: str | None = None,
+        smtp_password: str | None = None,
+        email_from: str | None = None,
+    ) -> dict[str, Any]:
         # Update runtime settings (non-persistent). Best-effort.
         if enabled is not None:
             self.enabled = bool(enabled)
@@ -178,7 +175,7 @@ class NotificationService:
             self.email_from = email_from
         return self.get_settings()
 
-    def _meets_threshold(self, severity: Optional[str]) -> bool:
+    def _meets_threshold(self, severity: str | None) -> bool:
         if not self.enabled:
             return False
         sev = (severity or "info").lower()
@@ -194,7 +191,7 @@ class NotificationService:
         """
         if not self._meets_threshold(alert.rule_severity):
             return "skipped"
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "type": "topic_alert",
             "user_id": alert.user_id,
@@ -238,7 +235,7 @@ class NotificationService:
         return "logged" if file_written else "failed"
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=False)
-    def _send_webhook(self, payload: Dict[str, Any]) -> None:
+    def _send_webhook(self, payload: dict[str, Any]) -> None:
         from tldw_Server_API.app.core.http_client import create_client, fetch
         # 3s connect, 5s read/write aligns with defaults but explicit here
         try:
@@ -249,7 +246,7 @@ class NotificationService:
             # Let retry decorator handle; raise to trigger retry
             raise e
 
-    def _send_webhook_safe(self, payload: Dict[str, Any]) -> None:
+    def _send_webhook_safe(self, payload: dict[str, Any]) -> None:
         try:
             self._send_webhook(payload)
         except Exception as e:
@@ -292,7 +289,7 @@ class NotificationService:
             logger.info(f"Email notify failed: {e}")
 
 
-_notify_singleton: Optional[NotificationService] = None
+_notify_singleton: NotificationService | None = None
 
 
 def get_notification_service() -> NotificationService:

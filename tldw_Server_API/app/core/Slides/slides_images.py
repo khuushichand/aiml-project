@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from typing import Any, Dict, List, Optional
-
+from typing import Any
 
 MAX_IMAGES_PER_SLIDE = 10
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -43,7 +42,7 @@ def validate_images_payload(
     *,
     max_images: int = MAX_IMAGES_PER_SLIDE,
     max_bytes: int = MAX_IMAGE_BYTES,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     if images is None:
         return []
     if not isinstance(images, list):
@@ -51,7 +50,7 @@ def validate_images_payload(
     if len(images) > max_images:
         raise SlidesImageError("images_too_many")
 
-    normalized: List[Dict[str, Any]] = []
+    normalized: list[dict[str, Any]] = []
     for image in images:
         if not isinstance(image, dict):
             raise SlidesImageError("image_entry_invalid")
@@ -94,10 +93,10 @@ def validate_images_payload(
     return normalized
 
 
-def collect_image_alt_text(images: Optional[List[Dict[str, Any]]]) -> List[str]:
+def collect_image_alt_text(images: list[dict[str, Any]] | None) -> list[str]:
     if not images:
         return []
-    alt_texts: List[str] = []
+    alt_texts: list[str] = []
     for image in images:
         alt = image.get("alt") if isinstance(image, dict) else None
         if isinstance(alt, str) and alt.strip():

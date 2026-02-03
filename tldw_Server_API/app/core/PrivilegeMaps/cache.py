@@ -4,14 +4,14 @@ import json
 import os
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
 
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
-from tldw_Server_API.app.core.RAG.rag_service.advanced_cache import MemoryCache
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.RAG.rag_service.advanced_cache import MemoryCache
 
 
 def _truthy(value: str) -> bool:
@@ -25,12 +25,12 @@ class DistributedPrivilegeCache:
     Provides in-process caching with optional Redis persistence and invalidation broadcasts.
     """
 
-    def __init__(self, namespace: Optional[str] = None) -> None:
+    def __init__(self, namespace: str | None = None) -> None:
         self._namespace = (namespace or os.getenv("PRIVILEGE_CACHE_NAMESPACE") or "privmap").strip()
         self._local = MemoryCache()
         self._backend_name = (os.getenv("PRIVILEGE_CACHE_BACKEND", "memory") or "memory").strip().lower()
         self._redis = None
-        self._redis_ttl: Optional[int] = None
+        self._redis_ttl: int | None = None
         self._sliding_ttl = _truthy(os.getenv("PRIVILEGE_CACHE_SLIDING_TTL", "1"))
         self._generation: int = 0
         self._last_generation_sync: float = 0.0
@@ -39,7 +39,7 @@ class DistributedPrivilegeCache:
             float(os.getenv("PRIVILEGE_CACHE_GENERATION_SYNC_SECONDS", "2") or "2"),
         )
         self._pubsub = None
-        self._pubsub_thread: Optional[threading.Thread] = None
+        self._pubsub_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
         if self._backend_name == "redis":
@@ -48,7 +48,7 @@ class DistributedPrivilegeCache:
                 self._backend_name = "memory"
 
         self._metrics = None
-        self._metrics_labels: Dict[str, str] = {}
+        self._metrics_labels: dict[str, str] = {}
         self._init_metrics()
 
         if self._redis is not None:
@@ -58,7 +58,7 @@ class DistributedPrivilegeCache:
             self._set_generation_gauge()
         self._update_entry_gauge()
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         self._sync_generation()
         value = self._local.get(key)
         if value is not None:
@@ -108,7 +108,7 @@ class DistributedPrivilegeCache:
         self._update_entry_gauge()
         return decoded
 
-    def set(self, key: str, value: Any, ttl_sec: Optional[int] = None) -> None:
+    def set(self, key: str, value: Any, ttl_sec: int | None = None) -> None:
         self._redis_ttl = ttl_sec
         self._local.set(key, value, ttl_sec=ttl_sec)
         self._update_entry_gauge()
@@ -337,7 +337,7 @@ class DistributedPrivilegeCache:
             pass
 
 
-_GLOBAL_CACHE: Optional[DistributedPrivilegeCache] = None
+_GLOBAL_CACHE: DistributedPrivilegeCache | None = None
 
 
 def get_privilege_cache() -> DistributedPrivilegeCache:

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional
-import hashlib
 
 
 class RuntimeType(str, Enum):
@@ -27,47 +25,47 @@ class TrustLevel(str, Enum):
 
 @dataclass
 class SessionSpec:
-    runtime: Optional[RuntimeType] = None
-    base_image: Optional[str] = None
-    cpu_limit: Optional[float] = None
-    memory_mb: Optional[int] = None
+    runtime: RuntimeType | None = None
+    base_image: str | None = None
+    cpu_limit: float | None = None
+    memory_mb: int | None = None
     timeout_sec: int = 300
     network_policy: str = "deny_all"
-    env: Dict[str, str] = field(default_factory=dict)
-    labels: Dict[str, str] = field(default_factory=dict)
-    trust_level: Optional[TrustLevel] = None  # Defaults to standard if not specified
+    env: dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
+    trust_level: TrustLevel | None = None  # Defaults to standard if not specified
 
 
 @dataclass
 class Session:
     id: str
     runtime: RuntimeType
-    base_image: Optional[str]
-    expires_at: Optional[datetime]
+    base_image: str | None
+    expires_at: datetime | None
 
 
 @dataclass
 class RunSpec:
-    session_id: Optional[str]
-    runtime: Optional[RuntimeType]
-    base_image: Optional[str]
-    command: List[str]
-    env: Dict[str, str] = field(default_factory=dict)
-    startup_timeout_sec: Optional[int] = None
+    session_id: str | None
+    runtime: RuntimeType | None
+    base_image: str | None
+    command: list[str]
+    env: dict[str, str] = field(default_factory=dict)
+    startup_timeout_sec: int | None = None
     timeout_sec: int = 300
-    cpu: Optional[float] = None
-    memory_mb: Optional[int] = None
-    network_policy: Optional[str] = None
-    files_inline: List[tuple[str, bytes]] = field(default_factory=list)
-    capture_patterns: List[str] = field(default_factory=list)
+    cpu: float | None = None
+    memory_mb: int | None = None
+    network_policy: str | None = None
+    files_inline: list[tuple[str, bytes]] = field(default_factory=list)
+    capture_patterns: list[str] = field(default_factory=list)
     # Spec 1.1 interactive settings (stdin over WS)
-    interactive: Optional[bool] = None
-    stdin_max_bytes: Optional[int] = None
-    stdin_max_frame_bytes: Optional[int] = None
-    stdin_bps: Optional[int] = None
-    stdin_idle_timeout_sec: Optional[int] = None
+    interactive: bool | None = None
+    stdin_max_bytes: int | None = None
+    stdin_max_frame_bytes: int | None = None
+    stdin_bps: int | None = None
+    stdin_idle_timeout_sec: int | None = None
     # Trust level for risk-based isolation profiles
-    trust_level: Optional[TrustLevel] = None  # Defaults to standard if not specified
+    trust_level: TrustLevel | None = None  # Defaults to standard if not specified
 
 
 class RunPhase(str, Enum):
@@ -84,16 +82,16 @@ class RunPhase(str, Enum):
 class RunStatus:
     id: str
     phase: RunPhase
-    spec_version: Optional[str] = None
-    runtime: Optional[RuntimeType] = None
-    runtime_version: Optional[str] = None
-    base_image: Optional[str] = None
-    image_digest: Optional[str] = None
-    policy_hash: Optional[str] = None
-    exit_code: Optional[int] = None
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    message: Optional[str] = None
-    resource_usage: Optional[Dict[str, int]] = None
-    artifacts: Optional[Dict[str, bytes]] = None
-    estimated_start_time: Optional[datetime] = None
+    spec_version: str | None = None
+    runtime: RuntimeType | None = None
+    runtime_version: str | None = None
+    base_image: str | None = None
+    image_digest: str | None = None
+    policy_hash: str | None = None
+    exit_code: int | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    message: str | None = None
+    resource_usage: dict[str, int] | None = None
+    artifacts: dict[str, bytes] | None = None
+    estimated_start_time: datetime | None = None

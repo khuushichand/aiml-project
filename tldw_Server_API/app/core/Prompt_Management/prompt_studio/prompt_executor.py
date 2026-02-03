@@ -1,14 +1,16 @@
 # prompt_executor.py
 # Prompt execution engine for Prompt Studio
 
+import asyncio
 import json
 import time
-import asyncio
-from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
+from typing import Any, Optional
+
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
@@ -17,7 +19,6 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
     split_system_message,
 )
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 
 ########################################################################################################################
 # Prompt Executor
@@ -71,8 +72,8 @@ class PromptExecutor:
     ####################################################################################################################
     # Prompt Execution
 
-    async def execute_prompt(self, prompt_id: int, test_inputs: Dict[str, Any],
-                             model_config: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute_prompt(self, prompt_id: int, test_inputs: dict[str, Any],
+                             model_config: dict[str, Any]) -> dict[str, Any]:
         """
         Execute a prompt with given inputs and model configuration.
 
@@ -155,9 +156,9 @@ class PromptExecutor:
                 }
             }
 
-    async def execute_batch(self, prompt_id: int, test_cases: List[Dict[str, Any]],
-                           model_configs: List[Dict[str, Any]],
-                           max_concurrent: int = 5) -> List[Dict[str, Any]]:
+    async def execute_batch(self, prompt_id: int, test_cases: list[dict[str, Any]],
+                           model_configs: list[dict[str, Any]],
+                           max_concurrent: int = 5) -> list[dict[str, Any]]:
         """
         Execute a prompt with multiple test cases and model configurations.
 
@@ -222,12 +223,12 @@ class PromptExecutor:
         *,
         provider: str,
         model: Optional[str],
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         system_prompt: Optional[str],
         temperature: float,
         max_tokens: int,
-        params: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
         provider_name = normalize_provider(self._normalize_provider(provider))
         if not provider_name:
             raise ChatConfigurationError(provider=provider, message="LLM provider is required.")
@@ -241,7 +242,7 @@ class PromptExecutor:
         if not system_message:
             system_message, request_messages = split_system_message(messages)
 
-        request: Dict[str, Any] = {
+        request: dict[str, Any] = {
             "messages": request_messages,
             "system_message": system_message,
             "model": resolved_model,
@@ -260,7 +261,7 @@ class PromptExecutor:
         return request
 
     @staticmethod
-    def _coerce_llm_response(response: Any) -> Tuple[str, int]:
+    def _coerce_llm_response(response: Any) -> tuple[str, int]:
         if response is None:
             return "", 0
         if isinstance(response, tuple) and len(response) == 2:
@@ -324,7 +325,7 @@ class PromptExecutor:
 
     async def _call_llm(self, provider: str, model: str, prompt: str,
                        system_prompt: Optional[str] = None,
-                       parameters: Dict[str, Any] = None) -> Dict[str, Any]:
+                       parameters: dict[str, Any] = None) -> dict[str, Any]:
         """
         Call the appropriate LLM provider.
 
@@ -395,22 +396,22 @@ class PromptExecutor:
     ####################################################################################################################
     # Helper Methods
 
-    def _get_prompt(self, prompt_id: int) -> Optional[Dict[str, Any]]:
+    def _get_prompt(self, prompt_id: int) -> Optional[dict[str, Any]]:
         """Get prompt details from database."""
         prompt = self.db.get_prompt(prompt_id)
         if prompt and prompt.get("deleted"):
             return None
         return prompt
 
-    def _get_signature(self, signature_id: int) -> Optional[Dict[str, Any]]:
+    def _get_signature(self, signature_id: int) -> Optional[dict[str, Any]]:
         """Get signature details from database."""
         signature = self.db.get_signature(signature_id)
         if signature and signature.get("deleted"):
             return None
         return signature
 
-    def _build_prompt(self, prompt: Dict[str, Any], signature: Optional[Dict[str, Any]],
-                     inputs: Dict[str, Any]) -> str:
+    def _build_prompt(self, prompt: dict[str, Any], signature: Optional[dict[str, Any]],
+                     inputs: dict[str, Any]) -> str:
         """
         Build the final prompt by substituting variables.
 
@@ -483,8 +484,8 @@ class PromptExecutor:
         return template
 
     # Compatibility alias used by tests
-    async def execute(self, prompt_id: int, inputs: Dict[str, Any], provider: str = "openai", model: str = "gpt-3.5-turbo",
-                      parameters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def execute(self, prompt_id: int, inputs: dict[str, Any], provider: str = "openai", model: str = "gpt-3.5-turbo",
+                      parameters: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         """
         Execute prompt using simplified signature.
 
@@ -505,7 +506,7 @@ class PromptExecutor:
         }
         return await self.execute_prompt(prompt_id, inputs, model_config)
 
-    def _parse_output(self, output: str, signature: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def _parse_output(self, output: str, signature: Optional[dict[str, Any]]) -> dict[str, Any]:
         """
         Parse LLM output based on signature schema.
 
@@ -650,7 +651,7 @@ class PromptValidator:
     """Validates prompts and signatures before execution."""
 
     @staticmethod
-    def validate_prompt(prompt: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    def validate_prompt(prompt: dict[str, Any]) -> tuple[bool, Optional[str]]:
         """
         Validate a prompt.
 
@@ -679,7 +680,7 @@ class PromptValidator:
         return True, None
 
     @staticmethod
-    def validate_signature(signature: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    def validate_signature(signature: dict[str, Any]) -> tuple[bool, Optional[str]]:
         """
         Validate a signature.
 
@@ -724,7 +725,7 @@ class PromptValidator:
         return True, None
 
     @staticmethod
-    def validate_test_inputs(inputs: Dict[str, Any], signature: Optional[Dict[str, Any]]) -> Tuple[bool, Optional[str]]:
+    def validate_test_inputs(inputs: dict[str, Any], signature: Optional[dict[str, Any]]) -> tuple[bool, Optional[str]]:
         """
         Validate test inputs against signature schema.
 

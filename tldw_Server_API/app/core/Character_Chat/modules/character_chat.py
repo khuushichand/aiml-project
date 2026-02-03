@@ -10,13 +10,16 @@ import base64
 import random
 import re
 import time
-from datetime import datetime, timezone
 from collections import Counter
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
+from collections.abc import Iterable
+from datetime import datetime, timezone
+from typing import Any, Optional, Union
 
 from loguru import logger
 from PIL import Image
 
+from tldw_Server_API.app.core.Character_Chat.constants import MAX_PERSIST_CONTENT_LENGTH
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -26,13 +29,14 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 
 from .character_db import load_character_and_image
 from .character_utils import (
-    replace_placeholders,
-    USER_SENDER_ALIASES as _LEGACY_USER_SENDER_ALIASES,
     NON_CHARACTER_SENDER_ALIASES as _NON_CHARACTER_SENDER_ALIASES,
 )
-from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.Character_Chat.constants import MAX_PERSIST_CONTENT_LENGTH
-
+from .character_utils import (
+    USER_SENDER_ALIASES as _LEGACY_USER_SENDER_ALIASES,
+)
+from .character_utils import (
+    replace_placeholders,
+)
 
 # Aliases are sourced from character_utils for consistency across modules.
 _DEFAULT_FIRST_MESSAGE_TEMPLATE = "Hello, I am {{char}}. How can I help you, {{user}}?"
@@ -55,10 +59,10 @@ def _content_length_for_guardrails(text: str) -> int:
     return len(normalized)
 
 
-def _extract_message_attachments(msg_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _extract_message_attachments(msg_data: dict[str, Any]) -> list[dict[str, Any]]:
     """Build a normalized attachment list for UI consumption."""
 
-    attachments: Dict[int, Dict[str, Any]] = {}
+    attachments: dict[int, dict[str, Any]] = {}
 
     def _normalize_payload(position: int, data: Any, mime: Optional[str]) -> None:
         if data is None:
@@ -100,10 +104,10 @@ def _extract_message_attachments(msg_data: Dict[str, Any]) -> List[Dict[str, Any
 
 
 def _infer_character_sender_aliases(
-    db_messages: List[Dict[str, Any]],
-    user_aliases: Set[str],
+    db_messages: list[dict[str, Any]],
+    user_aliases: set[str],
     primary_char_name: str,
-) -> List[str]:
+) -> list[str]:
     """Infer legacy character sender aliases stored on existing messages."""
 
     alias_counter: Counter[str] = Counter()
@@ -132,7 +136,7 @@ def _infer_character_sender_aliases(
         if first_candidate is None:
             first_candidate = normalized
 
-    inferred_aliases: List[str] = []
+    inferred_aliases: list[str] = []
     for alias, count in alias_counter.items():
         if alias.lower() == primary_lower:
             continue
@@ -142,11 +146,11 @@ def _infer_character_sender_aliases(
 
 
 def _compute_additional_char_aliases(
-    db_messages: List[Dict[str, Any]],
+    db_messages: list[dict[str, Any]],
     char_name_from_card: str,
     user_name_for_placeholders: Optional[str],
     actual_user_sender_id_in_db: str,
-) -> Tuple[List[str], List[str]]:
+) -> tuple[list[str], list[str]]:
     user_aliases = {alias.lower() for alias in _LEGACY_USER_SENDER_ALIASES}
     if actual_user_sender_id_in_db:
         user_aliases.add(actual_user_sender_id_in_db.lower())
@@ -157,17 +161,17 @@ def _compute_additional_char_aliases(
     if not candidate_aliases:
         return [], []
 
-    inferred_user_aliases: List[str] = []
-    filtered_char_aliases: List[str] = []
+    inferred_user_aliases: list[str] = []
+    filtered_char_aliases: list[str] = []
     normalized_alias_map = {alias.lower(): alias for alias in candidate_aliases}
 
     # Pre-compute lowercase senders for efficient neighbour lookups
-    sender_sequence: List[Optional[str]] = []
+    sender_sequence: list[Optional[str]] = []
     for msg in db_messages:
         sender = msg.get("sender")
         sender_sequence.append(str(sender).strip().lower() if isinstance(sender, str) else None)
 
-    def _char_neighbor_set(current_alias: str) -> Set[str]:
+    def _char_neighbor_set(current_alias: str) -> set[str]:
         neighbors = {char_name_from_card.strip().lower()}
         for other_alias in candidate_aliases:
             normalized_other = other_alias.strip().lower()
@@ -207,7 +211,7 @@ def _compute_additional_char_aliases(
 
 
 def process_db_messages_to_ui_history(
-    db_messages: List[Dict[str, Any]],
+    db_messages: list[dict[str, Any]],
     char_name_from_card: str,
     user_name_for_placeholders: Optional[str],
     actual_user_sender_id_in_db: str = "User",
@@ -216,7 +220,7 @@ def process_db_messages_to_ui_history(
     additional_user_sender_ids: Optional[Iterable[str]] = None,
     char_first_message: Optional[str] = None,
     keep_trailing_user: bool = True,
-) -> List[Tuple[Optional[str], Optional[str]]]:
+) -> list[tuple[Optional[str], Optional[str]]]:
     """Convert database messages to UI-friendly paired chat history format."""
 
     rich_history = process_db_messages_to_rich_ui_history(
@@ -231,7 +235,7 @@ def process_db_messages_to_ui_history(
         keep_trailing_user=keep_trailing_user,
     )
 
-    processed_history: List[Tuple[Optional[str], Optional[str]]] = []
+    processed_history: list[tuple[Optional[str], Optional[str]]] = []
     for turn in rich_history:
         user_content = turn["user"]["content"] if turn["user"] else None
         character_content = None
@@ -244,7 +248,7 @@ def process_db_messages_to_ui_history(
 
 
 def process_db_messages_to_rich_ui_history(
-    db_messages: List[Dict[str, Any]],
+    db_messages: list[dict[str, Any]],
     char_name_from_card: str,
     user_name_for_placeholders: Optional[str],
     actual_user_sender_id_in_db: str = "User",
@@ -253,7 +257,7 @@ def process_db_messages_to_rich_ui_history(
     additional_user_sender_ids: Optional[Iterable[str]] = None,
     char_first_message: Optional[str] = None,
     keep_trailing_user: bool = False,
-) -> List[Dict[str, Optional[Dict[str, Any]]]]:
+) -> list[dict[str, Optional[dict[str, Any]]]]:
     """Convert database messages to UI-friendly structures including metadata."""
 
     char_sender_identifier = (
@@ -292,7 +296,7 @@ def process_db_messages_to_rich_ui_history(
         if placeholder_alias:
             user_identifiers.add(placeholder_alias)
 
-    user_msg_detail_buffer: Optional[Dict[str, Any]] = None
+    user_msg_detail_buffer: Optional[dict[str, Any]] = None
 
     explicit_char_sender_lower = None
     if actual_char_sender_id_in_db:
@@ -352,7 +356,7 @@ def process_db_messages_to_rich_ui_history(
     user_messages_seen = 0
     total_messages = len(db_messages)
 
-    rich_history: List[Dict[str, Optional[Dict[str, Any]]]] = []
+    rich_history: list[dict[str, Optional[dict[str, Any]]]] = []
 
     for idx, msg_data in enumerate(db_messages):
         sender = msg_data.get("sender")
@@ -596,9 +600,9 @@ def load_chat_and_character(
     conversation_id_str: str,
     user_name: Optional[str],
     messages_limit: int = 2000,
-) -> Tuple[
-    Optional[Dict[str, Any]],
-    List[Tuple[Optional[str], Optional[str]]],
+) -> tuple[
+    Optional[dict[str, Any]],
+    list[tuple[Optional[str], Optional[str]]],
     Optional[Image.Image],
 ]:
     """Load an existing chat conversation and associated character data."""
@@ -722,10 +726,10 @@ def start_new_chat_session(
     custom_title: Optional[str] = None,
     greeting_strategy: Optional[str] = None,
     alternate_index: Optional[int] = None,
-) -> Tuple[
+) -> tuple[
     Optional[str],
-    Optional[Dict[str, Any]],
-    Optional[List[Tuple[Optional[str], Optional[str]]]],
+    Optional[dict[str, Any]],
+    Optional[list[tuple[Optional[str], Optional[str]]]],
     Optional[Image.Image],
 ]:
     """Start a new chat session with the specified character."""
@@ -733,7 +737,7 @@ def start_new_chat_session(
     logger.debug("Starting new chat session for character_id: {}, user: {}", character_id, user_name)
 
     original_first_message_content: Optional[str] = None
-    original_alternate_greetings: Optional[List[str]] = None
+    original_alternate_greetings: Optional[list[str]] = None
 
     def _normalize_alt_greeting(value: Any) -> Optional[str]:
         """Normalize value (Any) to UTF-8 text or None (Optional[str]); bytes/memoryview are decoded with errors replaced."""
@@ -755,7 +759,7 @@ def start_new_chat_session(
             ag = raw_char_data_for_first_message.get("alternate_greetings")
             if isinstance(ag, list):
                 # Normalize bytes-like greetings to text
-                normalized: List[str] = []
+                normalized: list[str] = []
                 for entry in ag:
                     greeting = _normalize_alt_greeting(entry)
                     if isinstance(greeting, str):
@@ -918,7 +922,7 @@ def list_character_conversations(
     limit: int = 50,
     offset: int = 0,
     client_id: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """List active conversations for a given character."""
 
     try:
@@ -945,7 +949,7 @@ def list_character_conversations(
         return []
 
 
-def get_conversation_metadata(db: CharactersRAGDB, conversation_id: str) -> Optional[Dict[str, Any]]:
+def get_conversation_metadata(db: CharactersRAGDB, conversation_id: str) -> Optional[dict[str, Any]]:
     """Retrieve metadata for a specific conversation."""
 
     try:
@@ -970,7 +974,7 @@ def get_conversation_metadata(db: CharactersRAGDB, conversation_id: str) -> Opti
 def update_conversation_metadata(
     db: CharactersRAGDB,
     conversation_id: str,
-    update_data: Dict[str, Any],
+    update_data: dict[str, Any],
     expected_version: int,
 ) -> bool:
     """Update conversation metadata with optimistic locking."""
@@ -1050,7 +1054,7 @@ def search_conversations_by_title_query(
     character_id: Optional[int] = None,
     limit: int = 10,
     client_id: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Search conversations by title."""
 
     try:
@@ -1238,7 +1242,7 @@ def retrieve_message_details(
     message_id: str,
     character_name_for_placeholders: str,
     user_name_for_placeholders: Optional[str],
-) -> Optional[Dict[str, Any]]:
+) -> Optional[dict[str, Any]]:
     """Retrieve a specific message by its ID and process placeholder content."""
 
     try:
@@ -1277,7 +1281,7 @@ def retrieve_conversation_messages_for_ui(
     rich_output: bool = False,
     char_first_message_hint: Optional[str] = None,
     character_id: Optional[int] = None,
-) -> Union[List[Tuple[Optional[str], Optional[str]]], List[Dict[str, Optional[Dict[str, Any]]]]]:
+) -> Union[list[tuple[Optional[str], Optional[str]]], list[dict[str, Optional[dict[str, Any]]]]]:
     """Retrieve and process conversation messages for UI display.
 
     When ``rich_output`` is True the response contains message metadata and attachments.
@@ -1479,7 +1483,7 @@ def find_messages_in_conversation(
     character_name_for_placeholders: str,
     user_name_for_placeholders: Optional[str],
     limit: int = 10,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Search for messages within a specific conversation by content."""
 
     try:

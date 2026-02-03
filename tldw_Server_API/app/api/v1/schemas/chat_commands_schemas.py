@@ -5,7 +5,6 @@ Pydantic schemas for the Chat Commands discovery endpoint.
 """
 from __future__ import annotations
 
-from typing import List
 from pydantic import BaseModel, Field
 
 
@@ -21,4 +20,4 @@ class ChatCommandInfo(BaseModel):
 
 class ChatCommandsListResponse(BaseModel):
     """Container for a list of available chat commands."""
-    commands: List[ChatCommandInfo] = Field(..., description="List of available commands")
+    commands: list[ChatCommandInfo] = Field(..., description="List of available commands")

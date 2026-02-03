@@ -5,6 +5,8 @@ from typing import Any, Dict, Optional, List
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+pytestmark = pytest.mark.unit
+
 from tldw_Server_API.app.core.Chat import chat_service
 from tldw_Server_API.app.core.Chat.streaming_utils import StreamingResponseHandler
 
@@ -38,7 +40,7 @@ class DummyChatDB:
 
         return {"id": char_id, "name": "Assistant", "system_prompt": "Prompt"}
 
-    def get_message_metadata(self, message_id: str):
+    def get_message_metadata(self, _message_id: str):
         return {}
 
     def get_connection(self):
@@ -47,7 +49,7 @@ class DummyChatDB:
 
 
 class DummyChatDBWithMetadata(DummyChatDB):
-    def get_message_metadata(self, message_id: str):
+    def get_message_metadata(self, _message_id: str):
         return {
             "tool_calls": None,
             "extra": {
@@ -60,7 +62,13 @@ class DummyChatDBWithMetadata(DummyChatDB):
 @pytest.mark.asyncio
 async def test_build_context_uses_history_knobs():
     records = [
-        {"id": f"msg-{idx}", "sender": "user" if idx % 2 == 0 else "assistant", "content": f"text-{idx}", "timestamp": idx, "images": []}
+        {
+            "id": f"msg-{idx}",
+            "sender": "user" if idx % 2 == 0 else "assistant",
+            "content": f"text-{idx}",
+            "timestamp": idx,
+            "images": [],
+        }
         for idx in range(10)
     ]
     db = DummyChatDB(records)
@@ -107,7 +115,7 @@ async def test_build_context_history_limit_zero_skips_history():
             self.role = role
             self.content = content
 
-        def model_dump(self, exclude_none: bool = True):
+        def model_dump(self, _exclude_none: bool = True, **_kwargs):
             return {"role": self.role, "content": self.content}
 
     request_data.messages = [DummyMessage("user", "current")]
@@ -139,7 +147,12 @@ class DummySave:
     def __init__(self):
         self.calls: List[Dict[str, Any]] = []
 
-    async def __call__(self, text: str, tool_calls: Optional[List[Dict[str, Any]]], function_call: Optional[Dict[str, Any]]):
+    async def __call__(
+        self,
+        text: str,
+        tool_calls: Optional[List[Dict[str, Any]]],
+        function_call: Optional[Dict[str, Any]],
+    ):
         self.calls.append({
             "text": text,
             "tool_calls": tool_calls,
@@ -159,7 +172,7 @@ async def test_build_context_skips_tool_placeholder_replacement():
         }
     ]
     class DummyChatDBWithToolId(DummyChatDB):
-        def get_message_metadata(self, message_id: str):
+        def get_message_metadata(self, _message_id: str):
             return {
                 "tool_calls": None,
                 "extra": {
@@ -237,7 +250,7 @@ async def test_build_context_skips_tool_message_without_tool_call_id():
 @pytest.mark.asyncio
 async def test_build_context_keeps_tool_message_with_tool_call_id():
     class DummyChatDBWithToolId(DummyChatDB):
-        def get_message_metadata(self, message_id: str):
+        def get_message_metadata(self, _message_id: str):
             return {
                 "tool_calls": None,
                 "extra": {
@@ -332,7 +345,7 @@ async def test_build_context_persists_full_transcript_when_enabled():
             self.role = role
             self.content = content
 
-        def model_dump(self, exclude_none: bool = True):
+        def model_dump(self, _exclude_none: bool = True, **_kwargs):
             return {"role": self.role, "content": self.content}
 
     db = DummyChatDBWithConversation([])
@@ -379,7 +392,7 @@ async def test_build_context_sanitizes_message_names():
             self.content = content
             self.name = name
 
-        def model_dump(self, exclude_none: bool = True):
+        def model_dump(self, _exclude_none: bool = True, **_kwargs):
             data = {"role": self.role, "content": self.content}
             if self.name is not None:
                 data["name"] = self.name
@@ -548,8 +561,6 @@ async def test_streaming_topic_monitoring_runs_without_output_moderation(monkeyp
 
 
 def test_document_generator_accepts_string_ids(tmp_path):
-
-
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
     from tldw_Server_API.app.core.Chat.document_generator import DocumentGeneratorService, DocumentType
 
@@ -562,7 +573,13 @@ def test_document_generator_accepts_string_ids(tmp_path):
 
     # Insert with UUID conversation id
     conv_id = "550e8400-e29b-41d4-a716-446655440000"
-    job_id = generator.create_generation_job(conv_id, DocumentType.SUMMARY, provider="openai", model="gpt", prompt_config={})
+    job_id = generator.create_generation_job(
+        conv_id,
+        DocumentType.SUMMARY,
+        provider="openai",
+        model="gpt",
+        prompt_config={},
+    )
     generator._save_generated_document(
         conversation_id=conv_id,
         document_type=DocumentType.SUMMARY,

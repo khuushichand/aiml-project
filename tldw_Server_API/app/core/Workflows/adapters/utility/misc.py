@@ -11,30 +11,29 @@ import difflib
 import json
 import os
 import time
-from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
+from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Workflows.adapters._common import (
-    resolve_context_user_id,
     resolve_artifacts_dir,
+    resolve_context_user_id,
 )
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.utility._config import (
+    ContextBuildConfig,
     DiffChangeDetectorConfig,
     DocumentDiffConfig,
     DocumentMergeConfig,
-    ContextBuildConfig,
     EmbedConfig,
     SandboxExecConfig,
-    ScreenshotCaptureConfig,
     ScheduleWorkflowConfig,
+    ScreenshotCaptureConfig,
     TimingStartConfig,
     TimingStopConfig,
 )
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 
 
 @registry.register(
@@ -45,7 +44,7 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template
     tags=["utility", "timing"],
     config_model=TimingStartConfig,
 )
-async def run_timing_start_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_timing_start_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Start a named timer.
 
     Config:
@@ -78,7 +77,7 @@ async def run_timing_start_adapter(config: Dict[str, Any], context: Dict[str, An
     tags=["utility", "timing"],
     config_model=TimingStopConfig,
 )
-async def run_timing_stop_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_timing_stop_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Stop timer and return elapsed time.
 
     Config:
@@ -130,7 +129,7 @@ async def run_timing_stop_adapter(config: Dict[str, Any], context: Dict[str, Any
     tags=["utility", "diff"],
     config_model=DiffChangeDetectorConfig,
 )
-async def run_diff_change_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_diff_change_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Compare last vs current text to detect changes.
 
     Config:
@@ -177,7 +176,7 @@ async def run_diff_change_adapter(config: Dict[str, Any], context: Dict[str, Any
     tags=["utility", "merge"],
     config_model=DocumentMergeConfig,
 )
-async def run_document_merge_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_document_merge_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Merge multiple documents into one.
 
     Config:
@@ -230,7 +229,7 @@ async def run_document_merge_adapter(config: Dict[str, Any], context: Dict[str, 
     tags=["utility", "diff"],
     config_model=DocumentDiffConfig,
 )
-async def run_document_diff_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_document_diff_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Compare two documents and output diff.
 
     Config:
@@ -290,7 +289,7 @@ async def run_document_diff_adapter(config: Dict[str, Any], context: Dict[str, A
     tags=["utility", "context"],
     config_model=ContextBuildConfig,
 )
-async def run_context_build_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_context_build_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Build context from multiple sources."""
     if callable(context.get("is_cancelled")) and context["is_cancelled"]():
         return {"__status__": "cancelled"}
@@ -360,7 +359,7 @@ async def run_context_build_adapter(config: Dict[str, Any], context: Dict[str, A
     tags=["utility", "embeddings"],
     config_model=EmbedConfig,
 )
-async def run_embed_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_embed_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Embed texts and upsert into vector store (Chroma) directly.
 
     Config:
@@ -371,10 +370,11 @@ async def run_embed_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
 
     Output: { upserted: n, collection: name }
     """
-    from tldw_Server_API.app.core.config import settings as _settings
-    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import create_embeddings_batch_async
-    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
     import uuid as _uuid
+
+    from tldw_Server_API.app.core.config import settings as _settings
+    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import create_embeddings_batch_async
 
     # Resolve texts
     texts_cfg = config.get("texts")
@@ -434,7 +434,7 @@ async def run_embed_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
     tags=["utility", "execution"],
     config_model=SandboxExecConfig,
 )
-async def run_sandbox_exec_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_sandbox_exec_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Execute code in an isolated sandbox environment.
 
     Config:
@@ -504,8 +504,8 @@ async def run_sandbox_exec_adapter(config: Dict[str, Any], context: Dict[str, An
         }
 
     try:
-        from tldw_Server_API.app.core.Sandbox.service import SandboxService
         from tldw_Server_API.app.core.Sandbox.models import RunSpec, RuntimeType
+        from tldw_Server_API.app.core.Sandbox.service import SandboxService
 
         service = SandboxService()
 
@@ -570,7 +570,7 @@ async def run_sandbox_exec_adapter(config: Dict[str, Any], context: Dict[str, An
         if status.started_at and status.finished_at:
             duration_ms = (status.finished_at - status.started_at).total_seconds() * 1000
 
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "stdout": stdout,
             "stderr": stderr,
             "exit_code": exit_code,
@@ -598,7 +598,7 @@ async def run_sandbox_exec_adapter(config: Dict[str, Any], context: Dict[str, An
     tags=["utility", "screenshot"],
     config_model=ScreenshotCaptureConfig,
 )
-async def run_screenshot_capture_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_screenshot_capture_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Capture screenshot of URL using playwright.
 
     Config:
@@ -703,7 +703,7 @@ async def run_screenshot_capture_adapter(config: Dict[str, Any], context: Dict[s
     tags=["utility", "scheduling"],
     config_model=ScheduleWorkflowConfig,
 )
-async def run_schedule_workflow_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_schedule_workflow_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Schedule a workflow for future execution.
 
     Config:

@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
 import inspect
 import os
+from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Path, Body
+from fastapi import APIRouter, Body, Depends, Path, Query
 from fastapi.responses import JSONResponse
 from loguru import logger
 
-from tldw_Server_API.app.main import app as _app
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
+from tldw_Server_API.app.main import app as _app
 
 router = APIRouter()
 
@@ -24,7 +24,7 @@ def _get_app():
         return _app
 
 
-def _get_or_init_governor() -> Optional[Any]:
+def _get_or_init_governor() -> Any | None:
     """Return the resource governor from app state or lazily initialize it.
 
     Tries to create a MemoryResourceGovernor using the configured policy loader
@@ -55,7 +55,7 @@ def _get_or_init_governor() -> Optional[Any]:
     dependencies=[Depends(require_roles("admin"))],
 )
 async def get_resource_governor_policy(
-    include: Optional[str] = Query(None, description="Include extra data: 'ids' or 'full'"),
+    include: str | None = Query(None, description="Include extra data: 'ids' or 'full'"),
 ) -> JSONResponse:
     """
     Return current Resource Governor policy snapshot metadata.
@@ -101,8 +101,12 @@ async def get_resource_governor_policy(
                 from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
                     PolicyLoader,
                     PolicyReloadConfig,
-                    default_policy_loader as _rg_default_loader,
+                )
+                from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
                     db_policy_loader as _rg_db_loader,
+                )
+                from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                    default_policy_loader as _rg_default_loader,
                 )
                 # Decide store mode: 'db' → AuthNZ-backed; otherwise file-based
                 if str(store).lower() == "db":
@@ -165,7 +169,7 @@ async def get_resource_governor_policy(
         # Ensure response reflects the effective store mode after init/fallback.
         store = getattr(app.state, "rg_policy_store", None) or store
         snap = loader.get_snapshot()
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "status": "ok",
             "version": int(getattr(snap, "version", 0) or 0),
             "store": store,
@@ -185,6 +189,7 @@ async def get_resource_governor_policy(
 
 # --- Policy admin endpoints (gated by require_roles('admin')) ---
 from pydantic import BaseModel, Field
+
 from tldw_Server_API.app.core.Resource_Governance.policy_admin import (
     AuthNZPolicyAdmin,
     PolicyVersionConflictError,
@@ -192,8 +197,8 @@ from tldw_Server_API.app.core.Resource_Governance.policy_admin import (
 
 
 class PolicyUpsertRequest(BaseModel):
-    payload: Dict[str, Any] = Field(..., description="Policy payload JSON object")
-    version: Optional[int] = Field(None, description="Optional explicit version (auto-increments if omitted)")
+    payload: dict[str, Any] = Field(..., description="Policy payload JSON object")
+    version: int | None = Field(None, description="Optional explicit version (auto-increments if omitted)")
 
 
 @router.put(
@@ -220,12 +225,14 @@ async def upsert_policy(
                     loader = None
                 if loader is None:
                     try:
-                        from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
-                            db_policy_loader as _rg_db_loader,
-                            PolicyReloadConfig as _RGReloadCfg,
-                        )
                         from tldw_Server_API.app.core.Resource_Governance.authnz_policy_store import (
                             AuthNZPolicyStore as _RGDBStore,
+                        )
+                        from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                            PolicyReloadConfig as _RGReloadCfg,
+                        )
+                        from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                            db_policy_loader as _rg_db_loader,
                         )
 
                         interval = int(os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10")
@@ -263,7 +270,7 @@ async def upsert_policy(
 )
 async def delete_policy(
     policy_id: str = Path(..., description="Policy identifier"),
-    version: Optional[int] = Query(None, ge=1, description="Optional expected version for optimistic delete"),
+    version: int | None = Query(None, ge=1, description="Optional expected version for optimistic delete"),
 ):
     try:
         admin = AuthNZPolicyAdmin()
@@ -281,12 +288,14 @@ async def delete_policy(
                     loader = None
                 if loader is None:
                     try:
-                        from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
-                            db_policy_loader as _rg_db_loader,
-                            PolicyReloadConfig as _RGReloadCfg,
-                        )
                         from tldw_Server_API.app.core.Resource_Governance.authnz_policy_store import (
                             AuthNZPolicyStore as _RGDBStore,
+                        )
+                        from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                            PolicyReloadConfig as _RGReloadCfg,
+                        )
+                        from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                            db_policy_loader as _rg_db_loader,
                         )
 
                         interval = int(os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10")
@@ -356,7 +365,7 @@ async def get_policy(policy_id: str = Path(..., description="Policy identifier")
 async def rg_diag_peek(
     entity: str = Query(..., description="Entity key, e.g., 'user:123'"),
     categories: str = Query(..., description="Comma-separated categories, e.g., 'requests,tokens'"),
-    policy_id: Optional[str] = Query(None, description="Optional policy id to use for peek_with_policy when supported"),
+    policy_id: str | None = Query(None, description="Optional policy id to use for peek_with_policy when supported"),
 ):
     try:
         gov = _get_or_init_governor()

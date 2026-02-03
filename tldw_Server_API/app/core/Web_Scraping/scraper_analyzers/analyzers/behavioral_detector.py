@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 try:
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -18,11 +18,11 @@ HONEYPOT_THRESHOLD = 3
 ScanDepth = Optional[str]
 
 
-def _choose_identity() -> Dict[str, str]:
+def _choose_identity() -> dict[str, str]:
     return random.choice(MODERN_BROWSER_IDENTITIES)
 
 
-def detect_honeypots(url: str, scan_depth: ScanDepth = "default") -> Dict[str, Any]:
+def detect_honeypots(url: str, scan_depth: ScanDepth = "default") -> dict[str, Any]:
     """
     Launch a headless browser and count invisible links that may act as honeypots.
 

@@ -5,13 +5,13 @@ This module defines the interface that all database backends must implement
 to ensure compatibility with the application.
 """
 
+import threading
 from abc import ABC, abstractmethod
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union, Generator
-import threading
+from typing import Any, Optional, Union
 
 
 class DatabaseError(Exception):
@@ -101,7 +101,7 @@ class DatabaseConfig:
     isolation_level: Optional[str] = None
     connect_timeout: int = 10
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert config to dictionary."""
         return {k: v for k, v in self.__dict__.items() if v is not None}
 
@@ -234,10 +234,10 @@ class DatabaseConfig:
 @dataclass
 class QueryResult:
     """Result of a database query."""
-    rows: List[Dict[str, Any]]
+    rows: list[dict[str, Any]]
     rowcount: int
     lastrowid: Optional[int] = None
-    description: Optional[List[Tuple]] = None
+    description: Optional[list[tuple]] = None
     execution_time: Optional[float] = None
 
     def __len__(self) -> int:
@@ -250,12 +250,12 @@ class QueryResult:
         return self.rows[index]
 
     @property
-    def first(self) -> Optional[Dict[str, Any]]:
+    def first(self) -> Optional[dict[str, Any]]:
         """Get the first row or None."""
         return self.rows[0] if self.rows else None
 
     @property
-    def one(self) -> Dict[str, Any]:
+    def one(self) -> dict[str, Any]:
         """Get exactly one row, raise if not exactly one."""
         if len(self.rows) != 1:
             raise DatabaseError(f"Expected 1 row, got {len(self.rows)}")
@@ -277,13 +277,13 @@ class FTSQuery:
     """Full-text search query representation."""
     # Public attribute name expected by tests and callers
     query: str
-    columns: List[str] = field(default_factory=list)
+    columns: list[str] = field(default_factory=list)
     table: Optional[str] = None
     limit: Optional[int] = None
     offset: Optional[int] = None
-    highlight_config: Optional[Dict[str, Any]] = None
+    highlight_config: Optional[dict[str, Any]] = None
     rank_expression: Optional[str] = None
-    filters: Dict[str, Any] = field(default_factory=dict)
+    filters: dict[str, Any] = field(default_factory=dict)
 
     # Backward-compat alias used by some backends
     @property
@@ -316,7 +316,7 @@ class ConnectionPool(ABC):
         pass
 
     @abstractmethod
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get pool statistics."""
         pass
 
@@ -394,7 +394,7 @@ class DatabaseBackend(ABC):
     def execute(
         self,
         query: str,
-        params: Optional[Union[Tuple, Dict]] = None,
+        params: Optional[Union[tuple, dict]] = None,
         connection: Optional[Any] = None
     ) -> QueryResult:
         """
@@ -414,7 +414,7 @@ class DatabaseBackend(ABC):
     def execute_many(
         self,
         query: str,
-        params_list: List[Union[Tuple, Dict]],
+        params_list: list[Union[tuple, dict]],
         connection: Optional[Any] = None
     ) -> QueryResult:
         """
@@ -462,7 +462,7 @@ class DatabaseBackend(ABC):
         self,
         table_name: str,
         connection: Optional[Any] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get information about a table's columns.
 
@@ -482,7 +482,7 @@ class DatabaseBackend(ABC):
         self,
         table_name: str,
         source_table: str,
-        columns: List[str],
+        columns: list[str],
         connection: Optional[Any] = None
     ) -> None:
         """
@@ -610,7 +610,7 @@ class DatabaseBackend(ABC):
         self,
         table_name: str,
         connection: Optional[Any] = None
-    ) -> Generator[Dict[str, Any], None, None]:
+    ) -> Generator[dict[str, Any], None, None]:
         """
         Export data from a table.
 
@@ -627,7 +627,7 @@ class DatabaseBackend(ABC):
     def import_data(
         self,
         table_name: str,
-        data: List[Dict[str, Any]],
+        data: list[dict[str, Any]],
         connection: Optional[Any] = None
     ) -> int:
         """

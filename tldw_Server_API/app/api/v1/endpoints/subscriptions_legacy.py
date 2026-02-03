@@ -7,9 +7,7 @@ All routes under this prefix return 410 Gone with a Link header pointing to the
 replacement Watchlists endpoints.
 """
 
-from typing import Optional
 from fastapi import APIRouter, Request, Response, status
-
 
 router = APIRouter(prefix="/subscriptions", tags=["subscriptions-deprecated"])
 
@@ -47,7 +45,7 @@ def _deprecated_payload(request: Request, mapped: str) -> dict[str, object]:
 
 
 @router.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"], include_in_schema=False)
-async def subscriptions_deprecated(request: Request, full_path: Optional[str] = None) -> Response:
+async def subscriptions_deprecated(request: Request, full_path: str | None = None) -> Response:
     mapped = _map_subscriptions_to_watchlists(request.url.path)
     payload = _deprecated_payload(request, mapped)
     headers = {

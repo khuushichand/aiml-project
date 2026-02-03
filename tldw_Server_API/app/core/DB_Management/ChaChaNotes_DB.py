@@ -36,17 +36,18 @@ The library requires a `client_id` upon initialization, which is used to attribu
 changes in the `sync_log` and in individual records.
 """
 # Imports
-import sqlite3
 import json
-import uuid
 import re
-from contextlib import contextmanager
-from configparser import ConfigParser
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
+import sqlite3
 import threading
+import uuid
+from configparser import ConfigParser
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Union
+
 from loguru import logger
-from typing import List, Dict, Optional, Any, Union, Set, Tuple
+
 try:  # Prefer psycopg v3 sql helper, fall back to psycopg2 if available
     from psycopg import sql as psycopg_sql  # type: ignore
 except Exception:  # pragma: no cover - compatibility fallback
@@ -56,17 +57,21 @@ except Exception:  # pragma: no cover - compatibility fallback
         psycopg_sql = None  # type: ignore
 #
 # Third-Party Libraries
-from loguru import logger
 #
 # Local Imports
 #
+from tldw_Server_API.app.core.config import load_comprehensive_config, settings
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     BackendType,
     DatabaseBackend,
     DatabaseConfig,
-    DatabaseError as BackendDatabaseError,
     QueryResult,
 )
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
+from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
 from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
     normalise_params,
     prepare_backend_many_statement,
@@ -74,10 +79,8 @@ from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
     replace_insert_or_ignore,
     transform_sqlite_query_for_postgres,
 )
-from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
-from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
-from tldw_Server_API.app.core.config import load_comprehensive_config, settings
+
 #
 ########################################################################################################################
 #
@@ -125,7 +128,7 @@ class ConflictError(CharactersRAGDBError):
     def __init__(
         self,
         message: str = "Conflict detected.",
-        entity: Optional[str] = None,
+        entity: str | None = None,
         entity_id: Any = None,
         identifier: Any = None,
     ):
@@ -165,7 +168,7 @@ class BackendCursorAdapter:
         self._index += 1
         return row
 
-    def fetchmany(self, size: Optional[int] = None):
+    def fetchmany(self, size: int | None = None):
         if size is None or size <= 0:
             size = len(self._result.rows) - self._index
         end = min(self._index + size, len(self._result.rows))
@@ -189,13 +192,13 @@ class BackendCursorWrapper:
     def __init__(self, db: 'CharactersRAGDB', connection):
         self._db = db
         self._connection = connection
-        self._result: Optional[QueryResult] = None
-        self._adapter: Optional[BackendCursorAdapter] = None
+        self._result: QueryResult | None = None
+        self._adapter: BackendCursorAdapter | None = None
         self.rowcount: int = -1
-        self.lastrowid: Optional[int] = None
+        self.lastrowid: int | None = None
         self.description = None
 
-    def execute(self, query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+    def execute(self, query: str, params: Union[tuple, list, dict] | None = None):
         prepared_query, prepared_params = self._db._prepare_backend_statement(query, params)
         self._result = self._db.backend.execute(
             prepared_query,
@@ -208,7 +211,7 @@ class BackendCursorWrapper:
         self.description = self._result.description
         return self
 
-    def executemany(self, query: str, params_list: List[Union[Tuple, List, Dict]]):
+    def executemany(self, query: str, params_list: list[Union[tuple, list, dict]]):
         prepared_query, prepared_params_list = self._db._prepare_backend_many_statement(query, params_list)
         self._result = self._db.backend.execute_many(
             prepared_query,
@@ -221,18 +224,18 @@ class BackendCursorWrapper:
         self.description = self._result.description
         return self
 
-    def fetchone(self) -> Optional[Dict[str, Any]]:
+    def fetchone(self) -> dict[str, Any] | None:
         if not self._adapter:
             return None
         row = self._adapter.fetchone()
         return dict(row) if row else None
 
-    def fetchall(self) -> List[Dict[str, Any]]:
+    def fetchall(self) -> list[dict[str, Any]]:
         if not self._adapter:
             return []
         return [dict(row) for row in self._adapter.fetchall()]
 
-    def fetchmany(self, size: Optional[int] = None) -> List[Dict[str, Any]]:
+    def fetchmany(self, size: int | None = None) -> list[dict[str, Any]]:
         if not self._adapter:
             return []
         rows = self._adapter.fetchmany(size)
@@ -260,11 +263,11 @@ class BackendConnectionWrapper:
             return self._connection.cursor()
         return BackendCursorWrapper(self._db, self._connection)
 
-    def execute(self, query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+    def execute(self, query: str, params: Union[tuple, list, dict] | None = None):
         cursor = self.cursor()
         return cursor.execute(query, params)
 
-    def executemany(self, query: str, params_list: List[Union[Tuple, List, Dict]]):
+    def executemany(self, query: str, params_list: list[Union[tuple, list, dict]]):
         cursor = self.cursor()
         return cursor.executemany(query, params_list)
 
@@ -375,12 +378,12 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 19  # Schema v19 adds voice assistant analytics tables
+    _CURRENT_SCHEMA_VERSION = 20  # Schema v20 adds skills registry
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
-    _ALLOWED_CONVERSATION_STATES: Tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
+    _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
 
-    _FTS_CONFIG: List[Tuple[str, str, List[str]]] = [
+    _FTS_CONFIG: list[tuple[str, str, list[str]]] = [
         (
             "character_cards_fts",
             "character_cards",
@@ -423,7 +426,7 @@ class CharactersRAGDB:
         ),
     ]
 
-    _POSTGRES_SEQUENCE_TABLES: Tuple[Tuple[str, str], ...] = (
+    _POSTGRES_SEQUENCE_TABLES: tuple[tuple[str, str], ...] = (
         ("character_cards", "id"),
         ("keywords", "id"),
         ("keyword_collections", "id"),
@@ -437,6 +440,7 @@ class CharactersRAGDB:
         ("writing_templates", "id"),
         ("writing_themes", "id"),
         ("voice_command_events", "id"),
+        ("skill_registry", "id"),
     )
 
     _FULL_SCHEMA_SQL_V4 = """
@@ -2309,6 +2313,41 @@ UPDATE db_schema_version
    AND version < 19;
 """
 
+    _MIGRATION_SQL_V19_TO_V20 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 20 - Skills registry (2026-02-03)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS skill_registry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    argument_hint TEXT,
+    disable_model_invocation BOOLEAN DEFAULT 0,
+    user_invocable BOOLEAN DEFAULT 1,
+    allowed_tools TEXT,
+    model TEXT,
+    context TEXT DEFAULT 'inline',
+    directory_path TEXT NOT NULL,
+    last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    file_hash TEXT,
+    uuid TEXT UNIQUE NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    deleted BOOLEAN DEFAULT 0,
+    version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_name ON skill_registry(name);
+CREATE INDEX IF NOT EXISTS idx_skill_user_invocable ON skill_registry(user_invocable);
+CREATE INDEX IF NOT EXISTS idx_skill_deleted ON skill_registry(deleted);
+
+UPDATE db_schema_version
+   SET version = 20
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 20;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -2421,8 +2460,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def _prepare_backend_statement(
         self,
         query: str,
-        params: Optional[Union[Tuple, List, Dict]] = None,
-    ) -> Tuple[str, Optional[Union[Tuple, Dict]]]:
+        params: Union[tuple, list, dict] | None = None,
+    ) -> tuple[str, Union[tuple, dict] | None]:
         return prepare_backend_statement(
             self.backend_type,
             query,
@@ -2436,8 +2475,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def _prepare_backend_many_statement(
         self,
         query: str,
-        params_list: List[Union[Tuple, List, Dict]],
-    ) -> Tuple[str, List[Union[Tuple, Dict]]]:
+        params_list: list[Union[tuple, list, dict]],
+    ) -> tuple[str, list[Union[tuple, dict]]]:
         converted_query, prepared_params = prepare_backend_many_statement(
             self.backend_type,
             query,
@@ -2451,8 +2490,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def _normalise_params(
         self,
-        params: Optional[Union[List, Tuple, Dict, Any]],
-    ) -> Optional[Union[Tuple, Dict]]:
+        params: Union[list, tuple, dict, Any] | None,
+    ) -> Union[tuple, dict] | None:
         return normalise_params(params)
 
     def _transform_query_for_backend(self, query: str) -> str:
@@ -2776,7 +2815,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         logger.info(f"Starting database backup from '{self.db_path_str}' to '{backup_file_path}'")
         # src_conn is managed by get_connection and should not be closed by this method directly
         # backup_conn is local to this method and must be closed
-        backup_conn: Optional[sqlite3.Connection] = None
+        backup_conn: sqlite3.Connection | None = None
         try:
             # Ensure the backup file path is not the same as the source for file-based DBs
             if not self.is_memory_db and self.db_path.resolve() == Path(backup_file_path).resolve():
@@ -2822,7 +2861,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def execute_query(
         self,
         query: str,
-        params: Optional[Union[tuple, Dict[str, Any]]] = None,
+        params: Union[tuple, dict[str, Any]] | None = None,
         *,
         commit: bool = False,
         script: bool = False,
@@ -2906,10 +2945,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def execute_many(
         self,
         query: str,
-        params_list: List[tuple],
+        params_list: list[tuple],
         *,
         commit: bool = False,
-    ) -> Optional[Any]:
+    ) -> Any | None:
         """
         Executes a parameterized SQL query multiple times with a list of parameter sets.
 
@@ -3482,6 +3521,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V18->V19: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V19 for '{self._SCHEMA_NAME}': {e}") from e
 
+    def _migrate_from_v19_to_v20(self, conn: sqlite3.Connection):
+        """Migrates schema from V19 to V20 (Skills registry)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V19 to V20 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V19_TO_V20)
+            final_version = self._get_db_version(conn)
+            if final_version != 20:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V19->V20 failed version check. Expected 20, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V20 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V19->V20 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V19->V20 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V19->V20: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V20 for '{self._SCHEMA_NAME}': {e}") from e
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -3669,6 +3728,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 19 and current_db_version == 18:
                         self._migrate_from_v18_to_v19(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 20 and current_db_version == 19:
+                        self._migrate_from_v19_to_v20(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -3831,6 +3893,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     elif current_initial_version == 17 and target_version >= 18:
                         self._migrate_from_v17_to_v18(conn)
                         current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 18 and target_version >= 19:
+                        self._migrate_from_v18_to_v19(conn)
+                        current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 19 and target_version >= 20:
+                        self._migrate_from_v19_to_v20(conn)
+                        current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
                             f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -3861,6 +3929,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 19 and current_db_version == 18:
                     self._migrate_from_v18_to_v19(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 20 and current_db_version == 19:
+                    self._migrate_from_v19_to_v20(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -3973,6 +4044,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 19:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V18_TO_V19, conn, expected_version=19)
                 current_version = 19
+            if current_version < 20:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V19_TO_V20, conn, expected_version=20)
+                current_version = 20
 
             if current_version > target_version:
                 raise SchemaError(
@@ -4196,7 +4270,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             f"message_metadata table creation not supported for backend {self.backend_type.value}"
         )
 
-    def add_message_metadata(self, message_id: str, tool_calls: Optional[Any] = None, extra: Optional[Any] = None) -> bool:
+    def add_message_metadata(self, message_id: str, tool_calls: Any | None = None, extra: Any | None = None) -> bool:
         """Upsert per-message metadata such as tool calls.
 
         Stores JSON-serialized metadata in an auxiliary table `message_metadata`.
@@ -4241,7 +4315,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.warning(f"add_message_metadata failed for message {message_id}: {e}")
             return False
 
-    def get_message_metadata(self, message_id: str) -> Optional[Dict[str, Any]]:
+    def get_message_metadata(self, message_id: str) -> dict[str, Any] | None:
         """Fetch metadata for a message if present."""
         try:
             self._ensure_message_metadata_table()
@@ -4271,11 +4345,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except Exception:
             return None
 
-    def _convert_sqlite_schema_to_postgres_statements(self, sql: str) -> List[str]:
+    def _convert_sqlite_schema_to_postgres_statements(self, sql: str) -> list[str]:
         """Convert SQLite schema SQL into individual Postgres-compatible statements."""
 
-        statements: List[str] = []
-        buffer: List[str] = []
+        statements: list[str] = []
+        buffer: list[str] = []
         in_block_comment = False
         skip_until_semicolon = False
         skip_trigger_block = False
@@ -4342,7 +4416,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     # ----------------------
     # Message metadata helpers (structured extras + backfill)
     # ----------------------
-    def set_message_metadata_extra(self, message_id: str, extra: Dict[str, Any], merge: bool = True) -> bool:
+    def set_message_metadata_extra(self, message_id: str, extra: dict[str, Any], merge: bool = True) -> bool:
         """Set or merge structured extra metadata for a message.
 
         Expected shape for `extra`:
@@ -4381,7 +4455,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def set_message_rag_context(
         self,
         message_id: str,
-        rag_context: Dict[str, Any],
+        rag_context: dict[str, Any],
         merge: bool = True
     ) -> bool:
         """
@@ -4429,7 +4503,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.warning(f"set_message_rag_context failed for {message_id}: {e}")
             return False
 
-    def get_message_rag_context(self, message_id: str) -> Optional[Dict[str, Any]]:
+    def get_message_rag_context(self, message_id: str) -> dict[str, Any] | None:
         """
         Retrieve RAG context stored with a message.
 
@@ -4454,7 +4528,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         limit: int = 100,
         offset: int = 0,
         include_rag_context: bool = True
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Retrieve messages for a conversation with optional RAG context attached.
 
@@ -4493,7 +4567,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.warning(f"get_messages_with_rag_context failed for conversation {conversation_id}: {e}")
             return []
 
-    def get_conversation_citations(self, conversation_id: str) -> List[Dict[str, Any]]:
+    def get_conversation_citations(self, conversation_id: str) -> list[dict[str, Any]]:
         """
         Retrieve all citations from a conversation's messages.
 
@@ -4506,7 +4580,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """
         try:
             messages = self.get_messages_for_conversation(conversation_id, limit=1000)
-            citations_by_id: Dict[str, Dict[str, Any]] = {}
+            citations_by_id: dict[str, dict[str, Any]] = {}
 
             for msg in messages:
                 msg_id = msg.get('id')
@@ -4535,7 +4609,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.warning(f"get_conversation_citations failed for conversation {conversation_id}: {e}")
             return []
 
-    def backfill_tool_calls_from_inline(self, strip_inline: bool = False, limit: Optional[int] = None) -> Dict[str, int]:
+    def backfill_tool_calls_from_inline(self, strip_inline: bool = False, limit: int | None = None) -> dict[str, int]:
         """Scan assistant messages for an inline "[tool_calls]: <json>" suffix and backfill message_metadata.
 
         - Extracts JSON array/object after the last occurrence of "[tool_calls]:" (case-sensitive).
@@ -4547,7 +4621,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         counts = {"scanned": 0, "matched": 0, "backfilled": 0, "stripped": 0}
         pattern = re.compile(r"\[tool_calls\]\s*:\s*(\{.*|\[.*)$", re.DOTALL)
 
-        def _extract(content: str) -> Optional[Dict[str, Any]]:
+        def _extract(content: str) -> dict[str, Any] | None:
             if not content:
                 return None
             m = pattern.search(content)
@@ -4568,7 +4642,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 return None
 
         try:
-            rows: List[Dict[str, Any]] = []
+            rows: list[dict[str, Any]] = []
             if self.backend_type == BackendType.SQLITE:
                 query = "SELECT id, content, version FROM messages WHERE sender = ? AND deleted = 0"
                 params = ("assistant",)
@@ -4626,7 +4700,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.warning(f"backfill_tool_calls_from_inline encountered an error: {e}")
         return counts
 
-    def _transform_sqlite_schema_statement_for_postgres(self, statement: str) -> Optional[str]:
+    def _transform_sqlite_schema_statement_for_postgres(self, statement: str) -> str | None:
         """Apply token-level rewrites so the statement can run on Postgres."""
 
         stmt = statement.strip()
@@ -4710,7 +4784,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def _apply_schema_v4_postgres(self, conn) -> None:
         statements = self._convert_sqlite_schema_to_postgres_statements(self._FULL_SCHEMA_SQL_V4)
 
-        deferred_sync_idx_stmt: Optional[str] = None
+        deferred_sync_idx_stmt: str | None = None
         for stmt in statements:
             up = stmt.upper().strip()
             if up.startswith("CREATE INDEX IF NOT EXISTS IDX_SYNC_LOG_ENTITY"):
@@ -4872,10 +4946,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         from_note_id: str,
         to_note_id: str,
         directed: bool = False,
-        weight: Optional[float] = 1.0,
-        metadata: Optional[Dict[str, Any]] = None,
+        weight: float | None = 1.0,
+        metadata: dict[str, Any] | None = None,
         created_by: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create a manual note edge, enforcing undirected canonicalization and uniqueness.
 
         Returns the created edge row as a dict. Raises ConflictError on duplicates.
@@ -5051,7 +5125,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         return row['version']
 
-    def _ensure_json_string(self, data: Optional[Union[List, Dict, Set]]) -> Optional[str]:
+    def _ensure_json_string(self, data: Union[list, dict, set] | None) -> str | None:
         """
         Serializes Python list, dict, or set to a JSON string.
 
@@ -5065,7 +5139,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """
         if data is None:
             return None
-        if isinstance(data, Set):
+        if isinstance(data, set):
             data = list(data)  # Convert set to list before dumping
         return json.dumps(data)
 
@@ -5074,7 +5148,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         message = str(error).lower()
         return "unique constraint" in message or "duplicate key" in message
 
-    def _deserialize_row_fields(self, row: sqlite3.Row, json_fields: List[str]) -> Optional[Dict[str, Any]]:
+    def _deserialize_row_fields(self, row: sqlite3.Row, json_fields: list[str]) -> dict[str, Any] | None:
         """
         Converts a sqlite3.Row object to a dictionary, deserializing specified JSON fields.
 
@@ -5109,7 +5183,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     # --- Character Card Methods ---
     @staticmethod
-    def _ensure_json_string_from_mixed(data: Optional[Union[List, Dict, Set, str]]) -> Optional[str]:
+    def _ensure_json_string_from_mixed(data: Union[list, dict, set, str] | None) -> str | None:
         """
         Serializes Python list, dict, or set to a JSON string, or passes through an existing string.
 
@@ -5137,12 +5211,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             except json.JSONDecodeError:
                 logger.debug(f"Input string is not valid JSON, passing through: '{data[:100]}...'")
                 return data
-        if isinstance(data, Set):
+        if isinstance(data, set):
             new_data = list(data)
             return json.dumps(new_data)
         return json.dumps(data)
 
-    def add_character_card(self, card_data: Dict[str, Any]) -> Optional[int]:
+    def add_character_card(self, card_data: dict[str, Any]) -> int | None:
         """
         Adds a new character card to the database.
 
@@ -5246,7 +5320,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
         return None # Should not be reached
 
-    def get_character_card_by_id(self, character_id: int) -> Optional[Dict[str, Any]]:
+    def get_character_card_by_id(self, character_id: int) -> dict[str, Any] | None:
         """
         Retrieve a specific character card by its ID.
 
@@ -5273,7 +5347,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error fetching character card ID {character_id}: {e}")
             raise
 
-    def get_character_card_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+    def get_character_card_by_name(self, name: str) -> dict[str, Any] | None:
         """
         Retrieve a specific character card by its unique name.
 
@@ -5316,7 +5390,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error fetching character card by name '{name}': {e}")
             raise
 
-    def list_character_cards(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def list_character_cards(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         """
         Lists character cards, ordered by name.
 
@@ -5343,7 +5417,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error listing character cards: {e}")
             raise
 
-    def update_character_card(self, character_id: int, card_data: Dict[str, Any], expected_version: int) -> bool | None:
+    def update_character_card(self, character_id: int, card_data: dict[str, Any], expected_version: int) -> bool | None:
         """Update character card with optimistic locking."""
         logger.debug(
             f"Starting update_character_card for ID {character_id}, expected_version {expected_version} (SINGLE UPDATE STRATEGY)")
@@ -5687,7 +5761,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 exc_info=True)
             raise
 
-    def search_character_cards(self, search_term: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def search_character_cards(self, search_term: str, limit: int = 10) -> list[dict[str, Any]]:
         """
         Searches character cards using Full-Text Search (FTS).
 
@@ -5774,7 +5848,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except (sqlite3.OperationalError, CharactersRAGDBError):
             return False
 
-    def search_character_cards_by_tags(self, tag_keywords: List[str], limit: int = 10) -> List[Dict[str, Any]]:
+    def search_character_cards_by_tags(self, tag_keywords: list[str], limit: int = 10) -> list[dict[str, Any]]:
         """
         Search character cards efficiently by their tags using database-level filtering.
 
@@ -5812,7 +5886,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.warning("SQLite JSON functions not available, using fallback tag search method")
             return self._search_cards_by_tags_fallback(normalized_tags, limit)
 
-    def _search_cards_by_tags_json(self, normalized_tags: List[str], limit: int) -> List[Dict[str, Any]]:
+    def _search_cards_by_tags_json(self, normalized_tags: list[str], limit: int) -> list[dict[str, Any]]:
         """
         Search character cards by tags using SQLite JSON functions.
 
@@ -5849,7 +5923,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Unexpected error in JSON-based tag search: {e}")
             raise CharactersRAGDBError(f"JSON tag search failed: {e}") from e
 
-    def _search_cards_by_tags_fallback(self, normalized_tags: List[str], limit: int) -> List[Dict[str, Any]]:
+    def _search_cards_by_tags_fallback(self, normalized_tags: list[str], limit: int) -> list[dict[str, Any]]:
         """
         Fallback tag search that loads cards and filters in Python.
 
@@ -5917,7 +5991,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise CharactersRAGDBError(f"Fallback tag search failed: {e}") from e
 
     # --- Conversation Methods ---
-    def _normalize_conversation_state(self, state: Optional[str]) -> str:
+    def _normalize_conversation_state(self, state: str | None) -> str:
         """
         Normalize and validate conversation state, applying the default when missing.
         """
@@ -5935,7 +6009,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return normalized
 
     @staticmethod
-    def _normalize_nullable_text(value: Any) -> Optional[str]:
+    def _normalize_nullable_text(value: Any) -> str | None:
         """Normalize optional text fields; returns None for empty/whitespace."""
         if value is None:
             return None
@@ -5944,7 +6018,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return stripped if stripped else None
         return str(value)
 
-    def add_conversation(self, conv_data: Dict[str, Any]) -> Optional[str]:
+    def add_conversation(self, conv_data: dict[str, Any]) -> str | None:
         """
         Adds a new conversation to the database.
 
@@ -6025,7 +6099,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
         return None # Should not be reached
 
-    def get_conversation_by_id(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+    def get_conversation_by_id(self, conversation_id: str) -> dict[str, Any] | None:
         """
         Retrieves a specific conversation by its UUID.
 
@@ -6055,8 +6129,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         character_id: int,
         limit: int = 50,
         offset: int = 0,
-        client_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        client_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Lists conversations associated with a specific character ID.
 
@@ -6083,7 +6157,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "SELECT * FROM conversations "
             "WHERE character_id = ? AND deleted = 0"
         )
-        params: List[Any] = [character_id]
+        params: list[Any] = [character_id]
 
         if client_filter is not None:
             query += " AND client_id = ?"
@@ -6120,7 +6194,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error counting conversations for client_id {client_id}: {e}")
             raise
 
-    def get_conversations_for_user(self, client_id: str, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+    def get_conversations_for_user(self, client_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         """
         List non-deleted conversations for a given user (client_id), ordered by last_modified DESC.
 
@@ -6186,9 +6260,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def count_messages_for_conversations(
         self,
-        conversation_ids: List[str],
+        conversation_ids: list[str],
         include_deleted: bool = False,
-    ) -> Dict[str, int]:
+    ) -> dict[str, int]:
         """
         Count messages for multiple conversations in a single query.
 
@@ -6214,7 +6288,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         try:
             cursor = self.execute_query(base_query, tuple(conversation_ids))
             rows = cursor.fetchall()
-            result: Dict[str, int] = {cid: 0 for cid in conversation_ids}
+            result: dict[str, int] = {cid: 0 for cid in conversation_ids}
             for row in rows:
                 if isinstance(row, dict):
                     conv_id = row.get("conversation_id")
@@ -6229,7 +6303,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error("Database error counting messages for conversations: %s", e)
             raise
 
-    def get_latest_message_for_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+    def get_latest_message_for_conversation(self, conversation_id: str) -> dict[str, Any] | None:
         """Fetch the most recent non-deleted message for a conversation."""
         query = (
             "SELECT m.id, m.timestamp, m.content, m.sender "
@@ -6255,7 +6329,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def count_messages_since(
         self,
         conversation_id: str,
-        since_message_id: Optional[str],
+        since_message_id: str | None,
     ) -> int:
         """Count messages after the given message_id within a conversation."""
         if not since_message_id:
@@ -6296,8 +6370,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         cluster_id: str,
         *,
-        title: Optional[str] = None,
-        centroid: Optional[str] = None,
+        title: str | None = None,
+        centroid: str | None = None,
         size: int = 0,
     ) -> bool:
         """Insert or update a conversation cluster metadata row."""
@@ -6329,7 +6403,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error("Failed to upsert conversation cluster %s: %s", cluster_id, exc)
             return False
 
-    def get_conversation_cluster(self, cluster_id: str) -> Optional[Dict[str, Any]]:
+    def get_conversation_cluster(self, cluster_id: str) -> dict[str, Any] | None:
         """Fetch a conversation cluster metadata row by ID."""
         query = "SELECT * FROM conversation_clusters WHERE cluster_id = ?"
         try:
@@ -6381,7 +6455,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
             raise
 
-    def get_conversations_for_user_and_character(self, client_id: str, character_id: int, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+    def get_conversations_for_user_and_character(self, client_id: str, character_id: int, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         """
         List non-deleted conversations for a given user scoped to a specific character.
 
@@ -6412,7 +6486,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
             raise
 
-    def update_conversation(self, conversation_id: str, update_data: Dict[str, Any], expected_version: int) -> bool | None:
+    def update_conversation(self, conversation_id: str, update_data: dict[str, Any], expected_version: int) -> bool | None:
         """
         Updates an existing conversation using optimistic locking.
 
@@ -6707,11 +6781,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def search_conversations_by_title(
         self,
         title_query: str,
-        character_id: Optional[int] = None,
+        character_id: int | None = None,
         limit: int = 10,
         offset: int = 0,
-        client_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        client_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Searches conversations by title using FTS.
 
@@ -6751,8 +6825,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 WHERE c.deleted = FALSE
                   AND c.conversations_fts_tsv @@ to_tsquery('english', ?)
             """
-            params_list: List[Any] = [tsquery, tsquery]
-            filters: List[str] = []
+            params_list: list[Any] = [tsquery, tsquery]
+            filters: list[str] = []
             if character_id is not None:
                 filters.append("c.character_id = ?")
                 params_list.append(character_id)
@@ -6786,8 +6860,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return rows[offset: offset + limit]
 
         safe_search_term = f'"{title_query}"'
-        filters: List[str] = ["conversations_fts MATCH ?", "c.deleted = 0"]
-        params_filters: List[Any] = [title_query]
+        filters: list[str] = ["conversations_fts MATCH ?", "c.deleted = 0"]
+        params_filters: list[Any] = [title_query]
         if character_id is not None:
             filters.append("c.character_id = ?")
             params_filters.append(character_id)
@@ -6830,19 +6904,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def search_conversations(
         self,
-        query: Optional[str],
+        query: str | None,
         *,
-        client_id: Optional[str] = None,
-        character_id: Optional[int] = None,
-        state: Optional[str] = None,
-        topic_label: Optional[str] = None,
+        client_id: str | None = None,
+        character_id: int | None = None,
+        state: str | None = None,
+        topic_label: str | None = None,
         topic_prefix: bool = False,
-        cluster_id: Optional[str] = None,
-        keywords: Optional[List[str]] = None,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        cluster_id: str | None = None,
+        keywords: list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         date_field: str = "last_modified",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Search/filter conversations with optional FTS query and metadata filters.
 
@@ -6856,8 +6930,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if date_field not in {"last_modified", "created_at"}:
             raise InputError("date_field must be 'last_modified' or 'created_at'")
 
-        filters: List[str] = []
-        params: List[Any] = []
+        filters: list[str] = []
+        params: list[Any] = []
         keyword_table = self._map_table_for_backend("keywords")
 
         if self.backend_type == BackendType.POSTGRESQL:
@@ -6980,7 +7054,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
     # --- Message Methods ---
-    def add_message(self, msg_data: Dict[str, Any]) -> Optional[str]:
+    def add_message(self, msg_data: dict[str, Any]) -> str | None:
         """
         Adds a new message to a conversation, optionally with image data.
 
@@ -7009,11 +7083,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             CharactersRAGDBError: For other database errors (e.g., FK violation for conversation_id).
         """
         images_payload_raw = msg_data.pop('images', None)
-        normalized_images: List[Tuple[bytes, str]] = []
+        normalized_images: list[tuple[bytes, str]] = []
         if images_payload_raw:
             for entry in images_payload_raw:
-                img_bytes: Optional[bytes] = None
-                img_mime: Optional[str] = None
+                img_bytes: bytes | None = None
+                img_mime: str | None = None
                 if isinstance(entry, dict):
                     img_bytes = entry.get("data") or entry.get("image_data")
                     img_mime = entry.get("mime") or entry.get("image_mime_type")
@@ -7129,11 +7203,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError as e:
             logger.error(f"Database error adding message: {e}")
             raise
-    def _insert_message_images(self, message_id: str, images: List[Tuple[bytes, str]]) -> None:
+    def _insert_message_images(self, message_id: str, images: list[tuple[bytes, str]]) -> None:
         """Insert or replace message images for the given message."""
         if not images:
             return
-        params: List[Tuple[str, int, bytes, str]] = []
+        params: list[tuple[str, int, bytes, str]] = []
         for idx, (img_bytes, img_mime) in enumerate(images):
             if img_bytes is None or img_mime is None:
                 continue
@@ -7151,7 +7225,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         )
         self.execute_many(query, params, commit=False)
 
-    def get_message_images(self, message_id: str) -> List[Dict[str, Any]]:
+    def get_message_images(self, message_id: str) -> list[dict[str, Any]]:
         """Fetch all images associated with a message, ordered by position."""
         try:
             cursor = self.execute_query(
@@ -7161,7 +7235,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
             rows = cursor.fetchall()
             columns = [col[0] for col in cursor.description] if cursor.description else []
-            images: List[Dict[str, Any]] = []
+            images: list[dict[str, Any]] = []
             for row in rows:
                 if isinstance(row, dict):
                     record = dict(row)
@@ -7176,7 +7250,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Failed to fetch images for message {message_id}: {e}")
             return []
 
-    def get_message_conversation_id(self, message_id: str) -> Optional[str]:
+    def get_message_conversation_id(self, message_id: str) -> str | None:
         """Return the conversation_id for a message if it exists and is not deleted."""
         query = "SELECT conversation_id FROM messages WHERE id = ? AND deleted = 0"
         try:
@@ -7191,7 +7265,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error fetching conversation_id for message {message_id}: {e}")
             raise
 
-    def get_message_by_id(self, message_id: str) -> Optional[Dict[str, Any]]:
+    def get_message_by_id(self, message_id: str) -> dict[str, Any] | None:
         """
         Retrieves a specific message by its UUID.
 
@@ -7228,7 +7302,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
     def get_messages_for_conversation(self, conversation_id: str, limit: int = 100, offset: int = 0,
-                                      order_by_timestamp: str = "ASC", include_deleted: bool = False) -> List[Dict[str, Any]]:
+                                      order_by_timestamp: str = "ASC", include_deleted: bool = False) -> list[dict[str, Any]]:
         """
         Lists messages for a specific conversation.
         Returns non-deleted messages, ordered by `timestamp` according to `order_by_timestamp`.
@@ -7259,7 +7333,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             cursor = self.execute_query(query, (conversation_id, limit, offset))
             raw_rows = cursor.fetchall()
             columns = [col[0] for col in cursor.description] if cursor.description else []
-            results: List[Dict[str, Any]] = []
+            results: list[dict[str, Any]] = []
             for row in raw_rows:
                 if isinstance(row, dict):
                     record = dict(row)
@@ -7303,7 +7377,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         limit: int,
         offset: int,
         order_by_timestamp: str = "ASC",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch root (parentless) messages with minimal columns for tree building."""
         if order_by_timestamp.upper() not in ["ASC", "DESC"]:
             raise InputError("order_by_timestamp must be 'ASC' or 'DESC'.")
@@ -7322,7 +7396,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             cursor = self.execute_query(query, (conversation_id, limit, offset))
             rows = cursor.fetchall()
             columns = [col[0] for col in cursor.description] if cursor.description else []
-            results: List[Dict[str, Any]] = []
+            results: list[dict[str, Any]] = []
             for row in rows:
                 if isinstance(row, dict):
                     record = dict(row)
@@ -7337,10 +7411,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_messages_for_conversation_by_parent_ids(
         self,
         conversation_id: str,
-        parent_ids: List[str],
+        parent_ids: list[str],
         *,
         order_by_timestamp: str = "ASC",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch child messages for the given parent IDs with minimal columns."""
         if not parent_ids:
             return []
@@ -7362,7 +7436,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             cursor = self.execute_query(query, tuple(params))
             rows = cursor.fetchall()
             columns = [col[0] for col in cursor.description] if cursor.description else []
-            results: List[Dict[str, Any]] = []
+            results: list[dict[str, Any]] = []
             for row in rows:
                 if isinstance(row, dict):
                     record = dict(row)
@@ -7418,7 +7492,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
             raise
 
-    def update_message(self, message_id: str, update_data: Dict[str, Any], expected_version: int) -> bool | None:
+    def update_message(self, message_id: str, update_data: dict[str, Any], expected_version: int) -> bool | None:
         """
         Updates an existing message using optimistic locking.
 
@@ -7609,7 +7683,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                          exc_info=True)
             raise
 
-    def search_messages_by_content(self, content_query: str, conversation_id: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
+    def search_messages_by_content(self, content_query: str, conversation_id: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
         """
         Searches messages by content using FTS.
 
@@ -7640,7 +7714,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 "WHERE m.deleted = FALSE",
                 "AND m.messages_fts_tsv @@ to_tsquery('english', ?)",
             ]
-            params_list: List[Any] = [tsquery, tsquery]
+            params_list: list[Any] = [tsquery, tsquery]
 
             if conversation_id:
                 base_query.append("AND m.conversation_id = ?")
@@ -7689,8 +7763,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     # - soft_delete: UPDATE SET deleted = 1, last_modified, version, client_id WHERE id/name = ? AND version = ? AND deleted = 0.
     # - search: Use respective FTS table.
 
-    def _add_generic_item(self, table_name: str, unique_col_name: str, item_data: Dict[str, Any], main_col_value: str,
-                          other_fields_map: Dict[str, str]) -> Optional[int]:
+    def _add_generic_item(self, table_name: str, unique_col_name: str, item_data: dict[str, Any], main_col_value: str,
+                          other_fields_map: dict[str, str]) -> int | None:
         """
         Internal helper to add items to tables with an auto-increment ID and a unique text column.
 
@@ -7815,7 +7889,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
         return None  # Should not be reached if exceptions are raised properly
 
-    def _get_generic_item_by_id(self, table_name: str, item_id: int) -> Optional[Dict[str, Any]]:
+    def _get_generic_item_by_id(self, table_name: str, item_id: int) -> dict[str, Any] | None:
         """
         Internal helper: Retrieves a non-deleted item by its auto-increment integer ID.
 
@@ -7839,7 +7913,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error fetching {table_name} ID {item_id}: {e}")
             raise
 
-    def _get_generic_item_by_unique_text(self, table_name: str, unique_col_name: str, value: str) -> Optional[Dict[str, Any]]:
+    def _get_generic_item_by_unique_text(self, table_name: str, unique_col_name: str, value: str) -> dict[str, Any] | None:
         """
         Internal helper: Retrieves a non-deleted item by a unique text column value.
         Assumes the column has `COLLATE NOCASE` if case-insensitive search is desired.
@@ -7865,7 +7939,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error fetching {table_name} by {unique_col_name} '{value}': {e}")
             raise
 
-    def _case_insensitive_order_expression(self, column: str, direction: Optional[str] = None) -> str:
+    def _case_insensitive_order_expression(self, column: str, direction: str | None = None) -> str:
         column_clean = (column or '').strip()
         if not _ORDER_BY_COLUMN_RE.match(column_clean):
             raise InputError(f"Invalid order-by column: {column!r}")
@@ -7875,10 +7949,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return f"LOWER({column_clean}){direction_clause}"
         return f"{column_clean} COLLATE NOCASE{direction_clause}"
 
-    def _case_insensitive_order_clause(self, column: str, direction: Optional[str] = None) -> str:
+    def _case_insensitive_order_clause(self, column: str, direction: str | None = None) -> str:
         return f"ORDER BY {self._case_insensitive_order_expression(column, direction)}"
 
-    def _list_generic_items(self, table_name: str, order_by_col: str, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def _list_generic_items(self, table_name: str, order_by_col: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         """
         Internal helper: Lists non-deleted items from a table, with specified ordering.
 
@@ -7914,9 +7988,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
     def _update_generic_item(self, table_name: str, item_id: Union[int, str],
-                             update_data: Dict[str, Any], expected_version: int,
-                             allowed_fields: List[str], pk_col_name: str = "id",
-                             unique_col_name_in_data: Optional[str] = None) -> bool | None:
+                             update_data: dict[str, Any], expected_version: int,
+                             allowed_fields: list[str], pk_col_name: str = "id",
+                             unique_col_name_in_data: str | None = None) -> bool | None:
         """
         Internal helper: Updates an item in a table using optimistic locking.
 
@@ -8142,7 +8216,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         # No implicit return None.
 
     def _search_generic_items_fts(self, fts_table_name: str, main_table_name: str, fts_match_cols_or_table: str,
-                                  search_term: str, limit: int = 10) -> List[Dict[str, Any]]:
+                                  search_term: str, limit: int = 10) -> list[dict[str, Any]]:
         """
         Internal helper: Performs FTS search on tables like keywords, notes, collections.
 
@@ -8216,7 +8290,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
     # Keywords
-    def add_keyword(self, keyword_text: str) -> Optional[int]:
+    def add_keyword(self, keyword_text: str) -> int | None:
         """
         Adds a new keyword or undeletes an existing soft-deleted one.
 
@@ -8239,7 +8313,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise InputError("Keyword text cannot be empty.")
         return self._add_generic_item("keywords", "keyword", {}, keyword_text.strip(), {})  # No other_fields_map
 
-    def get_keyword_by_id(self, keyword_id: int) -> Optional[Dict[str, Any]]:
+    def get_keyword_by_id(self, keyword_id: int) -> dict[str, Any] | None:
         """
         Retrieves a keyword by its integer ID. Returns active (non-deleted) keywords only.
 
@@ -8251,7 +8325,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """
         return self._get_generic_item_by_id("keywords", keyword_id)
 
-    def get_keyword_by_text(self, keyword_text: str) -> Optional[Dict[str, Any]]:
+    def get_keyword_by_text(self, keyword_text: str) -> dict[str, Any] | None:
         """
         Retrieves a keyword by its text (case-insensitive due to schema).
         Returns active (non-deleted) keywords only.
@@ -8264,7 +8338,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """
         return self._get_generic_item_by_unique_text("keywords", "keyword", keyword_text.strip())
 
-    def list_keywords(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def list_keywords(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         """
         Lists active keywords, ordered by text (case-insensitively).
 
@@ -8315,7 +8389,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             pk_col_name="id" # Explicitly pass, though "id" is default
         )
 
-    def search_keywords(self, search_term: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def search_keywords(self, search_term: str, limit: int = 10) -> list[dict[str, Any]]:
         """
         Searches keywords by text using FTS.
 
@@ -8401,7 +8475,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return [dict(row) for row in cursor.fetchall()]
 
     # Keyword Collections
-    def add_keyword_collection(self, name: str, parent_id: Optional[int] = None) -> Optional[int]:
+    def add_keyword_collection(self, name: str, parent_id: int | None = None) -> int | None:
         """
         Adds a new keyword collection or undeletes an existing one.
 
@@ -8425,7 +8499,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return self._add_generic_item("keyword_collections", "name", {"parent_id": parent_id}, name.strip(),
                                       {"parent_id": "parent_id"}) # Maps DB 'parent_id' to item_data['parent_id']
 
-    def get_keyword_collection_by_id(self, collection_id: int) -> Optional[Dict[str, Any]]:
+    def get_keyword_collection_by_id(self, collection_id: int) -> dict[str, Any] | None:
         """
         Retrieves a keyword collection by ID. Active collections only.
 
@@ -8437,7 +8511,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """
         return self._get_generic_item_by_id("keyword_collections", collection_id)
 
-    def get_keyword_collection_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+    def get_keyword_collection_by_name(self, name: str) -> dict[str, Any] | None:
         """
         Retrieves a keyword collection by name (case-insensitive). Active collections only.
 
@@ -8449,7 +8523,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """
         return self._get_generic_item_by_unique_text("keyword_collections", "name", name.strip())
 
-    def list_keyword_collections(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def list_keyword_collections(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         """
         Lists active keyword collections, ordered by name (case-insensitively).
 
@@ -8462,7 +8536,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """
         return self._list_generic_items("keyword_collections", "name COLLATE NOCASE", limit, offset)
 
-    def update_keyword_collection(self, collection_id: int, update_data: Dict[str, Any], expected_version: int) -> bool:
+    def update_keyword_collection(self, collection_id: int, update_data: dict[str, Any], expected_version: int) -> bool:
         """
         Updates a keyword collection with optimistic locking.
 
@@ -8517,7 +8591,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             pk_col_name="id" # Explicitly pass, though "id" is default
         )
 
-    def search_keyword_collections(self, search_term: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def search_keyword_collections(self, search_term: str, limit: int = 10) -> list[dict[str, Any]]:
         safe_literal = search_term.replace('"', '""')
         safe_search_term = f'"{safe_literal}"'
         return self._search_generic_items_fts("keyword_collections_fts", "keyword_collections", "name", safe_search_term,
@@ -8528,9 +8602,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         title: str,
         content: str,
-        note_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
-        message_id: Optional[str] = None,
+        note_id: str | None = None,
+        conversation_id: str | None = None,
+        message_id: str | None = None,
     ) -> str | None:
         if not title or not title.strip():
             raise InputError("Note title cannot be empty.")
@@ -8581,13 +8655,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error adding note '{title.strip()}': {e}")
             raise
 
-    def get_note_by_id(self, note_id: str) -> Optional[Dict[str, Any]]:
+    def get_note_by_id(self, note_id: str) -> dict[str, Any] | None:
         query = "SELECT * FROM notes WHERE id = ? AND deleted = 0"
         cursor = self.execute_query(query, (note_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
-    def list_notes(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def list_notes(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         # Using _list_generic_items but ensuring table name and order_by_col are correct for notes
         return self._list_generic_items("notes", "last_modified DESC", limit, offset)
 
@@ -8602,7 +8676,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Error counting notes: {exc}")
             raise
 
-    def update_note(self, note_id: str, update_data: Dict[str, Any], expected_version: int) -> bool | None:
+    def update_note(self, note_id: str, update_data: dict[str, Any], expected_version: int) -> bool | None:
         if not update_data:
             raise InputError("No data provided for note update.")
 
@@ -8737,7 +8811,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                          exc_info=True)
             raise
 
-    def delete_note(self, note_id: str, expected_version: Optional[int] = None, hard_delete: bool = False) -> bool:
+    def delete_note(self, note_id: str, expected_version: int | None = None, hard_delete: bool = False) -> bool:
         """Soft or hard delete a note."""
         now = self._get_current_utc_timestamp_iso()
         try:
@@ -8859,7 +8933,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 exc_info=True)
             raise
 
-    def search_notes(self, search_term: str, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
+    def search_notes(self, search_term: str, limit: int = 10, offset: int = 0) -> list[dict[str, Any]]:
         """Searches notes_fts (title and content) with optional pagination."""
         # FTS5 requires wrapping terms with special characters in double quotes
         # to be treated as a literal phrase.
@@ -8876,6 +8950,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.debug(f"search_notes diagnostic query failed: {diag_err}")
 
         if self.backend_type == BackendType.POSTGRESQL:
+            if not search_term or not str(search_term).strip():
+                logger.debug("Empty notes search term; returning no results.")
+                return []
             tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
             fallback_query = """
                 SELECT n.*
@@ -8933,11 +9010,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def search_notes_with_keywords(
         self,
-        search_term: Optional[str],
-        keyword_tokens: List[str],
+        search_term: str | None,
+        keyword_tokens: list[str],
         limit: int = 10,
         offset: int = 0
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Search notes with an optional FTS query and keyword-token filter."""
         tokens = [t.strip().lower() for t in keyword_tokens if isinstance(t, str) and t.strip()]
         if not tokens:
@@ -9062,7 +9139,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                      operation: str) -> bool:
         """Helper to add ('link') or remove ('unlink') entries from a linking table."""
         now_iso = self._get_current_utc_timestamp_iso()
-        sync_payload_dict: Dict[str, Any] = {}
+        sync_payload_dict: dict[str, Any] = {}
         log_sync_entry = False
         rows_affected = 0
 
@@ -9159,7 +9236,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return self._manage_link("conversation_keywords", "conversation_id", conversation_id, "keyword_id", keyword_id,
                                  "unlink")
 
-    def get_keywords_for_conversation(self, conversation_id: str) -> List[Dict[str, Any]]:
+    def get_keywords_for_conversation(self, conversation_id: str) -> list[dict[str, Any]]:
         keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
         query = f"""
@@ -9173,7 +9250,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         cursor = self.execute_query(query, (conversation_id,))
         return [dict(row) for row in cursor.fetchall()]
 
-    def get_keywords_for_conversations(self, conversation_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+    def get_keywords_for_conversations(self, conversation_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
         """Fetch keywords for multiple conversations in a single query."""
         if not conversation_ids:
             return {}
@@ -9191,7 +9268,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         cursor = self.execute_query(query, tuple(conversation_ids))
         rows = cursor.fetchall()
         columns = [col[0] for col in cursor.description] if cursor.description else []
-        result: Dict[str, List[Dict[str, Any]]] = {cid: [] for cid in conversation_ids}
+        result: dict[str, list[dict[str, Any]]] = {cid: [] for cid in conversation_ids}
         for row in rows:
             if isinstance(row, dict):
                 record = dict(row)
@@ -9203,7 +9280,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             result.setdefault(str(conv_id), []).append(record)
         return result
 
-    def get_conversations_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+    def get_conversations_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         query = """
                 SELECT c.* \
                 FROM conversations c \
@@ -9225,7 +9302,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return self._manage_link("collection_keywords", "collection_id", collection_id, "keyword_id", keyword_id,
                                  "unlink")
 
-    def get_keywords_for_collection(self, collection_id: int) -> List[Dict[str, Any]]:
+    def get_keywords_for_collection(self, collection_id: int) -> list[dict[str, Any]]:
         keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
         query = f"""
@@ -9239,7 +9316,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         cursor = self.execute_query(query, (collection_id,))
         return [dict(row) for row in cursor.fetchall()]
 
-    def get_collections_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+    def get_collections_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         order_clause = self._case_insensitive_order_clause("kc.name")
         query = f"""
                 SELECT kc.* \
@@ -9260,7 +9337,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def unlink_note_from_keyword(self, note_id: str, keyword_id: int) -> bool: # note_id is str
         return self._manage_link("note_keywords", "note_id", note_id, "keyword_id", keyword_id, "unlink")
 
-    def get_keywords_for_note(self, note_id: str) -> List[Dict[str, Any]]: # note_id is str
+    def get_keywords_for_note(self, note_id: str) -> list[dict[str, Any]]: # note_id is str
         keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
         query = f"""
@@ -9274,13 +9351,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         cursor = self.execute_query(query, (note_id,))
         return [dict(row) for row in cursor.fetchall()]
 
-    def get_keywords_for_notes(self, note_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+    def get_keywords_for_notes(self, note_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
         """Return keywords for multiple notes as a map of note_id -> keywords list."""
         if not note_ids:
             return {}
         keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
-        out: Dict[str, List[Dict[str, Any]]] = {nid: [] for nid in note_ids}
+        out: dict[str, list[dict[str, Any]]] = {nid: [] for nid in note_ids}
         # SQLite has a default variable cap of 999; keep a buffer to be safe.
         max_vars = 900
         for start in range(0, len(note_ids), max_vars):
@@ -9304,7 +9381,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 out.setdefault(note_id, []).append(record)
         return out
 
-    def get_notes_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+    def get_notes_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         query = """
                 SELECT n.* \
                 FROM notes n \
@@ -9320,7 +9397,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     # ==========================
     # Flashcards & Decks (V5)
     # ==========================
-    def add_deck(self, name: str, description: Optional[str] = None) -> int:
+    def add_deck(self, name: str, description: str | None = None) -> int:
         """Create a deck and return its id."""
         now = self._get_current_utc_timestamp_iso()
         try:
@@ -9384,7 +9461,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to create deck: {e}") from e
 
-    def list_decks(self, limit: int = 100, offset: int = 0, include_deleted: bool = False) -> List[Dict[str, Any]]:
+    def list_decks(self, limit: int = 100, offset: int = 0, include_deleted: bool = False) -> list[dict[str, Any]]:
         cond = "" if include_deleted else "WHERE deleted = 0"
         query = f"SELECT id, name, description, created_at, last_modified, deleted, client_id, version FROM decks {cond} ORDER BY name LIMIT ? OFFSET ?"
         try:
@@ -9393,7 +9470,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError:
             raise
 
-    def get_deck(self, deck_id: int) -> Optional[Dict[str, Any]]:
+    def get_deck(self, deck_id: int) -> dict[str, Any] | None:
         """Fetch a single deck row by id."""
         query = (
             "SELECT id, name, description, created_at, last_modified, deleted, client_id, version "
@@ -9406,11 +9483,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError:
             raise
 
-    def _get_flashcard_id_from_uuid(self, conn: sqlite3.Connection, card_uuid: str) -> Optional[int]:
+    def _get_flashcard_id_from_uuid(self, conn: sqlite3.Connection, card_uuid: str) -> int | None:
         row = conn.execute("SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0", (card_uuid,)).fetchone()
         return int(row[0]) if row else None
 
-    def add_flashcard(self, card_data: Dict[str, Any]) -> str:
+    def add_flashcard(self, card_data: dict[str, Any]) -> str:
         """
         Create a flashcard. card_data keys: deck_id (optional), front, back, notes?, is_cloze?, tags_json?,
         source_ref_type?, source_ref_id?
@@ -9490,14 +9567,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to add flashcard: {exc}") from exc
 
-    def add_flashcards_bulk(self, cards: List[Dict[str, Any]]) -> List[str]:
+    def add_flashcards_bulk(self, cards: list[dict[str, Any]]) -> list[str]:
         """
         Bulk create flashcards; returns list of uuids in the same order.
 
         Supports newer fields: extra, model_type, reverse. If model_type is not
         provided, it will be inferred from is_cloze/reverse similar to add_flashcard().
         """
-        uuids: List[str] = []
+        uuids: list[str] = []
         try:
             with self.transaction() as _:
                 insert_sql = (
@@ -9512,7 +9589,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     """
                 )
 
-                params_list: List[tuple] = []
+                params_list: list[tuple] = []
                 for card_data in cards:
                     uuid_val = self._generate_uuid()
                     uuids.append(uuid_val)
@@ -9582,17 +9659,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise CharactersRAGDBError(f"Failed to add flashcards in bulk: {exc}") from exc
 
     def list_flashcards(self,
-                        deck_id: Optional[int] = None,
-                        tag: Optional[str] = None,
+                        deck_id: int | None = None,
+                        tag: str | None = None,
                         due_status: str = 'all',
-                        q: Optional[str] = None,
+                        q: str | None = None,
                         include_deleted: bool = False,
                         limit: int = 100,
                         offset: int = 0,
-                        order_by: str = 'due_at') -> List[Dict[str, Any]]:
+                        order_by: str = 'due_at') -> list[dict[str, Any]]:
         """List flashcards with filters. due_status in {'new','learning','due','all'}."""
         where_clauses = ["1=1"]
-        params: List[Any] = []
+        params: list[Any] = []
         keyword_table = self._map_table_for_backend("keywords")
         if not include_deleted:
             if self.backend_type == BackendType.POSTGRESQL:
@@ -9661,14 +9738,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
     def count_flashcards(self,
-                         deck_id: Optional[int] = None,
-                         tag: Optional[str] = None,
+                         deck_id: int | None = None,
+                         tag: str | None = None,
                          due_status: str = 'all',
-                         q: Optional[str] = None,
+                         q: str | None = None,
                          include_deleted: bool = False) -> int:
         """Count flashcards matching filters. Mirrors list_flashcards filters."""
         where_clauses = ["1=1"]
-        params: List[Any] = []
+        params: list[Any] = []
         keyword_table = self._map_table_for_backend("keywords")
         if not include_deleted:
             if self.backend_type == BackendType.POSTGRESQL:
@@ -9724,7 +9801,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError:
             raise
 
-    def get_flashcards_by_uuids(self, uuids: List[str]) -> List[Dict[str, Any]]:
+    def get_flashcards_by_uuids(self, uuids: list[str]) -> list[dict[str, Any]]:
         """Fetch multiple flashcards by UUIDs in one query. Order is not guaranteed; caller can reorder."""
         if not uuids:
             return []
@@ -9799,7 +9876,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             # If any statement fails due to existing objects, ignore and proceed
             logger.debug(f"_ensure_postgres_flashcards_tsvector: {e}")
 
-    def _srs_sm2_update(self, ef: float, interval_days: int, repetitions: int, lapses: int, rating: int) -> Dict[str, Any]:
+    def _srs_sm2_update(self, ef: float, interval_days: int, repetitions: int, lapses: int, rating: int) -> dict[str, Any]:
         """
         Apply SM-2 style scheduling update and return new values.
         rating: 0-5 (Anki scale). q<3 counts as lapse.
@@ -9830,7 +9907,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             'was_lapse': was_lapse,
         }
 
-    def review_flashcard(self, card_uuid: str, rating: int, answer_time_ms: Optional[int] = None) -> Dict[str, Any]:
+    def review_flashcard(self, card_uuid: str, rating: int, answer_time_ms: int | None = None) -> dict[str, Any]:
         """Submit a review for a flashcard and update scheduling. Returns updated card fields."""
         now = self._get_current_utc_timestamp_iso()
         try:
@@ -9873,9 +9950,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise CharactersRAGDBError(f"Failed to review flashcard: {e}") from e
 
     def export_flashcards_csv(self,
-                              deck_id: Optional[int] = None,
-                              tag: Optional[str] = None,
-                              q: Optional[str] = None,
+                              deck_id: int | None = None,
+                              tag: str | None = None,
+                              q: str | None = None,
                               *,
                               delimiter: str = '\t',
                               include_header: bool = False,
@@ -9886,7 +9963,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             include_header: include a header row
         """
         rows = self.list_flashcards(deck_id=deck_id, tag=tag, q=q, due_status='all', include_deleted=False, limit=100000, offset=0)
-        output_lines: List[str] = []
+        output_lines: list[str] = []
         if include_header:
             base_cols = ["Deck", "Front", "Back", "Tags", "Notes"]
             if extended_header:
@@ -9917,7 +9994,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         csv_bytes = ("\n".join(output_lines) + ("\n" if output_lines else "")).encode('utf-8')
         return csv_bytes
 
-    def get_flashcard(self, card_uuid: str) -> Optional[Dict[str, Any]]:
+    def get_flashcard(self, card_uuid: str) -> dict[str, Any] | None:
         """Fetch a single flashcard by uuid (active only)."""
         query = """
             SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
@@ -9937,9 +10014,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def update_flashcard(
         self,
         card_uuid: str,
-        updates: Dict[str, Any],
-        expected_version: Optional[int] = None,
-        tags: Optional[List[str]] = None,
+        updates: dict[str, Any],
+        expected_version: int | None = None,
+        tags: list[str] | None = None,
     ) -> bool:
         """
         Update mutable fields: deck_id, front, back, notes, is_cloze, tags_json.
@@ -9947,12 +10024,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """
         allowed = {"deck_id", "front", "back", "notes", "extra", "is_cloze", "tags_json", "model_type", "reverse"}
         set_parts = []
-        params: List[Any] = []
+        params: list[Any] = []
         for k, v in updates.items():
             if k in allowed:
                 set_parts.append(f"{k} = ?")
                 params.append(v)
-        norm_tags: Optional[List[str]] = None
+        norm_tags: list[str] | None = None
         if tags is not None:
             norm_tags = [t.strip() for t in tags if t and t.strip()]
             set_parts.append("tags_json = ?")
@@ -10021,7 +10098,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to delete flashcard: {e}") from e
 
-    def get_keywords_for_flashcard(self, card_uuid: str) -> List[Dict[str, Any]]:
+    def get_keywords_for_flashcard(self, card_uuid: str) -> list[dict[str, Any]]:
         """Return keywords linked to a flashcard."""
         keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("kw.keyword")
@@ -10039,7 +10116,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError:
             raise
 
-    def set_flashcard_tags(self, card_uuid: str, tags: List[str]) -> bool:
+    def set_flashcard_tags(self, card_uuid: str, tags: list[str]) -> bool:
         """
         Replace flashcard tags (keywords) with provided list.
         Ensures keywords exist, links missing, removes extra.
@@ -10064,7 +10141,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to set flashcard tags: {exc}") from exc
 
-    def _sync_flashcard_keyword_links(self, conn: sqlite3.Connection, card_id: int, tags: List[str]) -> None:
+    def _sync_flashcard_keyword_links(self, conn: sqlite3.Connection, card_id: int, tags: list[str]) -> None:
         # current keyword ids
         cur_kw_ids = set(
             r[0] for r in conn.execute(
@@ -10113,7 +10190,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return "true" if val in {"true", "1", "yes", "y"} else "false"
         return str(correct_answer or "").strip()
 
-    def _deserialize_quiz_question(self, row: Any) -> Optional[Dict[str, Any]]:
+    def _deserialize_quiz_question(self, row: Any) -> dict[str, Any] | None:
         item = self._deserialize_row_fields(row, ["options", "tags_json"])
         if not item:
             return None
@@ -10127,7 +10204,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 pass
         return item
 
-    def _public_quiz_question(self, question: Dict[str, Any]) -> Dict[str, Any]:
+    def _public_quiz_question(self, question: dict[str, Any]) -> dict[str, Any]:
         payload = dict(question)
         payload.pop("correct_answer", None)
         payload.pop("explanation", None)
@@ -10150,11 +10227,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def create_quiz(
         self,
         name: str,
-        description: Optional[str] = None,
-        workspace_tag: Optional[str] = None,
-        media_id: Optional[int] = None,
-        time_limit_seconds: Optional[int] = None,
-        passing_score: Optional[int] = None,
+        description: str | None = None,
+        workspace_tag: str | None = None,
+        media_id: int | None = None,
+        time_limit_seconds: int | None = None,
+        passing_score: int | None = None,
         client_id: str = "unknown",
     ) -> int:
         """Create a new quiz and return its ID."""
@@ -10195,7 +10272,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to create quiz: {exc}") from exc
 
-    def get_quiz(self, quiz_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_quiz(self, quiz_id: int, include_deleted: bool = False) -> dict[str, Any] | None:
         """Get quiz by ID, returns None if not found or deleted (unless include_deleted)."""
         deleted_clause = "" if include_deleted else "AND deleted = 0"
         query = (
@@ -10212,16 +10289,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def list_quizzes(
         self,
-        q: Optional[str] = None,
-        media_id: Optional[int] = None,
-        workspace_tag: Optional[str] = None,
+        q: str | None = None,
+        media_id: int | None = None,
+        workspace_tag: str | None = None,
         include_deleted: bool = False,
         limit: int = 50,
         offset: int = 0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """List quizzes with pagination and optional filters."""
         where_clauses = ["1=1"]
-        params: List[Any] = []
+        params: list[Any] = []
         if not include_deleted:
             where_clauses.append("deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0")
         if media_id is not None:
@@ -10252,12 +10329,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError:
             raise
 
-    def update_quiz(self, quiz_id: int, updates: Dict[str, Any], client_id: str = "unknown") -> bool:
+    def update_quiz(self, quiz_id: int, updates: dict[str, Any], client_id: str = "unknown") -> bool:
         """Update quiz fields, returns True if successful."""
         expected_version = updates.pop("expected_version", None)
         allowed = {"name", "description", "workspace_tag", "media_id", "time_limit_seconds", "passing_score"}
         set_parts = []
-        params: List[Any] = []
+        params: list[Any] = []
         for k, v in updates.items():
             if k in allowed:
                 set_parts.append(f"{k} = ?")
@@ -10293,7 +10370,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to update quiz: {e}") from e
 
-    def delete_quiz(self, quiz_id: int, expected_version: Optional[int] = None, hard_delete: bool = False) -> bool:
+    def delete_quiz(self, quiz_id: int, expected_version: int | None = None, hard_delete: bool = False) -> bool:
         """Soft or hard delete a quiz."""
         now = self._get_current_utc_timestamp_iso()
         try:
@@ -10330,11 +10407,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         question_type: str,
         question_text: str,
         correct_answer: int | str,
-        options: Optional[List[str]] = None,
-        explanation: Optional[str] = None,
+        options: list[str] | None = None,
+        explanation: str | None = None,
         points: int = 1,
         order_index: int = 0,
-        tags: Optional[List[str]] = None,
+        tags: list[str] | None = None,
         client_id: str = "unknown",
     ) -> int:
         """Create a question for a quiz and increment total_questions."""
@@ -10384,7 +10461,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to create question: {exc}") from exc
 
-    def get_question(self, question_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_question(self, question_id: int, include_deleted: bool = False) -> dict[str, Any] | None:
         """Get question by ID."""
         deleted_clause = "" if include_deleted else "AND deleted = 0"
         query = (
@@ -10402,14 +10479,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def list_questions(
         self,
         quiz_id: int,
-        q: Optional[str] = None,
+        q: str | None = None,
         include_answers: bool = False,
-        limit: Optional[int] = 50,
+        limit: int | None = 50,
         offset: int = 0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """List questions for a quiz with pagination."""
         where_clauses = ["quiz_id = ?"]
-        params: List[Any] = [quiz_id]
+        params: list[Any] = [quiz_id]
         where_clauses.append("deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0")
 
         fts_filter = ""
@@ -10442,7 +10519,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         count_query = f"SELECT COUNT(*) AS count FROM quiz_questions WHERE {where_sql} {fts_filter}"
         try:
             cursor = self.execute_query(query, tuple(query_params))
-            items: List[Dict[str, Any]] = []
+            items: list[dict[str, Any]] = []
             for row in cursor.fetchall():
                 question = self._deserialize_quiz_question(row)
                 if not question:
@@ -10457,12 +10534,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError:
             raise
 
-    def update_question(self, question_id: int, updates: Dict[str, Any], client_id: str = "unknown") -> bool:
+    def update_question(self, question_id: int, updates: dict[str, Any], client_id: str = "unknown") -> bool:
         """Update question fields."""
         expected_version = updates.pop("expected_version", None)
         allowed = {"question_type", "question_text", "options", "correct_answer", "explanation", "points", "order_index", "tags"}
         set_parts = []
-        params: List[Any] = []
+        params: list[Any] = []
         for k, v in updates.items():
             if k not in allowed:
                 continue
@@ -10522,7 +10599,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to update question: {e}") from e
 
-    def delete_question(self, question_id: int, expected_version: Optional[int] = None, hard_delete: bool = False) -> bool:
+    def delete_question(self, question_id: int, expected_version: int | None = None, hard_delete: bool = False) -> bool:
         """Delete a question and decrement total_questions (or recompute)."""
         now = self._get_current_utc_timestamp_iso()
         try:
@@ -10555,7 +10632,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to delete question: {e}") from e
 
-    def start_attempt(self, quiz_id: int, client_id: str = "unknown") -> Dict[str, Any]:
+    def start_attempt(self, quiz_id: int, client_id: str = "unknown") -> dict[str, Any]:
         """Start a new quiz attempt, snapshot questions, returns attempt dict."""
         now = self._get_current_utc_timestamp_iso()
         try:
@@ -10604,7 +10681,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to start attempt: {exc}") from exc
 
-    def submit_attempt(self, attempt_id: int, answers: List[Dict]) -> Dict[str, Any]:
+    def submit_attempt(self, attempt_id: int, answers: list[dict]) -> dict[str, Any]:
         """Submit answers for an attempt, grade and return results."""
         now = self._get_current_utc_timestamp_iso()
         try:
@@ -10683,7 +10760,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         attempt_id: int,
         include_questions: bool = False,
         include_answers: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Get attempt with full answer breakdown."""
         query = (
             "SELECT id, quiz_id, started_at, completed_at, score, total_possible, time_spent_seconds, "
@@ -10709,13 +10786,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def list_attempts(
         self,
-        quiz_id: Optional[int] = None,
+        quiz_id: int | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """List attempts with optional quiz filter."""
         where_clauses = ["1=1"]
-        params: List[Any] = []
+        params: list[Any] = []
         if quiz_id is not None:
             where_clauses.append("quiz_id = ?")
             params.append(quiz_id)
@@ -10735,7 +10812,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError:
             raise
 
-    def _check_answer(self, question: Dict[str, Any], user_answer: Any) -> bool:
+    def _check_answer(self, question: dict[str, Any], user_answer: Any) -> bool:
         """Grade a single answer based on question type."""
         q_type = question.get("question_type")
         correct = question.get("correct_answer")
@@ -10773,7 +10850,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise InputError(f"{entity_label} name cannot be empty.")
         return str(name).strip()
 
-    def _serialize_writing_payload(self, payload: Dict[str, Any], entity_label: str) -> str:
+    def _serialize_writing_payload(self, payload: dict[str, Any], entity_label: str) -> str:
         """
         Serialize a writing payload to JSON for storage.
 
@@ -10818,11 +10895,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def add_writing_session(
         self,
         name: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         *,
         schema_version: int = 1,
-        session_id: Optional[str] = None,
-        version_parent_id: Optional[str] = None,
+        session_id: str | None = None,
+        version_parent_id: str | None = None,
     ) -> str:
         """
         Create a writing session for the Writing Playground.
@@ -10904,7 +10981,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 ) from exc
             raise CharactersRAGDBError(f"Backend error adding writing session: {exc}") from exc
 
-    def get_writing_session(self, session_id: str, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_writing_session(self, session_id: str, include_deleted: bool = False) -> dict[str, Any] | None:
         """
         Fetch a writing session by ID.
 
@@ -10933,7 +11010,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError:
             raise
 
-    def list_writing_sessions(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def list_writing_sessions(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         """
         List non-deleted writing sessions with pagination.
 
@@ -10981,7 +11058,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def update_writing_session(
         self,
         session_id: str,
-        update_data: Dict[str, Any],
+        update_data: dict[str, Any],
         expected_version: int,
     ) -> bool | None:
         """
@@ -11043,7 +11120,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """
         return self._soft_delete_generic_item("writing_sessions", session_id, expected_version, pk_col_name="id")
 
-    def clone_writing_session(self, session_id: str, *, name: Optional[str] = None) -> Dict[str, Any]:
+    def clone_writing_session(self, session_id: str, *, name: str | None = None) -> dict[str, Any]:
         """
         Clone a writing session, optionally renaming the copy.
 
@@ -11078,12 +11155,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def add_writing_template(
         self,
         name: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         *,
         schema_version: int = 1,
-        version_parent_id: Optional[str] = None,
+        version_parent_id: str | None = None,
         is_default: bool = False,
-    ) -> Optional[int]:
+    ) -> int | None:
         """
         Create a writing template for the Writing Playground.
 
@@ -11120,7 +11197,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         }
         return self._add_generic_item("writing_templates", "name", item_data, template_name, other_fields_map)
 
-    def get_writing_template_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+    def get_writing_template_by_name(self, name: str) -> dict[str, Any] | None:
         """
         Fetch a writing template by name.
 
@@ -11149,7 +11226,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         item.pop("payload_json", None)
         return item
 
-    def list_writing_templates(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def list_writing_templates(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         """
         List non-deleted writing templates with pagination.
 
@@ -11209,7 +11286,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def update_writing_template(
         self,
         name: str,
-        update_data: Dict[str, Any],
+        update_data: dict[str, Any],
         expected_version: int,
     ) -> bool | None:
         """
@@ -11278,13 +11355,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         name: str,
         *,
-        class_name: Optional[str] = None,
-        css: Optional[str] = None,
+        class_name: str | None = None,
+        css: str | None = None,
         schema_version: int = 1,
-        version_parent_id: Optional[str] = None,
+        version_parent_id: str | None = None,
         is_default: bool = False,
         order_index: int = 0,
-    ) -> Optional[int]:
+    ) -> int | None:
         """
         Create a writing theme for the Writing Playground.
 
@@ -11328,7 +11405,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         }
         return self._add_generic_item("writing_themes", "name", item_data, theme_name, other_fields_map)
 
-    def get_writing_theme_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+    def get_writing_theme_by_name(self, name: str) -> dict[str, Any] | None:
         """
         Fetch a writing theme by name.
 
@@ -11345,7 +11422,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         row = self._get_generic_item_by_unique_text("writing_themes", "name", theme_name)
         return dict(row) if row else None
 
-    def list_writing_themes(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def list_writing_themes(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         """
         List non-deleted writing themes ordered by sort index.
 
@@ -11392,7 +11469,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def update_writing_theme(
         self,
         name: str,
-        update_data: Dict[str, Any],
+        update_data: dict[str, Any],
         expected_version: int,
     ) -> bool | None:
         """
@@ -11466,7 +11543,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def add_writing_wordcloud_job(
         self,
         wordcloud_id: str,
-        options: Dict[str, Any],
+        options: dict[str, Any],
         *,
         input_chars: int,
         status: str = "queued",
@@ -11515,7 +11592,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except Exception as exc:
             raise CharactersRAGDBError(f"Failed to create wordcloud job: {exc}") from exc
 
-    def get_writing_wordcloud(self, wordcloud_id: str) -> Optional[Dict[str, Any]]:
+    def get_writing_wordcloud(self, wordcloud_id: str) -> dict[str, Any] | None:
         """
         Fetch a wordcloud job by ID.
 
@@ -11541,7 +11618,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except Exception as exc:
             raise CharactersRAGDBError(f"Failed to fetch wordcloud job: {exc}") from exc
 
-    def _update_writing_wordcloud_fields(self, wordcloud_id: str, update_data: Dict[str, Any]) -> None:
+    def _update_writing_wordcloud_fields(self, wordcloud_id: str, update_data: dict[str, Any]) -> None:
         if not update_data:
             raise InputError("No data provided for wordcloud update.")
         allowed_fields = {
@@ -11553,8 +11630,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "input_chars",
         }
         now = self._get_current_utc_timestamp_iso()
-        fields_sql: List[str] = []
-        params: List[Any] = []
+        fields_sql: list[str] = []
+        params: list[Any] = []
         for key, value in update_data.items():
             if key not in allowed_fields:
                 continue
@@ -11574,10 +11651,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except Exception as exc:
             raise CharactersRAGDBError(f"Failed to update wordcloud job: {exc}") from exc
 
-    def set_writing_wordcloud_status(self, wordcloud_id: str, status: str, error: Optional[str] = None) -> None:
+    def set_writing_wordcloud_status(self, wordcloud_id: str, status: str, error: str | None = None) -> None:
         """Update wordcloud job status (and optional error)."""
         normalized_status = self._normalize_wordcloud_status(status)
-        update_data: Dict[str, Any] = {"status": normalized_status, "error": error}
+        update_data: dict[str, Any] = {"status": normalized_status, "error": error}
         self._update_writing_wordcloud_fields(wordcloud_id, update_data)
 
     def set_writing_wordcloud_result(
@@ -11585,13 +11662,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         wordcloud_id: str,
         *,
         status: str,
-        words: Optional[List[Dict[str, Any]]] = None,
-        meta: Optional[Dict[str, Any]] = None,
-        error: Optional[str] = None,
+        words: list[dict[str, Any]] | None = None,
+        meta: dict[str, Any] | None = None,
+        error: str | None = None,
     ) -> None:
         """Persist wordcloud results and status."""
         normalized_status = self._normalize_wordcloud_status(status)
-        update_data: Dict[str, Any] = {"status": normalized_status, "error": error}
+        update_data: dict[str, Any] = {"status": normalized_status, "error": error}
         if words is not None:
             update_data["words_json"] = self._serialize_json_payload(words, "Wordcloud result")
         if meta is not None:
@@ -11599,11 +11676,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self._update_writing_wordcloud_fields(wordcloud_id, update_data)
 
     # --- Sync Log Methods ---
-    def get_sync_log_entries(self, since_change_id: int = 0, limit: Optional[int] = None,
-                             entity_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_sync_log_entries(self, since_change_id: int = 0, limit: int | None = None,
+                             entity_type: str | None = None) -> list[dict[str, Any]]:
         """Retrieves sync log entries newer than a given change_id, optionally filtered by entity type."""
         query_parts = ["SELECT * FROM sync_log WHERE change_id > ?"]
-        params_list: List[Any] = [since_change_id]
+        params_list: list[Any] = [since_change_id]
 
         if entity_type:
             query_parts.append("AND entity = ?")
@@ -11649,7 +11726,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 class TransactionContextManager:
     def __init__(self, db_instance: CharactersRAGDB):
         self.db = db_instance
-        self.conn: Optional[sqlite3.Connection] = None
+        self.conn: sqlite3.Connection | None = None
         self.is_outermost_transaction = False
 
     def __enter__(self) -> sqlite3.Connection:

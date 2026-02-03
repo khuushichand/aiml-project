@@ -1,5 +1,22 @@
 # Utils.py
 from __future__ import annotations
+
+import hashlib
+import json
+import mimetypes
+import os
+import re
+import tempfile
+import time
+import unicodedata
+import uuid
+import zipfile
+from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
+from typing import AnyStr, Union
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
 #########################################
 # General Utilities Library
 # This library is used to hold random utilities used by various other libraries.
@@ -31,28 +48,12 @@ from __future__ import annotations
 #
 # Import necessary libraries
 import chardet
-import configparser
-import hashlib
-import json
-import os
-import re
-import tempfile
-import time
-import uuid
-import mimetypes
-import sys
-import zipfile
-from datetime import timedelta, datetime
-from decimal import Decimal, ROUND_HALF_UP
-from pathlib import Path
-from typing import Union, AnyStr, Tuple, List, Optional, Protocol, cast
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from loguru import logger
+
 #
 # 3rd-Party Imports
-from tldw_Server_API.app.core.http_client import fetch, download, RetryPolicy, DownloadError
-import unicodedata
-from tqdm import tqdm
-from loguru import logger
+from tldw_Server_API.app.core.http_client import RetryPolicy, download, fetch
+
 #
 #######################################################################################################################
 #
@@ -347,7 +348,7 @@ def convert_to_seconds(time_str):
     raise ValueError(f"Invalid time format '{time_str}'")
 
 
-def truncate_content(content: Optional[str], max_length: int = 200) -> Optional[str]:
+def truncate_content(content: str | None, max_length: int = 200) -> str | None:
     """Truncate content to the specified maximum length with ellipsis."""
     if not content:
         return content
@@ -926,7 +927,7 @@ class ZipValidator:
         return any(part == ".." for part in parts)
 
     @staticmethod
-    def validate_zip_file(zip_path: str) -> Tuple[bool, str, List[str]]:
+    def validate_zip_file(zip_path: str) -> tuple[bool, str, list[str]]:
         """
         Validate zip file and its contents
         Returns: (is_valid, error_message, valid_files)
@@ -998,7 +999,7 @@ def format_transcript(raw_text: str) -> str:
 # End of File Handling Functions
 #######################################################################################################################
 
-def extract_media_id_from_result_string(result_msg: Optional[str]) -> Optional[str]:
+def extract_media_id_from_result_string(result_msg: str | None) -> str | None:
     """
     Extracts the Media ID from a string expected to contain 'Media ID: <id>'.
 

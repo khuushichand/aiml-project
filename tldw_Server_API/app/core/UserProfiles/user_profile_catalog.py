@@ -8,15 +8,15 @@ and enumerates profile/config keys, editability, and UI metadata.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Set
+from typing import Any
 
+import yaml
 from loguru import logger
 from pydantic import BaseModel, Field, ValidationError, model_validator, validator
-import yaml
-
 
 _ALLOWED_EDITORS = {"user", "admin", "org_admin", "team_admin", "platform_admin"}
 
@@ -54,15 +54,15 @@ class UserProfileCatalogEntry(BaseModel):
 
     key: str
     label: str
-    description: Optional[str] = None
+    description: str | None = None
     type: str
-    enum: Optional[List[Any]] = None
-    minimum: Optional[float] = None
-    maximum: Optional[float] = None
-    default: Optional[Any] = None
-    editable_by: List[str] = Field(default_factory=list)
+    enum: list[Any] | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    default: Any | None = None
+    editable_by: list[str] = Field(default_factory=list)
     sensitivity: str
-    ui: Optional[str] = None
+    ui: str | None = None
     deprecated: bool = False
 
     @validator("key", "label", "type", "sensitivity")
@@ -83,7 +83,7 @@ class UserProfileCatalog(BaseModel):
 
     version: str
     updated_at: datetime
-    entries: List[UserProfileCatalogEntry]
+    entries: list[UserProfileCatalogEntry]
 
     @validator("version")
     def _validate_version(cls, value: str) -> str:
@@ -99,7 +99,7 @@ class UserProfileCatalog(BaseModel):
 
     @staticmethod
     def _assert_unique(values: Iterable[str], label: str) -> None:
-        seen: Set[str] = set()
+        seen: set[str] = set()
         for value in values:
             if value in seen:
                 raise ValueError(f"Duplicate {label} detected: '{value}'")
@@ -130,7 +130,7 @@ def _load_user_profile_catalog(catalog_path: Path) -> UserProfileCatalog:
         raise
 
 
-def load_user_profile_catalog(path: Optional[Path] = None) -> UserProfileCatalog:
+def load_user_profile_catalog(path: Path | None = None) -> UserProfileCatalog:
     """
     Load and validate the user profile catalog from YAML.
 

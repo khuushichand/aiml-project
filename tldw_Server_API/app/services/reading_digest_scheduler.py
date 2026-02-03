@@ -13,32 +13,32 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, Dict, Optional, Set
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase, ReadingDigestScheduleRow
 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
-from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Collections.reading_digest_jobs import (
     READING_DIGEST_DOMAIN,
     READING_DIGEST_JOB_TYPE,
     reading_digest_queue,
 )
 from tldw_Server_API.app.core.config import settings as core_settings
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase, ReadingDigestScheduleRow
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 class _ReadingDigestScheduler:
     def __init__(self) -> None:
-        self._aps: Optional[AsyncIOScheduler] = None
+        self._aps: AsyncIOScheduler | None = None
         self._db_cache: dict[int, CollectionsDatabase] = {}
         self._lock = asyncio.Lock()
         self._started = False
-        self._rescan_task: Optional[asyncio.Task] = None
+        self._rescan_task: asyncio.Task | None = None
         self._jobs = JobManager()
 
     async def start(self) -> None:
@@ -113,7 +113,7 @@ class _ReadingDigestScheduler:
     async def _rescan_once(self) -> None:
         if not self._aps:
             return
-        desired: Set[str] = set()
+        desired: set[str] = set()
         user_ids = self._enumerate_user_ids()
         for uid in sorted(user_ids):
             try:
@@ -135,8 +135,8 @@ class _ReadingDigestScheduler:
         except Exception:
             pass
 
-    def _enumerate_user_ids(self) -> Set[int]:
-        user_ids: Set[int] = set()
+    def _enumerate_user_ids(self) -> set[int]:
+        user_ids: set[int] = set()
         try:
             base = DatabasePaths.get_user_db_base_dir()
             for p in base.iterdir():
@@ -153,7 +153,7 @@ class _ReadingDigestScheduler:
             pass
         return user_ids
 
-    def _add_job(self, schedule: ReadingDigestScheduleRow, user_id: Optional[int] = None) -> None:
+    def _add_job(self, schedule: ReadingDigestScheduleRow, user_id: int | None = None) -> None:
         if not self._aps:
             return
         try:
@@ -187,7 +187,7 @@ class _ReadingDigestScheduler:
         except Exception as exc:
             logger.warning("Reading digest scheduler failed to add job %s: %s", schedule.id, exc)
 
-    async def _run_schedule(self, schedule_id: str, user_id: Optional[int] = None) -> None:
+    async def _run_schedule(self, schedule_id: str, user_id: int | None = None) -> None:
         db = None
         schedule = None
         if user_id is not None:
@@ -309,16 +309,16 @@ class _ReadingDigestScheduler:
         *,
         tenant_id: str,
         user_id: str,
-        name: Optional[str],
+        name: str | None,
         cron: str,
-        timezone: Optional[str],
+        timezone: str | None,
         enabled: bool,
         require_online: bool,
         filters: dict[str, Any],
-        template_id: Optional[int],
-        template_name: Optional[str],
+        template_id: int | None,
+        template_name: str | None,
         format: str,
-        retention_days: Optional[int],
+        retention_days: int | None,
     ) -> str:
         sid = __import__("uuid").uuid4().hex
         db = self._get_db(int(user_id))
@@ -341,7 +341,7 @@ class _ReadingDigestScheduler:
             self._add_job(schedule, int(user_id))
         return sid
 
-    def update(self, schedule_id: str, patch: Dict[str, Any]) -> bool:
+    def update(self, schedule_id: str, patch: dict[str, Any]) -> bool:
         schedule = self.get(schedule_id)
         if not schedule:
             return False
@@ -370,7 +370,7 @@ class _ReadingDigestScheduler:
         db = self._get_db(int(schedule.user_id))
         return db.delete_reading_digest_schedule(schedule_id)
 
-    def get(self, schedule_id: str) -> Optional[ReadingDigestScheduleRow]:
+    def get(self, schedule_id: str) -> ReadingDigestScheduleRow | None:
         user_ids = self._enumerate_user_ids()
         for uid in sorted(user_ids):
             try:
@@ -389,7 +389,7 @@ class _ReadingDigestScheduler:
             return []
 
 
-_INSTANCE: Optional[_ReadingDigestScheduler] = None
+_INSTANCE: _ReadingDigestScheduler | None = None
 
 
 def get_reading_digest_scheduler() -> _ReadingDigestScheduler:
@@ -399,7 +399,7 @@ def get_reading_digest_scheduler() -> _ReadingDigestScheduler:
     return _INSTANCE
 
 
-async def start_reading_digest_scheduler(enabled: Optional[bool] = None) -> Optional[asyncio.Task]:
+async def start_reading_digest_scheduler(enabled: bool | None = None) -> asyncio.Task | None:
     if enabled is None:
         enabled = os.getenv("READING_DIGEST_SCHEDULER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     if not enabled:
@@ -415,7 +415,7 @@ async def start_reading_digest_scheduler(enabled: Optional[bool] = None) -> Opti
     return task
 
 
-async def stop_reading_digest_scheduler(task: Optional[asyncio.Task]) -> None:
+async def stop_reading_digest_scheduler(task: asyncio.Task | None) -> None:
     try:
         if task:
             task.cancel()

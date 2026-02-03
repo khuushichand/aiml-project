@@ -78,6 +78,7 @@ def validate_regex_pattern_enhanced(pattern: str, max_length: int = 500, timeout
     """
     import re
     import time
+
     from tldw_Server_API.app.core.Chunking.exceptions import InvalidInputError
 
     # Check pattern length

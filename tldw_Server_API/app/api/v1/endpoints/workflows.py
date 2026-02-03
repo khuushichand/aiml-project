@@ -9,75 +9,91 @@ import errno
 import json
 import os
 import re
+import sqlite3
 import time
-from typing import Any, Dict, List, Optional, Set
+from pathlib import Path
+from typing import Any, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status, Request, Body, Response
-import sqlite3
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field, ValidationError
 from loguru import logger
-from pathlib import Path
+from pydantic import BaseModel, Field, ValidationError
 
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.api.v1.schemas.workflows import (
+    AdhocRunRequest,
+    EventResponse,
+    RunRequest,
     WorkflowDefinitionCreate,
     WorkflowDefinitionResponse,
-    RunRequest,
-    AdhocRunRequest,
-    WorkflowRunResponse,
-    EventResponse,
+    WorkflowRagSearchConfig,
     WorkflowRunListItem,
     WorkflowRunListResponse,
-    WorkflowRagSearchConfig,
+    WorkflowRunResponse,
 )
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditContext,
+    AuditEventCategory,
+    AuditEventType,
+    AuditSeverity,
+)
+from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
+from tldw_Server_API.app.core.AuthNZ.permissions import (
+    WORKFLOWS_ADMIN,
+    WORKFLOWS_RUNS_CONTROL,
+    WORKFLOWS_RUNS_READ,
+)
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
-    get_request_user,
     User,
+    get_request_user,
     resolve_user_id_for_request,
 )
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_workflows_database,
     get_content_backend_instance,
 )
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
-from tldw_Server_API.app.core.Workflows import WorkflowEngine, RunMode, WorkflowScheduler
-from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
-from tldw_Server_API.app.core.Workflows.adapters._registry import get_parallelizable
-from tldw_Server_API.app.core.Workflows.adapters._common import artifacts_base_dir, is_subpath
-from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
-from tldw_Server_API.app.core.AuthNZ.permissions import (
-    WORKFLOWS_RUNS_READ,
-    WORKFLOWS_RUNS_CONTROL,
-    WORKFLOWS_ADMIN,
-)
-from tldw_Server_API.app.api.v1.API_Deps import auth_deps
-from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
-from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditEventCategory, AuditSeverity, AuditContext
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
-from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
-from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
-from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
-from tldw_Server_API.app.core.Resource_Governance.daily_caps import check_daily_cap
-from tldw_Server_API.app.core.Workflows.daily_ledger import (
-    get_workflows_daily_ledger,
-    backfill_legacy_runs_to_ledger,
-    record_workflow_run,
-    workflows_ledger_category,
-)
 from tldw_Server_API.app.core.exceptions import (
     EgressPolicyError,
     NetworkError,
     RetryExhaustedError,
 )
-from tldw_Server_API.app.core.http_client import afetch as _http_afetch, RetryPolicy as _RetryPolicy
-
+from tldw_Server_API.app.core.http_client import RetryPolicy as _RetryPolicy
+from tldw_Server_API.app.core.http_client import afetch as _http_afetch
+from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
+from tldw_Server_API.app.core.Resource_Governance.daily_caps import check_daily_cap
+from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
+from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
+from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.Workflows import RunMode, WorkflowEngine, WorkflowScheduler
+from tldw_Server_API.app.core.Workflows.adapters._common import artifacts_base_dir, is_subpath
+from tldw_Server_API.app.core.Workflows.adapters._registry import get_parallelizable
+from tldw_Server_API.app.core.Workflows.daily_ledger import (
+    backfill_legacy_runs_to_ledger,
+    get_workflows_daily_ledger,
+    record_workflow_run,
+    workflows_ledger_category,
+)
+from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
 
 # Best-effort per-process cache for "did we backfill today" keys.
 # Keep it bounded to avoid unbounded growth in long-lived workers.
-_WORKFLOWS_BACKFILL_CACHE: Set[str] = set()
+_WORKFLOWS_BACKFILL_CACHE: set[str] = set()
 _raw_cache_max = int(os.getenv("WORKFLOWS_BACKFILL_CACHE_MAX", "50000") or "50000")
 _WORKFLOWS_BACKFILL_CACHE_MAX = max(1, _raw_cache_max)
 
@@ -142,7 +158,7 @@ def _safe_jsonschema_detail(exc: Exception) -> str:
 
 
 def _pydantic_error_detail(exc: ValidationError) -> str:
-    parts: List[str] = []
+    parts: list[str] = []
     for err in exc.errors():
         loc = ".".join(str(p) for p in err.get("loc", []) if p is not None)
         msg = err.get("msg") or "invalid"
@@ -186,7 +202,7 @@ def _find_signing_secret_path(value: Any, path: str = "") -> Optional[str]:
     return None
 
 
-def _llm_step_schema_base() -> Dict[str, Any]:
+def _llm_step_schema_base() -> dict[str, Any]:
     return {
         "type": "object",
         "description": (
@@ -227,7 +243,7 @@ def _llm_step_schema_base() -> Dict[str, Any]:
     }
 
 
-def _rag_search_schema_base() -> Dict[str, Any]:
+def _rag_search_schema_base() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
@@ -280,7 +296,7 @@ def _rag_search_schema_base() -> Dict[str, Any]:
     }
 
 
-def _validate_rag_search_config(cfg: Dict[str, Any], *, step_id: str) -> None:
+def _validate_rag_search_config(cfg: dict[str, Any], *, step_id: str) -> None:
     try:
         WorkflowRagSearchConfig.model_validate(cfg)
     except ValidationError as exc:
@@ -288,7 +304,7 @@ def _validate_rag_search_config(cfg: Dict[str, Any], *, step_id: str) -> None:
         raise HTTPException(status_code=422, detail=f"Invalid config for step '{step_id}': {detail}") from exc
 
 
-def _validate_chunking_contract(cfg: Dict[str, Any], *, step_id: str) -> None:
+def _validate_chunking_contract(cfg: dict[str, Any], *, step_id: str) -> None:
     if not isinstance(cfg, dict):
         return
     chunking = cfg.get("chunking")
@@ -395,7 +411,7 @@ def _classify_webhook_status(status_code: int) -> str:
     return "permanent_error"
 
 
-def _validate_definition_payload(defn: Dict[str, Any]) -> None:
+def _validate_definition_payload(defn: dict[str, Any]) -> None:
     import json
     # Optional JSON Schema validator
     try:
@@ -429,7 +445,7 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
         raise HTTPException(status_code=422, detail="Too many steps")
     reg = StepTypeRegistry()
     # Build a schema map (LLM schema shared with list_step_types()).
-    step_schemas: Dict[str, Dict[str, Any]] = {
+    step_schemas: dict[str, dict[str, Any]] = {
         "prompt": {
             "type": "object",
             "properties": {
@@ -666,7 +682,7 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
     _validate_dag(defn)
 
 
-def _validate_dag(defn: Dict[str, Any]) -> None:
+def _validate_dag(defn: dict[str, Any]) -> None:
     steps = defn.get("steps") or []
     if not isinstance(steps, list):
         return
@@ -675,7 +691,7 @@ def _validate_dag(defn: Dict[str, Any]) -> None:
     for i, s in enumerate(steps):
         sid = str(s.get("id") or f"step_{i+1}")
         id_to_idx[sid] = i
-    edges: Dict[str, list[str]] = {}
+    edges: dict[str, list[str]] = {}
     for i, s in enumerate(steps):
         sid = str(s.get("id") or f"step_{i+1}")
         edges.setdefault(sid, [])
@@ -721,8 +737,8 @@ def _validate_dag(defn: Dict[str, Any]) -> None:
             logger.debug(f"workflows._validate_dag: branch parse error for step {sid}: {e}")
 
     # Detect cycles among explicit edges (DFS)
-    visiting: Dict[str, bool] = {}
-    visited: Dict[str, bool] = {}
+    visiting: dict[str, bool] = {}
+    visited: dict[str, bool] = {}
     path: list[str] = []
 
     def _dfs(u: str) -> Optional[list[str]]:
@@ -755,7 +771,7 @@ def _validate_dag(defn: Dict[str, Any]) -> None:
                 raise HTTPException(status_code=422, detail=f"Workflow contains an explicit cycle: {pretty}")
 
 
-def _find_step_def(defn: Dict[str, Any], step_id: str) -> Optional[Dict[str, Any]]:
+def _find_step_def(defn: dict[str, Any], step_id: str) -> Optional[dict[str, Any]]:
     steps = defn.get("steps") or []
     for i, s in enumerate(steps):
         sid = str(s.get("id") or f"step_{i+1}")
@@ -800,7 +816,7 @@ async def _wait_for_run_completion(
         await asyncio.sleep(poll_interval)
 
 
-def _build_rate_limit_headers(limit: int, remaining: int, reset_epoch: int) -> Dict[str, str]:
+def _build_rate_limit_headers(limit: int, remaining: int, reset_epoch: int) -> dict[str, str]:
     """Return a dict including both legacy X-RateLimit-* and RFC-style RateLimit-* headers.
 
     RateLimit-Reset is provided as delta-seconds; X-RateLimit-Reset remains epoch seconds.
@@ -1067,7 +1083,7 @@ async def create_definition(
     )
 
 
-@router.get("", response_model=List[WorkflowDefinitionResponse])
+@router.get("", response_model=list[WorkflowDefinitionResponse])
 async def list_definitions(
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
@@ -1534,7 +1550,7 @@ async def run_saved(
     }
 )
 async def list_runs(
-    status: Optional[List[str]] = Query(None, description="Filter by status (repeatable)"),
+    status: Optional[list[str]] = Query(None, description="Filter by status (repeatable)"),
     owner: Optional[str] = Query(None, description="Owner user id (admin only)"),
     workflow_id: Optional[int] = Query(None),
     created_after: Optional[str] = Query(None, description="ISO timestamp lower bound (created_at)"),
@@ -1621,7 +1637,8 @@ async def list_runs(
     cur_order_desc = (str(order or "desc").lower() != "asc")
     if cursor:
         try:
-            import base64, json as _json
+            import base64
+            import json as _json
             raw = base64.urlsafe_b64decode(cursor.encode("utf-8") + b"==").decode("utf-8")
             tok = _json.loads(raw)
             # Validate and adopt settings from token
@@ -1656,7 +1673,7 @@ async def list_runs(
     has_more = len(rows) > limit
     if has_more:
         rows = rows[:limit]
-    items: List[WorkflowRunListItem] = []
+    items: list[WorkflowRunListItem] = []
     for r in rows:
         items.append(
             WorkflowRunListItem(
@@ -1675,7 +1692,8 @@ async def list_runs(
     next_cursor = None
     if has_more and rows:
         try:
-            import base64, json as _json
+            import base64
+            import json as _json
             last = rows[-1]
             last_ts = getattr(last, cur_order_by) or last.created_at
             token_obj = {
@@ -1974,7 +1992,7 @@ async def get_run_events(
     run_id: str,
     since: Optional[int] = Query(None, description="Return events with seq strictly greater than this value"),
     limit: int = Query(500, ge=1, le=1000),
-    types: Optional[List[str]] = Query(None, description="Filter by event types (repeatable)"),
+    types: Optional[list[str]] = Query(None, description="Filter by event types (repeatable)"),
     cursor: Optional[str] = Query(None, description="Opaque continuation token (overrides since)"),
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
@@ -1996,7 +2014,8 @@ async def get_run_events(
     # Cursor token overrides since
     if cursor:
         try:
-            import base64, json as _json
+            import base64
+            import json as _json
             pad = "=" * (-len(cursor) % 4)
             raw = base64.urlsafe_b64decode((cursor + pad).encode("utf-8")).decode("utf-8")
             tok = _json.loads(raw)
@@ -2005,7 +2024,7 @@ async def get_run_events(
         except Exception as e:
             logger.debug(f"Workflows events: failed to parse cursor token; ignoring. Error: {e}")
     events = db.get_events(run_id, since=since, limit=limit, types=types_norm if types_norm else None)
-    out: List[EventResponse] = []
+    out: list[EventResponse] = []
     for e in events:
         out.append(
             EventResponse(
@@ -2027,7 +2046,8 @@ async def get_run_events(
                 logger.debug(f"Workflows events: no last_seq available: {e2}")
                 last_seq = None
         if last_seq is not None:
-            import base64, json as _json
+            import base64
+            import json as _json
             token = {"last_seq": last_seq}
             raw = _json.dumps(token).encode("utf-8")
             nxt = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
@@ -2229,7 +2249,9 @@ async def replay_webhook_dlq(
 
     # Attempt delivery with the same headers/signing as engine
     try:
-        import time as _time, hmac, hashlib
+        import hashlib
+        import hmac
+        import time as _time
         secret = _os.getenv("WORKFLOWS_WEBHOOK_SECRET", "")
         ts = str(int(_time.time()))
         headers = {
@@ -2501,7 +2523,7 @@ class VerifyBatchItem(BaseModel):
 
 
 class VerifyBatchRequest(BaseModel):
-    items: List[VerifyBatchItem]
+    items: list[VerifyBatchItem]
 
 
 @router.post(
@@ -2600,7 +2622,6 @@ async def download_artifact(
     audit_service=Depends(get_audit_service_for_user),
 ):
     import os as _os
-    from pathlib import Path
     art = db.get_artifact(artifact_id)
     if not art:
         raise HTTPException(status_code=404, detail="Artifact not found")
@@ -2783,10 +2804,10 @@ async def download_run_artifacts_zip(
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
-    import os as _os
+    import io
     import mimetypes as _m
-    import io, zipfile
-    from pathlib import Path
+    import os as _os
+    import zipfile
 
     run = db.get_run(run_id)
     if not run:
@@ -3405,7 +3426,7 @@ async def list_workflow_template_tags() -> list[str]:
 
 
 @router.get("/templates/{name:path}")
-async def get_workflow_template(name: str) -> Dict[str, Any]:
+async def get_workflow_template(name: str) -> dict[str, Any]:
     """Return JSON content for a named workflow template (sans extension)."""
     # Disallow traversal and separators (defense-in-depth with unquoting)
     from urllib.parse import unquote as _unquote
@@ -3450,7 +3471,7 @@ async def get_workflow_template(name: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail="Failed to load template")
 
 @router.get("/templates/_byname/{name:path}")
-async def get_workflow_template_legacy(name: str) -> Dict[str, Any]:
+async def get_workflow_template_legacy(name: str) -> dict[str, Any]:
     """Return JSON content for a named workflow template (sans extension)."""
     # Disallow traversal and separators (defense-in-depth with unquoting)
     from urllib.parse import unquote as _unquote
@@ -3631,7 +3652,7 @@ async def get_definition(
 
 class HumanReviewPayload(BaseModel):
     comment: Optional[str] = None
-    edited_fields: Optional[Dict[str, Any]] = None
+    edited_fields: Optional[dict[str, Any]] = None
 
 
 @router.post(
@@ -3933,7 +3954,7 @@ async def workflows_ws(
     websocket: WebSocket,
     run_id: str,
     token: Optional[str] = Query(None),
-    types: Optional[List[str]] = Query(None),
+    types: Optional[list[str]] = Query(None),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
     # Extract token: prefer query param; fallback to Authorization header

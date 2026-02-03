@@ -5,8 +5,8 @@ Uses database-backed locks for coordination.
 
 import asyncio
 import uuid
-from typing import Optional, Callable, Any
-from datetime import datetime, timedelta
+from typing import Any, Callable, Optional
+
 from loguru import logger
 
 from ..base.queue_backend import QueueBackend

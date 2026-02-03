@@ -6,20 +6,18 @@ This module provides functionality to collect user feedback on search results,
 track relevance scores, and use feedback to improve future searches.
 """
 
+import hashlib
 import json
+import sqlite3
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
-from collections import defaultdict
-import hashlib
-import sqlite3
-import asyncio
-from pathlib import Path
+from typing import Any, Optional
 
-from loguru import logger
 import numpy as np
+from loguru import logger
+
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
@@ -52,9 +50,9 @@ class FeedbackEntry:
     feedback_type: FeedbackType
     value: Any
     timestamp: datetime = field(default_factory=datetime.now)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
             "id": self.id,
@@ -172,7 +170,7 @@ class FeedbackStore:
         query: str,
         feedback_type: Optional[FeedbackType] = None,
         limit: int = 100
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get feedback entries for a specific query."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -204,7 +202,7 @@ class FeedbackStore:
         self,
         document_id: str,
         limit: int = 100
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get all feedback for a specific document."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -223,7 +221,7 @@ class FeedbackStore:
         self,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get aggregated feedback statistics."""
         with sqlite3.connect(self.db_path) as conn:
             # Build time filter
@@ -299,8 +297,8 @@ class FeedbackAnalyzer:
             store: Feedback storage backend
         """
         self.store = store
-        self.reranking_weights = {}
-        self.document_scores = {}
+        self.reranking_weights: dict[str, float] = {}
+        self.document_scores: dict[str, float] = {}
 
     def calculate_document_score(self, document_id: str) -> float:
         """
@@ -433,16 +431,16 @@ class FeedbackAnalyzer:
                     logger.debug(f"Failed to parse dwell_time feedback value: error={e}")
 
         perf.total_results = len(unique_docs)
-        perf.avg_relevance = np.mean(relevance_scores) if relevance_scores else 0.0
-        perf.avg_dwell_time = np.mean(dwell_times) if dwell_times else 0.0
+        perf.avg_relevance = float(np.mean(relevance_scores)) if relevance_scores else 0.0
+        perf.avg_dwell_time = float(np.mean(dwell_times)) if dwell_times else 0.0
 
         return perf
 
     def get_reranking_weights(
         self,
         query: str,
-        document_ids: List[str]
-    ) -> Dict[str, float]:
+        document_ids: list[str]
+    ) -> dict[str, float]:
         """
         Get reranking weights for documents based on feedback.
 
@@ -485,7 +483,7 @@ class FeedbackAnalyzer:
         self,
         threshold: float = 0.3,
         min_feedback: int = 5
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Identify documents with poor feedback scores.
 
@@ -532,7 +530,7 @@ class FeedbackSystem:
         """
         self.store = FeedbackStore(db_path)
         self.analyzer = FeedbackAnalyzer(self.store)
-        self.active_sessions = {}
+        self.active_sessions: dict[str, Any] = {}
 
     def generate_feedback_id(self, query: str, document_id: str, user_id: str) -> str:
         """Generate unique feedback ID."""
@@ -546,7 +544,7 @@ class FeedbackSystem:
         user_id: str,
         feedback_type: FeedbackType,
         value: Any,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> bool:
         """
         Submit feedback entry.
@@ -600,7 +598,7 @@ class FeedbackSystem:
         document_id: str,
         user_id: str,
         score: int,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> bool:
         """Submit relevance score (1-5)."""
         if not 1 <= score <= 5:
@@ -621,7 +619,7 @@ class FeedbackSystem:
         document_id: str,
         user_id: str,
         helpful: bool,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> bool:
         """Submit helpful/unhelpful vote."""
         return await self.submit_feedback(
@@ -639,7 +637,7 @@ class FeedbackSystem:
         document_id: str,
         user_id: str,
         position: int,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> bool:
         """Track document click."""
         meta = metadata or {}
@@ -660,7 +658,7 @@ class FeedbackSystem:
         document_id: str,
         user_id: str,
         dwell_seconds: float,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> bool:
         """Track time spent on document."""
         return await self.submit_feedback(
@@ -676,7 +674,7 @@ class FeedbackSystem:
         self,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get feedback statistics.
 
@@ -713,9 +711,9 @@ class FeedbackSystem:
     def apply_feedback_reranking(
         self,
         query: str,
-        documents: List[Dict[str, Any]],
+        documents: list[dict[str, Any]],
         score_field: str = "score"
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Apply feedback-based reranking to search results.
 

@@ -6,7 +6,7 @@ These adapters handle sub-workflow execution.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -22,7 +22,7 @@ from tldw_Server_API.app.core.Workflows.adapters.control._config import Workflow
     tags=["control", "orchestration"],
     config_model=WorkflowCallConfig,
 )
-async def run_workflow_call_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_workflow_call_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Call another workflow as a sub-workflow.
 
     Config:
@@ -68,7 +68,7 @@ async def run_workflow_call_adapter(config: Dict[str, Any], context: Dict[str, A
         )
 
         if wait:
-            from tldw_Server_API.app.core.Workflows.engine import WorkflowEngine, EngineConfig
+            from tldw_Server_API.app.core.Workflows.engine import EngineConfig, WorkflowEngine
 
             engine = WorkflowEngine(db=db, config=EngineConfig(tenant_id=tenant_id))
             await asyncio.wait_for(engine.start_run(run_id, mode="sync"), timeout=timeout_seconds)
@@ -79,7 +79,7 @@ async def run_workflow_call_adapter(config: Dict[str, Any], context: Dict[str, A
             return {"run_id": run_id, "status": "unknown", "result": None}
         else:
             # Async execution
-            from tldw_Server_API.app.core.Workflows.engine import WorkflowEngine, EngineConfig
+            from tldw_Server_API.app.core.Workflows.engine import EngineConfig, WorkflowEngine
 
             engine = WorkflowEngine(db=db, config=EngineConfig(tenant_id=tenant_id))
             engine.submit(run_id, mode="async")

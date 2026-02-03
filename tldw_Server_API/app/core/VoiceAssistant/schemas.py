@@ -4,7 +4,7 @@
 #######################################################################################################################
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -26,9 +26,9 @@ class VoiceCommand(BaseModel):
     id: str = Field(..., description="Unique identifier for the command")
     user_id: int = Field(..., description="Owner user ID")
     name: str = Field(..., description="Human-readable name for the command")
-    phrases: List[str] = Field(..., description="Trigger phrases that activate this command")
+    phrases: list[str] = Field(..., description="Trigger phrases that activate this command")
     action_type: ActionType = Field(..., description="Type of action to execute")
-    action_config: Dict[str, Any] = Field(
+    action_config: dict[str, Any] = Field(
         default_factory=dict,
         description="Configuration for the action (tool name, workflow ID, etc.)"
     )
@@ -57,11 +57,11 @@ class VoiceIntent(BaseModel):
         description="Matched command ID (if keyword/pattern match)"
     )
     action_type: ActionType = Field(..., description="Determined action type")
-    action_config: Dict[str, Any] = Field(
+    action_config: dict[str, Any] = Field(
         default_factory=dict,
         description="Action configuration with extracted parameters"
     )
-    entities: Dict[str, Any] = Field(
+    entities: dict[str, Any] = Field(
         default_factory=dict,
         description="Extracted entities from the utterance"
     )
@@ -87,7 +87,7 @@ class ParsedIntent(BaseModel):
         default="unknown",
         description="How the intent was matched: keyword, pattern, llm, or default"
     )
-    alternatives: List[VoiceIntent] = Field(
+    alternatives: list[VoiceIntent] = Field(
         default_factory=list,
         description="Alternative intent matches if ambiguous"
     )
@@ -119,7 +119,7 @@ class VoiceSessionContext(BaseModel):
         default=VoiceSessionState.IDLE,
         description="Current session state"
     )
-    conversation_history: List[Dict[str, Any]] = Field(
+    conversation_history: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Recent conversation turns for context"
     )
@@ -127,11 +127,11 @@ class VoiceSessionContext(BaseModel):
         default=None,
         description="Intent awaiting confirmation"
     )
-    last_action_result: Optional[Dict[str, Any]] = Field(
+    last_action_result: Optional[dict[str, Any]] = Field(
         default=None,
         description="Result of the last executed action"
     )
-    metadata: Dict[str, Any] = Field(
+    metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Session-specific metadata"
     )
@@ -144,7 +144,7 @@ class VoiceSessionContext(BaseModel):
         description="Last activity timestamp"
     )
 
-    def add_turn(self, role: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+    def add_turn(self, role: str, content: str, metadata: Optional[dict[str, Any]] = None) -> None:
         """Add a conversation turn to history."""
         turn = {
             "role": role,
@@ -159,7 +159,7 @@ class VoiceSessionContext(BaseModel):
         if len(self.conversation_history) > 20:
             self.conversation_history = self.conversation_history[-20:]
 
-    def get_context_messages(self, max_turns: int = 10) -> List[Dict[str, str]]:
+    def get_context_messages(self, max_turns: int = 10) -> list[dict[str, str]]:
         """Get recent conversation history for LLM context."""
         recent = self.conversation_history[-max_turns:]
         return [{"role": t["role"], "content": t["content"]} for t in recent]
@@ -169,7 +169,7 @@ class ActionResult(BaseModel):
     """Result of executing a voice command action."""
     success: bool = Field(..., description="Whether the action succeeded")
     action_type: ActionType = Field(..., description="Type of action that was executed")
-    result_data: Optional[Dict[str, Any]] = Field(
+    result_data: Optional[dict[str, Any]] = Field(
         default=None,
         description="Data returned by the action"
     )

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.Security.crypto import (
-    encrypt_json_blob_with_key,
     decrypt_json_blob_with_key,
+    encrypt_json_blob_with_key,
 )
 
 
@@ -23,22 +23,22 @@ def key_hint_for_api_key(api_key: str) -> str:
 
 def build_secret_payload(
     api_key: str,
-    credential_fields: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {"api_key": api_key}
+    credential_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"api_key": api_key}
     if credential_fields:
         payload["credential_fields"] = credential_fields
     return payload
 
 
-def _get_byok_keys() -> tuple[Optional[str], Optional[str]]:
+def _get_byok_keys() -> tuple[str | None, str | None]:
     settings = get_settings()
     primary = getattr(settings, "BYOK_ENCRYPTION_KEY", None)
     secondary = getattr(settings, "BYOK_SECONDARY_ENCRYPTION_KEY", None)
     return primary, secondary
 
 
-def encrypt_byok_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+def encrypt_byok_payload(payload: dict[str, Any]) -> dict[str, Any]:
     primary, _secondary = _get_byok_keys()
     if not primary:
         raise ValueError("BYOK_ENCRYPTION_KEY is not configured")
@@ -48,7 +48,7 @@ def encrypt_byok_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return envelope
 
 
-def decrypt_byok_payload(envelope: Dict[str, Any]) -> Dict[str, Any]:
+def decrypt_byok_payload(envelope: dict[str, Any]) -> dict[str, Any]:
     primary, secondary = _get_byok_keys()
     if not primary and not secondary:
         raise ValueError("BYOK_ENCRYPTION_KEY is not configured")
@@ -65,11 +65,11 @@ def decrypt_byok_payload(envelope: Dict[str, Any]) -> Dict[str, Any]:
     raise ValueError("Failed to decrypt BYOK payload")
 
 
-def dumps_envelope(envelope: Dict[str, Any]) -> str:
+def dumps_envelope(envelope: dict[str, Any]) -> str:
     return json.dumps(envelope)
 
 
-def loads_envelope(encrypted_blob: str) -> Dict[str, Any]:
+def loads_envelope(encrypted_blob: str) -> dict[str, Any]:
     if not encrypted_blob:
         return {}
     return json.loads(encrypted_blob)

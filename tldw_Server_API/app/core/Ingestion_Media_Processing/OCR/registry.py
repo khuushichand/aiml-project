@@ -1,19 +1,13 @@
 from __future__ import annotations
 
-from typing import Dict, Optional, Type, List
-
-from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
-from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.tesseract_cli import (
-    TesseractCLIBackend,
+from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.deepseek_ocr import (
+    DeepSeekOCRBackend,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.dolphin_ocr import (
+    DolphinOCRBackend,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.dots_ocr import (
     DotsOCRBackend,
-)
-from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.points_reader import (
-    PointsReaderBackend,
-)
-from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.deepseek_ocr import (
-    DeepSeekOCRBackend,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.hunyuan_ocr import (
     HunyuanOCRBackend,
@@ -21,16 +15,21 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.hunyuan_oc
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.nemotron_parse import (
     NemotronParseBackend,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.dolphin_ocr import (
-    DolphinOCRBackend,
+from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.points_reader import (
+    PointsReaderBackend,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.tesseract_cli import (
+    TesseractCLIBackend,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
+
 try:
     # Optional config override
     from tldw_Server_API.app.core.config import loaded_config_data as _loaded_cfg
 except Exception:
     _loaded_cfg = None
 
-_BACKENDS: Dict[str, Type[OCRBackend]] = {
+_BACKENDS: dict[str, type[OCRBackend]] = {
     # Auto-detection priority is the dictionary order below
     # Keep Tesseract first for a lightweight default, but users can force 'dots'
     TesseractCLIBackend.name: TesseractCLIBackend,
@@ -48,7 +47,7 @@ _AUTO_EXCLUDE = {
 }
 
 
-def _resolve_priority_from_config() -> Optional[List[str]]:
+def _resolve_priority_from_config() -> list[str] | None:
     try:
         if not _loaded_cfg:
             return None
@@ -66,7 +65,7 @@ def _resolve_priority_from_config() -> Optional[List[str]]:
         return None
 
 
-def get_backend(name: Optional[str] = None) -> Optional[OCRBackend]:
+def get_backend(name: str | None = None) -> OCRBackend | None:
     """
     Resolve an OCR backend instance by name or choose the first available.
 
@@ -86,7 +85,7 @@ def get_backend(name: Optional[str] = None) -> Optional[OCRBackend]:
         return None
 
     # Auto resolution
-    preferred_order: Optional[List[str]] = None
+    preferred_order: list[str] | None = None
     if name == "auto_high_quality":
         preferred_order = _resolve_priority_from_config()
         if not preferred_order:
@@ -113,9 +112,9 @@ def get_backend(name: Optional[str] = None) -> Optional[OCRBackend]:
     return candidates[0]()
 
 
-def list_backends() -> Dict[str, Dict[str, bool]]:
+def list_backends() -> dict[str, dict[str, bool]]:
     """Return a simple availability map for known backends."""
-    out: Dict[str, Dict[str, bool]] = {}
+    out: dict[str, dict[str, bool]] = {}
     for k, cls in _BACKENDS.items():
         ok = False
         try:

@@ -1,25 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import time
 import uuid
 from dataclasses import dataclass
-import os
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
 # Telemetry/metrics (graceful fallbacks if missing)
 try:
     from tldw_Server_API.app.core.Metrics import (
+        add_span_event,
         increment_counter,
         observe_histogram,
-        start_span,
-        add_span_event,
-        set_span_attribute,
         record_span_exception,
+        set_span_attribute,
+        start_span,
     )
 except Exception:  # pragma: no cover - safety
     def increment_counter(*args, **kwargs):
@@ -40,10 +40,9 @@ except Exception:  # pragma: no cover - safety
     def record_span_exception(*args, **kwargs):
         return None
 
-from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
+from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.core.Workflows.adapters import get_adapter
-from tldw_Server_API.app.core.Workflows import metrics as _wf_metrics  # ensure metrics registered
 
 
 class RunMode(str, Enum):
@@ -69,13 +68,13 @@ class WorkflowEngine:
     # Structure: { run_id: {"data": {..}, "set_at": epoch_seconds} }
     _RUN_SECRETS: dict[str, dict[str, Any]] = {}
 
-    def __init__(self, db: Optional[WorkflowsDatabase] = None, config: Optional[EngineConfig] = None):
+    def __init__(self, db: WorkflowsDatabase | None = None, config: EngineConfig | None = None):
         self.db = self._resolve_database(db)
         self.config = config or EngineConfig()
-        self._tenant_cache: Dict[str, str] = {}
+        self._tenant_cache: dict[str, str] = {}
 
     @classmethod
-    def set_run_secrets(cls, run_id: str, secrets: Optional[dict[str, str]]) -> None:
+    def set_run_secrets(cls, run_id: str, secrets: dict[str, str] | None) -> None:
         try:
             if secrets:
                 # Store a shallow copy to avoid external mutation and attach timestamp
@@ -84,7 +83,7 @@ class WorkflowEngine:
             logger.debug(f"WorkflowEngine: failed to set run secrets for {run_id}: {e}", exc_info=True)
 
     @classmethod
-    def _pop_run_secrets(cls, run_id: str) -> Optional[dict[str, str]]:
+    def _pop_run_secrets(cls, run_id: str) -> dict[str, str] | None:
         try:
             entry = cls._RUN_SECRETS.pop(run_id, None)
             if isinstance(entry, dict) and "data" in entry:
@@ -114,7 +113,7 @@ class WorkflowEngine:
         except Exception as e:
             logger.debug(f"WorkflowEngine: purge_expired_secrets failed: {e}")
 
-    def _tenant_for_run(self, run_id: Optional[str]) -> str:
+    def _tenant_for_run(self, run_id: str | None) -> str:
         """Resolve tenant id for a given run with simple caching."""
         if not run_id:
             return self.config.tenant_id
@@ -130,7 +129,7 @@ class WorkflowEngine:
         self._tenant_cache[run_id] = tenant
         return tenant
 
-    def _clear_tenant_cache(self, run_id: Optional[str]) -> None:
+    def _clear_tenant_cache(self, run_id: str | None) -> None:
         if not run_id:
             return
         try:
@@ -138,13 +137,13 @@ class WorkflowEngine:
         except Exception as e:
             logger.debug(f"WorkflowEngine: failed to clear tenant cache for {run_id}: {e}")
 
-    def _aggregate_run_token_usage(self, run_id: str) -> tuple[Optional[int], Optional[int], Optional[float]]:
+    def _aggregate_run_token_usage(self, run_id: str) -> tuple[int | None, int | None, float | None]:
         try:
             return self.db.aggregate_run_token_usage(run_id)
         except Exception:
             return (None, None, None)
 
-    def _append_event(self, run_id: str, event_type: str, payload: Optional[Dict[str, Any]] = None, step_run_id: Optional[str] = None) -> None:
+    def _append_event(self, run_id: str, event_type: str, payload: dict[str, Any] | None = None, step_run_id: str | None = None) -> None:
         try:
             tenant = self._tenant_for_run(run_id)
             self.db.append_event(tenant, run_id, event_type, payload or {}, step_run_id=step_run_id)
@@ -155,13 +154,13 @@ class WorkflowEngine:
                 pass
 
     @staticmethod
-    def _resolve_database(db: Optional[WorkflowsDatabase]) -> WorkflowsDatabase:
+    def _resolve_database(db: WorkflowsDatabase | None) -> WorkflowsDatabase:
         if db is not None:
             return db
         backend = get_content_backend_instance()
         return create_workflows_database(backend=backend)
 
-    async def _wait_if_paused(self, run_id: str, step_run_id: Optional[str] = None) -> None:
+    async def _wait_if_paused(self, run_id: str, step_run_id: str | None = None) -> None:
         """Cooperatively wait while run is paused; break if cancel is requested."""
         while True:
             run = self.db.get_run(run_id)
@@ -244,7 +243,7 @@ class WorkflowEngine:
             _tenant = (self.db.get_run(run_id).tenant_id if self.db.get_run(run_id) else self.config.tenant_id)
         except Exception:
             pass
-        context: Dict[str, Any] = {"inputs": inputs, "tenant_id": _tenant}
+        context: dict[str, Any] = {"inputs": inputs, "tenant_id": _tenant}
         try:
             meta = definition.get("metadata") if isinstance(definition, dict) else None
             if isinstance(meta, dict):
@@ -279,7 +278,7 @@ class WorkflowEngine:
             secrets_data = {}
         if secrets_data:
             context["secrets"] = dict(secrets_data)
-        last_outputs: Dict[str, Any] = {}
+        last_outputs: dict[str, Any] = {}
 
         try:
             # One-time orphan reaper pass before running
@@ -343,15 +342,16 @@ class WorkflowEngine:
                         return
 
                     # Execute with retries + timeout (trace nested span per step)
-                    from tldw_Server_API.app.core.Metrics import start_span as _start_span, set_span_attribute as _set_attr
+                    from tldw_Server_API.app.core.Metrics import set_span_attribute as _set_attr
+                    from tldw_Server_API.app.core.Metrics import start_span as _start_span
                     step_timeout = int(step.get("timeout_seconds") or 300)
                     max_retries = self._compute_max_retries_for_step(step_type, step)
                     attempt = 0
-                    err: Optional[Exception] = None
-                    outputs: Dict[str, Any] = {}
+                    err: Exception | None = None
+                    outputs: dict[str, Any] = {}
 
                     step_start_ts = time.time()
-                    jump_to_id_on_failure: Optional[str] = None
+                    jump_to_id_on_failure: str | None = None
                     while attempt <= max_retries:
                         # Update heartbeat
                         try:
@@ -611,8 +611,8 @@ class WorkflowEngine:
         self,
         run_id: str,
         after_step_id: str,
-        last_outputs: Optional[dict] = None,
-        next_step_id: Optional[str] = None,
+        last_outputs: dict | None = None,
+        next_step_id: str | None = None,
     ) -> None:
         """Resume a run after the given step id, optionally jumping to next_step_id."""
         run = self.db.get_run(run_id)
@@ -757,8 +757,8 @@ class WorkflowEngine:
             step_timeout = int(step.get("timeout_seconds") or 300)
             max_retries = self._compute_max_retries_for_step(stype, step)
             attempt = 0
-            err: Optional[Exception] = None
-            outputs: Dict[str, Any] = {}
+            err: Exception | None = None
+            outputs: dict[str, Any] = {}
             while attempt <= max_retries:
                 try:
                     self.db.update_step_lock_and_heartbeat(step_run_id=step_run_id, locked_by="engine", lock_ttl_seconds=int(self.config.heartbeat_interval_sec * 5))
@@ -975,10 +975,10 @@ class WorkflowEngine:
     def _now_iso() -> str:
         return __import__("datetime").datetime.utcnow().isoformat()
 
-    def _compute_max_retries_for_step(self, step_type: str, step_obj: Dict[str, Any]) -> int:
+    def _compute_max_retries_for_step(self, step_type: str, step_obj: dict[str, Any]) -> int:
         """Adapter-level retry defaults with per-step override via 'retry'."""
         # Explicit config wins (subject to optional per-type caps)
-        specified: Optional[int] = None
+        specified: int | None = None
         try:
             if "retry" in step_obj and step_obj.get("retry") is not None:
                 specified = max(0, int(step_obj.get("retry") or 0))
@@ -1030,9 +1030,9 @@ class WorkflowEngine:
     def _resolve_assigned_to(
         self,
         step_type: str,
-        step_cfg: Dict[str, Any],
-        context: Dict[str, Any],
-    ) -> Optional[str]:
+        step_cfg: dict[str, Any],
+        context: dict[str, Any],
+    ) -> str | None:
         """Resolve assigned_to_user_id for human steps, applying templates if needed."""
         if step_type not in {"wait_for_human", "wait_for_approval"}:
             return None
@@ -1064,7 +1064,7 @@ class WorkflowEngine:
         run_id: str,
         step_id: str,
         timeout_seconds: Any,
-        on_timeout: Optional[str],
+        on_timeout: str | None,
     ) -> None:
         """Schedule a best-effort timeout handler for human steps."""
         try:
@@ -1131,12 +1131,12 @@ class WorkflowEngine:
     async def _run_step_adapter(
         self,
         step_type: str,
-        step_cfg: Dict[str, Any],
-        context: Dict[str, Any],
-        last_outputs: Dict[str, Any],
+        step_cfg: dict[str, Any],
+        context: dict[str, Any],
+        last_outputs: dict[str, Any],
         run_id: str,
-        step_run_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        step_run_id: str | None = None,
+    ) -> dict[str, Any]:
         """Dispatch to the proper adapter with cancel/heartbeat hooks in context."""
         # Inject helper hooks
         ctx = {**context, "prev": last_outputs}
@@ -1156,7 +1156,7 @@ class WorkflowEngine:
             )
             ctx["append_event"] = lambda etype, payload=None: self._append_event(run_id, etype, payload or {}, step_run_id=step_run_id)
             # Add artifact helper
-            def _add_artifact(type: str, uri: str, size_bytes: Optional[int] = None, mime_type: Optional[str] = None, checksum_sha256: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None, artifact_id: Optional[str] = None) -> None:
+            def _add_artifact(type: str, uri: str, size_bytes: int | None = None, mime_type: str | None = None, checksum_sha256: str | None = None, metadata: dict[str, Any] | None = None, artifact_id: str | None = None) -> None:
                 try:
                     _run = self.db.get_run(run_id)
                     tenant_id = _run.tenant_id if _run else self.config.tenant_id
@@ -1215,7 +1215,7 @@ class WorkflowEngine:
             from pathlib import Path
             from types import SimpleNamespace
 
-            def _parse_ts(val: Optional[str]) -> Optional[datetime]:
+            def _parse_ts(val: str | None) -> datetime | None:
                 if not val:
                     return None
                 try:
@@ -1235,7 +1235,7 @@ class WorkflowEngine:
                 return
             now = datetime.utcnow().replace(tzinfo=timezone.utc)
             grace_ms = 5000
-            requeue_targets: Dict[str, Dict[str, Any]] = {}
+            requeue_targets: dict[str, dict[str, Any]] = {}
 
             for s in stale:
                 sid = s.get("step_run_id")
@@ -1266,7 +1266,7 @@ class WorkflowEngine:
                         elapsed_ms = None
 
                 if rid:
-                    payload: Dict[str, Any] = {
+                    payload: dict[str, Any] = {
                         "step_id": step_id,
                         "forced_kill": bool(forced),
                         "orphan_reaped": True,
@@ -1311,7 +1311,7 @@ class WorkflowEngine:
                 if not step_id:
                     continue
                 after_step_id = step_id
-                last_outputs: Optional[Dict[str, Any]] = None
+                last_outputs: dict[str, Any] | None = None
                 try:
                     last = self.db.get_last_completed_step_run(run_id=rid, before_ts=target.get("started_at"))
                     if last:
@@ -1343,7 +1343,7 @@ class WorkflowEngine:
         except Exception as e:
             logger.warning(f"Orphan reaper failed: {e}")
 
-    async def _maybe_send_completion_webhook(self, definition: Dict[str, Any], run_id: str, status: str) -> None:
+    async def _maybe_send_completion_webhook(self, definition: dict[str, Any], run_id: str, status: str) -> None:
         """Send a completion webhook if configured on the workflow definition.
 
         Accepted definition formats:
@@ -1371,8 +1371,9 @@ class WorkflowEngine:
             # SSRF/egress control
             try:
                 # Prefer tenant-aware policy when available; fall back to general egress.
-                from tldw_Server_API.app.core.Security import egress as _eg
                 from urllib.parse import urlparse as _urlparse
+
+                from tldw_Server_API.app.core.Security import egress as _eg
                 tenant_id_for_policy = (self.db.get_run(run_id).tenant_id if self.db.get_run(run_id) else self.config.tenant_id)
                 parsed_host = _urlparse(url).hostname or ""
 
@@ -1404,7 +1405,7 @@ class WorkflowEngine:
                 except Exception:
                     pass
 
-                allowed: Optional[bool] = None
+                allowed: bool | None = None
                 if hasattr(_eg, 'is_webhook_url_allowed_for_tenant'):
                     try:
                         allowed = bool(_eg.is_webhook_url_allowed_for_tenant(url, tenant_id_for_policy))
@@ -1479,7 +1480,9 @@ class WorkflowEngine:
             # Headers and signing
             headers = {"content-type": "application/json", "X-Workflow-Id": str(run.workflow_id or ""), "X-Run-Id": str(run.run_id)}
             try:
-                import os, hmac, hashlib
+                import hashlib
+                import hmac
+                import os
                 from urllib.parse import urlparse as _urlparse
                 # Inject W3C trace context
                 try:
@@ -1504,7 +1507,8 @@ class WorkflowEngine:
                 from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
                 timeout = float(os.getenv("WORKFLOWS_WEBHOOK_TIMEOUT", "10"))
                 # Trace webhook delivery as a child span
-                from tldw_Server_API.app.core.Metrics import start_span as _start_span, set_span_attribute as _set_attr
+                from tldw_Server_API.app.core.Metrics import set_span_attribute as _set_attr
+                from tldw_Server_API.app.core.Metrics import start_span as _start_span
                 with _start_span("workflows.webhook", attributes={"run_id": run_id}):
                     _set_attr("workflows.webhook.url", url)
                 try:
@@ -1554,7 +1558,7 @@ class WorkflowEngine:
 class WorkflowScheduler:
     """In-process scheduler with per-tenant and per-workflow concurrency limits."""
 
-    _inst: Optional["WorkflowScheduler"] = None
+    _inst: "WorkflowScheduler" | None = None
 
     @classmethod
     def instance(cls) -> "WorkflowScheduler":
@@ -1563,11 +1567,11 @@ class WorkflowScheduler:
         return cls._inst
 
     def __init__(self) -> None:
-        from collections import deque
         import os
+        from collections import deque
         self._queue = deque()  # items: (engine, run_id, mode, tenant, workflow_id)
-        self._active_tenant: Dict[str, int] = {}
-        self._active_workflow: Dict[Optional[int], int] = {}
+        self._active_tenant: dict[str, int] = {}
+        self._active_workflow: dict[int | None, int] = {}
         self.tenant_limit = int(os.getenv("WORKFLOWS_TENANT_CONCURRENCY", "2"))
         self.workflow_limit = int(os.getenv("WORKFLOWS_WORKFLOW_CONCURRENCY", "1"))
         self._lock = threading.Lock()
@@ -1597,7 +1601,7 @@ class WorkflowScheduler:
             queue_depth = float(len(self._queue))
         self._set_queue_gauge(queue_depth)
 
-    def notify_finished(self, tenant: str, workflow_id: Optional[int]) -> None:
+    def notify_finished(self, tenant: str, workflow_id: int | None) -> None:
         queue_depth = 0.0
         with self._lock:
             if tenant:
@@ -1616,10 +1620,10 @@ class WorkflowScheduler:
             queue_depth = float(len(self._queue))
         self._set_queue_gauge(queue_depth)
 
-    def _can_start(self, tenant: str, workflow_id: Optional[int]) -> bool:
+    def _can_start(self, tenant: str, workflow_id: int | None) -> bool:
         return self._active_tenant.get(tenant, 0) < self.tenant_limit and self._active_workflow.get(workflow_id, 0) < self.workflow_limit
 
-    def _start_locked(self, engine: "WorkflowEngine", run_id: str, mode: RunMode, tenant: str, workflow_id: Optional[int]) -> None:
+    def _start_locked(self, engine: "WorkflowEngine", run_id: str, mode: RunMode, tenant: str, workflow_id: int | None) -> None:
         self._active_tenant[tenant] = self._active_tenant.get(tenant, 0) + 1
         if workflow_id is not None:
             self._active_workflow[workflow_id] = self._active_workflow.get(workflow_id, 0) + 1
@@ -1630,7 +1634,7 @@ class WorkflowScheduler:
         with self._lock:
             return len(self._queue)
 
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         with self._lock:
             return {
                 "queue_depth": len(self._queue),

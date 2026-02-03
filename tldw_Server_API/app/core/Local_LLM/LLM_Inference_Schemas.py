@@ -3,8 +3,10 @@
 #
 # Imports
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Optional
+
 from pydantic import BaseModel, ConfigDict, Field
+
 #
 #########################################################################################################################
 #
@@ -68,7 +70,7 @@ class LLMManagerConfig(BaseModel):
     llamafile: Optional[LlamafileConfig] = Field(default_factory=LlamafileConfig)
     llamacpp: Optional[LlamaCppConfig] = None
     # Global settings for the library
-    app_config: Dict[str, Any] = Field(default_factory=dict) # To pass through parts of your project_config.settings
+    app_config: dict[str, Any] = Field(default_factory=dict) # To pass through parts of your project_config.settings
 
 #
 # End of LLM_Inference_Schemas.py

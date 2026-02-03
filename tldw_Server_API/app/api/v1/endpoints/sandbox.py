@@ -1,59 +1,76 @@
 from __future__ import annotations
 
-from typing import Optional
-
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Header, File, UploadFile, WebSocket, WebSocketDisconnect, Request, Query
-from fastapi.responses import StreamingResponse, Response, JSONResponse
-from fastapi.routing import APIRoute
 import asyncio
+import hashlib
+import hmac
+import mimetypes
 import os
+import time
+
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import JSONResponse, Response
+from fastapi.routing import APIRoute
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.api.v1.schemas.sandbox_schemas import (
     ArtifactListResponse,
     CancelResponse,
-    RuntimeType,
+    SandboxAdminIdempotencyItem,
+    SandboxAdminIdempotencyListResponse,
+    SandboxAdminRunDetails,
+    SandboxAdminRunListResponse,
+    SandboxAdminRunSummary,
+    SandboxAdminUsageItem,
+    SandboxAdminUsageResponse,
     SandboxFileUploadResponse,
-    SandboxRun,
     SandboxRunCreateRequest,
     SandboxRunStatus,
     SandboxRuntimesResponse,
     SandboxSession,
     SandboxSessionCreateRequest,
-    SandboxAdminRunListResponse,
-    SandboxAdminRunSummary,
-    SandboxAdminRunDetails,
-    SandboxAdminIdempotencyListResponse,
-    SandboxAdminIdempotencyItem,
-    SandboxAdminUsageResponse,
-    SandboxAdminUsageItem,
+    SessionCloneRequest,
+    SessionCloneResponse,
     SnapshotCreateResponse,
     SnapshotInfo,
     SnapshotListResponse,
     SnapshotRestoreRequest,
     SnapshotRestoreResponse,
-    SessionCloneRequest,
-    SessionCloneResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed, resolve_client_ip
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditContext,
+    AuditEventCategory,
+    AuditEventType,
+    AuditSeverity,
+)
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.Sandbox.models import RunSpec, SessionSpec, RuntimeType as CoreRuntimeType, TrustLevel as CoreTrustLevel
-from tldw_Server_API.app.core.Sandbox.service import SandboxService
-from tldw_Server_API.app.core.config import settings as app_settings
-from tldw_Server_API.app.core.Sandbox.streams import get_hub
-from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
-from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
-from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditEventCategory, AuditSeverity, AuditContext
-from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed, resolve_client_ip
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-import mimetypes
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.config import settings as app_settings
+from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
+from tldw_Server_API.app.core.Sandbox.models import RunSpec, SessionSpec
+from tldw_Server_API.app.core.Sandbox.models import RuntimeType as CoreRuntimeType
+from tldw_Server_API.app.core.Sandbox.models import TrustLevel as CoreTrustLevel
+from tldw_Server_API.app.core.Sandbox.service import SandboxService
+from tldw_Server_API.app.core.Sandbox.streams import get_hub
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from tldw_Server_API.app.core.Utils.path_utils import safe_join
-import hmac
-import hashlib
-import time
 
 
 class SandboxArtifactGuardRoute(APIRoute):
@@ -75,8 +92,8 @@ class SandboxArtifactGuardRoute(APIRoute):
                 if "/api/v1/sandbox/runs/" in path_raw and "/../" in path_raw:
                     return JSONResponse({"detail": "invalid_path"}, status_code=400)
                 if "/api/v1/sandbox/runs/" in path_raw and "/artifacts/" in path_raw:
-                    from urllib.parse import unquote
                     import posixpath as _pp
+                    from urllib.parse import unquote
                     idx = path_raw.find("/artifacts/")
                     tail = path_raw[idx + len("/artifacts/"):]
                     tail_unquoted = unquote(tail)
@@ -133,15 +150,15 @@ def _require_session_owner(session_id: str, current_user: User) -> str:
     return str(owner)
 
 
-def _looks_like_jwt(token: Optional[str]) -> bool:
+def _looks_like_jwt(token: str | None) -> bool:
     return isinstance(token, str) and token.count(".") == 2
 
 
 async def _resolve_sandbox_ws_user_id(
     websocket: WebSocket,
     *,
-    token: Optional[str],
-    api_key: Optional[str],
+    token: str | None,
+    api_key: str | None,
 ) -> int:
     if not token:
         auth_hdr = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
@@ -156,9 +173,9 @@ async def _resolve_sandbox_ws_user_id(
 
     if token:
         try:
+            from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
             from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
             from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
-            from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 
             jwt_service = get_jwt_service()
             payload = await jwt_service.verify_token_async(token, token_type="access")
@@ -207,7 +224,7 @@ async def _resolve_sandbox_ws_user_id(
     raise HTTPException(status_code=401, detail="auth_required")
 
 
-def _normalize_reason(outcome: str, message: Optional[str]) -> str:
+def _normalize_reason(outcome: str, message: str | None) -> str:
     """Normalize a possibly long/unique error message into a small, bounded set for metrics labels.
 
     Prefers bucketing into a fixed taxonomy to prevent Prometheus label cardinality explosions.
@@ -274,7 +291,8 @@ async def sandbox_health(current_user: User = Depends(get_request_user)) -> dict
     - Redis: reports whether WS fan-out is enabled and connected.
     """
     import time as _time
-    from tldw_Server_API.app.core.Sandbox.store import get_store_mode, get_store
+
+    from tldw_Server_API.app.core.Sandbox.store import get_store, get_store_mode
     store_info: dict = {"mode": None, "healthy": True}
     timings: dict = {}
     try:
@@ -318,7 +336,8 @@ async def sandbox_health_public() -> dict:
     Redis fan-out status and ping timings when available.
     """
     import time as _time
-    from tldw_Server_API.app.core.Sandbox.store import get_store_mode, get_store
+
+    from tldw_Server_API.app.core.Sandbox.store import get_store, get_store_mode
     store_info: dict = {"mode": None, "healthy": True}
     timings: dict = {}
     try:
@@ -360,7 +379,7 @@ async def create_session(
     request: Request,
     payload: SandboxSessionCreateRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxSession:
     # Default execution timeout from settings (fallback handled in schema)
@@ -390,8 +409,8 @@ async def create_session(
         )
     except Exception as e:
         from tldw_Server_API.app.core.Sandbox.orchestrator import IdempotencyConflict, QueueFull
-        from tldw_Server_API.app.core.Sandbox.service import SandboxService as _Svc
         from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy as _Pol
+        from tldw_Server_API.app.core.Sandbox.service import SandboxService as _Svc
         if isinstance(e, _Pol.RuntimeUnavailable):
             # Map to 503 with details per PRD; read runtime from exception with safe fallback
             rt_attr = getattr(e, "runtime", None)
@@ -664,7 +683,9 @@ async def upload_files(
     written = 0
     count = 0
 
-    import tarfile, zipfile, io
+    import io
+    import tarfile
+    import zipfile
     for up in files:
         try:
             content = await up.read()
@@ -783,7 +804,7 @@ async def start_run(
     request: Request,
     payload: SandboxRunCreateRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxRunStatus:
     """
@@ -856,8 +877,8 @@ async def start_run(
         )
     except Exception as e:
         from tldw_Server_API.app.core.Sandbox.orchestrator import IdempotencyConflict, QueueFull
-        from tldw_Server_API.app.core.Sandbox.service import SandboxService as _Svc
         from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy as _Pol
+        from tldw_Server_API.app.core.Sandbox.service import SandboxService as _Svc
         if isinstance(e, _Pol.RuntimeUnavailable):
             # Use runtime from exception; fallback only if missing/None
             rt_attr = getattr(e, "runtime", None)
@@ -873,7 +894,9 @@ async def start_run(
             try:
                 # Prefer suggesting Docker when Firecracker unavailable
                 from tldw_Server_API.app.core.Sandbox.runners.docker_runner import docker_available as _dock_avail
-                from tldw_Server_API.app.core.Sandbox.runners.firecracker_runner import firecracker_available as _fc_avail
+                from tldw_Server_API.app.core.Sandbox.runners.firecracker_runner import (
+                    firecracker_available as _fc_avail,
+                )
                 if str(rt) == "firecracker":
                     # Suggest docker even if availability is unknown (tests expect this)
                     if _dock_avail() or True:
@@ -1056,7 +1079,7 @@ async def start_run(
         pass
 
     # Build optional log_stream_url (signed or unsigned)
-    log_stream_url: Optional[str] = None
+    log_stream_url: str | None = None
     try:
         base_path = f"/api/v1/sandbox/runs/{status.id}/stream"
         # Prefer explicit env override to avoid stale cached settings in tests.
@@ -1224,7 +1247,7 @@ async def download_artifact(
     run_id: str = Path(..., min_length=1),
     path: str = Path(..., min_length=1),
     current_user: User = Depends(get_request_user),
-    range_header: Optional[str] = Header(None, alias="Range"),
+    range_header: str | None = Header(None, alias="Range"),
 ):
     _require_run_owner(run_id, current_user)
     # Basic path normalization checks (orchestrator also normalizes on FS)
@@ -1715,14 +1738,14 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     summary="Admin: list sandbox runs with filters",
 )
 async def admin_list_runs(
-    image_digest: Optional[str] = Query(None, description="Filter by image digest"),
-    user_id: Optional[str] = Query(None, description="Filter by user id"),
-    phase: Optional[str] = Query(None, description="Filter by run phase"),
-    started_at_from: Optional[str] = Query(None, description="ISO timestamp inclusive lower bound"),
-    started_at_to: Optional[str] = Query(None, description="ISO timestamp inclusive upper bound"),
+    image_digest: str | None = Query(None, description="Filter by image digest"),
+    user_id: str | None = Query(None, description="Filter by user id"),
+    phase: str | None = Query(None, description="Filter by run phase"),
+    started_at_from: str | None = Query(None, description="ISO timestamp inclusive lower bound"),
+    started_at_to: str | None = Query(None, description="ISO timestamp inclusive upper bound"),
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    sort: Optional[str] = Query("desc", pattern="^(asc|desc)$"),
+    sort: str | None = Query("desc", pattern="^(asc|desc)$"),
     principal: AuthPrincipal = Depends(auth_deps.require_roles("admin")),
     current_user: User = Depends(get_request_user),
 ) -> SandboxAdminRunListResponse:
@@ -1862,14 +1885,14 @@ async def sandbox_runs_fallback_guard(
     summary="Admin: list idempotency records",
 )
 async def admin_list_idempotency(
-    endpoint: Optional[str] = Query(None, description="Filter by endpoint, e.g., 'runs' or 'sessions'"),
-    user_id: Optional[str] = Query(None, description="Filter by user id"),
-    key: Optional[str] = Query(None, description="Filter by idempotency key"),
-    created_at_from: Optional[str] = Query(None, description="ISO timestamp inclusive lower bound"),
-    created_at_to: Optional[str] = Query(None, description="ISO timestamp inclusive upper bound"),
+    endpoint: str | None = Query(None, description="Filter by endpoint, e.g., 'runs' or 'sessions'"),
+    user_id: str | None = Query(None, description="Filter by user id"),
+    key: str | None = Query(None, description="Filter by idempotency key"),
+    created_at_from: str | None = Query(None, description="ISO timestamp inclusive lower bound"),
+    created_at_to: str | None = Query(None, description="ISO timestamp inclusive upper bound"),
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    sort: Optional[str] = Query("desc", pattern="^(asc|desc)$"),
+    sort: str | None = Query("desc", pattern="^(asc|desc)$"),
     principal: AuthPrincipal = Depends(auth_deps.require_roles("admin")),
     current_user: User = Depends(get_request_user),
 ) -> SandboxAdminIdempotencyListResponse:
@@ -1912,10 +1935,10 @@ async def admin_list_idempotency(
     summary="Admin: usage aggregates per user",
 )
 async def admin_usage(
-    user_id: Optional[str] = Query(None, description="Filter by user id"),
+    user_id: str | None = Query(None, description="Filter by user id"),
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    sort: Optional[str] = Query("desc", pattern="^(asc|desc)$"),
+    sort: str | None = Query("desc", pattern="^(asc|desc)$"),
     principal: AuthPrincipal = Depends(auth_deps.require_roles("admin")),
     current_user: User = Depends(get_request_user),
 ) -> SandboxAdminUsageResponse:

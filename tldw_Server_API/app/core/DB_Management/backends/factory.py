@@ -6,11 +6,13 @@ database backend instances based on configuration.
 """
 
 import os
-from typing import Dict, Optional, Type
+from typing import Optional
+
 from loguru import logger
 
-from .base import DatabaseBackend, DatabaseConfig, BackendType, DatabaseError, normalize_backend_name
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+from .base import BackendType, DatabaseBackend, DatabaseConfig, DatabaseError, normalize_backend_name
 from .sqlite_backend import SQLiteBackend
 
 # Try to import PostgreSQL backend if available
@@ -22,7 +24,7 @@ except ImportError:
 
 
 # Registry of available backends
-_BACKEND_REGISTRY: Dict[BackendType, Type[DatabaseBackend]] = {
+_BACKEND_REGISTRY: dict[BackendType, type[DatabaseBackend]] = {
     BackendType.SQLITE: SQLiteBackend,
 }
 
@@ -31,7 +33,7 @@ if POSTGRESQL_AVAILABLE:
     _BACKEND_REGISTRY[BackendType.POSTGRESQL] = PostgreSQLBackend
 
 # Global backend instances cache
-_backend_instances: Dict[str, DatabaseBackend] = {}
+_backend_instances: dict[str, DatabaseBackend] = {}
 
 
 class DatabaseBackendFactory:
@@ -86,7 +88,7 @@ class BackendFactory:
     @staticmethod
     def create_from_env(
         backend_type: Optional[str] = None,
-        config_overrides: Optional[Dict] = None
+        config_overrides: Optional[dict] = None
     ) -> DatabaseBackend:
         """
         Create a backend from environment variables.
@@ -202,7 +204,7 @@ class BackendFactory:
         return DatabaseBackendFactory.create_backend(config)
 
 
-def register_backend(backend_type: BackendType, backend_class: Type[DatabaseBackend]) -> None:
+def register_backend(backend_type: BackendType, backend_class: type[DatabaseBackend]) -> None:
     """
     Register a new backend implementation.
 

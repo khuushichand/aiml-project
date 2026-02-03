@@ -6,6 +6,7 @@
 # It uses yt-dlp to extract video information and download the videos.
 ####
 import json
+
 ####################
 # Function List
 #
@@ -25,42 +26,41 @@ import json
 # Import necessary libraries to run solo for testing
 import os
 import re
-import subprocess
-import sys
-import uuid
-import tempfile
 import shutil
-from datetime import datetime
+import tempfile
 import time
-from pathlib import Path
-from typing import List, Optional, Sequence, Dict, Any, Callable
-from urllib.parse import urlparse, parse_qs, urlunparse
+
 #
 # 3rd-Party Imports
 import unicodedata
+import uuid
+from collections.abc import Sequence
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Optional
+from urllib.parse import parse_qs, urlparse, urlunparse
+
 import yt_dlp
 from loguru import logger
+
 # Import Local
 from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
+
+
 # Lazy import for transcription to avoid heavy dependencies at module import time
 def perform_transcription(*args, **kwargs):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
         perform_transcription as _perform_transcription,
     )
     return _perform_transcription(*args, **kwargs)
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
-from tldw_Server_API.app.core.Utils.Utils import (
-    convert_to_seconds,
-    extract_text_from_segments,
-    logging
-)
-from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
-from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
-from tldw_Server_API.app.core.Metrics.metrics_logger import (
-    log_counter, log_histogram
-)
+from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+from tldw_Server_API.app.core.Utils.Utils import convert_to_seconds, extract_text_from_segments, logging
+
 #
 #######################################################################################################################
 # Function Definitions
@@ -76,7 +76,7 @@ except NameError: # Fallback if __file__ is not defined
     logging.warning(f"Could not determine project root from __file__, falling back to CWD: {PROJECT_ROOT}")
 
 
-_PROVIDER_SECTION_MAP: Dict[str, str] = {
+_PROVIDER_SECTION_MAP: dict[str, str] = {
     "openai": "openai_api",
     "anthropic": "anthropic_api",
     "cohere": "cohere_api",
@@ -99,7 +99,7 @@ _PROVIDER_SECTION_MAP: Dict[str, str] = {
     "aphrodite": "aphrodite_api",
 }
 
-_PROVIDER_ENV_MAP: Dict[str, str] = {
+_PROVIDER_ENV_MAP: dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "cohere": "COHERE_API_KEY",
@@ -159,9 +159,9 @@ def _safe_remove_file(file_path: Path) -> None:
         logging.warning(f"Failed to remove stored video '{file_path}': {exc}")
 
 
-def _collect_storage_entries(storage_dir: Path) -> List[Dict[str, Any]]:
+def _collect_storage_entries(storage_dir: Path) -> list[dict[str, Any]]:
     """Return storage entries sorted by modification time (oldest first)."""
-    entries: List[Dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
     if not storage_dir.exists():
         return entries
     for item in storage_dir.iterdir():
@@ -310,7 +310,7 @@ def _resolve_eval_api_key(api_name: Optional[str]) -> Optional[str]:
     return str(api_key) if api_key else None
 
 
-def _extract_declared_filesize(info_dict: Optional[Dict[str, Any]]) -> Optional[int]:
+def _extract_declared_filesize(info_dict: Optional[dict[str, Any]]) -> Optional[int]:
     """Best-effort extraction of declared file size from yt-dlp metadata."""
     if not isinstance(info_dict, dict):
         return None
@@ -351,7 +351,7 @@ def normalize_title(title):
         '<', '').replace('>', '').replace('|', '')
     return title
 
-def get_video_info(url: str, *, use_cookies: bool = False, cookies: Optional[Dict[str, Any] | str] = None) -> dict:
+def get_video_info(url: str, *, use_cookies: bool = False, cookies: Optional[dict[str, Any] | str] = None) -> dict:
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
@@ -373,7 +373,7 @@ def get_video_info(url: str, *, use_cookies: bool = False, cookies: Optional[Dic
             return None
 
 
-def get_youtube(video_url: str, *, use_cookies: bool = False, cookies: Optional[Dict[str, Any] | str] = None):
+def get_youtube(video_url: str, *, use_cookies: bool = False, cookies: Optional[dict[str, Any] | str] = None):
     ydl_opts = {
         'format': 'bestaudio[ext=m4a]',
         'noplaylist': False,
@@ -394,7 +394,7 @@ def get_youtube(video_url: str, *, use_cookies: bool = False, cookies: Optional[
     return info_dict
 
 
-def get_playlist_videos(playlist_url: str, *, use_cookies: bool = False, cookies: Optional[Dict[str, Any] | str] = None):
+def get_playlist_videos(playlist_url: str, *, use_cookies: bool = False, cookies: Optional[dict[str, Any] | str] = None):
     ydl_opts = {
         'extract_flat': True,
         'skip_download': True,
@@ -461,7 +461,7 @@ def download_video(
     format_string = "bestvideo+bestaudio/best" if download_video_flag else "bestaudio/best"
     outtmpl = str(download_dir / "%(title).200B-%(id)s.%(ext)s")
 
-    ydl_opts: Dict[str, Any] = {
+    ydl_opts: dict[str, Any] = {
         "format": format_string,
         "restrictfilenames": True,
         "noplaylist": True,
@@ -498,15 +498,15 @@ def download_video(
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             result = ydl.extract_info(video_url, download=True)
 
-            def _collect_candidate_paths(data: Dict[str, Any]) -> List[Path]:
-                candidates: List[Path] = []
+            def _collect_candidate_paths(data: dict[str, Any]) -> list[Path]:
+                candidates: list[Path] = []
                 for key in ("filepath", "_filename", "filename"):
                     value = data.get(key)
                     if value:
                         candidates.append(Path(value))
                 return candidates
 
-            candidates: List[Path] = []
+            candidates: list[Path] = []
 
             requested = result.get("requested_downloads") or []
             for entry in requested:
@@ -660,9 +660,9 @@ HTTPONLY_PREFIX = '#HttpOnly_'
 _HTTPONLY_PREFIX_LOWER = HTTPONLY_PREFIX.lower()
 
 
-def _parse_netscape_cookie_export(text: str) -> List[str]:
+def _parse_netscape_cookie_export(text: str) -> list[str]:
     """Return cookie name=value pairs from a Netscape/Mozilla cookie export blob."""
-    pairs: List[str] = []
+    pairs: list[str] = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
@@ -778,7 +778,7 @@ def generate_timestamped_url(url, hours, minutes, seconds):
 
 # New FastAPI ingestion functions
 def process_videos(
-    inputs: List[str],
+    inputs: list[str],
     start_time: Optional[str],
     end_time: Optional[str],
     diarize: bool,
@@ -808,7 +808,7 @@ def process_videos(
     perform_diarization:bool = False,
     user_id: Optional[int] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Processes multiple videos or local file paths, transcribes, summarizes,
     and optionally stores in the DB (if store_in_db=True).
@@ -860,8 +860,8 @@ def process_videos(
     if expanded_inputs != inputs:
         logging.info(f"Expanded playlist and shortcut URLs into {len(expanded_inputs)} concrete entries.")
     inputs = expanded_inputs
-    errors: List[str] = []
-    warnings_accum: List[str] = []
+    errors: list[str] = []
+    warnings_accum: list[str] = []
     results = []
 
     def _is_cancelled() -> bool:
@@ -874,7 +874,7 @@ def process_videos(
             logging.warning(f"cancel_check raised an error: {exc}")
             return False
 
-    def _cancelled_result(input_ref: str, processing_source: Optional[str] = None) -> Dict[str, Any]:
+    def _cancelled_result(input_ref: str, processing_source: Optional[str] = None) -> dict[str, Any]:
         """Build a standard cancelled result payload."""
         return {
             "status": "Cancelled",
@@ -893,8 +893,8 @@ def process_videos(
         }
 
     from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
-    all_transcripts_for_confab: Dict[str, str] = {}
-    all_summaries_for_confab: Dict[str, str] = {}
+    all_transcripts_for_confab: dict[str, str] = {}
+    all_summaries_for_confab: dict[str, str] = {}
 
     # If user typed no inputs, bail out
     if not inputs:
@@ -1193,7 +1193,7 @@ def process_single_video(
     keep_original: bool = False,
     user_id: Optional[int] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Processes a single video/file: Extracts metadata, downloads if URL,
     transcribes, optionally summarizes.

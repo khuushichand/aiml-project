@@ -5,7 +5,7 @@
 import asyncio
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -31,8 +31,8 @@ class VoiceSessionManager:
 
     def __init__(self):
         """Initialize the session manager."""
-        self._sessions: Dict[str, VoiceSessionContext] = {}
-        self._user_sessions: Dict[int, set] = {}
+        self._sessions: dict[str, VoiceSessionContext] = {}
+        self._user_sessions: dict[int, set] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
@@ -83,7 +83,7 @@ class VoiceSessionManager:
     async def create_session(
         self,
         user_id: int,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> VoiceSessionContext:
         """
         Create a new voice session.
@@ -159,7 +159,7 @@ class VoiceSessionManager:
         self,
         session_id: Optional[str],
         user_id: int,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> tuple[VoiceSessionContext, bool]:
         """
         Get an existing session or create a new one.
@@ -224,7 +224,7 @@ class VoiceSessionManager:
         session_id: str,
         role: str,
         content: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> bool:
         """
         Add a conversation turn to the session.
@@ -285,7 +285,7 @@ class VoiceSessionManager:
     async def set_last_action_result(
         self,
         session_id: str,
-        result: Dict[str, Any],
+        result: dict[str, Any],
     ) -> bool:
         """
         Store the result of the last executed action.

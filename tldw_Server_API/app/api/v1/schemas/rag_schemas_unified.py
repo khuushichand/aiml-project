@@ -5,15 +5,18 @@ This schema maps directly to the unified_rag_pipeline parameters,
 providing a clean API interface with all features accessible.
 """
 
-from typing import List, Optional, Literal, Dict, Any
+from typing import Any, Literal, Optional
+
 from pydantic import BaseModel
+
 try:
     # Pydantic v2
-    from pydantic import model_validator, field_validator  # type: ignore
+    from pydantic import field_validator, model_validator  # type: ignore
 except Exception:
     model_validator = None  # type: ignore
     from pydantic import validator as field_validator  # type: ignore
 from pydantic import ConfigDict
+
 from ._compat import Field
 
 # Load contextual retrieval defaults from settings (config.txt/env)
@@ -54,7 +57,7 @@ class UnifiedRAGRequest(BaseModel):
     )
 
     # ========== DATA SOURCES ==========
-    sources: Optional[List[str]] = Field(
+    sources: Optional[list[str]] = Field(
         default=["media_db"],
         description="Databases to search: media_db, notes, characters, chats, kanban",
         example=["media_db", "notes", "kanban"]
@@ -187,7 +190,7 @@ class UnifiedRAGRequest(BaseModel):
         example=True
     )
 
-    expansion_strategies: Optional[List[str]] = Field(
+    expansion_strategies: Optional[list[str]] = Field(
         default=None,
         description="Expansion strategies: acronym, synonym, domain, entity",
         example=["acronym", "synonym"]
@@ -228,19 +231,19 @@ class UnifiedRAGRequest(BaseModel):
     )
 
     # ========== FILTERING ==========
-    keyword_filter: Optional[List[str]] = Field(
+    keyword_filter: Optional[list[str]] = Field(
         default=None,
         description="Filter results by keywords",
         example=["python", "api"]
     )
 
     # Explicit selection of items per source
-    include_media_ids: Optional[List[int]] = Field(
+    include_media_ids: Optional[list[int]] = Field(
         default=None,
         description="Restrict search to these Media DB item IDs",
         example=[1, 2, 3]
     )
-    include_note_ids: Optional[List[str]] = Field(
+    include_note_ids: Optional[list[str]] = Field(
         default=None,
         description="Restrict search to these Note IDs (ChaChaNotes UUIDs)",
         example=["a1b2c3-uuid", "d4e5f6-uuid"]
@@ -323,7 +326,7 @@ class UnifiedRAGRequest(BaseModel):
 
     # ========== CHUNKING & CONTEXT ==========
 
-    chunk_type_filter: Optional[List[str]] = Field(
+    chunk_type_filter: Optional[list[str]] = Field(
         default=None,
         description="Filter chunks by type: text, code, table, list",
         example=["text", "code"]
@@ -1001,7 +1004,7 @@ class UnifiedRAGRequest(BaseModel):
         description="Apply PII/PHI content policy on retrieved chunks before generation",
         example=False,
     )
-    content_policy_types: Optional[List[str]] = Field(
+    content_policy_types: Optional[list[str]] = Field(
         default=None,
         description="Policy types to enforce: ['pii', 'phi']",
         example=["pii", "phi"],
@@ -1016,12 +1019,12 @@ class UnifiedRAGRequest(BaseModel):
         description="Sanitize HTML with an allow-list of tags/attributes",
         example=False,
     )
-    html_allowed_tags: Optional[List[str]] = Field(
+    html_allowed_tags: Optional[list[str]] = Field(
         default=None,
         description="Allowed HTML tags for sanitizer",
         example=["p", "b", "i", "ul", "li", "code"],
     )
-    html_allowed_attrs: Optional[List[str]] = Field(
+    html_allowed_attrs: Optional[list[str]] = Field(
         default=None,
         description="Allowed HTML attributes for sanitizer",
         example=["href", "title"],
@@ -1278,7 +1281,7 @@ class UnifiedRAGRequest(BaseModel):
         example=False
     )
 
-    batch_queries: Optional[List[str]] = Field(
+    batch_queries: Optional[list[str]] = Field(
         default=None,
         description="Additional queries for batch processing",
         example=["query1", "query2"]
@@ -1380,7 +1383,7 @@ class UnifiedRAGRequest(BaseModel):
 class UnifiedRAGResponse(BaseModel):
     """Unified response structure for RAG queries."""
 
-    documents: List[Dict[str, Any]] = Field(
+    documents: list[dict[str, Any]] = Field(
         description="Retrieved documents"
     )
 
@@ -1388,32 +1391,32 @@ class UnifiedRAGResponse(BaseModel):
         description="Original query"
     )
 
-    expanded_queries: List[str] = Field(
+    expanded_queries: list[str] = Field(
         default_factory=list,
         description="Expanded query variations"
     )
 
-    metadata: Dict[str, Any] = Field(
+    metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Additional metadata"
     )
 
-    timings: Dict[str, float] = Field(
+    timings: dict[str, float] = Field(
         default_factory=dict,
         description="Performance timings"
     )
 
-    citations: List[Dict[str, Any]] = Field(
+    citations: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Generated citations (academic and chunk-level)"
     )
 
-    academic_citations: List[str] = Field(
+    academic_citations: list[str] = Field(
         default_factory=list,
         description="Formatted academic citations (MLA/APA/etc)"
     )
 
-    chunk_citations: List[Dict[str, Any]] = Field(
+    chunk_citations: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Chunk-level citations for answer verification"
     )
@@ -1433,12 +1436,12 @@ class UnifiedRAGResponse(BaseModel):
         description="Whether result was from cache"
     )
 
-    errors: List[str] = Field(
+    errors: list[str] = Field(
         default_factory=list,
         description="Any errors encountered"
     )
 
-    security_report: Optional[Dict[str, Any]] = Field(
+    security_report: Optional[dict[str, Any]] = Field(
         default=None,
         description="Security analysis report"
     )
@@ -1449,15 +1452,15 @@ class UnifiedRAGResponse(BaseModel):
     )
 
     # ========== CLAIMS & FACTUALITY ==========
-    claims: Optional[List[Dict[str, Any]]] = Field(
+    claims: Optional[list[dict[str, Any]]] = Field(
         default=None,
         description="Per-claim verification results with evidence",
     )
-    factuality: Optional[Dict[str, Any]] = Field(
+    factuality: Optional[dict[str, Any]] = Field(
         default=None,
         description="Summary of factuality (supported/refuted/nei, precision, coverage)",
     )
-    verification_report: Optional[Dict[str, Any]] = Field(
+    verification_report: Optional[dict[str, Any]] = Field(
         default=None,
         description="Structured verification report for machine-readable audit (when generate_verification_report=true)",
     )
@@ -1504,7 +1507,7 @@ class UnifiedRAGResponse(BaseModel):
 class UnifiedBatchRequest(BaseModel):
     """Request for batch processing multiple queries."""
 
-    queries: List[str] = Field(
+    queries: list[str] = Field(
         ...,
         min_length=1,
         max_length=100,
@@ -1522,7 +1525,7 @@ class UnifiedBatchRequest(BaseModel):
 
     # Include all optional parameters from UnifiedRAGRequest that will be applied to all queries
     # Data Sources
-    sources: Optional[List[str]] = Field(
+    sources: Optional[list[str]] = Field(
         default=["media_db", "notes", "characters"],
         description="Databases to search (media_db, notes, characters, chats, kanban)",
     )
@@ -1540,7 +1543,7 @@ class UnifiedBatchRequest(BaseModel):
 
     # Query Expansion
     expand_query: bool = Field(default=False)
-    expansion_strategies: Optional[List[str]] = Field(default=None)
+    expansion_strategies: Optional[list[str]] = Field(default=None)
     spell_check: bool = Field(default=False)
     max_query_variations: int = Field(default=3, ge=0, le=10)
 
@@ -1550,7 +1553,7 @@ class UnifiedBatchRequest(BaseModel):
     adaptive_cache: bool = Field(default=True)
 
     # Filtering
-    keyword_filter: Optional[List[str]] = Field(default=None)
+    keyword_filter: Optional[list[str]] = Field(default=None)
 
     # Security & Privacy
     enable_security_filter: bool = Field(default=False)
@@ -1571,7 +1574,7 @@ class UnifiedBatchRequest(BaseModel):
 
     # Chunking & Context
     enable_enhanced_chunking: bool = Field(default=_DEF_ENH_CHUNK)
-    chunk_type_filter: Optional[List[str]] = Field(default=None)
+    chunk_type_filter: Optional[list[str]] = Field(default=None)
     enable_parent_expansion: bool = Field(default=False)
     parent_context_size: int = Field(default=500, ge=100, le=2000)
     include_sibling_chunks: bool = Field(default=False)
@@ -1614,11 +1617,11 @@ class UnifiedBatchRequest(BaseModel):
     synthesis_refine_tokens: Optional[int] = Field(default=None, ge=32, le=4000)
     # Guardrails
     enable_content_policy_filter: bool = Field(default=False)
-    content_policy_types: Optional[List[str]] = Field(default=None)
+    content_policy_types: Optional[list[str]] = Field(default=None)
     content_policy_mode: Literal["redact", "drop", "annotate"] = Field(default="redact")
     enable_html_sanitizer: bool = Field(default=False)
-    html_allowed_tags: Optional[List[str]] = Field(default=None)
-    html_allowed_attrs: Optional[List[str]] = Field(default=None)
+    html_allowed_tags: Optional[list[str]] = Field(default=None)
+    html_allowed_attrs: Optional[list[str]] = Field(default=None)
     ocr_confidence_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
     # Post-Verification (Adaptive)
@@ -1718,7 +1721,7 @@ class UnifiedBatchRequest(BaseModel):
 class UnifiedBatchResponse(BaseModel):
     """Response for batch processing."""
 
-    results: List[UnifiedRAGResponse] = Field(
+    results: list[UnifiedRAGResponse] = Field(
         description="Results for each query"
     )
 
@@ -1757,9 +1760,9 @@ class ImplicitFeedbackEvent(BaseModel):
     query: Optional[str] = Field(default=None, description="Original query text")
     feedback_id: Optional[str] = Field(default=None, description="Optional feedback correlation id")
     doc_id: Optional[str] = Field(default=None, description="Document/chunk id involved")
-    chunk_ids: Optional[List[str]] = Field(default=None, description="Optional chunk ids involved")
+    chunk_ids: Optional[list[str]] = Field(default=None, description="Optional chunk ids involved")
     rank: Optional[int] = Field(default=None, description="Rank position of the doc in the displayed list")
-    impression_list: Optional[List[str]] = Field(
+    impression_list: Optional[list[str]] = Field(
         default=None,
         description="Ordered doc ids visible when the event happened"
     )

@@ -29,14 +29,13 @@ This module does not enforce auth/quotas; it is a drop-in core for external serv
 from __future__ import annotations
 
 import json
-from typing import Optional
 
 from fastapi import APIRouter, WebSocket
 from loguru import logger
 
-from .config import StreamingConfig
-from .transcriber import ParakeetCoreTranscriber, DecodeFn
 from ..model_utils import normalize_model_and_variant
+from .config import StreamingConfig
+from .transcriber import DecodeFn, ParakeetCoreTranscriber
 
 # Optional enhancements: live insights and diarization
 try:  # pragma: no cover - optional, heavy dependency surface
@@ -63,7 +62,7 @@ router = APIRouter()
 @router.websocket("/core/parakeet/stream")
 async def websocket_parakeet_core(
     websocket: WebSocket,
-    decode_fn: Optional[DecodeFn] = None,
+    decode_fn: DecodeFn | None = None,
 ):
     """
     Handle a long-lived WebSocket session for Parakeet Core streaming: accept configuration, receive audio chunks, stream partial and final transcript frames, and manage session lifecycle.

@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import IO, AsyncIterator, Optional
+from typing import IO
 
 from aiofiles import threadpool as aiofiles_threadpool
-
 from loguru import logger
 
 
-def resolve_safe_local_path(path: Path, base_dir: Path) -> Optional[Path]:
+def resolve_safe_local_path(path: Path, base_dir: Path) -> Path | None:
     """
     Resolve ``path`` relative to ``base_dir`` and validate containment.
 
@@ -83,7 +83,7 @@ def _open_safe_posix(
     relative_path: Path,
     base_dir: Path,
     mode: str,
-) -> Optional[IO]:
+) -> IO | None:
     if not relative_path.parts:
         logger.warning("Rejected empty relative path under base directory: %s", base_dir)
         return None
@@ -126,7 +126,7 @@ def _open_safe_windows(
     safe_path: Path,
     base_dir: Path,
     mode: str,
-) -> Optional[IO]:
+) -> IO | None:
     try:
         handle = open(safe_path, mode)
     except Exception as exc:
@@ -159,7 +159,7 @@ def open_safe_local_path(
     base_dir: Path,
     *,
     mode: str = "rb",
-) -> Optional[IO]:
+) -> IO | None:
     """
     Open a local file under ``base_dir`` with best-effort protections against traversal.
 
@@ -194,7 +194,7 @@ async def open_safe_local_path_async(
     base_dir: Path,
     *,
     mode: str = "rb",
-) -> AsyncIterator[Optional[IO]]:
+) -> AsyncIterator[IO | None]:
     """
     Async wrapper around ``open_safe_local_path`` that returns an aiofiles handle.
 

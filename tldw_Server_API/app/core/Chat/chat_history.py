@@ -22,11 +22,12 @@ import re
 import tempfile
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 from loguru import logger  # noqa: F401 - retained for future use/debug parity
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
+from tldw_Server_API.app.core.Chat.message_utils import should_persist_message_role
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -35,20 +36,19 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Utils.Utils import generate_unique_filename, logging
-from tldw_Server_API.app.core.Chat.message_utils import should_persist_message_role
 
-HistoryList = List[Union[Tuple[Optional[str], Optional[str]], Dict[str, Any]]]
-MediaContent = Optional[Dict[str, Any]]
+HistoryList = list[Union[tuple[Optional[str], Optional[str]], dict[str, Any]]]
+MediaContent = Optional[dict[str, Any]]
 
 
 def save_chat_history_to_db_wrapper(
     db: CharactersRAGDB,
-    chatbot_history: List[Dict[str, Any]],
-    conversation_id: Optional[str],
-    media_content_for_char_assoc: Optional[Dict[str, Any]],
-    media_name_for_char_assoc: Optional[str] = None,
-    character_name_for_chat: Optional[str] = None,
-) -> Tuple[Optional[str], str]:
+    chatbot_history: list[dict[str, Any]],
+    conversation_id: str | None,
+    media_content_for_char_assoc: dict[str, Any] | None,
+    media_name_for_char_assoc: str | None = None,
+    character_name_for_chat: str | None = None,
+) -> tuple[str | None, str]:
     """
     Persist a chat history into the ChaChaNotes database, creating or updating a conversation record.
 
@@ -67,7 +67,7 @@ def save_chat_history_to_db_wrapper(
     )
 
     try:
-        associated_character_id: Optional[int] = None
+        associated_character_id: int | None = None
         final_character_name_for_title = "Unknown Character"
 
         char_lookup_name = character_name_for_chat or media_name_for_char_assoc
@@ -221,8 +221,8 @@ def save_chat_history_to_db_wrapper(
 
             # For existing conversations, fetch version BEFORE the transaction to avoid
             # double-read with stale version issues (Issue #11)
-            conv_version_for_update: Optional[int] = None
-            conv_title_for_update: Optional[str] = None
+            conv_version_for_update: int | None = None
+            conv_title_for_update: str | None = None
             if not is_new_conversation:
                 pre_fetch_conv = db.get_conversation_by_id(current_conversation_id)
                 if pre_fetch_conv:
@@ -237,10 +237,10 @@ def save_chat_history_to_db_wrapper(
                         logging.debug("Skipping message with role '%s' at index %s", sender, index)
                         continue
 
-                    text_content_parts: List[str] = []
-                    image_data_bytes: Optional[bytes] = None
-                    image_mime_type_str: Optional[str] = None
-                    image_entries: List[Tuple[bytes, str]] = []
+                    text_content_parts: list[str] = []
+                    image_data_bytes: bytes | None = None
+                    image_mime_type_str: str | None = None
+                    image_entries: list[tuple[bytes, str]] = []
                     content_data = message_obj.get("content")
 
                     if isinstance(content_data, str):
@@ -384,10 +384,10 @@ def save_chat_history_to_db_wrapper(
 
 def save_chat_history(
     history: HistoryList,
-    conversation_id: Optional[str],
+    conversation_id: str | None,
     media_content: MediaContent,
-    db_instance: Optional[CharactersRAGDB] = None,
-) -> Optional[str]:
+    db_instance: CharactersRAGDB | None = None,
+) -> str | None:
     """
     Export chat history into a uniquely named JSON file and return the path.
     """
@@ -424,9 +424,9 @@ def save_chat_history(
 
 
 def get_conversation_name(
-    conversation_id: Optional[str],
-    db_instance: Optional[CharactersRAGDB] = None,
-) -> Optional[str]:
+    conversation_id: str | None,
+    db_instance: CharactersRAGDB | None = None,
+) -> str | None:
     """
     Retrieve a conversation title from the database, if available.
     """
@@ -446,10 +446,10 @@ def get_conversation_name(
 
 def generate_chat_history_content(
     history: HistoryList,
-    conversation_id: Optional[str],
+    conversation_id: str | None,
     media_content: MediaContent,
-    db_instance: Optional[CharactersRAGDB] = None,
-) -> Tuple[str, str]:
+    db_instance: CharactersRAGDB | None = None,
+) -> tuple[str, str]:
     """
     Generate JSON content summarising the conversation and return it along with a name.
     """
@@ -466,7 +466,7 @@ def generate_chat_history_content(
         else:
             conversation_name = f"chat-{timestamp}"
 
-    chat_data: Dict[str, Any] = {
+    chat_data: dict[str, Any] = {
         "conversation_id": conversation_id,
         "conversation_name": conversation_name,
         "timestamp": timestamp,
@@ -488,7 +488,7 @@ def generate_chat_history_content(
     return json.dumps(chat_data, indent=2), conversation_name
 
 
-def extract_media_name(media_content: MediaContent) -> Optional[str]:
+def extract_media_name(media_content: MediaContent) -> str | None:
     """
     Attempt to derive a human-readable media name from the provided content payload.
     """
@@ -528,13 +528,13 @@ def extract_media_name(media_content: MediaContent) -> Optional[str]:
 
 
 def update_chat_content(
-    selected_item: Optional[str],
+    selected_item: str | None,
     use_content: bool,
     use_summary: bool,
     use_prompt: bool,
-    item_mapping: Dict[str, str],
+    item_mapping: dict[str, str],
     db_instance: CharactersRAGDB,
-) -> Tuple[Dict[str, str], List[str]]:
+) -> tuple[dict[str, str], list[str]]:
     """
     Fetch content from stored notes to assemble media context for chat requests.
     """
@@ -542,8 +542,8 @@ def update_chat_content(
     start_time = time.time()
     logging.debug("Debug - Update Chat Content - Selected Item: %s", selected_item)
 
-    output_media_content_for_chat: Dict[str, str] = {}
-    selected_parts_names: List[str] = []
+    output_media_content_for_chat: dict[str, str] = {}
+    selected_parts_names: list[str] = []
 
     if selected_item and selected_item in item_mapping:
         note_id = item_mapping[selected_item]
@@ -559,7 +559,7 @@ def update_chat_content(
 
         if note_data:
             raw_note_content_field = note_data.get("content", "")
-            structured_content_from_note: Dict[str, str] = {}
+            structured_content_from_note: dict[str, str] = {}
 
             if (
                 isinstance(raw_note_content_field, str)

@@ -3,12 +3,12 @@
 #
 # Imports
 import asyncio
+import os
 import threading
 import time
-import os
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -31,7 +31,7 @@ class UsageStats:
     request_count: int = 0
     token_count: int = 0
     last_request_time: Optional[float] = None
-    conversation_request_counts: Dict[str, int] = None
+    conversation_request_counts: dict[str, int] = None
 
     def __post_init__(self):
         if self.conversation_request_counts is None:
@@ -147,15 +147,15 @@ class ConversationRateLimiter:
             refill_rate=config.global_rpm / 60
         )
 
-        self.user_buckets: Dict[str, TokenBucket] = {}
-        self.conversation_buckets: Dict[str, TokenBucket] = {}
-        self.user_token_buckets: Dict[str, TokenBucket] = {}
+        self.user_buckets: dict[str, TokenBucket] = {}
+        self.conversation_buckets: dict[str, TokenBucket] = {}
+        self.user_token_buckets: dict[str, TokenBucket] = {}
 
         # Usage tracking
-        self.usage_stats: Dict[str, UsageStats] = defaultdict(UsageStats)
+        self.usage_stats: dict[str, UsageStats] = defaultdict(UsageStats)
 
         # Sliding window for more accurate tracking
-        self.request_windows: Dict[str, deque] = defaultdict(lambda: deque(maxlen=100))
+        self.request_windows: dict[str, deque] = defaultdict(lambda: deque(maxlen=100))
 
         # Idle cleanup support
         self._last_cleanup: float = time.time()
@@ -164,7 +164,7 @@ class ConversationRateLimiter:
 
     async def _get_or_create_bucket(
         self,
-        bucket_dict: Dict[str, TokenBucket],
+        bucket_dict: dict[str, TokenBucket],
         key: str,
         capacity: int,
         refill_rate: float
@@ -195,7 +195,7 @@ class ConversationRateLimiter:
         user_id: str,
         conversation_id: Optional[str] = None,
         estimated_tokens: int = 0,
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> tuple[bool, Optional[str]]:
         """
         Legacy in-process rate limit evaluation using token buckets.
 
@@ -290,7 +290,7 @@ class ConversationRateLimiter:
         user_id: str,
         conversation_id: Optional[str] = None,
         estimated_tokens: int = 0
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> tuple[bool, Optional[str]]:
         """
         Check if request is within rate limits.
 
@@ -348,7 +348,7 @@ class ConversationRateLimiter:
         conversation_id: Optional[str] = None,
         estimated_tokens: int = 0,
         timeout: float = 60
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> tuple[bool, Optional[str]]:
         """
         Wait for rate limit capacity to become available.
 
@@ -376,7 +376,7 @@ class ConversationRateLimiter:
 
         return False, f"Timeout waiting for rate limit capacity"
 
-    async def get_usage_stats(self, user_id: str) -> Dict[str, Any]:
+    async def get_usage_stats(self, user_id: str) -> dict[str, Any]:
         """
         Get usage statistics for a user (async with lock protection).
 
@@ -571,7 +571,7 @@ _rg_chat_init_error_logged = False
 _rg_chat_fallback_logged = False
 
 
-def _rg_chat_context() -> Dict[str, str]:
+def _rg_chat_context() -> dict[str, str]:
     policy_path = os.getenv(
         "RG_POLICY_PATH",
         "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
@@ -624,6 +624,7 @@ def _log_rg_chat_fallback(reason: str) -> None:
     )
 
 try:  # pragma: no cover - RG is optional
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
     from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
         MemoryResourceGovernor,
         RedisResourceGovernor,
@@ -634,7 +635,6 @@ try:  # pragma: no cover - RG is optional
         PolicyReloadConfig,
         default_policy_loader,
     )
-    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
 except Exception:  # pragma: no cover - safe fallback when RG not installed
     MemoryResourceGovernor = None  # type: ignore
     RedisResourceGovernor = None  # type: ignore
@@ -712,7 +712,7 @@ async def _maybe_enforce_with_rg_chat(
     user_id: str,
     conversation_id: Optional[str],
     estimated_tokens: int,
-) -> Optional[Dict[str, object]]:
+) -> Optional[dict[str, object]]:
     """
     Optionally enforce Chat limits via ResourceGovernor.
 
@@ -736,7 +736,7 @@ async def _maybe_enforce_with_rg_chat(
         tokens_units = max(0, tokens_units)
 
         # Only enforce token budgets here; request-rate limiting happens at ingress.
-        categories: Dict[str, Dict[str, int]] = {}
+        categories: dict[str, dict[str, int]] = {}
         if tokens_units > 0:
             categories["tokens"] = {"units": tokens_units}
         else:
@@ -760,7 +760,7 @@ async def _maybe_enforce_with_rg_chat(
                 try:
                     # Treat reserve as consumption; commit with the same units
                     # to keep semantics simple for now.
-                    actuals: Dict[str, int] = {}
+                    actuals: dict[str, int] = {}
                     if tokens_units > 0:
                         actuals["tokens"] = tokens_units
                     await gov.commit(handle, actuals=actuals, op_id=op_id)

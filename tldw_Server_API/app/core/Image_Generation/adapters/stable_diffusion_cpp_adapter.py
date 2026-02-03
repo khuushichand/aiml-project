@@ -5,7 +5,6 @@ from __future__ import annotations
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import List, Optional
 
 from loguru import logger
 
@@ -104,7 +103,7 @@ class StableDiffusionCppAdapter:
         return ImageGenResult(content=content, content_type=content_type, bytes_len=len(content))
 
     @staticmethod
-    def _resolve_path(raw_path: Optional[str], label: str) -> Path:
+    def _resolve_path(raw_path: str | None, label: str) -> Path:
         if not raw_path:
             raise ImageBackendUnavailableError(f"{label} is not configured")
         path = Path(raw_path).expanduser()
@@ -113,7 +112,7 @@ class StableDiffusionCppAdapter:
         return path
 
     @staticmethod
-    def _resolve_optional_path(raw_path: Optional[str]) -> Optional[Path]:
+    def _resolve_optional_path(raw_path: str | None) -> Path | None:
         if not raw_path:
             return None
         path = Path(raw_path).expanduser()
@@ -127,18 +126,18 @@ class StableDiffusionCppAdapter:
         model_path: Path,
         output_path: Path,
         prompt: str,
-        negative_prompt: Optional[str],
+        negative_prompt: str | None,
         width: int,
         height: int,
         steps: int,
         cfg_scale: float,
-        seed: Optional[int],
+        seed: int | None,
         sampler: str,
-        vae_path: Optional[Path],
-        lora_paths: List[Path],
+        vae_path: Path | None,
+        lora_paths: list[Path],
         extra_params: dict,
-        device: Optional[str],
-    ) -> List[str]:
+        device: str | None,
+    ) -> list[str]:
         cmd = [str(binary_path), model_flag, str(model_path), "-o", str(output_path), "-p", prompt]
         if negative_prompt:
             cmd += ["-n", negative_prompt]

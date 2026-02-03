@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 import json
-from typing import List, Optional
 
 from fastapi import Form, HTTPException, status
 from loguru import logger
 from pydantic import ValidationError
 
 from tldw_Server_API.app.api.v1.schemas.media_request_models import (
+    TRANSCRIPTION_MODEL_ENUM,
     AddMediaForm,
     ChunkMethod,
-    MediaType,
-    OcrMode,
     PdfEngine,
-    TRANSCRIPTION_MODEL_ENUM,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
     resolve_default_transcription_model,
@@ -32,15 +29,15 @@ async def get_add_media_form(
         ...,
         description="Type of media (e.g., 'audio', 'video', 'pdf')",
     ),
-    urls: Optional[List[str]] = Form(
+    urls: list[str] | None = Form(
         None,
         description="List of URLs of the media items to add",
     ),
-    title: Optional[str] = Form(
+    title: str | None = Form(
         None,
         description="Optional title (applied if only one item processed)",
     ),
-    author: Optional[str] = Form(
+    author: str | None = Form(
         None,
         description="Optional author (applied similarly to title)",
     ),
@@ -48,11 +45,11 @@ async def get_add_media_form(
         "",
         description="Comma-separated keywords (applied to all processed items)",
     ),
-    custom_prompt: Optional[str] = Form(
+    custom_prompt: str | None = Form(
         None,
         description="Optional custom prompt (applied to all)",
     ),
-    system_prompt: Optional[str] = Form(
+    system_prompt: str | None = Form(
         None,
         description="Optional system prompt (applied to all)",
     ),
@@ -65,27 +62,27 @@ async def get_add_media_form(
         True,
         description="Perform analysis (default=True)",
     ),
-    perform_claims_extraction: Optional[bool] = Form(
+    perform_claims_extraction: bool | None = Form(
         None,
         description=(
             "Extract factual claims during analysis "
             "(defaults to server configuration)."
         ),
     ),
-    claims_extractor_mode: Optional[str] = Form(
+    claims_extractor_mode: str | None = Form(
         None,
         description=(
             "Override claims extractor mode (heuristic|ner|provider id)."
         ),
     ),
-    claims_max_per_chunk: Optional[int] = Form(
+    claims_max_per_chunk: int | None = Form(
         None,
         description=(
             "Maximum number of claims to extract per chunk "
             "(uses config default when unset)."
         ),
     ),
-    api_name: Optional[str] = Form(
+    api_name: str | None = Form(
         None,
         description="Optional API name",
     ),
@@ -94,11 +91,11 @@ async def get_add_media_form(
         False,
         description="Use cookies for URL download requests",
     ),
-    cookies: Optional[str] = Form(
+    cookies: str | None = Form(
         None,
         description="Cookie string if `use_cookies` is True",
     ),
-    transcription_model: Optional[str] = Form(
+    transcription_model: str | None = Form(
         None,
         description="Transcription model (defaults to config when omitted)",
         json_schema_extra={"enum": TRANSCRIPTION_MODEL_ENUM},
@@ -117,20 +114,20 @@ async def get_add_media_form(
         False,
         description="Enable confabulation check",
     ),
-    start_time: Optional[str] = Form(
+    start_time: str | None = Form(
         None,
         description="Optional start time (HH:MM:SS or seconds)",
     ),
-    end_time: Optional[str] = Form(
+    end_time: str | None = Form(
         None,
         description="Optional end time (HH:MM:SS or seconds)",
     ),
-    pdf_parsing_engine: Optional[PdfEngine] = Form(
+    pdf_parsing_engine: PdfEngine | None = Form(
         "pymupdf4llm",
         description="PDF parsing engine",
     ),
     perform_chunking: bool = Form(True, description="Enable chunking"),
-    chunk_method: Optional[ChunkMethod] = Form(
+    chunk_method: ChunkMethod | None = Form(
         None,
         description="Chunking method",
     ),
@@ -142,13 +139,13 @@ async def get_add_media_form(
         False,
         description="Enable multi-level chunking",
     ),
-    chunk_language: Optional[str] = Form(
+    chunk_language: str | None = Form(
         None,
         description="Chunking language override",
     ),
     chunk_size: int = Form(500, description="Target chunk size"),
     chunk_overlap: int = Form(200, description="Chunk overlap size"),
-    custom_chapter_pattern: Optional[str] = Form(
+    custom_chapter_pattern: str | None = Form(
         None,
         description="Regex pattern for custom chapter splitting",
     ),
@@ -190,19 +187,19 @@ async def get_add_media_form(
         False,
         description="Enable contextual chunking",
     ),
-    contextual_llm_model: Optional[str] = Form(
+    contextual_llm_model: str | None = Form(
         None,
         description="LLM model for contextual chunking",
     ),
-    context_window_size: Optional[int] = Form(
+    context_window_size: int | None = Form(
         None,
         description="Context window size (chars)",
     ),
-    context_strategy: Optional[str] = Form(
+    context_strategy: str | None = Form(
         None,
         description="Context strategy: auto|full|window|outline_window",
     ),
-    context_token_budget: Optional[int] = Form(
+    context_token_budget: int | None = Form(
         None,
         description="Approx token budget for auto strategy",
     ),
@@ -215,11 +212,11 @@ async def get_add_media_form(
         False,
         description="Generate embeddings after media processing",
     ),
-    embedding_model: Optional[str] = Form(
+    embedding_model: str | None = Form(
         None,
         description="Specific embedding model to use",
     ),
-    embedding_provider: Optional[str] = Form(
+    embedding_provider: str | None = Form(
         None,
         description="Embedding provider (huggingface, openai, etc)",
     ),

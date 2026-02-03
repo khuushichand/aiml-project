@@ -7,13 +7,11 @@ Kept dependency-free (stdlib only) to avoid import-time side effects.
 from __future__ import annotations
 
 import os
-from typing import Optional
-
 
 _TRUTHY = {"1", "true", "yes", "y", "on"}
 
 
-def _env_truthy(val: Optional[str]) -> bool:
+def _env_truthy(val: str | None) -> bool:
     try:
         return str(val or "").strip().lower() in _TRUTHY
     except Exception:

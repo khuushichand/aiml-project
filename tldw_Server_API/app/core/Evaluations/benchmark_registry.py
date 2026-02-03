@@ -6,21 +6,22 @@ to appropriate evaluation types.
 """
 
 import json
-import yaml
-from typing import Dict, Any, List, Optional, Type
-from pathlib import Path
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Optional
+
+import yaml
 from loguru import logger
 
 from tldw_Server_API.app.core.Evaluations.benchmark_utils import (
     BaseEvaluation,
-    MultipleChoiceEvaluation,
     CodeGenerationEvaluation,
-    InstructionFollowingEvaluation,
     HonestyEvaluation,
+    InstructionFollowingEvaluation,
+    MultipleChoiceEvaluation,
     load_dataset_from_json,
     load_dataset_from_jsonl,
-    load_dataset_from_url
+    load_dataset_from_url,
 )
 
 logger = logger
@@ -34,11 +35,11 @@ class BenchmarkConfig:
     evaluation_type: str
     dataset_source: str  # URL, file path, or HuggingFace dataset ID
     dataset_format: str  # json, jsonl, csv, huggingface
-    field_mappings: Dict[str, str] = field(default_factory=dict)
-    evaluation_params: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    field_mappings: dict[str, str] = field(default_factory=dict)
+    evaluation_params: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "name": self.name,
@@ -52,7 +53,7 @@ class BenchmarkConfig:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'BenchmarkConfig':
+    def from_dict(cls, data: dict[str, Any]) -> 'BenchmarkConfig':
         """Create from dictionary."""
         return cls(**data)
 
@@ -79,7 +80,7 @@ class BenchmarkRegistry:
     }
 
     def __init__(self):
-        self.benchmarks: Dict[str, BenchmarkConfig] = {}
+        self.benchmarks: dict[str, BenchmarkConfig] = {}
         self._load_default_benchmarks()
 
     def _load_default_benchmarks(self):
@@ -304,11 +305,11 @@ class BenchmarkRegistry:
         """Get a benchmark configuration."""
         return self.benchmarks.get(name)
 
-    def list_benchmarks(self) -> List[str]:
+    def list_benchmarks(self) -> list[str]:
         """List all registered benchmark names."""
         return list(self.benchmarks.keys())
 
-    def get_benchmark_info(self, name: str) -> Dict[str, Any]:
+    def get_benchmark_info(self, name: str) -> dict[str, Any]:
         """Get detailed information about a benchmark."""
         config = self.get(name)
         if not config:
@@ -358,7 +359,7 @@ class BenchmarkRegistry:
             logger.error(f"Failed to create evaluator for {benchmark_name}: {e}")
             return None
 
-    def load_dataset(self, benchmark_name: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def load_dataset(self, benchmark_name: str, limit: Optional[int] = None) -> list[dict[str, Any]]:
         """Load dataset for a benchmark."""
         config = self.get(benchmark_name)
         if not config:

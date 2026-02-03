@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-from typing import Optional, Tuple
-
 ALLOWED_PARAKEET_VARIANTS = {"standard", "onnx", "mlx"}
 
 
 def normalize_model_and_variant(
-    raw_model: Optional[str],
+    raw_model: str | None,
     current_model: str,
     current_variant: str,
-    variant_override: Optional[str] = None,
-) -> Tuple[str, str]:
+    variant_override: str | None = None,
+) -> tuple[str, str]:
     """
     Normalize streaming STT model + variant selection from potentially combined identifiers.
 

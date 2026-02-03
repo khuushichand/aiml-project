@@ -7,31 +7,24 @@ Provides CRUD operations for Kanban labels including:
 - Assign and remove labels from cards
 - Get labels for a board or card
 """
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
-    KanbanDB,
-    KanbanDBError,
-    InputError,
-    ConflictError,
-    NotFoundError,
-)
-from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
-    LabelCreate,
-    LabelUpdate,
-    LabelResponse,
-    LabelsListResponse,
-    DetailResponse,
-)
 from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     get_kanban_db_for_user,
     handle_kanban_db_error,
     kanban_rate_limit,
 )
-
+from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
+    DetailResponse,
+    LabelCreate,
+    LabelResponse,
+    LabelsListResponse,
+    LabelUpdate,
+)
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
+    KanbanDB,
+)
 
 router = APIRouter(tags=["Kanban Labels"])
 

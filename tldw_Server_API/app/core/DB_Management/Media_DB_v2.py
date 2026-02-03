@@ -37,14 +37,16 @@ import sqlite3
 import threading
 import time
 import uuid  # For UUID generation
+from configparser import ConfigParser
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
-from configparser import ConfigParser
-from datetime import datetime, timezone, timedelta  # Use timezone-aware UTC
+from datetime import datetime, timedelta, timezone  # Use timezone-aware UTC
 from math import ceil
 from pathlib import Path
-from typing import List, Tuple, Dict, Any, Optional, Union
+from typing import Any, Union
+
 from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
+
 #
 # Third-Party Libraries (Ensure these are installed if used)
 # import gradio as gr # Removed if Gradio interfaces moved out
@@ -70,29 +72,32 @@ except Exception:  # pragma: no cover - defensive fallback
 
 import yaml
 
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.DB_Management.db_migration import DatabaseMigrator, MigrationError
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+
 try:
     # Optional integration for Collections (highlights re-anchoring)
     from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase as _CollectionsDB
 except Exception:
     _CollectionsDB = None  # Safe fallback when module unavailable
+from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     BackendType,
     DatabaseBackend,
     DatabaseConfig,
-    DatabaseError as BackendDatabaseError,
     QueryResult,
 )
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
+from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
     convert_sqlite_placeholders_to_postgres,
     normalise_params,
     prepare_backend_many_statement,
     prepare_backend_statement,
 )
-from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend, load_content_db_settings
-from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
 
 # Use application-wide logging configuration; avoid configuring here.
@@ -138,7 +143,7 @@ class _RowAdapter:
     dict(row) works and existing code expecting dict-like rows continues to work.
     """
 
-    def __init__(self, row_dict: Dict[str, Any], description: Optional[List[tuple]] = None):
+    def __init__(self, row_dict: dict[str, Any], description: list[tuple] | None = None):
         self._data = row_dict
         # Build ordered column list from description when available
         self._cols = [d[0] for d in (description or []) if d and len(d) > 0]
@@ -192,7 +197,7 @@ class BackendCursorAdapter:
         self.lastrowid = result.lastrowid
         self.description = result.description
 
-    def _wrap(self, row: Dict[str, Any]):
+    def _wrap(self, row: dict[str, Any]):
         return _RowAdapter(row, self.description)
 
     def fetchall(self):
@@ -1045,8 +1050,8 @@ class MediaDatabase:
         *,
         backend: DatabaseBackend | None = None,
         config: ConfigParser | None = None,
-        default_org_id: Optional[int] = None,
-        default_team_id: Optional[int] = None,
+        default_org_id: int | None = None,
+        default_team_id: int | None = None,
     ):
         """
         Initializes the Database instance, sets up the connection pool (via threading.local),
@@ -1105,7 +1110,7 @@ class MediaDatabase:
         self.default_team_id = default_team_id
 
         # Transaction-scoped connection and depth (context-local for async safety)
-        self._txn_conn_var: ContextVar[Optional[Any]] = ContextVar(
+        self._txn_conn_var: ContextVar[Any | None] = ContextVar(
             f"media_db_txn_conn_{id(self)}",
             default=None,
         )
@@ -1115,7 +1120,7 @@ class MediaDatabase:
         )
         # Persistent non-transaction connection (PostgreSQL) is context-local; SQLite in-memory
         # uses a single persistent connection on the instance.
-        self._persistent_conn_var: ContextVar[Optional[Any]] = ContextVar(
+        self._persistent_conn_var: ContextVar[Any | None] = ContextVar(
             f"media_db_persistent_conn_{id(self)}",
             default=None,
         )
@@ -1133,7 +1138,7 @@ class MediaDatabase:
             self._persistent_conn = pc
         # Add lock for media insertion to prevent race conditions in concurrent uploads
         self._media_insert_lock = threading.Lock()
-        self._scope_cache: Tuple[Optional[int], Optional[int]] = (self.default_org_id, self.default_team_id)
+        self._scope_cache: tuple[int | None, int | None] = (self.default_org_id, self.default_team_id)
 
         # Flag to track successful initialization before logging completion
         initialization_successful = False
@@ -1166,7 +1171,7 @@ class MediaDatabase:
                 # Logging here provides context that the __init__ block finished, albeit with failure.
                 logging.error(f"Database initialization block finished for {self.db_path_str}, but failed.")
 
-    def _resolve_scope_ids(self) -> Tuple[Optional[int], Optional[int]]:
+    def _resolve_scope_ids(self) -> tuple[int | None, int | None]:
         """Determine effective org/team IDs for the current execution context."""
         try:
             scope = get_scope()
@@ -1259,8 +1264,8 @@ class MediaDatabase:
     def _prepare_backend_statement(
         self,
         query: str,
-        params: Optional[Union[Tuple, List, Dict]] = None,
-    ) -> tuple[str, Optional[Union[Tuple, Dict]]]:
+        params: Union[tuple, list, dict] | None = None,
+    ) -> tuple[str, Union[tuple, dict] | None]:
         return prepare_backend_statement(
             self.backend_type,
             query,
@@ -1272,8 +1277,8 @@ class MediaDatabase:
     def _prepare_backend_many_statement(
         self,
         query: str,
-        params_list: List[Union[Tuple, List, Dict]],
-    ) -> tuple[str, List[Union[Tuple, Dict]]]:
+        params_list: list[Union[tuple, list, dict]],
+    ) -> tuple[str, list[Union[tuple, dict]]]:
         converted_query, prepared_params = prepare_backend_many_statement(
             self.backend_type,
             query,
@@ -1292,8 +1297,8 @@ class MediaDatabase:
 
     def _append_case_insensitive_like(
         self,
-        clauses: List[str],
-        params: List[Any],
+        clauses: list[str],
+        params: list[Any],
         column: str,
         pattern: str,
     ) -> None:
@@ -1307,8 +1312,8 @@ class MediaDatabase:
 
     def _normalise_params(
         self,
-        params: Optional[Any],
-    ) -> Optional[Union[Tuple, Dict]]:
+        params: Any | None,
+    ) -> Union[tuple, dict] | None:
         return normalise_params(params)
 
     def _convert_sqlite_placeholders_to_postgres(self, query: str) -> str:
@@ -1318,7 +1323,7 @@ class MediaDatabase:
         self,
         conn,
         query: str,
-        params: Optional[Union[Tuple, List, Dict]] = None,
+        params: Union[tuple, list, dict] | None = None,
     ):
         prepared_query, prepared_params = self._prepare_backend_statement(query, params)
 
@@ -1347,7 +1352,7 @@ class MediaDatabase:
         self,
         conn,
         query: str,
-        params_list: List[Union[Tuple, List, Dict]],
+        params_list: list[Union[tuple, list, dict]],
     ):
         prepared_query, prepared_params_list = self._prepare_backend_many_statement(query, params_list)
 
@@ -1376,8 +1381,8 @@ class MediaDatabase:
         self,
         conn,
         query: str,
-        params: Optional[Union[Tuple, List, Dict]] = None,
-    ) -> Optional[Dict[str, Any]]:
+        params: Union[tuple, list, dict] | None = None,
+    ) -> dict[str, Any] | None:
         cursor = self._execute_with_connection(conn, query, params)
         row = cursor.fetchone()
         if row is None:
@@ -1388,8 +1393,8 @@ class MediaDatabase:
         self,
         conn,
         query: str,
-        params: Optional[Union[Tuple, List, Dict]] = None,
-    ) -> List[Dict[str, Any]]:
+        params: Union[tuple, list, dict] | None = None,
+    ) -> list[dict[str, Any]]:
         cursor = self._execute_with_connection(conn, query, params)
         rows = cursor.fetchall() or []
         return [dict(r) for r in rows]
@@ -1510,10 +1515,10 @@ class MediaDatabase:
     def execute_query(
         self,
         query: str,
-        params: Optional[Union[tuple, list, Dict]] = None,
+        params: Union[tuple, list, dict] | None = None,
         *,
         commit: bool = False,
-        connection: Optional[Any] = None,
+        connection: Any | None = None,
     ):
         """
          Executes a single SQL query.
@@ -1615,11 +1620,11 @@ class MediaDatabase:
     def execute_many(
         self,
         query: str,
-        params_list: List[Union[tuple, list, Dict]],
+        params_list: list[Union[tuple, list, dict]],
         *,
         commit: bool = False,
-        connection: Optional[Any] = None,
-    ) -> Optional[object]:
+        connection: Any | None = None,
+    ) -> object | None:
         """
         Executes a SQL query for multiple sets of parameters.
 
@@ -1715,15 +1720,15 @@ class MediaDatabase:
         self,
         media_id: int,
         *,
-        caption: Optional[str] = None,
-        ocr_text: Optional[str] = None,
-        tags: Optional[str] = None,
-        location: Optional[str] = None,
-        page_number: Optional[int] = None,
-        frame_index: Optional[int] = None,
-        timestamp_seconds: Optional[float] = None,
-        thumbnail_path: Optional[str] = None,
-        extra_metadata: Optional[str] = None,
+        caption: str | None = None,
+        ocr_text: str | None = None,
+        tags: str | None = None,
+        location: str | None = None,
+        page_number: int | None = None,
+        frame_index: int | None = None,
+        timestamp_seconds: float | None = None,
+        thumbnail_path: str | None = None,
+        extra_metadata: str | None = None,
     ) -> str:
         """
         Insert a new VisualDocuments row for a given media item.
@@ -1733,7 +1738,7 @@ class MediaDatabase:
         conn = self.get_connection()
         new_uuid = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
-        data: Dict[str, Any] = {
+        data: dict[str, Any] = {
             "media_id": media_id,
             "location": location,
             "page_number": page_number,
@@ -1784,13 +1789,13 @@ class MediaDatabase:
         media_id: int,
         *,
         include_deleted: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Return all VisualDocuments for a media item, ordered by page/frame/timestamp.
         """
         conn = self.get_connection()
-        clauses: List[str] = ["media_id = :media_id"]
-        params: Dict[str, Any] = {"media_id": media_id}
+        clauses: list[str] = ["media_id = :media_id"]
+        params: dict[str, Any] = {"media_id": media_id}
         if not include_deleted:
             clauses.append("deleted = 0")
         where_sql = " AND ".join(clauses)
@@ -1877,10 +1882,10 @@ class MediaDatabase:
         file_type: str,
         storage_path: str,
         *,
-        original_filename: Optional[str] = None,
-        file_size: Optional[int] = None,
-        mime_type: Optional[str] = None,
-        checksum: Optional[str] = None,
+        original_filename: str | None = None,
+        file_size: int | None = None,
+        mime_type: str | None = None,
+        checksum: str | None = None,
     ) -> str:
         """
         Insert a new MediaFiles row for a given media item.
@@ -1900,7 +1905,7 @@ class MediaDatabase:
         conn = self.get_connection()
         new_uuid = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
-        data: Dict[str, Any] = {
+        data: dict[str, Any] = {
             "media_id": media_id,
             "file_type": file_type,
             "storage_path": storage_path,
@@ -1949,7 +1954,7 @@ class MediaDatabase:
         file_type: str = "original",
         *,
         include_deleted: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Get a specific file record for a media item by type.
 
@@ -1962,8 +1967,8 @@ class MediaDatabase:
             Dict with file record or None if not found.
         """
         conn = self.get_connection()
-        clauses: List[str] = ["media_id = :media_id", "file_type = :file_type"]
-        params: Dict[str, Any] = {"media_id": media_id, "file_type": file_type}
+        clauses: list[str] = ["media_id = :media_id", "file_type = :file_type"]
+        params: dict[str, Any] = {"media_id": media_id, "file_type": file_type}
         if not include_deleted:
             clauses.append("deleted = 0")
         where_sql = " AND ".join(clauses)
@@ -1979,7 +1984,7 @@ class MediaDatabase:
         media_id: int,
         *,
         include_deleted: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get all file records for a media item.
 
@@ -1991,8 +1996,8 @@ class MediaDatabase:
             List of file record dicts.
         """
         conn = self.get_connection()
-        clauses: List[str] = ["media_id = :media_id"]
-        params: Dict[str, Any] = {"media_id": media_id}
+        clauses: list[str] = ["media_id = :media_id"]
+        params: dict[str, Any] = {"media_id": media_id}
         if not include_deleted:
             clauses.append("deleted = 0")
         where_sql = " AND ".join(clauses)
@@ -2485,11 +2490,11 @@ class MediaDatabase:
             logging.error(f"[Schema V1] Unexpected error during schema V1 application: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error applying schema V1: {e}") from e
 
-    def _convert_sqlite_sql_to_postgres_statements(self, sql: str) -> List[str]:
+    def _convert_sqlite_sql_to_postgres_statements(self, sql: str) -> list[str]:
         """Convert SQLite-oriented SQL blob into Postgres-compatible statements."""
 
-        statements: List[str] = []
-        buffer: List[str] = []
+        statements: list[str] = []
+        buffer: list[str] = []
         for raw_line in sql.splitlines():
             line = raw_line.strip()
             if not line or line.startswith('--'):
@@ -2510,7 +2515,7 @@ class MediaDatabase:
                     statements.append(transformed)
         return statements
 
-    def _transform_sqlite_statement_to_postgres(self, statement: str) -> Optional[str]:
+    def _transform_sqlite_statement_to_postgres(self, statement: str) -> str | None:
         """Apply token-level rewrites so a SQLite statement can run on Postgres."""
         # Remove SQL comments before any normalization to avoid commenting-out tokens
         # - Strip single-line comments starting with '--'
@@ -3851,7 +3856,7 @@ class MediaDatabase:
         conn,
         *,
         table: str,
-        column_defs: Dict[str, str],
+        column_defs: dict[str, str],
     ) -> None:
         """Ensure a set of columns exist on a PostgreSQL table."""
 
@@ -4681,7 +4686,7 @@ class MediaDatabase:
         return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
 
     # --- Claims Helpers (Stage 1 minimal CRUD) ---
-    def upsert_claims(self, claims: List[Dict[str, Any]]) -> int:
+    def upsert_claims(self, claims: list[dict[str, Any]]) -> int:
         """
         Insert claims in bulk. This is a minimal Stage 1 helper.
 
@@ -4695,7 +4700,7 @@ class MediaDatabase:
         if not claims:
             return 0
         now = self._get_current_utc_timestamp_str()
-        rows: List[tuple] = []
+        rows: list[tuple] = []
         for c in claims:
             media_id = int(c["media_id"])
             extractor = str(c.get("extractor", "heuristic"))
@@ -4735,7 +4740,7 @@ class MediaDatabase:
             )
         return len(rows)
 
-    def get_claims_by_media(self, media_id: int, *, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def get_claims_by_media(self, media_id: int, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         """
         Fetch claims for a media item (excluding soft-deleted), ordered by chunk_index then id.
         """
@@ -4759,18 +4764,18 @@ class MediaDatabase:
     def list_claims(
         self,
         *,
-        media_id: Optional[int] = None,
-        owner_user_id: Optional[int] = None,
-        org_id: Optional[int] = None,
-        team_id: Optional[int] = None,
-        review_status: Optional[str] = None,
-        reviewer_id: Optional[int] = None,
-        review_group: Optional[str] = None,
-        claim_cluster_id: Optional[int] = None,
+        media_id: int | None = None,
+        owner_user_id: int | None = None,
+        org_id: int | None = None,
+        team_id: int | None = None,
+        review_status: str | None = None,
+        reviewer_id: int | None = None,
+        review_group: str | None = None,
+        claim_cluster_id: int | None = None,
         limit: int = 100,
         offset: int = 0,
         include_deleted: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         List claims with optional media and scope filtering.
 
@@ -4784,8 +4789,8 @@ class MediaDatabase:
         limit = max(1, min(1000, limit))
         offset = max(0, offset)
 
-        conditions: List[str] = ["c.media_id = m.id"]
-        params: List[Any] = []
+        conditions: list[str] = ["c.media_id = m.id"]
+        params: list[Any] = []
 
         if not include_deleted:
             conditions.append("c.deleted = 0")
@@ -4821,7 +4826,7 @@ class MediaDatabase:
             logging.debug(f"Failed to resolve scope for claims visibility filter: {scope_err}")
             scope = None
         if scope and not scope.is_admin:
-            visibility_parts: List[str] = []
+            visibility_parts: list[str] = []
             user_id_str = str(scope.user_id) if scope.user_id is not None else ""
             if user_id_str:
                 visibility_parts.append(
@@ -4865,10 +4870,10 @@ class MediaDatabase:
         rows = self.execute_query(sql, tuple(params)).fetchall()
         return [dict(row) for row in rows]
 
-    def get_claim_with_media(self, claim_id: int, *, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_claim_with_media(self, claim_id: int, *, include_deleted: bool = False) -> dict[str, Any] | None:
         """Fetch a claim by id with media visibility metadata (scoped)."""
-        conditions: List[str] = ["c.media_id = m.id", "c.id = ?"]
-        params: List[Any] = [int(claim_id)]
+        conditions: list[str] = ["c.media_id = m.id", "c.id = ?"]
+        params: list[Any] = [int(claim_id)]
 
         if not include_deleted:
             conditions.append("c.deleted = 0")
@@ -4879,7 +4884,7 @@ class MediaDatabase:
             logging.debug(f"Failed to resolve scope for claim lookup: {scope_err}")
             scope = None
         if scope and not scope.is_admin:
-            visibility_parts: List[str] = []
+            visibility_parts: list[str] = []
             user_id_str = str(scope.user_id) if scope.user_id is not None else ""
             if user_id_str:
                 visibility_parts.append(
@@ -4925,19 +4930,19 @@ class MediaDatabase:
         self,
         claim_id: int,
         *,
-        claim_text: Optional[str] = None,
-        span_start: Optional[int] = None,
-        span_end: Optional[int] = None,
-        confidence: Optional[float] = None,
-        extractor: Optional[str] = None,
-        extractor_version: Optional[str] = None,
-        deleted: Optional[bool] = None,
-    ) -> Optional[Dict[str, Any]]:
+        claim_text: str | None = None,
+        span_start: int | None = None,
+        span_end: int | None = None,
+        confidence: float | None = None,
+        extractor: str | None = None,
+        extractor_version: str | None = None,
+        deleted: bool | None = None,
+    ) -> dict[str, Any] | None:
         """
         Update a claim row and return the updated record (or None if missing).
         """
-        update_parts: List[str] = []
-        params: List[Any] = []
+        update_parts: list[str] = []
+        params: list[Any] = []
 
         if claim_text is not None:
             update_parts.append("claim_text = ?")
@@ -4993,18 +4998,18 @@ class MediaDatabase:
         self,
         claim_id: int,
         *,
-        review_status: Optional[str] = None,
-        reviewer_id: Optional[int] = None,
-        review_group: Optional[str] = None,
-        review_notes: Optional[str] = None,
-        review_reason_code: Optional[str] = None,
-        corrected_text: Optional[str] = None,
-        span_start: Optional[int] = None,
-        span_end: Optional[int] = None,
-        expected_version: Optional[int] = None,
-        action_ip: Optional[str] = None,
-        action_user_agent: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        review_status: str | None = None,
+        reviewer_id: int | None = None,
+        review_group: str | None = None,
+        review_notes: str | None = None,
+        review_reason_code: str | None = None,
+        corrected_text: str | None = None,
+        span_start: int | None = None,
+        span_end: int | None = None,
+        expected_version: int | None = None,
+        action_ip: str | None = None,
+        action_user_agent: str | None = None,
+    ) -> dict[str, Any] | None:
         """
         Update review fields on a claim with optional optimistic locking.
 
@@ -5024,8 +5029,8 @@ class MediaDatabase:
             if expected_version is not None and current_review_version != int(expected_version):
                 return {"conflict": True, "current": dict(row)}
 
-            update_parts: List[str] = []
-            params: List[Any] = []
+            update_parts: list[str] = []
+            params: list[Any] = []
             now = self._get_current_utc_timestamp_str()
 
             if review_status is not None:
@@ -5118,7 +5123,7 @@ class MediaDatabase:
 
         return self.get_claim_with_media(int(claim_id), include_deleted=True)
 
-    def list_claim_review_history(self, claim_id: int) -> List[Dict[str, Any]]:
+    def list_claim_review_history(self, claim_id: int) -> list[dict[str, Any]]:
         """Return ordered review log entries for a claim."""
         cur = self.execute_query(
             "SELECT id, claim_id, old_status, new_status, old_text, new_text, reviewer_id, notes, "
@@ -5135,8 +5140,8 @@ class MediaDatabase:
         user_id: str,
         report_date: str,
         extractor: str,
-        extractor_version: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        extractor_version: str | None = None,
+    ) -> dict[str, Any]:
         version = "" if extractor_version is None else str(extractor_version)
         row = self.execute_query(
             (
@@ -5161,15 +5166,15 @@ class MediaDatabase:
         user_id: str,
         report_date: str,
         extractor: str,
-        extractor_version: Optional[str] = None,
+        extractor_version: str | None = None,
         total_reviewed: int = 0,
         approved_count: int = 0,
         rejected_count: int = 0,
         flagged_count: int = 0,
         reassigned_count: int = 0,
         edited_count: int = 0,
-        reason_code_counts_json: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        reason_code_counts_json: str | None = None,
+    ) -> dict[str, Any]:
         version = "" if extractor_version is None else str(extractor_version)
         now = self._get_current_utc_timestamp_str()
         existing = self.execute_query(
@@ -5182,7 +5187,7 @@ class MediaDatabase:
                 version,
             ),
         ).fetchone()
-        existing_id: Optional[int] = None
+        existing_id: int | None = None
         if existing is not None:
             try:
                 existing_id = int(existing["id"])
@@ -5257,13 +5262,13 @@ class MediaDatabase:
         self,
         *,
         user_id: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        extractor: Optional[str] = None,
-        extractor_version: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        extractor: str | None = None,
+        extractor_version: str | None = None,
         limit: int = 500,
         offset: int = 0,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         try:
             limit = int(limit)
             offset = int(offset)
@@ -5272,8 +5277,8 @@ class MediaDatabase:
         limit = max(1, min(5000, limit))
         offset = max(0, offset)
 
-        conditions: List[str] = ["user_id = ?"]
-        params: List[Any] = [str(user_id)]
+        conditions: list[str] = ["user_id = ?"]
+        params: list[Any] = [str(user_id)]
         if start_date:
             conditions.append("report_date >= ?")
             params.append(str(start_date))
@@ -5302,16 +5307,16 @@ class MediaDatabase:
     def list_review_queue(
         self,
         *,
-        status: Optional[str] = None,
-        reviewer_id: Optional[int] = None,
-        review_group: Optional[str] = None,
-        media_id: Optional[int] = None,
-        extractor: Optional[str] = None,
-        owner_user_id: Optional[int] = None,
+        status: str | None = None,
+        reviewer_id: int | None = None,
+        review_group: str | None = None,
+        media_id: int | None = None,
+        extractor: str | None = None,
+        owner_user_id: int | None = None,
         limit: int = 100,
         offset: int = 0,
         include_deleted: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """List claims in the review queue with optional filters (scoped)."""
         try:
             limit = int(limit)
@@ -5321,8 +5326,8 @@ class MediaDatabase:
         limit = max(1, min(1000, limit))
         offset = max(0, offset)
 
-        conditions: List[str] = ["c.media_id = m.id"]
-        params: List[Any] = []
+        conditions: list[str] = ["c.media_id = m.id"]
+        params: list[Any] = []
 
         if not include_deleted:
             conditions.append("c.deleted = 0")
@@ -5351,7 +5356,7 @@ class MediaDatabase:
             logging.debug(f"Failed to resolve scope for review queue visibility filter: {scope_err}")
             scope = None
         if scope and not scope.is_admin:
-            visibility_parts: List[str] = []
+            visibility_parts: list[str] = []
             user_id_str = str(scope.user_id) if scope.user_id is not None else ""
             if user_id_str:
                 visibility_parts.append(
@@ -5400,14 +5405,14 @@ class MediaDatabase:
         user_id: str,
         *,
         active_only: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Return review assignment rules for a user."""
         sql = (
             "SELECT id, user_id, priority, predicate_json, reviewer_id, review_group, active, "
             "created_at, updated_at "
             "FROM claims_review_rules WHERE user_id = ?"
         )
-        params: List[Any] = [str(user_id)]
+        params: list[Any] = [str(user_id)]
         if active_only:
             sql += " AND active = 1"
         sql += " ORDER BY priority DESC, id DESC"
@@ -5420,10 +5425,10 @@ class MediaDatabase:
         user_id: str,
         priority: int,
         predicate_json: str,
-        reviewer_id: Optional[int] = None,
-        review_group: Optional[str] = None,
+        reviewer_id: int | None = None,
+        review_group: str | None = None,
         active: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Insert a review rule and return it."""
         now = self._get_current_utc_timestamp_str()
         insert_sql = (
@@ -5456,7 +5461,7 @@ class MediaDatabase:
             return {}
         return self.get_claim_review_rule(rule_id)
 
-    def get_claim_review_rule(self, rule_id: int) -> Dict[str, Any]:
+    def get_claim_review_rule(self, rule_id: int) -> dict[str, Any]:
         row = self.execute_query(
             "SELECT id, user_id, priority, predicate_json, reviewer_id, review_group, active, "
             "created_at, updated_at FROM claims_review_rules WHERE id = ?",
@@ -5468,15 +5473,15 @@ class MediaDatabase:
         self,
         rule_id: int,
         *,
-        priority: Optional[int] = None,
-        predicate_json: Optional[str] = None,
-        reviewer_id: Optional[int] = None,
-        review_group: Optional[str] = None,
-        active: Optional[bool] = None,
-    ) -> Dict[str, Any]:
+        priority: int | None = None,
+        predicate_json: str | None = None,
+        reviewer_id: int | None = None,
+        review_group: str | None = None,
+        active: bool | None = None,
+    ) -> dict[str, Any]:
         """Update a review rule and return the updated record."""
-        update_parts: List[str] = []
-        params: List[Any] = []
+        update_parts: list[str] = []
+        params: list[Any] = []
         now = self._get_current_utc_timestamp_str()
 
         if priority is not None:
@@ -5514,7 +5519,7 @@ class MediaDatabase:
             commit=True,
         )
 
-    def get_claims_monitoring_settings(self, user_id: str) -> Dict[str, Any]:
+    def get_claims_monitoring_settings(self, user_id: str) -> dict[str, Any]:
         row = self.execute_query(
             "SELECT id, user_id, threshold_ratio, baseline_ratio, slack_webhook_url, webhook_url, "
             "email_recipients, enabled, created_at, updated_at "
@@ -5527,13 +5532,13 @@ class MediaDatabase:
         self,
         *,
         user_id: str,
-        threshold_ratio: Optional[float] = None,
-        baseline_ratio: Optional[float] = None,
-        slack_webhook_url: Optional[str] = None,
-        webhook_url: Optional[str] = None,
-        email_recipients: Optional[str] = None,
-        enabled: Optional[bool] = None,
-    ) -> Dict[str, Any]:
+        threshold_ratio: float | None = None,
+        baseline_ratio: float | None = None,
+        slack_webhook_url: str | None = None,
+        webhook_url: str | None = None,
+        email_recipients: str | None = None,
+        enabled: bool | None = None,
+    ) -> dict[str, Any]:
         existing = self.get_claims_monitoring_settings(str(user_id))
         now = self._get_current_utc_timestamp_str()
         if not existing:
@@ -5567,8 +5572,8 @@ class MediaDatabase:
                 config_id = cursor.lastrowid
             return self.get_claims_monitoring_settings(str(user_id)) if config_id else {}
 
-        update_parts: List[str] = []
-        params: List[Any] = []
+        update_parts: list[str] = []
+        params: list[Any] = []
         if threshold_ratio is not None:
             update_parts.append("threshold_ratio = ?")
             params.append(float(threshold_ratio))
@@ -5597,7 +5602,7 @@ class MediaDatabase:
         self.execute_query(sql, tuple(params), commit=True)
         return self.get_claims_monitoring_settings(str(user_id))
 
-    def list_claims_monitoring_alerts(self, user_id: str) -> List[Dict[str, Any]]:
+    def list_claims_monitoring_alerts(self, user_id: str) -> list[dict[str, Any]]:
         rows = self.execute_query(
             "SELECT id, user_id, name, alert_type, threshold_ratio, baseline_ratio, channels_json, "
             "slack_webhook_url, webhook_url, email_recipients, enabled, created_at, updated_at "
@@ -5606,7 +5611,7 @@ class MediaDatabase:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def get_claims_monitoring_alert(self, alert_id: int) -> Dict[str, Any]:
+    def get_claims_monitoring_alert(self, alert_id: int) -> dict[str, Any]:
         row = self.execute_query(
             "SELECT id, user_id, name, alert_type, threshold_ratio, baseline_ratio, channels_json, "
             "slack_webhook_url, webhook_url, email_recipients, enabled, created_at, updated_at "
@@ -5622,16 +5627,16 @@ class MediaDatabase:
         name: str,
         alert_type: str,
         channels_json: str,
-        threshold_ratio: Optional[float] = None,
-        baseline_ratio: Optional[float] = None,
-        slack_webhook_url: Optional[str] = None,
-        webhook_url: Optional[str] = None,
-        email_recipients: Optional[str] = None,
+        threshold_ratio: float | None = None,
+        baseline_ratio: float | None = None,
+        slack_webhook_url: str | None = None,
+        webhook_url: str | None = None,
+        email_recipients: str | None = None,
         enabled: bool = True,
-        alert_id: Optional[int] = None,
-        created_at: Optional[str] = None,
-        updated_at: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        alert_id: int | None = None,
+        created_at: str | None = None,
+        updated_at: str | None = None,
+    ) -> dict[str, Any]:
         now = self._get_current_utc_timestamp_str()
         created = created_at or now
         updated = updated_at or now
@@ -5709,18 +5714,18 @@ class MediaDatabase:
         self,
         alert_id: int,
         *,
-        name: Optional[str] = None,
-        alert_type: Optional[str] = None,
-        threshold_ratio: Optional[float] = None,
-        baseline_ratio: Optional[float] = None,
-        channels_json: Optional[str] = None,
-        slack_webhook_url: Optional[str] = None,
-        webhook_url: Optional[str] = None,
-        email_recipients: Optional[str] = None,
-        enabled: Optional[bool] = None,
-    ) -> Dict[str, Any]:
-        update_parts: List[str] = []
-        params: List[Any] = []
+        name: str | None = None,
+        alert_type: str | None = None,
+        threshold_ratio: float | None = None,
+        baseline_ratio: float | None = None,
+        channels_json: str | None = None,
+        slack_webhook_url: str | None = None,
+        webhook_url: str | None = None,
+        email_recipients: str | None = None,
+        enabled: bool | None = None,
+    ) -> dict[str, Any]:
+        update_parts: list[str] = []
+        params: list[Any] = []
         now = self._get_current_utc_timestamp_str()
         if name is not None:
             update_parts.append("name = ?")
@@ -5775,7 +5780,7 @@ class MediaDatabase:
     def list_claims_monitoring_configs(
         self,
         user_id: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """List monitoring configs (alert thresholds + channels) for a user."""
         rows = self.execute_query(
             "SELECT id, user_id, threshold_ratio, baseline_ratio, slack_webhook_url, webhook_url, "
@@ -5789,13 +5794,13 @@ class MediaDatabase:
         self,
         *,
         user_id: str,
-        threshold_ratio: Optional[float] = None,
-        baseline_ratio: Optional[float] = None,
-        slack_webhook_url: Optional[str] = None,
-        webhook_url: Optional[str] = None,
-        email_recipients: Optional[str] = None,
+        threshold_ratio: float | None = None,
+        baseline_ratio: float | None = None,
+        slack_webhook_url: str | None = None,
+        webhook_url: str | None = None,
+        email_recipients: str | None = None,
         enabled: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create a monitoring config row and return it."""
         now = self._get_current_utc_timestamp_str()
         insert_sql = (
@@ -5828,7 +5833,7 @@ class MediaDatabase:
             config_id = cursor.lastrowid
         return self.get_claims_monitoring_config(config_id) if config_id else {}
 
-    def get_claims_monitoring_config(self, config_id: int) -> Dict[str, Any]:
+    def get_claims_monitoring_config(self, config_id: int) -> dict[str, Any]:
         row = self.execute_query(
             "SELECT id, user_id, threshold_ratio, baseline_ratio, slack_webhook_url, webhook_url, "
             "email_recipients, enabled, created_at, updated_at "
@@ -5841,15 +5846,15 @@ class MediaDatabase:
         self,
         config_id: int,
         *,
-        threshold_ratio: Optional[float] = None,
-        baseline_ratio: Optional[float] = None,
-        slack_webhook_url: Optional[str] = None,
-        webhook_url: Optional[str] = None,
-        email_recipients: Optional[str] = None,
-        enabled: Optional[bool] = None,
-    ) -> Dict[str, Any]:
-        update_parts: List[str] = []
-        params: List[Any] = []
+        threshold_ratio: float | None = None,
+        baseline_ratio: float | None = None,
+        slack_webhook_url: str | None = None,
+        webhook_url: str | None = None,
+        email_recipients: str | None = None,
+        enabled: bool | None = None,
+    ) -> dict[str, Any]:
+        update_parts: list[str] = []
+        params: list[Any] = []
         now = self._get_current_utc_timestamp_str()
 
         if threshold_ratio is not None:
@@ -5941,11 +5946,11 @@ class MediaDatabase:
         user_id: str,
         kind: str,
         payload_json: str,
-        target_user_id: Optional[str] = None,
-        target_review_group: Optional[str] = None,
-        resource_type: Optional[str] = None,
-        resource_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        target_user_id: str | None = None,
+        target_review_group: str | None = None,
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+    ) -> dict[str, Any]:
         now = self._get_current_utc_timestamp_str()
         insert_sql = (
             "INSERT INTO claims_notifications "
@@ -5977,7 +5982,7 @@ class MediaDatabase:
             notif_id = cursor.lastrowid
         return self.get_claim_notification(int(notif_id)) if notif_id else {}
 
-    def get_claim_notification(self, notification_id: int) -> Dict[str, Any]:
+    def get_claim_notification(self, notification_id: int) -> dict[str, Any]:
         row = self.execute_query(
             "SELECT id, user_id, kind, target_user_id, target_review_group, resource_type, "
             "resource_id, payload_json, created_at, delivered_at "
@@ -5991,11 +5996,11 @@ class MediaDatabase:
         *,
         user_id: str,
         kind: str,
-        resource_type: Optional[str] = None,
-        resource_id: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+    ) -> dict[str, Any] | None:
         conditions = ["user_id = ?", "kind = ?"]
-        params: List[Any] = [str(user_id), str(kind)]
+        params: list[Any] = [str(user_id), str(kind)]
         if resource_type is not None:
             conditions.append("resource_type = ?")
             params.append(str(resource_type))
@@ -6016,15 +6021,15 @@ class MediaDatabase:
         self,
         *,
         user_id: str,
-        kind: Optional[str] = None,
-        target_user_id: Optional[str] = None,
-        target_review_group: Optional[str] = None,
-        resource_type: Optional[str] = None,
-        resource_id: Optional[str] = None,
-        delivered: Optional[bool] = None,
+        kind: str | None = None,
+        target_user_id: str | None = None,
+        target_review_group: str | None = None,
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+        delivered: bool | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         try:
             limit = int(limit)
             offset = int(offset)
@@ -6033,7 +6038,7 @@ class MediaDatabase:
         limit = max(1, min(1000, limit))
         offset = max(0, offset)
         conditions = ["user_id = ?"]
-        params: List[Any] = [str(user_id)]
+        params: list[Any] = [str(user_id)]
         if kind:
             conditions.append("kind = ?")
             params.append(str(kind))
@@ -6065,7 +6070,7 @@ class MediaDatabase:
         rows = self.execute_query(sql, tuple(params)).fetchall()
         return [dict(row) for row in rows]
 
-    def get_claim_notifications_by_ids(self, ids: List[int]) -> List[Dict[str, Any]]:
+    def get_claim_notifications_by_ids(self, ids: list[int]) -> list[dict[str, Any]]:
         if not ids:
             return []
         placeholders = ",".join("?" * len(ids))
@@ -6077,13 +6082,13 @@ class MediaDatabase:
         rows = self.execute_query(sql, tuple(int(i) for i in ids)).fetchall()
         return [dict(row) for row in rows]
 
-    def mark_claim_notifications_delivered(self, ids: List[int]) -> int:
+    def mark_claim_notifications_delivered(self, ids: list[int]) -> int:
         if not ids:
             return 0
         placeholders = ",".join("?" * len(ids))
         now = self._get_current_utc_timestamp_str()
         sql = f"UPDATE claims_notifications SET delivered_at = ? WHERE id IN ({placeholders})"
-        params: List[Any] = [str(now)]
+        params: list[Any] = [str(now)]
         params.extend([int(i) for i in ids])
         cursor = self.execute_query(sql, tuple(params), commit=True)
         try:
@@ -6091,7 +6096,7 @@ class MediaDatabase:
         except Exception:
             return 0
 
-    def get_claims_by_uuid(self, uuids: List[str]) -> List[Dict[str, Any]]:
+    def get_claims_by_uuid(self, uuids: list[str]) -> list[dict[str, Any]]:
         if not uuids:
             return []
         placeholders = ",".join("?" * len(uuids))
@@ -6102,7 +6107,7 @@ class MediaDatabase:
         rows = self.execute_query(sql, tuple(uuids)).fetchall()
         return [dict(row) for row in rows]
 
-    def get_claim_clusters_by_ids(self, cluster_ids: List[int]) -> List[Dict[str, Any]]:
+    def get_claim_clusters_by_ids(self, cluster_ids: list[int]) -> list[dict[str, Any]]:
         if not cluster_ids:
             return []
         placeholders = ",".join("?" * len(cluster_ids))
@@ -6113,7 +6118,7 @@ class MediaDatabase:
         rows = self.execute_query(sql, tuple(int(cid) for cid in cluster_ids)).fetchall()
         return [dict(row) for row in rows]
 
-    def get_claim_cluster_member_counts(self, cluster_ids: List[int]) -> Dict[int, int]:
+    def get_claim_cluster_member_counts(self, cluster_ids: list[int]) -> dict[int, int]:
         if not cluster_ids:
             return {}
         placeholders = ",".join("?" * len(cluster_ids))
@@ -6123,7 +6128,7 @@ class MediaDatabase:
             "GROUP BY cluster_id"
         )
         rows = self.execute_query(sql, tuple(int(cid) for cid in cluster_ids)).fetchall()
-        counts: Dict[int, int] = {}
+        counts: dict[int, int] = {}
         for row in rows:
             try:
                 counts[int(row[0])] = int(row[1])
@@ -6131,7 +6136,7 @@ class MediaDatabase:
                 continue
         return counts
 
-    def update_claim_clusters_watchlist_counts(self, counts: Dict[int, int]) -> int:
+    def update_claim_clusters_watchlist_counts(self, counts: dict[int, int]) -> int:
         if not counts:
             return 0
         params = [(int(count), int(cluster_id)) for cluster_id, count in counts.items()]
@@ -6146,8 +6151,8 @@ class MediaDatabase:
         *,
         user_id: str,
         event_type: str,
-        severity: Optional[str] = None,
-        payload_json: Optional[str] = None,
+        severity: str | None = None,
+        payload_json: str | None = None,
     ) -> None:
         now = self._get_current_utc_timestamp_str()
         self.execute_query(
@@ -6171,13 +6176,13 @@ class MediaDatabase:
         self,
         *,
         user_id: str,
-        event_type: Optional[str] = None,
-        severity: Optional[str] = None,
-        start_time: Optional[str] = None,
-        end_time: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        conditions: List[str] = ["user_id = ?"]
-        params: List[Any] = [str(user_id)]
+        event_type: str | None = None,
+        severity: str | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+    ) -> list[dict[str, Any]]:
+        conditions: list[str] = ["user_id = ?"]
+        params: list[Any] = [str(user_id)]
         if event_type:
             conditions.append("event_type = ?")
             params.append(str(event_type))
@@ -6206,16 +6211,16 @@ class MediaDatabase:
         self,
         *,
         user_id: str,
-        event_type: Optional[str] = None,
+        event_type: str | None = None,
         limit: int = 500,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         try:
             limit = int(limit)
         except (TypeError, ValueError):
             limit = 500
         limit = max(1, min(5000, limit))
-        conditions: List[str] = ["user_id = ?", "delivered_at IS NULL"]
-        params: List[Any] = [str(user_id)]
+        conditions: list[str] = ["user_id = ?", "delivered_at IS NULL"]
+        params: list[Any] = [str(user_id)]
         if event_type:
             conditions.append("event_type = ?")
             params.append(str(event_type))
@@ -6229,13 +6234,13 @@ class MediaDatabase:
         rows = self.execute_query(sql, tuple(params)).fetchall()
         return [dict(row) for row in rows]
 
-    def mark_claims_monitoring_events_delivered(self, ids: List[int]) -> int:
+    def mark_claims_monitoring_events_delivered(self, ids: list[int]) -> int:
         if not ids:
             return 0
         placeholders = ",".join("?" * len(ids))
         now = self._get_current_utc_timestamp_str()
         sql = f"UPDATE claims_monitoring_events SET delivered_at = ? WHERE id IN ({placeholders})"
-        params: List[Any] = [str(now)]
+        params: list[Any] = [str(now)]
         params.extend([int(i) for i in ids])
         cursor = self.execute_query(sql, tuple(params), commit=True)
         try:
@@ -6247,10 +6252,10 @@ class MediaDatabase:
         self,
         *,
         user_id: str,
-        event_type: Optional[str] = None,
-    ) -> Optional[str]:
-        conditions: List[str] = ["user_id = ?", "delivered_at IS NOT NULL"]
-        params: List[Any] = [str(user_id)]
+        event_type: str | None = None,
+    ) -> str | None:
+        conditions: list[str] = ["user_id = ?", "delivered_at IS NOT NULL"]
+        params: list[Any] = [str(user_id)]
         if event_type:
             conditions.append("event_type = ?")
             params.append(str(event_type))
@@ -6270,7 +6275,7 @@ class MediaDatabase:
             except Exception:
                 return None
 
-    def list_claims_monitoring_user_ids(self) -> List[str]:
+    def list_claims_monitoring_user_ids(self) -> list[str]:
         rows = self.execute_query(
             (
                 "SELECT DISTINCT user_id FROM claims_monitoring_alerts "
@@ -6278,7 +6283,7 @@ class MediaDatabase:
             ),
             tuple(),
         ).fetchall()
-        user_ids: List[str] = []
+        user_ids: list[str] = []
         for row in rows:
             try:
                 user_ids.append(str(row["user_id"]))
@@ -6289,7 +6294,7 @@ class MediaDatabase:
                     continue
         return [uid for uid in user_ids if uid]
 
-    def list_claims_review_user_ids(self) -> List[str]:
+    def list_claims_review_user_ids(self) -> list[str]:
         """Return distinct user IDs with review log activity (Postgres only)."""
         if self.backend_type != BackendType.POSTGRESQL:
             return []
@@ -6302,7 +6307,7 @@ class MediaDatabase:
             ),
             tuple(),
         ).fetchall()
-        user_ids: List[str] = []
+        user_ids: list[str] = []
         for row in rows:
             try:
                 user_id = row["user_id"]
@@ -6316,7 +6321,7 @@ class MediaDatabase:
             user_ids.append(str(user_id))
         return [uid for uid in user_ids if uid]
 
-    def get_claims_monitoring_health(self, user_id: str) -> Dict[str, Any]:
+    def get_claims_monitoring_health(self, user_id: str) -> dict[str, Any]:
         row = self.execute_query(
             "SELECT id, user_id, queue_size, worker_count, last_worker_heartbeat, last_processed_at, "
             "last_failure_at, last_failure_reason, updated_at "
@@ -6330,18 +6335,18 @@ class MediaDatabase:
         *,
         user_id: str,
         queue_size: int,
-        worker_count: Optional[int] = None,
-        last_worker_heartbeat: Optional[str] = None,
-        last_processed_at: Optional[str] = None,
-        last_failure_at: Optional[str] = None,
-        last_failure_reason: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        worker_count: int | None = None,
+        last_worker_heartbeat: str | None = None,
+        last_processed_at: str | None = None,
+        last_failure_at: str | None = None,
+        last_failure_reason: str | None = None,
+    ) -> dict[str, Any]:
         now = self._get_current_utc_timestamp_str()
         existing = self.execute_query(
             "SELECT id FROM claims_monitoring_health WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
             (str(user_id),),
         ).fetchone()
-        existing_id: Optional[int] = None
+        existing_id: int | None = None
         if existing is not None:
             try:
                 existing_id = int(existing["id"])
@@ -6400,12 +6405,12 @@ class MediaDatabase:
         user_id: str,
         format: str,
         status: str,
-        payload_json: Optional[str] = None,
-        payload_csv: Optional[str] = None,
-        filters_json: Optional[str] = None,
-        pagination_json: Optional[str] = None,
-        error_message: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        payload_json: str | None = None,
+        payload_csv: str | None = None,
+        filters_json: str | None = None,
+        pagination_json: str | None = None,
+        error_message: str | None = None,
+    ) -> dict[str, Any]:
         now = self._get_current_utc_timestamp_str()
         self.execute_query(
             (
@@ -6435,9 +6440,9 @@ class MediaDatabase:
         self,
         export_id: str,
         *,
-        user_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        params: List[Any] = [str(export_id)]
+        user_id: str | None = None,
+    ) -> dict[str, Any]:
+        params: list[Any] = [str(export_id)]
         conditions = ["export_id = ?"]
         if user_id is not None:
             conditions.append("user_id = ?")
@@ -6458,11 +6463,11 @@ class MediaDatabase:
         self,
         user_id: str,
         *,
-        status: Optional[str] = None,
-        format: Optional[str] = None,
+        status: str | None = None,
+        format: str | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         try:
             limit = int(limit)
             offset = int(offset)
@@ -6471,7 +6476,7 @@ class MediaDatabase:
         limit = max(1, min(1000, limit))
         offset = max(0, offset)
         conditions = ["user_id = ?"]
-        params: List[Any] = [str(user_id)]
+        params: list[Any] = [str(user_id)]
         if status:
             conditions.append("status = ?")
             params.append(str(status))
@@ -6493,11 +6498,11 @@ class MediaDatabase:
         self,
         user_id: str,
         *,
-        status: Optional[str] = None,
-        format: Optional[str] = None,
+        status: str | None = None,
+        format: str | None = None,
     ) -> int:
         conditions = ["user_id = ?"]
-        params: List[Any] = [str(user_id)]
+        params: list[Any] = [str(user_id)]
         if status:
             conditions.append("status = ?")
             params.append(str(status))
@@ -6550,11 +6555,11 @@ class MediaDatabase:
         *,
         limit: int = 100,
         offset: int = 0,
-        updated_since: Optional[str] = None,
-        keyword: Optional[str] = None,
-        min_size: Optional[int] = None,
-        watchlisted: Optional[bool] = None,
-    ) -> List[Dict[str, Any]]:
+        updated_since: str | None = None,
+        keyword: str | None = None,
+        min_size: int | None = None,
+        watchlisted: bool | None = None,
+    ) -> list[dict[str, Any]]:
         try:
             limit = int(limit)
             offset = int(offset)
@@ -6562,8 +6567,8 @@ class MediaDatabase:
             limit, offset = 100, 0
         limit = max(1, min(1000, limit))
         offset = max(0, offset)
-        conditions: List[str] = ["c.user_id = ?"]
-        params: List[Any] = [str(user_id)]
+        conditions: list[str] = ["c.user_id = ?"]
+        params: list[Any] = [str(user_id)]
         if updated_since:
             conditions.append("c.updated_at >= ?")
             params.append(str(updated_since))
@@ -6595,7 +6600,7 @@ class MediaDatabase:
         rows = self.execute_query(sql, tuple(params)).fetchall()
         return [dict(row) for row in rows]
 
-    def get_claim_cluster(self, cluster_id: int) -> Dict[str, Any]:
+    def get_claim_cluster(self, cluster_id: int) -> dict[str, Any]:
         row = self.execute_query(
             "SELECT id, user_id, canonical_claim_text, representative_claim_id, summary, "
             "cluster_version, watchlist_count, created_at, updated_at "
@@ -6609,7 +6614,7 @@ class MediaDatabase:
         *,
         parent_cluster_id: int,
         child_cluster_id: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         row = self.execute_query(
             (
                 "SELECT parent_cluster_id, child_cluster_id, relation_type, created_at "
@@ -6624,10 +6629,10 @@ class MediaDatabase:
         *,
         cluster_id: int,
         direction: str = "both",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         direction_norm = str(direction or "both").lower()
-        conditions: List[str] = []
-        params: List[Any] = []
+        conditions: list[str] = []
+        params: list[Any] = []
         if direction_norm in {"outbound", "parent"}:
             conditions.append("parent_cluster_id = ?")
             params.append(int(cluster_id))
@@ -6653,8 +6658,8 @@ class MediaDatabase:
         *,
         parent_cluster_id: int,
         child_cluster_id: int,
-        relation_type: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        relation_type: str | None = None,
+    ) -> dict[str, Any]:
         now = self._get_current_utc_timestamp_str()
         self.execute_query(
             (
@@ -6701,7 +6706,7 @@ class MediaDatabase:
         *,
         limit: int = 100,
         offset: int = 0,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         try:
             limit = int(limit)
             offset = int(offset)
@@ -6709,8 +6714,8 @@ class MediaDatabase:
             limit, offset = 100, 0
         limit = max(1, min(1000, limit))
         offset = max(0, offset)
-        conditions: List[str] = ["cm.cluster_id = ?", "c.media_id = m.id"]
-        params: List[Any] = [int(cluster_id)]
+        conditions: list[str] = ["cm.cluster_id = ?", "c.media_id = m.id"]
+        params: list[Any] = [int(cluster_id)]
 
         try:
             scope = get_scope()
@@ -6718,7 +6723,7 @@ class MediaDatabase:
             logging.debug(f"Failed to resolve scope for cluster membership visibility filter: {scope_err}")
             scope = None
         if scope and not scope.is_admin:
-            visibility_parts: List[str] = []
+            visibility_parts: list[str] = []
             user_id_str = str(scope.user_id) if scope.user_id is not None else ""
             if user_id_str:
                 visibility_parts.append(
@@ -6769,10 +6774,10 @@ class MediaDatabase:
         self,
         *,
         user_id: str,
-        canonical_claim_text: Optional[str] = None,
-        representative_claim_id: Optional[int] = None,
-        summary: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        canonical_claim_text: str | None = None,
+        representative_claim_id: int | None = None,
+        summary: str | None = None,
+    ) -> dict[str, Any]:
         now = self._get_current_utc_timestamp_str()
         insert_sql = (
             "INSERT INTO claim_clusters "
@@ -6808,7 +6813,7 @@ class MediaDatabase:
         *,
         cluster_id: int,
         claim_id: int,
-        similarity_score: Optional[float] = None,
+        similarity_score: float | None = None,
     ) -> None:
         now = self._get_current_utc_timestamp_str()
         with self.transaction() as conn:
@@ -6837,7 +6842,7 @@ class MediaDatabase:
         *,
         user_id: str,
         min_size: int = 2,
-    ) -> Dict[str, int]:
+    ) -> dict[str, int]:
         """Rebuild clusters by exact normalized claim text."""
         try:
             min_size = int(min_size)
@@ -6884,7 +6889,7 @@ class MediaDatabase:
                 (str(user_id),),
             )
 
-            groups: Dict[str, List[Dict[str, Any]]] = {}
+            groups: dict[str, list[dict[str, Any]]] = {}
             for r in rows:
                 text = str(r.get("claim_text") or "").strip()
                 if not text:
@@ -6958,8 +6963,8 @@ class MediaDatabase:
         self,
         *,
         user_id: str,
-        clusters: List[Dict[str, Any]],
-    ) -> Dict[str, int]:
+        clusters: list[dict[str, Any]],
+    ) -> dict[str, int]:
         """
         Rebuild clusters from precomputed assignments.
 
@@ -7058,8 +7063,8 @@ class MediaDatabase:
                 clusters_created += 1
 
                 members = cluster.get("members") or []
-                membership_params: List[tuple] = []
-                update_params: List[tuple] = []
+                membership_params: list[tuple] = []
+                update_params: list[tuple] = []
                 for member in members:
                     claim_id = member.get("claim_id")
                     if claim_id is None:
@@ -7209,8 +7214,8 @@ class MediaDatabase:
         *,
         limit: int = 20,
         fallback_to_like: bool = True,
-        owner_user_id: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+        owner_user_id: int | None = None,
+    ) -> list[dict[str, Any]]:
         """Search claims using the configured backend."""
         cleaned_query = (query or "").strip()
         if not cleaned_query:
@@ -7219,7 +7224,7 @@ class MediaDatabase:
             limit = max(1, int(limit))
         except (TypeError, ValueError):
             limit = 20
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         scope = None
         try:
             scope = get_scope()
@@ -7237,13 +7242,13 @@ class MediaDatabase:
                         conn.execute("INSERT INTO claims_fts(claims_fts) VALUES('rebuild')")
                     except sqlite3.Error:
                         pass
-                    conditions: List[str] = ["c.deleted = 0"]
-                    params: List[Any] = []
+                    conditions: list[str] = ["c.deleted = 0"]
+                    params: list[Any] = []
                     if owner_user_id is not None:
                         conditions.append("COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = ?")
                         params.append(str(owner_user_id))
                     if scope and not scope.is_admin:
-                        visibility_parts: List[str] = []
+                        visibility_parts: list[str] = []
                         user_id_str = str(scope.user_id) if scope.user_id is not None else ""
                         if user_id_str:
                             visibility_parts.append(
@@ -7280,13 +7285,13 @@ class MediaDatabase:
                 elif self.backend_type == BackendType.POSTGRESQL:
                     tsquery = FTSQueryTranslator.normalize_query(cleaned_query, 'postgresql')
                     if tsquery:
-                        conditions: List[str] = ["c.deleted IS FALSE"]
-                        params: List[Any] = []
+                        conditions: list[str] = ["c.deleted IS FALSE"]
+                        params: list[Any] = []
                         if owner_user_id is not None:
                             conditions.append("COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = ?")
                             params.append(str(owner_user_id))
                         if scope and not scope.is_admin:
-                            visibility_parts: List[str] = []
+                            visibility_parts: list[str] = []
                             user_id_str = str(scope.user_id) if scope.user_id is not None else ""
                             if user_id_str:
                                 visibility_parts.append(
@@ -7325,8 +7330,8 @@ class MediaDatabase:
                     )
 
                 if fallback_to_like and not results:
-                    like_conditions: List[str] = []
-                    like_params: List[Any] = []
+                    like_conditions: list[str] = []
+                    like_params: list[Any] = []
                     if owner_user_id is not None:
                         like_conditions.append("COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = ?")
                         like_params.append(str(owner_user_id))
@@ -7388,7 +7393,7 @@ class MediaDatabase:
     # -------------------------
     # Data Tables helpers
     # -------------------------
-    def _resolve_data_tables_owner(self, owner_user_id: Optional[int]) -> Optional[str]:
+    def _resolve_data_tables_owner(self, owner_user_id: int | None) -> str | None:
         """Resolve the owner user id for data table queries."""
         if owner_user_id is not None:
             return str(owner_user_id)
@@ -7401,7 +7406,7 @@ class MediaDatabase:
             return str(scope.user_id)
         return None
 
-    def _get_data_table_owner_client_id(self, conn, table_id: int) -> Optional[str]:
+    def _get_data_table_owner_client_id(self, conn, table_id: int) -> str | None:
         """Fetch the owning client_id for a data table id."""
         row = self._fetchone_with_connection(
             conn,
@@ -7417,15 +7422,15 @@ class MediaDatabase:
         *,
         name: str,
         prompt: str,
-        description: Optional[str] = None,
-        workspace_tag: Optional[str] = None,
-        column_hints: Optional[Union[str, Dict[str, Any], List[Any]]] = None,
+        description: str | None = None,
+        workspace_tag: str | None = None,
+        column_hints: Union[str, dict[str, Any], list[Any]] | None = None,
         status: str = "queued",
         row_count: int = 0,
-        generation_model: Optional[str] = None,
-        table_uuid: Optional[str] = None,
-        owner_user_id: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        generation_model: str | None = None,
+        table_uuid: str | None = None,
+        owner_user_id: int | None = None,
+    ) -> dict[str, Any]:
         """Create a data table metadata record and return the row."""
         if not name:
             raise InputError("name is required")
@@ -7488,12 +7493,12 @@ class MediaDatabase:
         table_id: int,
         *,
         include_deleted: bool = False,
-        owner_user_id: Optional[int] = None,
-    ) -> Optional[Dict[str, Any]]:
+        owner_user_id: int | None = None,
+    ) -> dict[str, Any] | None:
         """Fetch a data table by id."""
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
         conditions = ["id = ?"]
-        params: List[Any] = [int(table_id)]
+        params: list[Any] = [int(table_id)]
         if not include_deleted:
             conditions.append("deleted = 0")
         if owner_filter is not None:
@@ -7508,14 +7513,14 @@ class MediaDatabase:
         table_uuid: str,
         *,
         include_deleted: bool = False,
-        owner_user_id: Optional[int] = None,
-    ) -> Optional[Dict[str, Any]]:
+        owner_user_id: int | None = None,
+    ) -> dict[str, Any] | None:
         """Fetch a data table by uuid."""
         if not table_uuid:
             return None
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
         conditions = ["uuid = ?"]
-        params: List[Any] = [str(table_uuid)]
+        params: list[Any] = [str(table_uuid)]
         if not include_deleted:
             conditions.append("deleted = 0")
         if owner_filter is not None:
@@ -7528,14 +7533,14 @@ class MediaDatabase:
     def list_data_tables(
         self,
         *,
-        status: Optional[str] = None,
-        search: Optional[str] = None,
-        workspace_tag: Optional[str] = None,
+        status: str | None = None,
+        search: str | None = None,
+        workspace_tag: str | None = None,
         limit: int = 50,
         offset: int = 0,
         include_deleted: bool = False,
-        owner_user_id: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+        owner_user_id: int | None = None,
+    ) -> list[dict[str, Any]]:
         """List data tables with optional filters."""
         try:
             limit = int(limit)
@@ -7546,8 +7551,8 @@ class MediaDatabase:
         offset = max(0, offset)
 
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
-        conditions: List[str] = []
-        params: List[Any] = []
+        conditions: list[str] = []
+        params: list[Any] = []
         if not include_deleted:
             conditions.append("deleted = 0")
         if owner_filter is not None:
@@ -7579,16 +7584,16 @@ class MediaDatabase:
     def count_data_tables(
         self,
         *,
-        status: Optional[str] = None,
-        search: Optional[str] = None,
-        workspace_tag: Optional[str] = None,
+        status: str | None = None,
+        search: str | None = None,
+        workspace_tag: str | None = None,
         include_deleted: bool = False,
-        owner_user_id: Optional[int] = None,
+        owner_user_id: int | None = None,
     ) -> int:
         """Count data tables matching optional filters."""
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
-        conditions: List[str] = []
-        params: List[Any] = []
+        conditions: list[str] = []
+        params: list[Any] = []
         if not include_deleted:
             conditions.append("deleted = 0")
         if owner_filter is not None:
@@ -7619,10 +7624,10 @@ class MediaDatabase:
 
     def get_data_table_counts(
         self,
-        table_ids: List[int],
+        table_ids: list[int],
         *,
-        owner_user_id: Optional[int] = None,
-    ) -> Dict[int, Dict[str, int]]:
+        owner_user_id: int | None = None,
+    ) -> dict[int, dict[str, int]]:
         """Return column/source counts for the provided table ids."""
         ids = [int(table_id) for table_id in table_ids if table_id is not None]
         if not ids:
@@ -7630,7 +7635,7 @@ class MediaDatabase:
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
         placeholders = ",".join(["?"] * len(ids))
         owner_clause = ""
-        params: List[Any] = list(ids)
+        params: list[Any] = list(ids)
         if owner_filter is not None:
             owner_clause = " AND dt.client_id = ?"
             params.append(owner_filter)
@@ -7649,7 +7654,7 @@ class MediaDatabase:
         columns_rows = self.execute_query(columns_sql, tuple(params)).fetchall()
         sources_rows = self.execute_query(sources_sql, tuple(params)).fetchall()
 
-        counts: Dict[int, Dict[str, int]] = {
+        counts: dict[int, dict[str, int]] = {
             table_id: {"column_count": 0, "source_count": 0} for table_id in ids
         }
         for row in columns_rows:
@@ -7666,20 +7671,20 @@ class MediaDatabase:
         self,
         table_id: int,
         *,
-        owner_user_id: Optional[int] = None,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
-        prompt: Optional[str] = None,
-        status: Optional[str] = None,
-        row_count: Optional[int] = None,
-        generation_model: Optional[str] = None,
-        last_error: Optional[str] = None,
-        column_hints: Optional[Union[str, Dict[str, Any], List[Any]]] = None,
-    ) -> Optional[Dict[str, Any]]:
+        owner_user_id: int | None = None,
+        name: str | None = None,
+        description: str | None = None,
+        prompt: str | None = None,
+        status: str | None = None,
+        row_count: int | None = None,
+        generation_model: str | None = None,
+        last_error: str | None = None,
+        column_hints: Union[str, dict[str, Any], list[Any]] | None = None,
+    ) -> dict[str, Any] | None:
         """Update data table metadata and return the updated row."""
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
-        update_parts: List[str] = []
-        params: List[Any] = []
+        update_parts: list[str] = []
+        params: list[Any] = []
 
         if name is not None:
             update_parts.append("name = ?")
@@ -7734,12 +7739,12 @@ class MediaDatabase:
         self.execute_query(sql, tuple(params), commit=True)
         return self.get_data_table(int(table_id), include_deleted=True, owner_user_id=owner_user_id)
 
-    def soft_delete_data_table(self, table_id: int, owner_user_id: Optional[int] = None) -> bool:
+    def soft_delete_data_table(self, table_id: int, owner_user_id: int | None = None) -> bool:
         """Soft delete a data table and its related rows."""
         now = self._get_current_utc_timestamp_str()
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
         with self.transaction() as conn:
-            params: List[Any] = [now, now, str(self.client_id), int(table_id)]
+            params: list[Any] = [now, now, str(self.client_id), int(table_id)]
             where_clause = "WHERE id = ? AND deleted = 0"
             if owner_filter is not None:
                 where_clause += " AND client_id = ?"
@@ -7773,12 +7778,12 @@ class MediaDatabase:
         table_id: int,
         now: str,
         *,
-        owner_user_id: Optional[int] = None,
+        owner_user_id: int | None = None,
     ) -> None:
         """Soft delete data table child records within a transaction."""
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
         where_clause = "WHERE table_id = ? AND deleted = 0"
-        params: List[Any] = [now, str(self.client_id), int(table_id)]
+        params: list[Any] = [now, str(self.client_id), int(table_id)]
         if owner_filter is not None:
             where_clause += " AND client_id = ?"
             params.append(owner_filter)
@@ -7799,9 +7804,9 @@ class MediaDatabase:
     def insert_data_table_columns(
         self,
         table_id: int,
-        columns: List[Dict[str, Any]],
+        columns: list[dict[str, Any]],
         *,
-        owner_user_id: Optional[int] = None,
+        owner_user_id: int | None = None,
     ) -> int:
         """Insert data table columns and return count inserted."""
         if not columns:
@@ -7815,7 +7820,7 @@ class MediaDatabase:
             if not owned:
                 return 0
         now = self._get_current_utc_timestamp_str()
-        rows: List[tuple] = []
+        rows: list[tuple] = []
         for idx, column in enumerate(columns):
             name = column.get("name")
             col_type = column.get("type")
@@ -7860,12 +7865,12 @@ class MediaDatabase:
         table_id: int,
         *,
         include_deleted: bool = False,
-        owner_user_id: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+        owner_user_id: int | None = None,
+    ) -> list[dict[str, Any]]:
         """List columns for a data table."""
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
         conditions = ["table_id = ?"]
-        params: List[Any] = [int(table_id)]
+        params: list[Any] = [int(table_id)]
         if not include_deleted:
             conditions.append("deleted = 0")
         if owner_filter is not None:
@@ -7882,12 +7887,12 @@ class MediaDatabase:
     def soft_delete_data_table_columns(
         self,
         table_id: int,
-        owner_user_id: Optional[int] = None,
+        owner_user_id: int | None = None,
     ) -> int:
         """Soft delete columns for a data table."""
         now = self._get_current_utc_timestamp_str()
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
-        params: List[Any] = [now, str(self.client_id), int(table_id)]
+        params: list[Any] = [now, str(self.client_id), int(table_id)]
         where_clause = "WHERE table_id = ? AND deleted = 0"
         if owner_filter is not None:
             where_clause += " AND client_id = ?"
@@ -7910,7 +7915,7 @@ class MediaDatabase:
         self,
         row_json: Any,
         *,
-        column_ids: Optional[set[str]] = None,
+        column_ids: set[str] | None = None,
         validate_keys: bool = True,
     ) -> str:
         """Normalize row_json to a JSON string and validate column keys."""
@@ -7928,7 +7933,7 @@ class MediaDatabase:
                 raise InputError("column_ids are required for row_json validation")
             if not isinstance(payload, dict):
                 raise InputError("row_json must be an object keyed by column_id")
-            normalized: Dict[str, Any] = {str(key): value for key, value in payload.items()}
+            normalized: dict[str, Any] = {str(key): value for key, value in payload.items()}
             invalid = [key for key in normalized.keys() if key not in column_ids]
             if invalid:
                 raise InputError(f"row_json contains unknown column_id(s): {', '.join(invalid)}")
@@ -7941,10 +7946,10 @@ class MediaDatabase:
     def insert_data_table_rows(
         self,
         table_id: int,
-        rows: List[Dict[str, Any]],
+        rows: list[dict[str, Any]],
         *,
         validate_keys: bool = True,
-        owner_user_id: Optional[int] = None,
+        owner_user_id: int | None = None,
     ) -> int:
         """Insert data table rows and return count inserted."""
         if not rows:
@@ -7957,7 +7962,7 @@ class MediaDatabase:
             ).fetchone()
             if not owned:
                 return 0
-        column_ids: Optional[set[str]] = None
+        column_ids: set[str] | None = None
         if validate_keys:
             columns = self.list_data_table_columns(int(table_id), owner_user_id=owner_user_id)
             if not columns:
@@ -7966,7 +7971,7 @@ class MediaDatabase:
             if "" in column_ids:
                 column_ids.discard("")
         now = self._get_current_utc_timestamp_str()
-        insert_rows: List[tuple] = []
+        insert_rows: list[tuple] = []
         for idx, row in enumerate(rows):
             row_json = row.get("row_json", row.get("data"))
             row_json = self._normalize_data_table_row_json(
@@ -8014,9 +8019,9 @@ class MediaDatabase:
         table_id: int,
         *,
         owner_user_id: str,
-        columns: List[Dict[str, Any]],
-        rows: List[Dict[str, Any]],
-    ) -> Tuple[int, int]:
+        columns: list[dict[str, Any]],
+        rows: list[dict[str, Any]],
+    ) -> tuple[int, int]:
         """Replace data table columns and rows, returning counts inserted."""
         owner_value = str(owner_user_id).strip()
         if not owner_value:
@@ -8027,7 +8032,7 @@ class MediaDatabase:
             raise InputError("rows are required")
 
         now = self._get_current_utc_timestamp_str()
-        column_rows: List[tuple] = []
+        column_rows: list[tuple] = []
         for idx, column in enumerate(columns):
             name = column.get("name")
             col_type = column.get("type")
@@ -8055,7 +8060,7 @@ class MediaDatabase:
             )
         column_ids = {str(row[1]) for row in column_rows}
 
-        row_rows: List[tuple] = []
+        row_rows: list[tuple] = []
         for idx, row in enumerate(rows):
             row_json = row.get("row_json", row.get("data"))
             row_json = self._normalize_data_table_row_json(
@@ -8143,15 +8148,15 @@ class MediaDatabase:
         self,
         table_id: int,
         *,
-        columns: List[Dict[str, Any]],
-        rows: List[Dict[str, Any]],
-        sources: Optional[List[Dict[str, Any]]] = None,
+        columns: list[dict[str, Any]],
+        rows: list[dict[str, Any]],
+        sources: list[dict[str, Any]] | None = None,
         status: str = "ready",
-        row_count: Optional[int] = None,
-        generation_model: Optional[str] = None,
+        row_count: int | None = None,
+        generation_model: str | None = None,
         last_error: Any = None,
-        owner_user_id: Optional[int] = None,
-    ) -> Optional[Dict[str, Any]]:
+        owner_user_id: int | None = None,
+    ) -> dict[str, Any] | None:
         """Persist generated table data and update table metadata.
 
         If owner_user_id is provided, it must match the table owner.
@@ -8167,7 +8172,7 @@ class MediaDatabase:
             raise InputError("rows are required")
 
         now = self._get_current_utc_timestamp_str()
-        column_rows: List[tuple] = []
+        column_rows: list[tuple] = []
         for idx, column in enumerate(columns):
             name = column.get("name")
             col_type = column.get("type")
@@ -8195,7 +8200,7 @@ class MediaDatabase:
             )
         column_ids = {str(row[1]) for row in column_rows}
 
-        row_rows: List[tuple] = []
+        row_rows: list[tuple] = []
         for idx, row in enumerate(rows):
             row_json = row.get("row_json", row.get("data"))
             row_json = self._normalize_data_table_row_json(
@@ -8225,7 +8230,7 @@ class MediaDatabase:
                 )
             )
 
-        source_rows: List[tuple] = []
+        source_rows: list[tuple] = []
         if sources is not None:
             for src in sources:
                 source_type = src.get("source_type")
@@ -8257,7 +8262,7 @@ class MediaDatabase:
                 )
 
         update_parts = ["status = ?", "row_count = ?", "last_error = ?"]
-        params: List[Any] = [
+        params: list[Any] = [
             status,
             int(row_count if row_count is not None else len(rows)),
             last_error,
@@ -8364,8 +8369,8 @@ class MediaDatabase:
         limit: int = 200,
         offset: int = 0,
         include_deleted: bool = False,
-        owner_user_id: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+        owner_user_id: int | None = None,
+    ) -> list[dict[str, Any]]:
         """List rows for a data table."""
         try:
             limit = int(limit)
@@ -8376,7 +8381,7 @@ class MediaDatabase:
         offset = max(0, offset)
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
         conditions = ["table_id = ?"]
-        params: List[Any] = [int(table_id)]
+        params: list[Any] = [int(table_id)]
         if not include_deleted:
             conditions.append("deleted = 0")
         if owner_filter is not None:
@@ -8394,12 +8399,12 @@ class MediaDatabase:
     def soft_delete_data_table_rows(
         self,
         table_id: int,
-        owner_user_id: Optional[int] = None,
+        owner_user_id: int | None = None,
     ) -> int:
         """Soft delete rows for a data table."""
         now = self._get_current_utc_timestamp_str()
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
-        params: List[Any] = [now, str(self.client_id), int(table_id)]
+        params: list[Any] = [now, str(self.client_id), int(table_id)]
         where_clause = "WHERE table_id = ? AND deleted = 0"
         if owner_filter is not None:
             where_clause += " AND client_id = ?"
@@ -8421,9 +8426,9 @@ class MediaDatabase:
     def insert_data_table_sources(
         self,
         table_id: int,
-        sources: List[Dict[str, Any]],
+        sources: list[dict[str, Any]],
         *,
-        owner_user_id: Optional[int] = None,
+        owner_user_id: int | None = None,
     ) -> int:
         """Insert sources for a data table and return count inserted."""
         if not sources:
@@ -8437,7 +8442,7 @@ class MediaDatabase:
             if not owned:
                 return 0
         now = self._get_current_utc_timestamp_str()
-        rows: List[tuple] = []
+        rows: list[tuple] = []
         for src in sources:
             source_type = src.get("source_type")
             source_id = src.get("source_id")
@@ -8485,12 +8490,12 @@ class MediaDatabase:
         table_id: int,
         *,
         include_deleted: bool = False,
-        owner_user_id: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+        owner_user_id: int | None = None,
+    ) -> list[dict[str, Any]]:
         """List sources for a data table."""
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
         conditions = ["table_id = ?"]
-        params: List[Any] = [int(table_id)]
+        params: list[Any] = [int(table_id)]
         if not include_deleted:
             conditions.append("deleted = 0")
         if owner_filter is not None:
@@ -8507,12 +8512,12 @@ class MediaDatabase:
     def soft_delete_data_table_sources(
         self,
         table_id: int,
-        owner_user_id: Optional[int] = None,
+        owner_user_id: int | None = None,
     ) -> int:
         """Soft delete sources for a data table."""
         now = self._get_current_utc_timestamp_str()
         owner_filter = self._resolve_data_tables_owner(owner_user_id)
-        params: List[Any] = [now, str(self.client_id), int(table_id)]
+        params: list[Any] = [now, str(self.client_id), int(table_id)]
         where_clause = "WHERE table_id = ? AND deleted = 0"
         if owner_filter is not None:
             where_clause += " AND client_id = ?"
@@ -8560,7 +8565,7 @@ class MediaDatabase:
         """
         return str(uuid.uuid4())
 
-    def _get_next_version(self, conn: sqlite3.Connection, table: str, id_col: str, id_val: Any) -> Optional[Tuple[int, int]]:
+    def _get_next_version(self, conn: sqlite3.Connection, table: str, id_col: str, id_val: Any) -> tuple[int, int] | None:
         """
         Internal helper to get the current and next sync version for a record.
 
@@ -8602,7 +8607,7 @@ class MediaDatabase:
         return None
 
     # --- Internal Sync Logging Helper ---
-    def _log_sync_event(self, conn: sqlite3.Connection, entity: str, entity_uuid: str, operation: str, version: int, payload: Optional[Dict] = None):
+    def _log_sync_event(self, conn: sqlite3.Connection, entity: str, entity_uuid: str, operation: str, version: int, payload: dict | None = None):
         """
         Internal helper to insert a record into the sync_log table.
 
@@ -8677,7 +8682,7 @@ class MediaDatabase:
             raise DatabaseError(f"Failed to log sync event: {e}") from e
 
     # --- NEW: Internal FTS Helper Methods ---
-    def _update_fts_media(self, conn: sqlite3.Connection, media_id: int, title: str, content: Optional[str]):
+    def _update_fts_media(self, conn: sqlite3.Connection, media_id: int, title: str, content: str | None):
         """
         Internal helper to update or insert into the media_fts table.
 
@@ -8698,7 +8703,9 @@ class MediaDatabase:
             content = content or ""
             # Optional: append synonyms expansions to content for index-time synonyming
             try:
-                from tldw_Server_API.app.core.RAG.rag_service.synonyms_registry import get_corpus_synonyms  # type: ignore
+                from tldw_Server_API.app.core.RAG.rag_service.synonyms_registry import (
+                    get_corpus_synonyms,  # type: ignore
+                )
                 corpus = os.getenv("DEFAULT_FTS_CORPUS", "").strip() or None
                 syn_map = get_corpus_synonyms(corpus)
             except Exception:
@@ -8890,20 +8897,20 @@ class MediaDatabase:
 
     def search_media_db(
         self,
-        search_query: Optional[str], # Main text for FTS/LIKE (can be pre-formatted for exact phrase)
-        search_fields: Optional[List[str]] = None,
-        media_types: Optional[List[str]] = None,
-        date_range: Optional[Dict[str, datetime]] = None, # Expects datetime objects
-        must_have_keywords: Optional[List[str]] = None,
-        must_not_have_keywords: Optional[List[str]] = None,
-        sort_by: Optional[str] = "last_modified_desc", # Default sort order
+        search_query: str | None, # Main text for FTS/LIKE (can be pre-formatted for exact phrase)
+        search_fields: list[str] | None = None,
+        media_types: list[str] | None = None,
+        date_range: dict[str, datetime] | None = None, # Expects datetime objects
+        must_have_keywords: list[str] | None = None,
+        must_not_have_keywords: list[str] | None = None,
+        sort_by: str | None = "last_modified_desc", # Default sort order
         # boost_fields: Optional[Dict[str, float]] = None, # Future: for FTS boosting
-        media_ids_filter: Optional[List[Union[int, str]]] = None,
+        media_ids_filter: list[Union[int, str]] | None = None,
         page: int = 1,
         results_per_page: int = 20,
         include_trash: bool = False,
         include_deleted: bool = False
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         Searches media items based on a variety of criteria, supporting text search,
         filtering, and sorting.
@@ -9014,14 +9021,14 @@ class MediaDatabase:
         joins = []
         conditions = []
         params = []
-        fts_condition_index: Optional[int] = None
-        fts_param_index: Optional[int] = None
+        fts_condition_index: int | None = None
+        fts_param_index: int | None = None
         fts_join_added = False
         fts_relevance_added = False
 
-        fts_select_params: List[Any] = []
-        fts_condition_params: List[Any] = []
-        postgres_tsquery: Optional[str] = None
+        fts_select_params: list[Any] = []
+        fts_condition_params: list[Any] = []
+        postgres_tsquery: str | None = None
 
         def _is_sqlite_fts_query_error(err: Exception) -> bool:
             if self.backend_type != BackendType.SQLITE or fts_condition_index is None:
@@ -9170,7 +9177,7 @@ class MediaDatabase:
 
             if any(f in sanitized_text_search_fields for f in ["title", "content"]):
                 fts_search_active = True
-                fts_query_parts: List[str] = []
+                fts_query_parts: list[str] = []
 
                 if len(search_query) <= 2 and not (search_query.startswith('"') and search_query.endswith('"')):
                     fts_query_parts.append(f"{search_query}*")
@@ -9207,7 +9214,7 @@ class MediaDatabase:
                     logging.warning("FTS requested for unsupported backend %s", self.backend_type)
                     fts_search_active = False
 
-                title_content_like_parts: List[str] = []
+                title_content_like_parts: list[str] = []
                 for field in ["title", "content"]:
                     if field in sanitized_text_search_fields:
                         column = f"m.{field}"
@@ -9229,7 +9236,7 @@ class MediaDatabase:
 
             like_fields_to_search = [f for f in sanitized_text_search_fields if f in ["author", "type"]]
             if like_fields_to_search:
-                like_parts: List[str] = []
+                like_parts: list[str] = []
                 for field in like_fields_to_search:
                     if field == "type" and media_types:
                         logging.debug("LIKE search on 'type' skipped due to active 'media_types' filter.")
@@ -9459,12 +9466,12 @@ class MediaDatabase:
 
     def search_by_safe_metadata(
         self,
-        filters: Optional[List[Dict[str, Any]]] = None,
+        filters: list[dict[str, Any]] | None = None,
         match_all: bool = True,
         page: int = 1,
         per_page: int = 20,
         group_by_media: bool = True,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """Search by fields inside DocumentVersions.safe_metadata and identifiers table.
 
         - filters: [{field, op, value}] where op in (eq, contains, icontains, startswith, endswith)
@@ -9474,8 +9481,8 @@ class MediaDatabase:
         """
         try:
             offset = (max(1, page) - 1) * per_page
-            clauses: List[str] = ["dv.deleted = 0", "m.deleted = 0"]
-            params: List[Any] = []
+            clauses: list[str] = ["dv.deleted = 0", "m.deleted = 0"]
+            params: list[Any] = []
             join_ident = False
 
             id_fields = {"doi","pmid","pmcid","arxiv_id","s2_paper_id"}
@@ -9487,7 +9494,7 @@ class MediaDatabase:
                 'endswith': lambda col: (f"{col} LIKE ?", lambda v: f"%{v}"),
             }
 
-            filter_exprs: List[str] = []
+            filter_exprs: list[str] = []
             if filters:
                 for flt in filters:
                     field = (flt.get('field') or '').strip()
@@ -9574,7 +9581,7 @@ class MediaDatabase:
         except Exception as e:
             logging.error(f"Metadata search failed: {e}", exc_info=True)
             raise DatabaseError(f"Failed metadata search: {e}")
-    def add_keyword(self, keyword: str, conn: Optional[Any] = None) -> Tuple[Optional[int], Optional[str]]:
+    def add_keyword(self, keyword: str, conn: Any | None = None) -> tuple[int | None, str | None]:
         """
         Adds a new keyword or undeletes an existing soft-deleted one.
 
@@ -9757,8 +9764,8 @@ class MediaDatabase:
             logger.error(f"Unexpected error in add_keyword for '{keyword}': {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error adding/updating keyword: {e}") from e
 
-    def fetch_media_for_keywords(self, keywords: List[str], include_trash: bool = False) -> Dict[
-        str, List[Dict[str, Any]]]:
+    def fetch_media_for_keywords(self, keywords: list[str], include_trash: bool = False) -> dict[
+        str, list[dict[str, Any]]]:
         """
         Fetches all active, non-deleted media items associated with each of the
         provided active keywords.
@@ -9810,7 +9817,7 @@ class MediaDatabase:
         placeholders = ','.join('?' * len(unique_clean_keywords))
 
         media_conditions = ["m.deleted = ?"]
-        media_params: List[Any] = [False]
+        media_params: list[Any] = [False]
         if not include_trash:
             media_conditions.append("m.is_trash = ?")
             media_params.append(False)
@@ -9843,7 +9850,7 @@ class MediaDatabase:
 
         # Initialize results dictionary. Keys will be the cleaned, unique input keywords.
         # If a keyword has no matching media, its list will remain empty.
-        results_by_keyword: Dict[str, List[Dict[str, Any]]] = {kw: [] for kw in unique_clean_keywords}
+        results_by_keyword: dict[str, list[dict[str, Any]]] = {kw: [] for kw in unique_clean_keywords}
 
         try:
             conn = self.get_connection()
@@ -9898,7 +9905,7 @@ class MediaDatabase:
             logger.error(f"Unexpected error fetching media for keywords from DB {self.db_path_str}: {e}", exc_info=True)
             raise DatabaseError(f"An unexpected error occurred while fetching media for keywords: {e}") from e
 
-    def get_sync_log_entries(self, since_change_id: int = 0, limit: Optional[int] = None) -> List[Dict]:
+    def get_sync_log_entries(self, since_change_id: int = 0, limit: int | None = None) -> list[dict]:
         """
         Retrieves sync log entries newer than a given change_id.
 
@@ -9945,7 +9952,7 @@ class MediaDatabase:
             logger.error(f"Error fetching sync log entries from DB '{self.db_path_str}': {e}")
             raise DatabaseError("Failed to fetch sync log entries") from e
 
-    def delete_sync_log_entries(self, change_ids: List[int]) -> int:
+    def delete_sync_log_entries(self, change_ids: list[int]) -> int:
         """
         Deletes specific sync log entries by their change_id.
 
@@ -10134,7 +10141,9 @@ class MediaDatabase:
             logger.info(f"Soft delete successful for Media ID: {media_id}.")
             # Invalidate agentic intra-doc paragraph vectors for this document
             try:
-                from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import invalidate_intra_doc_vectors  # lazy import
+                from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import (
+                    invalidate_intra_doc_vectors,  # lazy import
+                )
                 invalidate_intra_doc_vectors(str(media_id))
             except Exception:
                 pass
@@ -10154,8 +10163,8 @@ class MediaDatabase:
         media_id: int,
         visibility: str,
         *,
-        org_id: Optional[int] = None,
-        team_id: Optional[int] = None,
+        org_id: int | None = None,
+        team_id: int | None = None,
     ) -> bool:
         """
         Share media by changing its visibility scope.
@@ -10251,7 +10260,7 @@ class MediaDatabase:
         """
         return self.share_media(media_id, visibility='personal')
 
-    def get_media_visibility(self, media_id: int) -> Optional[Dict[str, Any]]:
+    def get_media_visibility(self, media_id: int) -> dict[str, Any] | None:
         """
         Get the current visibility settings for a media item.
 
@@ -10281,24 +10290,24 @@ class MediaDatabase:
     def add_media_with_keywords(
             self,
             *,
-            url: Optional[str] = None,
-            title: Optional[str] = None,
-            media_type: Optional[str] = None,
-            content: Optional[str] = None,
-            keywords: Optional[List[str]] = None,
-            prompt: Optional[str] = None,
-            analysis_content: Optional[str] = None,
-            safe_metadata: Optional[str] = None,
-            source_hash: Optional[str] = None,
-            transcription_model: Optional[str] = None,
-            author: Optional[str] = None,
-            ingestion_date: Optional[str] = None,
+            url: str | None = None,
+            title: str | None = None,
+            media_type: str | None = None,
+            content: str | None = None,
+            keywords: list[str] | None = None,
+            prompt: str | None = None,
+            analysis_content: str | None = None,
+            safe_metadata: str | None = None,
+            source_hash: str | None = None,
+            transcription_model: str | None = None,
+            author: str | None = None,
+            ingestion_date: str | None = None,
             overwrite: bool = False,
-            chunk_options: Optional[Dict] = None,
-            chunks: Optional[List[Dict[str, Any]]] = None,
-            visibility: Optional[str] = None,
-            owner_user_id: Optional[int] = None,
-    ) -> Tuple[Optional[int], Optional[str], str]:
+            chunk_options: dict | None = None,
+            chunks: list[dict[str, Any]] | None = None,
+            visibility: str | None = None,
+            owner_user_id: int | None = None,
+    ) -> tuple[int | None, str | None, str]:
         """Add or update a media record, handle keyword links, optional chunks and full-text sync.
 
         Args:
@@ -10387,12 +10396,12 @@ class MediaDatabase:
             version_: int,
             *,
             chunk_status: str,
-            source_hash: Optional[str],
-            org_id: Optional[int],
-            team_id: Optional[int],
+            source_hash: str | None,
+            org_id: int | None,
+            team_id: int | None,
             visibility: str,
-            owner_user_id: Optional[int],
-        ) -> Dict[str, Any]:
+            owner_user_id: int | None,
+        ) -> dict[str, Any]:
             """Return a dict suitable for INSERT/UPDATE parameters and for sync logging."""
             bool_false = False if self.backend_type == BackendType.POSTGRESQL else 0
             return {
@@ -10467,13 +10476,13 @@ class MediaDatabase:
         # ------------------------------------------------------------------
         try:
             with self.transaction() as conn:
-                def _exec(query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+                def _exec(query: str, params: Union[tuple, list, dict] | None = None):
                     return self._execute_with_connection(conn, query, params)
 
-                def _fetchone(query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+                def _fetchone(query: str, params: Union[tuple, list, dict] | None = None):
                     return self._fetchone_with_connection(conn, query, params)
 
-                def _fetchall(query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+                def _fetchall(query: str, params: Union[tuple, list, dict] | None = None):
                     return self._fetchall_with_connection(conn, query, params)
 
                 # Find existing record by URL or content_hash
@@ -10524,8 +10533,8 @@ class MediaDatabase:
                                 )
                                 new_ver = current_ver + 1
                                 update_fields = []
-                                update_params: List[Any] = []
-                                payload_updates: Dict[str, Any] = {"last_modified": now}
+                                update_params: list[Any] = []
+                                payload_updates: dict[str, Any] = {"last_modified": now}
                                 if chunk_status_update_needed:
                                     update_fields.append("chunking_status = ?")
                                     update_params.append("completed")
@@ -10638,7 +10647,9 @@ class MediaDatabase:
                             logging.debug(f"Highlight re-anchoring hook failed (non-fatal): {_anch_err}")
                         # Invalidate agentic intra-doc vectors on content update
                         try:
-                            from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import invalidate_intra_doc_vectors  # lazy import
+                            from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import (
+                                invalidate_intra_doc_vectors,  # lazy import
+                            )
                             invalidate_intra_doc_vectors(str(media_id))
                         except Exception:
                             pass
@@ -10771,14 +10782,16 @@ class MediaDatabase:
 
                     # Optionally populate structure index based on provided chunks metadata
                     try:
-                        from tldw_Server_API.app.core.config import rag_enable_structure_index  # lazy import to avoid heavy deps
+                        from tldw_Server_API.app.core.config import (
+                            rag_enable_structure_index,  # lazy import to avoid heavy deps
+                        )
                         enable_si = rag_enable_structure_index()
                     except Exception:
                         enable_si = True
                     if enable_si and chunks:
                         try:
                             # Derive section ranges using chunk metadata 'section_path' or 'ancestry_titles'
-                            sections_agg: Dict[str, Dict[str, Any]] = {}
+                            sections_agg: dict[str, dict[str, Any]] = {}
                             order = 0
                             for ch in chunks:
                                 md = ch.get('metadata') or {}
@@ -10811,7 +10824,7 @@ class MediaDatabase:
                                     rec['start_char'] = min(int(start), int(rec['start_char']))
                                     rec['end_char'] = max(int(end), int(rec['end_char']))
 
-                            section_ids_by_range: List[Dict[str, Any]] = []
+                            section_ids_by_range: list[dict[str, Any]] = []
                             if sections_agg:
                                 # Insert sections first
                                 self._write_structure_index_records(conn, media_id, list(sections_agg.values()))
@@ -10907,7 +10920,7 @@ class MediaDatabase:
     # DocumentStructureIndex
     # ------------------------
 
-    def _write_structure_index_records(self, conn, media_id: int, records: List[Dict[str, Any]]) -> int:
+    def _write_structure_index_records(self, conn, media_id: int, records: list[dict[str, Any]]) -> int:
         """Internal: insert rows into DocumentStructureIndex for a media item.
 
         Expects records with keys: kind, level, title, start_char, end_char, order_index, path.
@@ -10954,7 +10967,7 @@ class MediaDatabase:
                 logging.warning(f"Skipping invalid structure record for media_id={media_id}: {e}")
         return inserted
 
-    def write_document_structure_index(self, media_id: int, records: List[Dict[str, Any]]) -> int:
+    def write_document_structure_index(self, media_id: int, records: list[dict[str, Any]]) -> int:
         """Public: replace DocumentStructureIndex for a media item with provided records.
 
         Suitable for callers that pre-compute structure externally.
@@ -10979,10 +10992,10 @@ class MediaDatabase:
     def create_chunking_template(self,
                                 name: str,
                                 template_json: str,
-                                description: Optional[str] = None,
+                                description: str | None = None,
                                 is_builtin: bool = False,
-                                tags: Optional[List[str]] = None,
-                                user_id: Optional[str] = None) -> Dict[str, Any]:
+                                tags: list[str] | None = None,
+                                user_id: str | None = None) -> dict[str, Any]:
         """
         Create a new chunking template.
 
@@ -11073,10 +11086,10 @@ class MediaDatabase:
         }
 
     def get_chunking_template(self,
-                             template_id: Optional[int] = None,
-                             name: Optional[str] = None,
-                             uuid: Optional[str] = None,
-                             include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+                             template_id: int | None = None,
+                             name: str | None = None,
+                             uuid: str | None = None,
+                             include_deleted: bool = False) -> dict[str, Any] | None:
         """
         Get a chunking template by ID, name, or UUID.
 
@@ -11091,8 +11104,8 @@ class MediaDatabase:
         """
         if not any([template_id, name, uuid]):
             raise InputError("Must provide template_id, name, or uuid")
-        params: List[Any] = []
-        conditions: List[str] = []
+        params: list[Any] = []
+        conditions: list[str] = []
 
         if template_id is not None:
             conditions.append("id = ?")
@@ -11133,9 +11146,9 @@ class MediaDatabase:
     def list_chunking_templates(self,
                                include_builtin: bool = True,
                                include_custom: bool = True,
-                               tags: Optional[List[str]] = None,
-                               user_id: Optional[str] = None,
-                               include_deleted: bool = False) -> List[Dict[str, Any]]:
+                               tags: list[str] | None = None,
+                               user_id: str | None = None,
+                               include_deleted: bool = False) -> list[dict[str, Any]]:
         """
         List all chunking templates with optional filtering.
 
@@ -11152,8 +11165,8 @@ class MediaDatabase:
         if not include_builtin and not include_custom:
             return []
 
-        conditions: List[str] = []
-        params: List[Any] = []
+        conditions: list[str] = []
+        params: list[Any] = []
 
         if not include_deleted:
             conditions.append("deleted = ?")
@@ -11199,12 +11212,12 @@ class MediaDatabase:
         return templates
 
     def update_chunking_template(self,
-                                template_id: Optional[int] = None,
-                                name: Optional[str] = None,
-                                uuid: Optional[str] = None,
-                                template_json: Optional[str] = None,
-                                description: Optional[str] = None,
-                                tags: Optional[List[str]] = None) -> bool:
+                                template_id: int | None = None,
+                                name: str | None = None,
+                                uuid: str | None = None,
+                                template_json: str | None = None,
+                                description: str | None = None,
+                                tags: list[str] | None = None) -> bool:
         """
         Update a chunking template (cannot update built-in templates).
 
@@ -11243,8 +11256,8 @@ class MediaDatabase:
             except json.JSONDecodeError as e:
                 raise InputError(f"Invalid template JSON: {e}")
 
-        updates: List[str] = []
-        params: List[Any] = []
+        updates: list[str] = []
+        params: list[Any] = []
 
         if template_json is not None:
             updates.append("template_json = ?")
@@ -11285,9 +11298,9 @@ class MediaDatabase:
         return True
 
     def delete_chunking_template(self,
-                                template_id: Optional[int] = None,
-                                name: Optional[str] = None,
-                                uuid: Optional[str] = None,
+                                template_id: int | None = None,
+                                name: str | None = None,
+                                uuid: str | None = None,
                                 hard_delete: bool = False) -> bool:
         """
         Delete a chunking template (soft delete by default).
@@ -11347,7 +11360,7 @@ class MediaDatabase:
 
         return deleted_rows > 0
 
-    def seed_builtin_templates(self, templates: List[Dict[str, Any]]) -> int:
+    def seed_builtin_templates(self, templates: list[dict[str, Any]]) -> int:
         """
         Seed built-in templates into the database.
 
@@ -11413,7 +11426,7 @@ class MediaDatabase:
 
         return count
 
-    def lookup_section_for_offset(self, media_id: int, char_offset: int) -> Optional[Dict[str, Any]]:
+    def lookup_section_for_offset(self, media_id: int, char_offset: int) -> dict[str, Any] | None:
         """Return the most specific section covering char_offset for media_id."""
         if media_id is None or char_offset is None:
             return None
@@ -11434,7 +11447,7 @@ class MediaDatabase:
             return row
         return {"id": row["id"], "title": row["title"], "level": row["level"], "start_char": row["start_char"], "end_char": row["end_char"]}
 
-    def lookup_section_by_heading(self, media_id: int, heading: str) -> Optional[Tuple[int, int, str]]:
+    def lookup_section_by_heading(self, media_id: int, heading: str) -> tuple[int, int, str] | None:
         """Best-effort lookup of a section by case-insensitive title match."""
         if not media_id or not heading:
             return None
@@ -11458,7 +11471,7 @@ class MediaDatabase:
             raise DatabaseError(f"Unexpected error processing media: {exc}") from exc
 
 
-    def create_document_version(self, media_id: int, content: str, prompt: Optional[str] = None, analysis_content: Optional[str] = None, safe_metadata: Optional[str] = None) -> Dict[str, Any]:
+    def create_document_version(self, media_id: int, content: str, prompt: str | None = None, analysis_content: str | None = None, safe_metadata: str | None = None) -> dict[str, Any]:
         """
         Creates a new version entry in the DocumentVersions table.
 
@@ -11494,10 +11507,10 @@ class MediaDatabase:
         # Assumes called within an existing transaction (e.g., from add_media_with_keywords)
         conn = self.get_connection()
         try:
-            def _exec(query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+            def _exec(query: str, params: Union[tuple, list, dict] | None = None):
                 return self._execute_with_connection(conn, query, params)
 
-            def _fetchone(query: str, params: Optional[Union[Tuple, List, Dict]] = None):
+            def _fetchone(query: str, params: Union[tuple, list, dict] | None = None):
                 return self._fetchone_with_connection(conn, query, params)
 
             media_info = _fetchone(
@@ -11639,8 +11652,8 @@ class MediaDatabase:
     def update_keywords_for_media(
         self,
         media_id: int,
-        keywords: List[str],
-        conn: Optional[Any] = None,
+        keywords: list[str],
+        conn: Any | None = None,
     ):
         """
         Synchronizes the keywords linked to a specific media item.
@@ -11818,7 +11831,7 @@ class MediaDatabase:
                 )
                 media_to_unlink = linked_cursor.fetchall()
                 if media_to_unlink:
-                    media_mappings: List[Dict[str, Any]] = []
+                    media_mappings: list[dict[str, Any]] = []
                     for record in media_to_unlink:
                         if isinstance(record, dict):
                             media_mappings.append(record)
@@ -12085,7 +12098,7 @@ class MediaDatabase:
             logger.error(f"Unexpected error restoring media {media_id} trash: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected restore trash error: {e}") from e
 
-    def rollback_to_version(self, media_id: int, target_version_number: int) -> Dict[str, Any]:
+    def rollback_to_version(self, media_id: int, target_version_number: int) -> dict[str, Any]:
         """
         Rolls back the main Media content to a previous DocumentVersion state.
 
@@ -12196,7 +12209,9 @@ class MediaDatabase:
                 logging.debug(f"Highlight re-anchoring hook (rollback) failed: {_anch_err}")
             # Invalidate agentic intra-doc vectors after content rollback
             try:
-                from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import invalidate_intra_doc_vectors  # lazy import
+                from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import (
+                    invalidate_intra_doc_vectors,  # lazy import
+                )
                 invalidate_intra_doc_vectors(str(media_id))
             except Exception:
                 pass
@@ -12219,9 +12234,9 @@ class MediaDatabase:
         media_id: int,
         include_content: bool = False,
         include_deleted: bool = False,
-        limit: Optional[int] = None,
-        offset: Optional[int] = 0,
-    ) -> List[Dict[str, Any]]:
+        limit: int | None = None,
+        offset: int | None = 0,
+    ) -> list[dict[str, Any]]:
         """
         Retrieves all document versions for an active media item with pagination.
 
@@ -12329,7 +12344,7 @@ class MediaDatabase:
             logging.error(f"Unexpected error retrieving versions for media_id {media_id} from {self.db_path_str}: {e}", exc_info=True)
             raise DatabaseError(f"An unexpected error occurred: {e}") from e
 
-    def process_unvectorized_chunks(self, media_id: int, chunks: List[Dict[str, Any]], batch_size: int = 100):
+    def process_unvectorized_chunks(self, media_id: int, chunks: list[dict[str, Any]], batch_size: int = 100):
         """
         Adds a batch of unvectorized chunk records to the database.
 
@@ -12497,7 +12512,7 @@ class MediaDatabase:
         self,
         media_id: int,
         *,
-        chunking_status: Optional[str],
+        chunking_status: str | None,
         reset_vector_processing: bool,
     ) -> None:
         """
@@ -12531,8 +12546,8 @@ class MediaDatabase:
                 now = self._get_current_utc_timestamp_str()
 
                 set_parts = ["last_modified = ?", "version = ?", "client_id = ?"]
-                params: List[Any] = [now, next_version, self.client_id]
-                payload: Dict[str, Any] = {"last_modified": now}
+                params: list[Any] = [now, next_version, self.client_id]
+                payload: dict[str, Any] = {"last_modified": now}
 
                 if chunking_status is not None:
                     set_parts.append("chunking_status = ?")
@@ -12603,14 +12618,14 @@ class MediaDatabase:
                     "vector_processing = ?",
                     "chunking_status = ?",
                 ]
-                params: List[Any] = [
+                params: list[Any] = [
                     now,
                     next_version,
                     self.client_id,
                     -1,
                     error_status,
                 ]
-                payload: Dict[str, Any] = {
+                payload: dict[str, Any] = {
                     "last_modified": now,
                     "vector_processing": -1,
                     "chunking_status": error_status,
@@ -12635,7 +12650,7 @@ class MediaDatabase:
             raise DatabaseError(f"Unexpected error marking embeddings error: {e}") from e
 
     # --- Read Methods (Ensure they filter by deleted=0) ---
-    def fetch_all_keywords(self) -> List[str]:
+    def fetch_all_keywords(self) -> list[str]:
         """
         Fetches all *active* (non-deleted) keywords from the database.
 
@@ -12655,8 +12670,8 @@ class MediaDatabase:
             logger.error(f"Error fetching keywords: {e}")
             raise
 
-    def get_paginated_media_list(self, page: int = 1, results_per_page: int = 10) -> Tuple[
-        List[Dict[str, Any]], int, int, int]:
+    def get_paginated_media_list(self, page: int = 1, results_per_page: int = 10) -> tuple[
+        list[dict[str, Any]], int, int, int]:
         """
         Fetches a paginated list of active media items (id, title, type, uuid)
         for the media listing endpoint.
@@ -12697,7 +12712,7 @@ class MediaDatabase:
             count_row = count_cursor.fetchone()
             total_items = count_row['total_items'] if count_row else 0
 
-            results_data: List[Dict[str, Any]] = []
+            results_data: list[dict[str, Any]] = []
             if total_items > 0:
                 items_cursor = self.execute_query(
                     """
@@ -12727,8 +12742,8 @@ class MediaDatabase:
             logging.error(f"Unexpected error during DB pagination: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error during DB pagination: {e}") from e
 
-    def get_paginated_trash_list(self, page: int = 1, results_per_page: int = 10) -> Tuple[
-        List[Dict[str, Any]], int, int, int]:
+    def get_paginated_trash_list(self, page: int = 1, results_per_page: int = 10) -> tuple[
+        list[dict[str, Any]], int, int, int]:
         """
         Fetches a paginated list of trashed media items (id, title, type, uuid).
 
@@ -12752,7 +12767,7 @@ class MediaDatabase:
             count_row = count_cursor.fetchone()
             total_items = count_row["total_items"] if count_row else 0
 
-            results_data: List[Dict[str, Any]] = []
+            results_data: list[dict[str, Any]] = []
             if total_items > 0:
                 items_cursor = self.execute_query(
                     """
@@ -12782,7 +12797,7 @@ class MediaDatabase:
             logging.error(f"Unexpected error during trash pagination: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error during trash pagination: {e}") from e
 
-    def get_media_by_id(self, media_id: int, include_deleted=False, include_trash=False) -> Optional[Dict]:
+    def get_media_by_id(self, media_id: int, include_deleted=False, include_trash=False) -> dict | None:
         """
         Retrieves a single media item by its primary key (ID).
 
@@ -12842,7 +12857,7 @@ class MediaDatabase:
             logger.error(f"Error checking unvectorized chunks for media {media_id}: {e}")
             return False
 
-    def get_unvectorized_anchor_index_for_offset(self, media_id: int, approx_offset: int) -> Optional[int]:
+    def get_unvectorized_anchor_index_for_offset(self, media_id: int, approx_offset: int) -> int | None:
         """
         Best-effort mapping from an approximate character offset in the full
         content to a prechunked chunk_index using UnvectorizedMediaChunks.
@@ -12871,7 +12886,7 @@ class MediaDatabase:
             logger.error(f"Error locating anchor chunk for media {media_id} at offset {approx_offset}: {e}")
             return None
 
-    def get_unvectorized_chunk_index_by_uuid(self, media_id: int, chunk_uuid: str) -> Optional[int]:
+    def get_unvectorized_chunk_index_by_uuid(self, media_id: int, chunk_uuid: str) -> int | None:
         """Return chunk_index for a given chunk UUID if present."""
         try:
             cur = self.execute_query(
@@ -12886,7 +12901,7 @@ class MediaDatabase:
             logger.error(f"Error fetching chunk_index by UUID for media {media_id}: {e}")
             return None
 
-    def get_unvectorized_chunk_by_index(self, media_id: int, chunk_index: int) -> Optional[Dict[str, Any]]:
+    def get_unvectorized_chunk_by_index(self, media_id: int, chunk_index: int) -> dict[str, Any] | None:
         """Return a single unvectorized chunk row for a media_id/chunk_index."""
         try:
             cur = self.execute_query(
@@ -12905,7 +12920,7 @@ class MediaDatabase:
             logger.error(f"Error fetching chunk_index {chunk_index} for media {media_id}: {e}")
             return None
 
-    def get_unvectorized_chunks_in_range(self, media_id: int, start_index: int, end_index: int) -> List[Dict[str, Any]]:
+    def get_unvectorized_chunks_in_range(self, media_id: int, start_index: int, end_index: int) -> list[dict[str, Any]]:
         """
         Fetch a range of chunks [start_index, end_index] (inclusive) ordered by chunk_index.
         Returns dicts with keys: chunk_index, uuid, chunk_text, start_char, end_char, chunk_type.
@@ -12932,7 +12947,7 @@ class MediaDatabase:
 # ----------------------------------------------------------------------------
 # Composite helper: Full media details (active-only)
 # ----------------------------------------------------------------------------
-def get_full_media_details(db_instance: MediaDatabase, media_id: int, *, include_content: bool = True) -> Optional[Dict[str, Any]]:
+def get_full_media_details(db_instance: MediaDatabase, media_id: int, *, include_content: bool = True) -> dict[str, Any] | None:
     """
     Return a consolidated view of an active media item:
       - media: full Media row
@@ -12974,7 +12989,7 @@ def get_full_media_details_rich(
     include_content: bool = True,
     include_versions: bool = True,
     include_version_content: bool = False,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """
     Build a response-shaped dictionary aligned with MediaDetailResponse for an active media item.
 
@@ -13010,7 +13025,7 @@ def get_full_media_details_rich(
 
     # Content and metadata parsing
     content_text = media.get("content") or ""
-    content_meta: Dict[str, Any] = {}
+    content_meta: dict[str, Any] = {}
     mtype = media.get("type")
     if mtype in ("video", "audio") and content_text:
         try:
@@ -13030,7 +13045,7 @@ def get_full_media_details_rich(
     word_count = len(content_text.split()) if content_text else 0
 
     # Versions list (lightweight by default - no content)
-    versions_list: List[Dict[str, Any]] = []
+    versions_list: list[dict[str, Any]] = []
     if include_versions:
         try:
             rows = db_instance.get_all_document_versions(
@@ -13119,7 +13134,7 @@ def get_full_media_details_rich(
 
 # Add similar get_media_by_uuid, get_media_by_url, get_media_by_hash, get_media_by_title
 # Ensure they include the include_deleted and include_trash filters correctly.
-def get_media_by_uuid(self, media_uuid: str, include_deleted=False, include_trash=False) -> Optional[Dict]:
+def get_media_by_uuid(self, media_uuid: str, include_deleted=False, include_trash=False) -> dict | None:
     """
     Retrieves a single media item by its UUID.
 
@@ -13154,7 +13169,7 @@ def get_media_by_uuid(self, media_uuid: str, include_deleted=False, include_tras
         logger.error(f"Error fetching media by UUID {media_uuid}: {e}")
         raise DatabaseError(f"Failed fetch media by UUID: {e}") from e
 
-def get_media_by_url(self, url: str, include_deleted=False, include_trash=False) -> Optional[Dict]:
+def get_media_by_url(self, url: str, include_deleted=False, include_trash=False) -> dict | None:
     """
     Retrieves a single media item by its URL.
 
@@ -13198,7 +13213,7 @@ def get_media_by_url(self, url: str, include_deleted=False, include_trash=False)
         logger.error(f"Unexpected error fetching media by URL '{url}': {e}", exc_info=True)
         raise DatabaseError(f"Unexpected error fetching media by URL: {e}") from e
 
-def get_media_by_hash(self, content_hash: str, include_deleted=False, include_trash=False) -> Optional[Dict]:
+def get_media_by_hash(self, content_hash: str, include_deleted=False, include_trash=False) -> dict | None:
     """
     Retrieves a single media item by its content hash (SHA256).
 
@@ -13242,7 +13257,7 @@ def get_media_by_hash(self, content_hash: str, include_deleted=False, include_tr
         logger.error(f"Unexpected error fetching media by hash '{content_hash[:10]}...': {e}", exc_info=True)
         raise DatabaseError(f"Unexpected error fetching media by hash: {e}") from e
 
-def get_media_by_title(self, title: str, include_deleted=False, include_trash=False) -> Optional[Dict]:
+def get_media_by_title(self, title: str, include_deleted=False, include_trash=False) -> dict | None:
     """
     Retrieves the *first* media item matching a given title (case-sensitive).
 
@@ -13287,7 +13302,7 @@ def get_media_by_title(self, title: str, include_deleted=False, include_trash=Fa
         logger.error(f"Unexpected error fetching media by title '{title}': {e}", exc_info=True)
         raise DatabaseError(f"Unexpected error fetching media by title: {e}") from e
 
-def get_paginated_files(self, page: int = 1, results_per_page: int = 50) -> Tuple[List[sqlite3.Row], int, int, int]:
+def get_paginated_files(self, page: int = 1, results_per_page: int = 50) -> tuple[list[sqlite3.Row], int, int, int]:
     """
     Fetches a paginated list of active media items (id, title, type) from this database instance.
 
@@ -13321,7 +13336,7 @@ def get_paginated_files(self, page: int = 1, results_per_page: int = 50) -> Tupl
 
     offset = (page - 1) * results_per_page
     total_items = 0
-    results: List[sqlite3.Row] = []  # Type hint for clarity
+    results: list[sqlite3.Row] = []  # Type hint for clarity
 
     try:
         # Query 1: Get total count of active items
@@ -13449,7 +13464,7 @@ setattr(MediaDatabase, "backup_database", backup_database)
 setattr(MediaDatabase, "_backup_non_sqlite_database", _backup_non_sqlite_database)
 
 
-def get_distinct_media_types(self, include_deleted=False, include_trash=False) -> List[str]:
+def get_distinct_media_types(self, include_deleted=False, include_trash=False) -> list[str]:
     """
     Retrieves a list of all distinct, non-null media types present in the Media table.
 
@@ -13488,7 +13503,7 @@ def get_distinct_media_types(self, include_deleted=False, include_trash=False) -
                      exc_info=True)
         raise DatabaseError(f"An unexpected error occurred while fetching distinct media types: {e}") from e
 
-def add_media_chunk(self, media_id: int, chunk_text: str, start_index: int, end_index: int, chunk_id: str) -> Optional[Dict]:
+def add_media_chunk(self, media_id: int, chunk_text: str, start_index: int, end_index: int, chunk_id: str) -> dict | None:
     """
     Adds a single chunk record to the MediaChunks table for an active media item.
 
@@ -13589,7 +13604,7 @@ def add_media_chunk(self, media_id: int, chunk_text: str, start_index: int, end_
         logger.error(f"Unexpected error adding chunk for media {media_id}: {e}", exc_info=True)
         raise DatabaseError(f"An unexpected error occurred while adding media chunk: {e}") from e
 
-def add_media_chunks_in_batches(self, media_id: int, chunks_to_add: List[Dict[str, Any]],
+def add_media_chunks_in_batches(self, media_id: int, chunks_to_add: list[dict[str, Any]],
                                 batch_size: int = 100) -> int:
     """
     Processes a list of chunk dictionaries and adds them to the MediaChunks table in batches.
@@ -13707,7 +13722,7 @@ def add_media_chunks_in_batches(self, media_id: int, chunks_to_add: List[Dict[st
         logging.error(f"Media ID {media_id}: Error processing the list of chunks: {e}", exc_info=True)
         raise  # Re-raise the caught exception to inform the caller
 
-def batch_insert_chunks(self, media_id: int, chunks: List[Dict]) -> int:
+def batch_insert_chunks(self, media_id: int, chunks: list[dict]) -> int:
     """
     Inserts a batch of chunk records into the MediaChunks table for an active media item.
 
@@ -13755,8 +13770,8 @@ def batch_insert_chunks(self, media_id: int, chunks: List[Dict]) -> int:
             )
             base_index = int((base_index_row or {}).get('chunk_count', 0))
 
-            params_list: List[tuple] = []
-            sync_log_data: List[tuple] = []
+            params_list: list[tuple] = []
+            sync_log_data: list[tuple] = []
             running_index = 0
 
             for chunk_dict in chunks:
@@ -13843,7 +13858,7 @@ def batch_insert_chunks(self, media_id: int, chunks: List[Dict]) -> int:
         logger.error(f"Unexpected error batch inserting chunks for media {media_id}: {e}", exc_info=True)
         raise DatabaseError(f"An unexpected error occurred during batch chunk insertion: {e}") from e
 
-def process_chunks(self, media_id: int, chunks: List[Dict[str, Any]], batch_size: int = 100):
+def process_chunks(self, media_id: int, chunks: list[dict[str, Any]], batch_size: int = 100):
     """
     Process chunks in batches and insert them into the MediaChunks table.
 
@@ -14032,7 +14047,7 @@ setattr(MediaDatabase, "process_chunks", process_chunks)
 # These generally call instance methods now, which handle logging/FTS internally.
 
 
-def get_document_version(db_instance: MediaDatabase, media_id: int, version_number: Optional[int] = None, include_content: bool = True) -> Optional[Dict[str, Any]]:
+def get_document_version(db_instance: MediaDatabase, media_id: int, version_number: int | None = None, include_content: bool = True) -> dict[str, Any] | None:
     """
     Gets a specific document version or the latest active one for an active media item.
 
@@ -14206,7 +14221,7 @@ def is_valid_date(date_string: str) -> bool:
         return False
 
 
-def check_media_exists(db_instance: MediaDatabase, media_id: Optional[int] = None, url: Optional[str] = None, content_hash: Optional[str] = None) -> Optional[int]:
+def check_media_exists(db_instance: MediaDatabase, media_id: int | None = None, url: str | None = None, content_hash: str | None = None) -> int | None:
     """
     Checks if an *active* (non-deleted) media item exists using ID, URL, or hash.
 
@@ -14253,7 +14268,7 @@ def check_media_exists(db_instance: MediaDatabase, media_id: Optional[int] = Non
         raise DatabaseError(f"Failed check media existence: {e}") from e
 
 
-def empty_trash(db_instance: MediaDatabase, days_threshold: int) -> Tuple[int, int]:
+def empty_trash(db_instance: MediaDatabase, days_threshold: int) -> tuple[int, int]:
     """
     Permanently removes items from the trash that are older than a threshold.
 
@@ -14333,7 +14348,7 @@ def check_media_and_whisper_model(*args, **kwargs):
     return True, "Deprecated"
 
 # Media processing state functions (unchanged logic, rely on DB fields)
-def get_unprocessed_media(db_instance: MediaDatabase) -> List[Dict]:
+def get_unprocessed_media(db_instance: MediaDatabase) -> list[dict]:
     """
     Retrieves media items marked as needing vector processing.
 
@@ -14394,13 +14409,13 @@ def mark_media_as_processed(db_instance: MediaDatabase, media_id: int):
 def ingest_article_to_db_new(db_instance: MediaDatabase, *,
                              url: str, title: str,
                              content: str,
-                             author: Optional[str] = None,
-                             keywords: Optional[List[str]] = None,
-                             summary: Optional[str] = None,
-                             ingestion_date: Optional[str] = None,
-                             custom_prompt: Optional[str] = None,
-                             overwrite: bool = False) -> Tuple[Optional[int],
-                            Optional[str], str]:
+                             author: str | None = None,
+                             keywords: list[str] | None = None,
+                             summary: str | None = None,
+                             ingestion_date: str | None = None,
+                             custom_prompt: str | None = None,
+                             overwrite: bool = False) -> tuple[int | None,
+                            str | None, str]:
     """
     Wrapper function to add or update an article using `add_media_with_keywords`.
 
@@ -14447,7 +14462,7 @@ def ingest_article_to_db_new(db_instance: MediaDatabase, *,
     )
 
 
-def import_obsidian_note_to_db(db_instance: MediaDatabase, note_data: Dict[str, Any]) -> Tuple[Optional[int], Optional[str], str]:
+def import_obsidian_note_to_db(db_instance: MediaDatabase, note_data: dict[str, Any]) -> tuple[int | None, str | None, str]:
     """
     Wrapper function to add or update an Obsidian note using `add_media_with_keywords`.
 
@@ -14497,7 +14512,7 @@ def import_obsidian_note_to_db(db_instance: MediaDatabase, note_data: Dict[str, 
 
 
 # Read functions call instance methods or query directly with filters
-def get_media_transcripts(db_instance: MediaDatabase, media_id: int) -> List[Dict]:
+def get_media_transcripts(db_instance: MediaDatabase, media_id: int) -> list[dict]:
     """
     Retrieves all active transcripts associated with an active media item.
 
@@ -14535,7 +14550,7 @@ def get_media_transcripts(db_instance: MediaDatabase, media_id: int) -> List[Dic
         raise DatabaseError(f"Failed get transcripts {media_id}") from e
 
 
-def get_latest_transcription(db_instance: MediaDatabase, media_id: int) -> Optional[str]:
+def get_latest_transcription(db_instance: MediaDatabase, media_id: int) -> str | None:
     """
     Retrieves the text content of the latest active transcript for an active media item.
 
@@ -14591,7 +14606,7 @@ def get_latest_transcription(db_instance: MediaDatabase, media_id: int) -> Optio
         raise DatabaseError(f"Failed get latest transcript {media_id}") from e
 
 
-def get_specific_transcript(db_instance: MediaDatabase, transcript_uuid: str) -> Optional[Dict]:
+def get_specific_transcript(db_instance: MediaDatabase, transcript_uuid: str) -> dict | None:
     """
     Retrieves a specific active transcript by its UUID, ensuring parent media is active.
 
@@ -14627,7 +14642,7 @@ def get_specific_transcript(db_instance: MediaDatabase, transcript_uuid: str) ->
         raise DatabaseError(f"Failed get transcript {transcript_uuid}") from e
 
 
-def get_specific_analysis(db_instance: MediaDatabase, version_uuid: str) -> Optional[str]:
+def get_specific_analysis(db_instance: MediaDatabase, version_uuid: str) -> str | None:
     """
     Retrieves the `analysis_content` from a specific active DocumentVersion.
 
@@ -14661,7 +14676,7 @@ def get_specific_analysis(db_instance: MediaDatabase, version_uuid: str) -> Opti
         raise DatabaseError(f"Failed get analysis {version_uuid}") from e
 
 
-def get_media_prompts(db_instance: MediaDatabase, media_id: int) -> List[Dict]:
+def get_media_prompts(db_instance: MediaDatabase, media_id: int) -> list[dict]:
     """
     Retrieves all non-empty prompts from active DocumentVersions for an active media item.
 
@@ -14708,7 +14723,7 @@ def get_media_prompts(db_instance: MediaDatabase, media_id: int) -> List[Dict]:
         raise DatabaseError(f"Failed get prompts {media_id}") from e
 
 
-def get_specific_prompt(db_instance: MediaDatabase, version_uuid: str) -> Optional[str]:
+def get_specific_prompt(db_instance: MediaDatabase, version_uuid: str) -> str | None:
     """
     Retrieves the `prompt` text from a specific active DocumentVersion.
 
@@ -14818,8 +14833,8 @@ def upsert_transcript(
     media_id: int,
     transcription: str,
     whisper_model: str,
-    created_at: Optional[str] = None,
-) -> Dict[str, Any]:
+    created_at: str | None = None,
+) -> dict[str, Any]:
     """
     Insert or update a transcript for a media item keyed by (media_id, whisper_model).
 
@@ -15061,7 +15076,7 @@ def clear_specific_prompt(db_instance: MediaDatabase, version_uuid: str) -> bool
 
 
 # Other remaining functions
-def get_chunk_text(db_instance: MediaDatabase, chunk_uuid: str) -> Optional[str]:
+def get_chunk_text(db_instance: MediaDatabase, chunk_uuid: str) -> str | None:
     """
     Retrieves the text content (`chunk_text`) of a specific active chunk.
 
@@ -15093,7 +15108,7 @@ def get_chunk_text(db_instance: MediaDatabase, chunk_uuid: str) -> Optional[str]
         raise DatabaseError(f"Failed get chunk text {chunk_uuid}") from e
 
 
-def get_all_content_from_database(db_instance: MediaDatabase) -> List[Dict[str, Any]]:
+def get_all_content_from_database(db_instance: MediaDatabase) -> list[dict[str, Any]]:
     """
     Retrieves basic identifying information for all active, non-trashed media items.
 
@@ -15171,7 +15186,9 @@ def permanently_delete_item(db_instance: MediaDatabase, media_id: int) -> bool:
             logger.info(f"Permanently deleted Media ID: {media_id}. NO sync log generated.")
             # Invalidate agentic intra-doc vectors
             try:
-                from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import invalidate_intra_doc_vectors  # lazy import
+                from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import (
+                    invalidate_intra_doc_vectors,  # lazy import
+                )
                 invalidate_intra_doc_vectors(str(media_id))
             except Exception:
                 pass
@@ -15187,7 +15204,7 @@ def permanently_delete_item(db_instance: MediaDatabase, media_id: int) -> bool:
 
 
 # Keyword read functions use instance methods or query directly
-def fetch_keywords_for_media(media_id: int, db_instance: MediaDatabase) -> List[str]:
+def fetch_keywords_for_media(media_id: int, db_instance: MediaDatabase) -> list[str]:
     """
        Fetches all active keywords associated with a specific active media item.
 
@@ -15227,7 +15244,7 @@ def fetch_keywords_for_media(media_id: int, db_instance: MediaDatabase) -> List[
         raise DatabaseError(f"Failed fetch keywords {media_id}") from e
 
 
-def fetch_keywords_for_media_batch(media_ids: List[int], db_instance: MediaDatabase) -> Dict[int, List[str]]:
+def fetch_keywords_for_media_batch(media_ids: list[int], db_instance: MediaDatabase) -> dict[int, list[str]]:
     """
        Fetches active keywords for multiple active media items in a single query.
 
@@ -15288,7 +15305,7 @@ try:
 except Exception:
     _ = None
 if not _:
-    def _get_media_by_title(self, title: str, include_deleted: bool = False, include_trash: bool = False) -> Optional[Dict]:
+    def _get_media_by_title(self, title: str, include_deleted: bool = False, include_trash: bool = False) -> dict | None:
         """Fetch the most recently modified active media by exact title.
 
         Mirrors other getter helpers. Ordered by last_modified DESC to prefer latest.

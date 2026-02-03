@@ -13,38 +13,42 @@ Env:
 from __future__ import annotations
 
 import asyncio
+import builtins
 import os
-from typing import Any, Dict, Optional, List, Set
-from loguru import logger
+import random
+from datetime import datetime, timedelta
+from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from datetime import datetime, timedelta
-import random
+from loguru import logger
 
-from tldw_Server_API.app.core.Scheduler import get_global_scheduler, Scheduler
-from tldw_Server_API.app.core.Scheduler.handlers import workflows as _ensure_handlers  # noqa: F401  # register workflow_run
-from tldw_Server_API.app.core.Scheduler.handlers import watchlists as _ensure_watchlists  # noqa: F401  # register watchlist_run
-from tldw_Server_API.app.core.Scheduler.base.registry import get_registry
-from tldw_Server_API.app.core.DB_Management.Workflows_Scheduler_DB import (
-    WorkflowsSchedulerDB,
-    WorkflowSchedule,
-)
+from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.config import settings as core_settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+from tldw_Server_API.app.core.DB_Management.Workflows_Scheduler_DB import (
+    WorkflowSchedule,
+    WorkflowsSchedulerDB,
+)
+from tldw_Server_API.app.core.Scheduler import Scheduler, get_global_scheduler
+from tldw_Server_API.app.core.Scheduler.handlers import (
+    watchlists as _ensure_watchlists,  # noqa: F401  # register watchlist_run
+)
+from tldw_Server_API.app.core.Scheduler.handlers import (
+    workflows as _ensure_handlers,  # noqa: F401  # register workflow_run
+)
 
 
 class _WFRecurringScheduler:
     def __init__(self) -> None:
-        self._core_scheduler: Optional[Scheduler] = None
-        self._aps: Optional[AsyncIOScheduler] = None
+        self._core_scheduler: Scheduler | None = None
+        self._aps: AsyncIOScheduler | None = None
         self._db = WorkflowsSchedulerDB()
         self._lock = asyncio.Lock()
         self._started = False
         # Cache of per-user scheduler DB handles
-        self._db_cache: Dict[int, WorkflowsSchedulerDB] = {}
-        self._rescan_task: Optional[asyncio.Task] = None
+        self._db_cache: dict[int, WorkflowsSchedulerDB] = {}
+        self._rescan_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         async with self._lock:
@@ -107,7 +111,7 @@ class _WFRecurringScheduler:
         """Scan all user directories and register their schedules."""
         loaded = 0
         try:
-            user_ids: Set[int] = set()
+            user_ids: set[int] = set()
             try:
                 base = DatabasePaths.get_user_db_base_dir()
                 for p in base.iterdir():
@@ -149,8 +153,8 @@ class _WFRecurringScheduler:
         if not self._aps:
             return
         # Collect desired enabled schedule IDs from all users
-        desired: Set[str] = set()
-        user_ids: Set[int] = set()
+        desired: set[str] = set()
+        user_ids: set[int] = set()
         try:
             base = DatabasePaths.get_user_db_base_dir()
             for p in base.iterdir():
@@ -188,7 +192,7 @@ class _WFRecurringScheduler:
         except Exception as e:
             logger.debug(f"Workflows scheduler: failed to reconcile jobs: {e}")
 
-    def _add_job(self, schedule: WorkflowSchedule, user_id: Optional[int] = None) -> None:
+    def _add_job(self, schedule: WorkflowSchedule, user_id: int | None = None) -> None:
         if not self._aps:
             return
         try:
@@ -275,7 +279,7 @@ class _WFRecurringScheduler:
         except Exception as e:
             logger.warning(f"Failed to add schedule job {schedule.id}: {e}")
 
-    async def _run_schedule(self, schedule_id: str, user_id: Optional[int] = None) -> None:
+    async def _run_schedule(self, schedule_id: str, user_id: int | None = None) -> None:
         # Fetch latest schedule in case it was modified
         # Backward compatibility: determine user_id from stored schedule when not provided
         db = None
@@ -375,7 +379,7 @@ class _WFRecurringScheduler:
                 logger.debug(f"Workflows scheduler: failed to set error status for {schedule_id}: {e}")
 
     # CRUD wrappers
-    def create(self, *, tenant_id: str, user_id: str, workflow_id: Optional[int], name: Optional[str], cron: str, timezone: Optional[str], inputs: Dict[str, Any], run_mode: str, validation_mode: str, enabled: bool, concurrency_mode: str = "skip", misfire_grace_sec: int = 300, coalesce: bool = True, require_online: bool = False) -> str:
+    def create(self, *, tenant_id: str, user_id: str, workflow_id: int | None, name: str | None, cron: str, timezone: str | None, inputs: dict[str, Any], run_mode: str, validation_mode: str, enabled: bool, concurrency_mode: str = "skip", misfire_grace_sec: int = 300, coalesce: bool = True, require_online: bool = False) -> str:
         sid = __import__("uuid").uuid4().hex
         db = self._get_db(int(user_id))
         db.create_schedule(
@@ -400,7 +404,7 @@ class _WFRecurringScheduler:
             self._add_job(s, int(user_id))
         return sid
 
-    def update(self, schedule_id: str, update: Dict[str, Any]) -> bool:
+    def update(self, schedule_id: str, update: dict[str, Any]) -> bool:
         # Resolve correct DB by locating the schedule first
         s = self.get(schedule_id)
         if not s:
@@ -431,7 +435,7 @@ class _WFRecurringScheduler:
         db = self._get_db(int(s.user_id))
         return db.delete_schedule(schedule_id)
 
-    def get(self, schedule_id: str) -> Optional[WorkflowSchedule]:
+    def get(self, schedule_id: str) -> WorkflowSchedule | None:
         # Check default DB first
         found = self._db.get_schedule(schedule_id)
         if found:
@@ -454,7 +458,7 @@ class _WFRecurringScheduler:
             logger.debug(f"Workflows scheduler: failed to locate schedule {schedule_id}")
         return None
 
-    def list(self, *, tenant_id: str, user_id: Optional[str] = None, limit: int = 50, offset: int = 0) -> List[WorkflowSchedule]:
+    def list(self, *, tenant_id: str, user_id: str | None = None, limit: int = 50, offset: int = 0) -> builtins.list[WorkflowSchedule]:
         # Require user_id to select correct per-user DB
         if not user_id:
             return []
@@ -466,7 +470,7 @@ class _WFRecurringScheduler:
             return []
 
 
-_INSTANCE: Optional[_WFRecurringScheduler] = None
+_INSTANCE: _WFRecurringScheduler | None = None
 
 
 def get_workflows_scheduler() -> _WFRecurringScheduler:
@@ -476,7 +480,7 @@ def get_workflows_scheduler() -> _WFRecurringScheduler:
     return _INSTANCE
 
 
-async def start_workflows_scheduler() -> Optional[asyncio.Task]:
+async def start_workflows_scheduler() -> asyncio.Task | None:
     enabled = os.getenv("WORKFLOWS_SCHEDULER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     if not enabled:
         return None
@@ -490,7 +494,7 @@ async def start_workflows_scheduler() -> Optional[asyncio.Task]:
     return task
 
 
-async def stop_workflows_scheduler(task: Optional[asyncio.Task]) -> None:
+async def stop_workflows_scheduler(task: asyncio.Task | None) -> None:
     try:
         if task:
             task.cancel()

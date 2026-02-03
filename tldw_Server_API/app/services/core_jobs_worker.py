@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.Chatbooks.chatbook_models import (
+    ConflictResolution,
+    ContentType,
+    ExportStatus,
+    ImportStatus,
+)
 from tldw_Server_API.app.core.Chatbooks.chatbook_service import ChatbookService
-from tldw_Server_API.app.core.Chatbooks.chatbook_models import ExportStatus, ImportStatus, ContentType, ConflictResolution
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
@@ -33,7 +37,7 @@ def _build_chacha_db_for_user(user_id: str) -> CharactersRAGDB:
         raise
 
 
-async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None) -> None:
     """Shared background worker for Chatbooks when using core Jobs backend.
 
     Processes jobs for all users by acquiring next job from the global Jobs table.
@@ -75,14 +79,14 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                     lease_id=str(lease_id),
                 )
                 continue
-            owner_int: Optional[int] = None
+            owner_int: int | None = None
             try:
                 owner_int = int(owner)
             except (TypeError, ValueError):
                 owner_int = None
             svc = ChatbookService(owner, db, user_id_int=owner_int)
 
-            payload: Dict = job.get("payload") or {}
+            payload: dict = job.get("payload") or {}
             action = payload.get("action")
             chatbooks_job_id = payload.get("chatbooks_job_id")
             async def _start_renewal(job_id: int):

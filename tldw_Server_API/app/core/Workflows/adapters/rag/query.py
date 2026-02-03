@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any
 
 from loguru import logger
 
@@ -36,7 +36,7 @@ from tldw_Server_API.app.core.Workflows.adapters.rag._config import (
     tags=["rag", "query"],
     config_model=QueryRewriteConfig,
 )
-async def run_query_rewrite_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_query_rewrite_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Rewrite a search query for better retrieval results.
 
     Config:
@@ -115,7 +115,7 @@ Return exactly {max_rewrites} rewritten queries, one per line. No numbering, no 
     tags=["rag", "query"],
     config_model=QueryExpandConfig,
 )
-async def run_query_expand_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_query_expand_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Expand search queries using multiple strategies.
 
     Config:
@@ -186,13 +186,12 @@ async def run_query_expand_adapter(config: Dict[str, Any], context: Dict[str, An
 
     try:
         from tldw_Server_API.app.core.RAG.rag_service.query_expansion import (
-            SynonymExpansion,
-            MultiQueryGeneration,
             AcronymExpansion,
             DomainExpansion,
             EntityExpansion,
             HybridQueryExpansion,
-            ExpandedQuery,
+            MultiQueryGeneration,
+            SynonymExpansion,
         )
 
         # Build strategy instances
@@ -204,10 +203,10 @@ async def run_query_expand_adapter(config: Dict[str, Any], context: Dict[str, An
             "entity": EntityExpansion,
         }
 
-        all_variations: List[str] = []
-        all_synonyms: Dict[str, List[str]] = {}
-        all_keywords: List[str] = []
-        all_entities: List[str] = []
+        all_variations: list[str] = []
+        all_synonyms: dict[str, list[str]] = {}
+        all_keywords: list[str] = []
+        all_entities: list[str] = []
 
         # If hybrid, use the combined strategy
         if "hybrid" in strategies:
@@ -271,7 +270,7 @@ async def run_query_expand_adapter(config: Dict[str, Any], context: Dict[str, An
     tags=["rag", "query"],
     config_model=HyDEGenerateConfig,
 )
-async def run_hyde_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_hyde_generate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate a Hypothetical Document Embedding (HyDE) for improved similarity search.
 
     Config:
@@ -350,7 +349,7 @@ Generate {num_hypothetical} hypothetical document(s). If multiple, separate with
     tags=["rag", "cache"],
     config_model=SemanticCacheCheckConfig,
 )
-async def run_semantic_cache_check_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_semantic_cache_check_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Check semantic cache for similar queries before running expensive searches.
 
     Config:
@@ -378,8 +377,9 @@ async def run_semantic_cache_check_adapter(config: Dict[str, Any], context: Dict
     max_age_seconds = int(config.get("max_age_seconds", 3600))
 
     try:
-        from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import chroma_client, embedding_function_factory
         import time
+
+        from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import chroma_client, embedding_function_factory
 
         client = chroma_client()
         if not client:
@@ -447,7 +447,7 @@ async def run_semantic_cache_check_adapter(config: Dict[str, Any], context: Dict
     tags=["rag", "search"],
     config_model=SearchAggregateConfig,
 )
-async def run_search_aggregate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_search_aggregate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Aggregate and deduplicate results from multiple search steps.
 
     Config:

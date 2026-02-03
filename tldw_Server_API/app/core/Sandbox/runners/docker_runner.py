@@ -1,26 +1,25 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
-from typing import Optional, List, Dict
+import subprocess
+import tempfile
+import threading
+import time
+from datetime import datetime, timedelta
 
 from loguru import logger
 
-from ..models import RunSpec, RunStatus, RunPhase
-from ..streams import get_hub
 from tldw_Server_API.app.core.config import settings as app_settings
+
+from ..models import RunPhase, RunSpec, RunStatus
 from ..network_policy import (
-    expand_allowlist_to_targets,
     apply_egress_rules_atomic,
     delete_rules_by_label,
+    expand_allowlist_to_targets,
 )
-import tempfile
-import subprocess
-from datetime import datetime, timedelta
-import threading
-import time
-import socket
-import json
+from ..streams import get_hub
 
 
 def docker_available() -> bool:
@@ -41,11 +40,11 @@ class DockerRunner:
     def __init__(self) -> None:
         pass
 
-    def _truthy(self, v: Optional[str]) -> bool:
+    def _truthy(self, v: str | None) -> bool:
         return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
 
     @staticmethod
-    def _docker_version() -> Optional[str]:
+    def _docker_version() -> str | None:
         try:
             out = subprocess.check_output(["docker", "version", "--format", "{{.Server.Version}}"], text=True, timeout=2).strip()
             if out:
@@ -67,7 +66,7 @@ class DockerRunner:
     _active_lock = threading.RLock()
     _egress_lock = threading.RLock()
     _active_cid: dict[str, str] = {}
-    _egress_net: dict[str, Optional[str]] = {}
+    _egress_net: dict[str, str | None] = {}
     _egress_label: dict[str, str] = {}
 
     @classmethod
@@ -142,7 +141,7 @@ class DockerRunner:
         except Exception:
             return False
 
-    def start_run(self, run_id: str, spec: RunSpec, session_workspace: Optional[str] = None) -> RunStatus:
+    def start_run(self, run_id: str, spec: RunSpec, session_workspace: str | None = None) -> RunStatus:
         logger.debug(f"DockerRunner.start_run called with spec: {spec}")
         # Fake mode for tests/CI without Docker
         if self._truthy(os.getenv("TLDW_SANDBOX_DOCKER_FAKE_EXEC")):
@@ -186,7 +185,9 @@ class DockerRunner:
         deadline = datetime.utcnow() + timedelta(seconds=max(1, startup_budget))
 
         # Prepare tar stream from inline files (session workspace integration TBD)
-        import io, tarfile, time
+        import io
+        import tarfile
+        import time
         tar_buf = io.BytesIO()
         with tarfile.open(fileobj=tar_buf, mode="w") as tf:
             # Session workspace files (if any)
@@ -214,7 +215,7 @@ class DockerRunner:
         tar_buf.seek(0)
 
         # Step 1: docker create
-        cmd: List[str] = ["docker", "create"]
+        cmd: list[str] = ["docker", "create"]
         # Keep STDIN open for interactive runs
         try:
             interactive = bool(getattr(spec, "interactive", None))
@@ -223,7 +224,7 @@ class DockerRunner:
         if interactive:
             cmd += ["-i"]
         # Network policy and (optional) granular allowlist enforcement
-        egress_net_name: Optional[str] = None
+        egress_net_name: str | None = None
         egress_label = f"tldw-run-{run_id[:12]}"
         net_policy = (spec.network_policy or "deny_all").lower()
         granular = self._truthy(os.getenv("SANDBOX_EGRESS_GRANULAR_ENFORCEMENT") or str(getattr(app_settings, "SANDBOX_EGRESS_GRANULAR_ENFORCEMENT", "false")))
@@ -274,7 +275,7 @@ class DockerRunner:
                         seccomp = default_seccomp
             except Exception:
                 seccomp = None
-        security_opts: List[str] = []
+        security_opts: list[str] = []
         if seccomp:
             security_opts += ["--security-opt", f"seccomp={seccomp}"]
         apparmor_prof = os.getenv("SANDBOX_DOCKER_APPARMOR_PROFILE") or getattr(app_settings, "SANDBOX_DOCKER_APPARMOR_PROFILE", None)
@@ -311,7 +312,7 @@ class DockerRunner:
         cmd += ["-w", "/workspace"]
 
         # Env vars (non-secret)
-        env: Dict[str, str] = spec.env or {}
+        env: dict[str, str] = spec.env or {}
         for k, v in env.items():
             # basic sanitization: avoid newlines
             val = str(v).replace("\n", " ")
@@ -487,7 +488,7 @@ class DockerRunner:
             raise RuntimeError(f"docker start failed: {e}")
 
         # If granular egress allowlist is enabled, inspect container IP and apply host iptables rules
-        container_ip: Optional[str] = None
+        container_ip: str | None = None
         if net_policy == "allowlist" and enforced and granular:
             try:
                 info = subprocess.check_output(["docker", "inspect", cid, "--format", "{{json .NetworkSettings.Networks}}"], text=True, timeout=3)
@@ -507,7 +508,7 @@ class DockerRunner:
                 raw = os.getenv("SANDBOX_EGRESS_ALLOWLIST") or getattr(app_settings, "SANDBOX_EGRESS_ALLOWLIST", "")
             except Exception:
                 raw = ""
-            allow_targets: List[str] = expand_allowlist_to_targets(raw)
+            allow_targets: list[str] = expand_allowlist_to_targets(raw)
             try:
                 if container_ip:
                     apply_egress_rules_atomic(container_ip, allow_targets, egress_label)
@@ -523,8 +524,8 @@ class DockerRunner:
             pass
 
         # Baseline CPU usage and resolved cgroup file after container start (best-effort)
-        baseline_cpu_sec: Optional[int] = None
-        baseline_cgroup_file: Optional[tuple[str, str]] = None  # (file_path, format: 'v1'|'v2')
+        baseline_cpu_sec: int | None = None
+        baseline_cgroup_file: tuple[str, str] | None = None  # (file_path, format: 'v1'|'v2')
         try:
             # Resolve cgroup stats file while container is running so we can reuse it later
             baseline_cgroup_file = self._resolve_cgroup_cpu_file_by_cid(cid)
@@ -564,8 +565,9 @@ class DockerRunner:
         stdin_thread = None
         if interactive:
             def _pump_stdin():
-                from tldw_Server_API.app.core.Sandbox.streams import get_hub as _get_hub
                 import queue as _queue
+
+                from tldw_Server_API.app.core.Sandbox.streams import get_hub as _get_hub
                 q = _get_hub().get_stdin_queue(run_id)
                 proc = None
                 try:
@@ -639,7 +641,7 @@ class DockerRunner:
                 exit_code = waited.returncode if waited.returncode is not None else 1
         except subprocess.TimeoutExpired:
             # Take a last CPU snapshot while the container is still running, before SIGKILL
-            prekill_cpu: Optional[int] = None
+            prekill_cpu: int | None = None
             try:
                 if baseline_cgroup_file is not None:
                     prekill_cpu = self._read_cpu_file_to_seconds(baseline_cgroup_file)
@@ -657,7 +659,7 @@ class DockerRunner:
             finished = datetime.utcnow()
             hub.publish_event(run_id, "end", {"exit_code": exit_code, "reason": "execution_timeout"})
             # CPU time: prefer cgroup delta if baseline captured; use pre-kill snapshot first
-            final_cpu: Optional[int] = prekill_cpu
+            final_cpu: int | None = prekill_cpu
             if final_cpu is None:
                 try:
                     if baseline_cgroup_file is not None:
@@ -705,7 +707,7 @@ class DockerRunner:
 
         finished = datetime.utcnow()
         # Resolve image digest (best-effort)
-        image_digest: Optional[str] = None
+        image_digest: str | None = None
         try:
             out = subprocess.check_output(["docker", "image", "inspect", image, "--format", "{{.Id}}"], text=True).strip()
             if out:
@@ -814,7 +816,7 @@ class DockerRunner:
         )
 
     @staticmethod
-    def _read_cgroup_cpu_time_sec_by_cid(cid: str) -> Optional[int]:
+    def _read_cgroup_cpu_time_sec_by_cid(cid: str) -> int | None:
         """Read absolute CPU time (seconds) from cgroup for a container by CID.
 
         Returns None if not available (non-Linux or permissions), so callers can fallback.
@@ -827,12 +829,12 @@ class DockerRunner:
             return None
 
     @staticmethod
-    def _read_cgroup_cpu_time_sec_by_pid(pid: int) -> Optional[int]:
+    def _read_cgroup_cpu_time_sec_by_pid(pid: int) -> int | None:
         """Read absolute CPU time (seconds) from cgroup for a process PID.
 
         Supports cgroup v1 and v2; returns None if unavailable.
         """
-        cgroups: Dict[str, str] = {}
+        cgroups: dict[str, str] = {}
         try:
             with open(f"/proc/{pid}/cgroup", "r") as f:
                 for line in f:
@@ -878,7 +880,7 @@ class DockerRunner:
         return None
 
     @staticmethod
-    def _read_cgroup_mem_peak_mb_by_cid(cid: str) -> Optional[int]:
+    def _read_cgroup_mem_peak_mb_by_cid(cid: str) -> int | None:
         try:
             pid_out = subprocess.check_output(["docker", "inspect", cid, "--format", "{{.State.Pid}}"], text=True, timeout=3).strip()
             pid = int(pid_out)
@@ -887,7 +889,7 @@ class DockerRunner:
             return None
 
     @staticmethod
-    def _read_cgroup_mem_peak_mb_by_pid(pid: int) -> Optional[int]:
+    def _read_cgroup_mem_peak_mb_by_pid(pid: int) -> int | None:
         """Read memory peak/current from cgroup and convert to MB.
 
         Prefer cgroup v2 memory.peak; fallback to memory.current. For v1, prefer
@@ -899,7 +901,7 @@ class DockerRunner:
                 lines = f.read().splitlines()
         except Exception:
             return None
-        subs: Dict[str, str] = {}
+        subs: dict[str, str] = {}
         for ln in lines:
             parts = ln.split(":")
             if len(parts) == 3:
@@ -935,7 +937,7 @@ class DockerRunner:
         return None
 
     @staticmethod
-    def _resolve_cgroup_cpu_file_by_cid(cid: str) -> Optional[tuple[str, str]]:
+    def _resolve_cgroup_cpu_file_by_cid(cid: str) -> tuple[str, str] | None:
         """Resolve the cgroup CPU stats file for a container by CID.
 
         Returns a tuple of (file_path, format), where format is 'v1' or 'v2'.
@@ -949,12 +951,12 @@ class DockerRunner:
             return None
 
     @staticmethod
-    def _resolve_cgroup_cpu_file_by_pid(pid: int) -> Optional[tuple[str, str]]:
+    def _resolve_cgroup_cpu_file_by_pid(pid: int) -> tuple[str, str] | None:
         """Resolve the cgroup CPU stats file for a process PID.
 
         Returns (file_path, 'v1'|'v2') if found, else None.
         """
-        cgroups: Dict[str, str] = {}
+        cgroups: dict[str, str] = {}
         try:
             with open(f"/proc/{pid}/cgroup", "r") as f:
                 for line in f:
@@ -989,7 +991,7 @@ class DockerRunner:
         return None
 
     @staticmethod
-    def _read_cpu_file_to_seconds(file_info: tuple[str, str]) -> Optional[int]:
+    def _read_cpu_file_to_seconds(file_info: tuple[str, str]) -> int | None:
         """Read a previously resolved cgroup CPU stats file and return seconds.
 
         file_info is (file_path, 'v1'|'v2').

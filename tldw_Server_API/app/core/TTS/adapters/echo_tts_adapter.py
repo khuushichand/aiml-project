@@ -12,21 +12,14 @@ import time
 from collections import OrderedDict
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Optional
+
 #
 # Third-party Imports
 import numpy as np
 from loguru import logger
-#
-# Local Imports
-from .base import (
-    AudioFormat,
-    ProviderStatus,
-    TTSCapabilities,
-    TTSAdapter,
-    TTSRequest,
-    TTSResponse,
-)
+
+from ..streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
 from ..tts_exceptions import (
     TTSGenerationError,
     TTSInvalidVoiceReferenceError,
@@ -36,10 +29,21 @@ from ..tts_exceptions import (
     TTSUnsupportedFormatError,
     TTSValidationError,
 )
-from ..tts_validation import TTSInputValidator, validate_tts_request
 from ..tts_resource_manager import get_resource_manager
+from ..tts_validation import TTSInputValidator, validate_tts_request
 from ..utils import parse_bool
-from ..streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
+
+#
+# Local Imports
+from .base import (
+    AudioFormat,
+    ProviderStatus,
+    TTSAdapter,
+    TTSCapabilities,
+    TTSRequest,
+    TTSResponse,
+)
+
 #
 #######################################################################################################################
 #
@@ -50,7 +54,7 @@ class EchoTTSAdapter(TTSAdapter):
     """Adapter for Echo-TTS (CUDA-only, speaker reference required)."""
 
     PROVIDER_KEY = "echo_tts"
-    SUPPORTED_FORMATS: Set[AudioFormat] = {
+    SUPPORTED_FORMATS: set[AudioFormat] = {
         AudioFormat.MP3,
         AudioFormat.WAV,
         AudioFormat.FLAC,
@@ -64,7 +68,7 @@ class EchoTTSAdapter(TTSAdapter):
     MAX_TEXT_BYTES = 767
     DEFAULT_BLOCK_SIZE = 160
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config)
         cfg = config or {}
 
@@ -139,7 +143,7 @@ class EchoTTSAdapter(TTSAdapter):
         self._echo_modules_loaded = False
         self._model_lock = asyncio.Lock()
         self._cache_lock = asyncio.Lock()
-        self._speaker_cache: "OrderedDict[str, Tuple[float, Any, Any]]" = OrderedDict()
+        self._speaker_cache: "OrderedDict[str, tuple[float, Any, Any]]" = OrderedDict()
 
         self._echo_inference = None
         self._echo_blockwise = None
@@ -518,7 +522,7 @@ class EchoTTSAdapter(TTSAdapter):
         digest = hashlib.sha256(voice_bytes).hexdigest()
         return f"{digest}:{self.model_repo}:{self.fish_ae_repo}:{self.device}:{self.sample_rate}"
 
-    async def _get_cached_speaker_latent(self, cache_key: str) -> Tuple[Optional[Any], Optional[Any]]:
+    async def _get_cached_speaker_latent(self, cache_key: str) -> tuple[Optional[Any], Optional[Any]]:
         if self.cache_size <= 0:
             return None, None
         async with self._cache_lock:
@@ -594,9 +598,9 @@ class EchoTTSAdapter(TTSAdapter):
     def _prepare_text_inputs(
         self,
         request: TTSRequest,
-        extras: Dict[str, Any],
+        extras: dict[str, Any],
         inference: Any,
-    ) -> Tuple[Any, Any, str]:
+    ) -> tuple[Any, Any, str]:
         normalize_text = self._coerce_bool(extras.get("normalize_text"), True)
         text_input_ids, text_mask, normalized_text = inference.get_text_input_ids_and_mask(
             [request.text],
@@ -617,7 +621,7 @@ class EchoTTSAdapter(TTSAdapter):
         text_mask: Any,
         speaker_latent: Any,
         speaker_mask: Any,
-        extras: Dict[str, Any],
+        extras: dict[str, Any],
     ):
         seq_len = self._resolve_sequence_length(extras)
         rng_seed = self._coerce_int(extras.get("rng_seed"), 0)
@@ -682,7 +686,7 @@ class EchoTTSAdapter(TTSAdapter):
         self,
         *,
         request: TTSRequest,
-        extras: Dict[str, Any],
+        extras: dict[str, Any],
         inference: Any,
         text_input_ids: Any,
         text_mask: Any,
@@ -845,8 +849,8 @@ class EchoTTSAdapter(TTSAdapter):
         self,
         *,
         request: TTSRequest,
-        text_chunks: List[str],
-        extras: Dict[str, Any],
+        text_chunks: list[str],
+        extras: dict[str, Any],
         inference: Any,
         speaker_latent: Any,
         speaker_mask: Any,
@@ -855,7 +859,7 @@ class EchoTTSAdapter(TTSAdapter):
         silence_samples = max(0, int(self.sample_rate * interval_silence_ms / 1000.0))
         silence = np.zeros(silence_samples, dtype=np.float32) if silence_samples > 0 else None
 
-        audio_segments: List[np.ndarray] = []
+        audio_segments: list[np.ndarray] = []
         for idx, chunk_text in enumerate(text_chunks):
             chunk_request = replace(request, text=chunk_text)
             text_input_ids, text_mask, _ = self._prepare_text_inputs(
@@ -898,8 +902,8 @@ class EchoTTSAdapter(TTSAdapter):
         self,
         *,
         request: TTSRequest,
-        text_chunks: List[str],
-        extras: Dict[str, Any],
+        text_chunks: list[str],
+        extras: dict[str, Any],
         inference: Any,
         speaker_latent: Any,
         speaker_mask: Any,
@@ -978,7 +982,7 @@ class EchoTTSAdapter(TTSAdapter):
             details={"type": type(voice_reference).__name__},
         )
 
-    async def _prepare_voice_reference(self, voice_bytes: bytes, extras: Dict[str, Any]) -> bytes:
+    async def _prepare_voice_reference(self, voice_bytes: bytes, extras: dict[str, Any]) -> bytes:
         validate_ref = self._coerce_bool(extras.get("validate_reference"), True)
         convert_ref = self._coerce_bool(extras.get("convert_reference"), True)
 
@@ -1024,10 +1028,10 @@ class EchoTTSAdapter(TTSAdapter):
                 details={"error": str(exc)},
             ) from exc
 
-    def _resolve_sequence_length(self, extras: Dict[str, Any]) -> int:
+    def _resolve_sequence_length(self, extras: dict[str, Any]) -> int:
         return self._coerce_int(extras.get("sequence_length"), 640)
 
-    def _resolve_chunking_flag(self, extras: Dict[str, Any]) -> Optional[bool]:
+    def _resolve_chunking_flag(self, extras: dict[str, Any]) -> Optional[bool]:
         for key in ("chunk_text", "enable_chunking", "chunking"):
             if key in extras:
                 return self._coerce_bool(extras.get(key), default=False)
@@ -1041,7 +1045,7 @@ class EchoTTSAdapter(TTSAdapter):
                 return self._coerce_bool(cfg_extras.get(key), default=False)
         return None
 
-    def _resolve_chunk_limits(self, extras: Dict[str, Any]) -> Tuple[int, int]:
+    def _resolve_chunk_limits(self, extras: dict[str, Any]) -> tuple[int, int]:
         cfg = self.config or {}
         cfg_extras = cfg.get("extra_params") if isinstance(cfg.get("extra_params"), dict) else {}
         max_chars = self._coerce_int(
@@ -1082,7 +1086,7 @@ class EchoTTSAdapter(TTSAdapter):
         except Exception:
             return False
 
-    def _split_text_chunks(self, text: str, *, max_chars: int, max_bytes: int) -> List[str]:
+    def _split_text_chunks(self, text: str, *, max_chars: int, max_bytes: int) -> list[str]:
         text = (text or "").strip()
         if not text:
             return []
@@ -1090,7 +1094,7 @@ class EchoTTSAdapter(TTSAdapter):
             return [text]
 
         sentences = re.split(r'(?<=[.!?])\s+', text)
-        chunks: List[str] = []
+        chunks: list[str] = []
         current = ""
 
         for sentence in sentences:
@@ -1115,11 +1119,11 @@ class EchoTTSAdapter(TTSAdapter):
 
         return [chunk for chunk in chunks if chunk.strip()]
 
-    def _split_text_by_words(self, text: str, *, max_chars: int, max_bytes: int) -> List[str]:
+    def _split_text_by_words(self, text: str, *, max_chars: int, max_bytes: int) -> list[str]:
         words = text.split()
         if not words:
             return []
-        chunks: List[str] = []
+        chunks: list[str] = []
         current = ""
 
         for word in words:
@@ -1141,13 +1145,13 @@ class EchoTTSAdapter(TTSAdapter):
             chunks.append(current.strip())
         return chunks
 
-    def _split_text_by_bytes(self, text: str, *, max_bytes: int, max_chars: Optional[int] = None) -> List[str]:
+    def _split_text_by_bytes(self, text: str, *, max_bytes: int, max_chars: Optional[int] = None) -> list[str]:
         if max_bytes <= 0:
             max_bytes = self.MAX_TEXT_BYTES
         if max_chars is None or max_chars <= 0:
             max_chars = self.MAX_TEXT_LENGTH
-        chunks: List[str] = []
-        current_chars: List[str] = []
+        chunks: list[str] = []
+        current_chars: list[str] = []
         current_bytes = 0
 
         for ch in text:
@@ -1166,7 +1170,7 @@ class EchoTTSAdapter(TTSAdapter):
             chunks.append("".join(current_chars))
         return chunks
 
-    def _validate_text_chunks(self, chunks: List[str], *, max_chars: int, max_bytes: int) -> None:
+    def _validate_text_chunks(self, chunks: list[str], *, max_chars: int, max_bytes: int) -> None:
         validator = TTSInputValidator()
         for chunk in chunks:
             validator.validate_text_length(chunk, provider=self.PROVIDER_KEY, max_length=max_chars)

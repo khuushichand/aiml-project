@@ -16,32 +16,32 @@
 ####################
 
 import asyncio
-import os
 import base64
+import copy
 import json
+import os
+import tempfile
 import time
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, List, Callable, Awaitable, Tuple
-from dataclasses import dataclass, field
-import numpy as np
-import tempfile
+from collections.abc import Awaitable
+from dataclasses import dataclass
 from pathlib import Path
-from fastapi import WebSocketDisconnect
-from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
-from loguru import logger
+from typing import Any, Callable, Optional
 from uuid import uuid4
-import copy
+
+import numpy as np
+from fastapi import WebSocketDisconnect
+from loguru import logger
+
+from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+
+from .Audio_Streaming_Parakeet import AudioBuffer, StreamingConfig
 
 # Import existing implementations
-from .Audio_Streaming_Parakeet import (
-    ParakeetStreamingTranscriber as OriginalParakeetTranscriber,
-    StreamingConfig,
-    AudioBuffer
-)
 from .Audio_Transcription_Nemo import (
     load_canary_model,
-    transcribe_with_canary,
     load_parakeet_model,
+    transcribe_with_canary,
     transcribe_with_parakeet,
 )
 from .model_utils import normalize_model_and_variant
@@ -84,9 +84,13 @@ def _safe_temp_subdir(raw: Optional[str]) -> Optional[Path]:
 # (WhisperStreamingTranscriber.initialize() will prefer a module-level symbol if present.)
 try:  # pragma: no cover - import availability varies in test contexts
     from .Audio_Transcription_Lib import (
-        get_whisper_model as get_whisper_model,  # type: ignore
-        _resample_audio_if_needed,
         WHISPER_COMPUTE_TYPE_OVERRIDE as _WHISPER_COMPUTE_TYPE_OVERRIDE,  # type: ignore
+    )
+    from .Audio_Transcription_Lib import (
+        _resample_audio_if_needed,
+    )
+    from .Audio_Transcription_Lib import (
+        get_whisper_model as get_whisper_model,  # type: ignore
     )
 except Exception:  # Fallback when whisper deps are unavailable; tests may monkeypatch this
     get_whisper_model = None  # type: ignore[assignment]
@@ -110,7 +114,10 @@ try:  # pragma: no cover
     import nemo.collections.asr as nemo_asr  # type: ignore
     from nemo.collections.asr.parts.submodules.rnnt_decoding import RNNTDecodingConfig  # type: ignore
     from nemo.collections.asr.parts.utils.rnnt_utils import batched_hyps_to_hypotheses  # type: ignore
-    from nemo.collections.asr.parts.utils.streaming_utils import ContextSize, StreamingBatchedAudioBuffer  # type: ignore
+    from nemo.collections.asr.parts.utils.streaming_utils import (  # type: ignore
+        ContextSize,
+        StreamingBatchedAudioBuffer,
+    )
 except Exception:  # pragma: no cover
     nemo_asr = None  # type: ignore
     RNNTDecodingConfig = None  # type: ignore
@@ -119,7 +126,9 @@ except Exception:  # pragma: no cover
 
 # Shared STT error sentinel detection for streaming paths
 try:  # pragma: no cover - available whenever Audio_Transcription_Lib imports
-    from .Audio_Transcription_Lib import is_transcription_error_message as _is_transcription_error_message  # type: ignore
+    from .Audio_Transcription_Lib import (
+        is_transcription_error_message as _is_transcription_error_message,  # type: ignore
+    )
 except Exception:  # pragma: no cover - degrade gracefully in minimal envs/tests
     def _is_transcription_error_message(_: str) -> bool:  # type: ignore[override]
         return False
@@ -127,7 +136,7 @@ except Exception:  # pragma: no cover - degrade gracefully in minimal envs/tests
 from .Audio_Streaming_Insights import LiveInsightSettings, LiveMeetingInsights
 
 try:
-    from .Diarization_Lib import DiarizationService, DiarizationError
+    from .Diarization_Lib import DiarizationError, DiarizationService
 except Exception:  # pragma: no cover - optional dependency probing
     DiarizationService = None  # type: ignore
 
@@ -137,8 +146,8 @@ except Exception:  # pragma: no cover - optional dependency probing
 
 # Optional: Parakeet Core adapter
 try:  # pragma: no cover - optional integration path
-    from .Parakeet_Core_Streaming.transcriber import ParakeetCoreTranscriber as _CoreTranscriber
     from .Parakeet_Core_Streaming.config import StreamingConfig as _CoreConfig
+    from .Parakeet_Core_Streaming.transcriber import ParakeetCoreTranscriber as _CoreTranscriber
 
     class _ParakeetCoreAdapter:
         """Adapter exposing the same interface expected by handle_unified_websocket.
@@ -558,10 +567,10 @@ class StreamingDiarizer:
         self.store_audio = bool(store_audio)
         self.storage_dir = _safe_temp_subdir(storage_dir)
         self.num_speakers = num_speakers
-        self._audio_chunks: List[np.ndarray] = []
-        self._transcript_segments: List[Dict[str, Any]] = []
-        self._mapping: Dict[int, Dict[str, Any]] = {}
-        self._last_result: Dict[str, Any] = {}
+        self._audio_chunks: list[np.ndarray] = []
+        self._transcript_segments: list[dict[str, Any]] = []
+        self._mapping: dict[int, dict[str, Any]] = {}
+        self._last_result: dict[str, Any] = {}
         self._dirty = False
         self._persist_path: Optional[Path] = None
         self._persist_method: Optional[str] = None  # 'soundfile' | 'scipy' | 'wave' | None
@@ -571,7 +580,7 @@ class StreamingDiarizer:
         self._service_checked = False
         self._service_error: Optional[str] = None
 
-    async def label_segment(self, audio_np: np.ndarray, segment_meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def label_segment(self, audio_np: np.ndarray, segment_meta: dict[str, Any]) -> Optional[dict[str, Any]]:
         """Append audio/transcript and return the speaker for the latest segment."""
         if not await self._ensure_service():
             return None
@@ -588,7 +597,7 @@ class StreamingDiarizer:
             segment_id = int(segment_meta.get("segment_id", 0))
             return mapping.get(segment_id)
 
-    async def finalize(self) -> Tuple[Dict[int, Dict[str, Any]], Optional[str], Optional[List[Dict[str, Any]]]]:
+    async def finalize(self) -> tuple[dict[int, dict[str, Any]], Optional[str], Optional[list[dict[str, Any]]]]:
         """Ensure latest mapping is available and optionally persist audio."""
         if not await self._ensure_service():
             return {}, None, None
@@ -654,7 +663,7 @@ class StreamingDiarizer:
             self._service_error = str(exc)
             return False
 
-    async def _ensure_mapping(self) -> Dict[int, Dict[str, Any]]:
+    async def _ensure_mapping(self) -> dict[int, dict[str, Any]]:
         if not await self._ensure_service():
             return {}
         if not self._dirty:
@@ -666,7 +675,7 @@ class StreamingDiarizer:
             self._dirty = False
         return self._mapping
 
-    def _run_alignment_sync(self) -> Optional[Dict[int, Dict[str, Any]]]:
+    def _run_alignment_sync(self) -> Optional[dict[int, dict[str, Any]]]:
         if not self._service or not self._audio_chunks:
             return {}
         combined = self._combined_audio()
@@ -691,7 +700,7 @@ class StreamingDiarizer:
             )
             self._last_result = result or {}
             segments = self._last_result.get("segments", []) or transcripts
-            mapping: Dict[int, Dict[str, Any]] = {}
+            mapping: dict[int, dict[str, Any]] = {}
             for seg in segments:
                 seg_id = seg.get("segment_id") or seg.get("id")
                 if seg_id is None:
@@ -878,7 +887,7 @@ class BaseStreamingTranscriber(ABC):
         pass
 
     @abstractmethod
-    async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
+    async def process_audio_chunk(self, audio_data: bytes) -> Optional[dict[str, Any]]:
         """Process a chunk of audio data."""
         pass
 
@@ -899,7 +908,7 @@ class BaseStreamingTranscriber(ABC):
         self.model = None
         self.reset()
 
-    def _prepare_partial_metadata(self, buffer_duration: float) -> Dict[str, float]:
+    def _prepare_partial_metadata(self, buffer_duration: float) -> dict[str, float]:
         """Attach common metadata for partial updates."""
         buffer_duration = float(buffer_duration)
         start = float(self.total_processed_seconds)
@@ -911,7 +920,7 @@ class BaseStreamingTranscriber(ABC):
             "cumulative_audio": float(self.total_processed_seconds),
         }
 
-    def _prepare_final_metadata(self, chunk_duration: float) -> Dict[str, float]:
+    def _prepare_final_metadata(self, chunk_duration: float) -> dict[str, float]:
         """Attach metadata for finalized segments and advance the timeline cursor."""
         chunk_duration = float(chunk_duration)
         if chunk_duration < 0:
@@ -1329,7 +1338,7 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
         self._rnnt_last_partial = ""
         self._rnnt_last_final = ""
 
-    async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
+    async def process_audio_chunk(self, audio_data: bytes) -> Optional[dict[str, Any]]:
         """
         Process audio chunk with Parakeet.
 
@@ -1525,7 +1534,7 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
         if not getattr(self.config, "task", None):
             self.config.task = "transcribe"
 
-    async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
+    async def process_audio_chunk(self, audio_data: bytes) -> Optional[dict[str, Any]]:
         """
         Process audio chunk with Canary.
 
@@ -1731,7 +1740,7 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
             logger.error(f"Failed to initialize Whisper model: {e}")
             raise
 
-    async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
+    async def process_audio_chunk(self, audio_data: bytes) -> Optional[dict[str, Any]]:
         """
         Process audio chunk with Whisper.
 
@@ -1864,7 +1873,7 @@ class Qwen3ASRStreamingTranscriber(BaseStreamingTranscriber):
         super().__init__(config)
         self._vllm_base_url: str = ""
         self._httpx_client = None
-        self._accumulated_audio: List[np.ndarray] = []
+        self._accumulated_audio: list[np.ndarray] = []
 
     def initialize(self):
         """Initialize the Qwen3-ASR transcriber with vLLM backend."""
@@ -1908,7 +1917,7 @@ class Qwen3ASRStreamingTranscriber(BaseStreamingTranscriber):
         self._httpx_client = None
         super().cleanup()
 
-    async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
+    async def process_audio_chunk(self, audio_data: bytes) -> Optional[dict[str, Any]]:
         """
         Process audio chunk with Qwen3-ASR via vLLM HTTP.
 
@@ -2011,8 +2020,8 @@ class Qwen3ASRStreamingTranscriber(BaseStreamingTranscriber):
             return ""
 
         try:
-            import tempfile
             import asyncio
+            import tempfile
 
             # Write audio to temporary WAV file for HTTP upload
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -2108,7 +2117,7 @@ class UnifiedStreamingTranscriber:
         self.transcriber.initialize()
         logger.info(f"Initialized {self.config.model} transcriber")
 
-    async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
+    async def process_audio_chunk(self, audio_data: bytes) -> Optional[dict[str, Any]]:
         """Process audio chunk with selected transcriber."""
         if not self.transcriber:
             raise RuntimeError("Transcriber not initialized")

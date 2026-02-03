@@ -5,30 +5,32 @@ Handles WebSocket and HTTP connections with production-ready features.
 """
 
 import asyncio
+import ipaddress
 import json
-from typing import Dict, Any, Optional, Set, List, Deque
-from datetime import datetime, timezone, timedelta
-from dataclasses import dataclass, field
 from collections import deque
 from contextlib import asynccontextmanager
-from fastapi import WebSocket, WebSocketDisconnect, HTTPException
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+from fastapi import HTTPException, WebSocket, WebSocketDisconnect
 from loguru import logger
 
-from .config import get_config, validate_config
-from .protocol import MCPProtocol, MCPRequest, MCPResponse, RequestContext
-from .modules.registry import get_module_registry
-from .auth.jwt_manager import get_jwt_manager, JWTManager
-from .auth.authnz_rbac import get_rbac_policy
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
-from .auth.rate_limiter import get_rate_limiter, RateLimitExceeded
-from .monitoring.metrics import get_metrics_collector
-from .security.ip_filter import get_ip_access_controller
-from .security.request_guards import enforce_client_certificate_headers
-import ipaddress
+from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+
+from .auth.authnz_rbac import get_rbac_policy
+from .auth.jwt_manager import JWTManager, get_jwt_manager
+from .auth.rate_limiter import RateLimitExceeded, get_rate_limiter
+from .config import get_config, validate_config
+from .modules.registry import get_module_registry
+from .monitoring.metrics import get_metrics_collector
+from .protocol import MCPProtocol, MCPRequest, MCPResponse, RequestContext
+from .security.ip_filter import get_ip_access_controller
+from .security.request_guards import enforce_client_certificate_headers
 
 
 def _is_authnz_access_token(token: str) -> bool:
@@ -45,7 +47,7 @@ def _is_authnz_access_token(token: str) -> bool:
         return False
 
 
-def _extract_api_key_permissions(info: Optional[Dict[str, Any]]) -> List[str]:
+def _extract_api_key_permissions(info: Optional[dict[str, Any]]) -> list[str]:
     """Normalize API key scopes into MCP permissions."""
     if not info:
         return []
@@ -85,7 +87,7 @@ class WebSocketConnection:
         connection_id: str,
         client_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ):
         self.websocket = websocket
         self.connection_id = connection_id
@@ -96,9 +98,9 @@ class WebSocketConnection:
         self.last_activity = self.connected_at
         self.message_count = 0
         self.error_count = 0
-        self.request_times: Deque[float] = deque(maxlen=1000)
+        self.request_times: deque[float] = deque(maxlen=1000)
 
-    async def send_json(self, data: Dict[str, Any]):
+    async def send_json(self, data: dict[str, Any]):
         """Send JSON data to client"""
         try:
             await self.websocket.send_json(data)
@@ -108,7 +110,7 @@ class WebSocketConnection:
             self.error_count += 1
             raise
 
-    async def receive_json(self) -> Dict[str, Any]:
+    async def receive_json(self) -> dict[str, Any]:
         """Receive JSON data from client"""
         try:
             data = await self.websocket.receive_json()
@@ -135,10 +137,10 @@ class SessionData:
     user_id: Optional[str] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    uris_seen: Deque[str] = field(default_factory=lambda: deque(maxlen=500))
-    uris_index: Set[str] = field(default_factory=set)
-    client_info: Dict[str, Any] = field(default_factory=dict)
-    safe_config: Dict[str, Any] = field(default_factory=dict)
+    uris_seen: deque[str] = field(default_factory=lambda: deque(maxlen=500))
+    uris_index: set[str] = field(default_factory=set)
+    client_info: dict[str, Any] = field(default_factory=dict)
+    safe_config: dict[str, Any] = field(default_factory=dict)
 
     def touch(self):
         self.last_activity = datetime.now(timezone.utc)
@@ -177,12 +179,12 @@ class MCPServer:
         self._ws_auth_required_initial = self.config.ws_auth_required
 
         # Connection management
-        self.connections: Dict[str, WebSocketConnection] = {}
+        self.connections: dict[str, WebSocketConnection] = {}
         self.connection_lock = asyncio.Lock()
-        self._ip_connection_counts: Dict[str, int] = {}
+        self._ip_connection_counts: dict[str, int] = {}
 
         # Session management (HTTP/WS)
-        self.sessions: Dict[str, SessionData] = {}
+        self.sessions: dict[str, SessionData] = {}
         self.session_lock = asyncio.Lock()
 
         # Server state
@@ -191,7 +193,7 @@ class MCPServer:
         self.shutdown_event = asyncio.Event()
 
         # Background tasks
-        self.background_tasks: Set[asyncio.Task] = set()
+        self.background_tasks: set[asyncio.Task] = set()
 
         logger.info("MCP Server created")
 
@@ -320,8 +322,8 @@ class MCPServer:
         """Register default modules via config/env-driven loader"""
         # Autoload modules from YAML config and/or MCP_MODULES env var
         try:
-            import os
             import importlib
+            import os
             # Lazy import yaml to avoid hard dependency during tests if not installed
             try:
                 import yaml  # type: ignore
@@ -574,7 +576,7 @@ class MCPServer:
             s.touch()
             return s
 
-    def _merge_safe_config(self, current: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_safe_config(self, current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
         """Merge allowlisted safe config keys with clamping."""
         if not incoming:
             return current
@@ -618,7 +620,7 @@ class MCPServer:
         user_id = None
 
         controller = get_ip_access_controller()
-        metadata: Dict[str, Any] = {}
+        metadata: dict[str, Any] = {}
         forwarded_for = websocket.headers.get("x-forwarded-for") or websocket.headers.get("X-Forwarded-For")
         real_ip = websocket.headers.get("x-real-ip") or websocket.headers.get("X-Real-IP")
         raw_remote_ip = None
@@ -720,6 +722,7 @@ class MCPServer:
             try:
                 # Try AuthNZ JWT first for consistency with HTTP endpoints
                 from starlette.requests import Request as _Request
+
                 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
 
                 scope = {
@@ -1012,11 +1015,12 @@ class MCPServer:
                             sess.client_info.update(client_info)
                         # Optional config param for WS (either dict or base64-encoded JSON)
                         cfg = params.get("config")
-                        safe_incoming: Dict[str, Any] = {}
+                        safe_incoming: dict[str, Any] = {}
                         if isinstance(cfg, dict):
                             safe_incoming = cfg
                         elif isinstance(cfg, str):
-                            import base64, json as _json
+                            import base64
+                            import json as _json
                             try:
                                 decoded = base64.b64decode(cfg).decode("utf-8")
                                 safe_incoming = _json.loads(decoded)
@@ -1130,7 +1134,7 @@ class MCPServer:
         request: MCPRequest,
         client_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> MCPResponse:
         """
         Handle an HTTP MCP request.
@@ -1145,7 +1149,7 @@ class MCPServer:
         """
         # Pull session_id and safe_config from metadata when present
         session_id: Optional[str] = None
-        safe_cfg: Dict[str, Any] = {}
+        safe_cfg: dict[str, Any] = {}
         try:
             if metadata:
                 raw_sid = metadata.get("session_id")
@@ -1229,17 +1233,17 @@ class MCPServer:
 
     async def handle_http_batch(
         self,
-        requests: List[MCPRequest],
+        requests: list[MCPRequest],
         client_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> Optional[List[MCPResponse]]:
+        metadata: Optional[dict[str, Any]] = None
+    ) -> Optional[list[MCPResponse]]:
         """
         Handle a batch of HTTP MCP requests with consistent session semantics.
         """
         # Pull session_id and safe_config from metadata when present
         session_id: Optional[str] = None
-        safe_cfg: Dict[str, Any] = {}
+        safe_cfg: dict[str, Any] = {}
         try:
             if metadata:
                 raw_sid = metadata.get("session_id")
@@ -1343,7 +1347,7 @@ class MCPServer:
 
             self.connections.clear()
 
-    async def get_status(self) -> Dict[str, Any]:
+    async def get_status(self) -> dict[str, Any]:
         """Get server status"""
         uptime = (datetime.now(timezone.utc) - self.startup_time).total_seconds()
 
@@ -1370,7 +1374,7 @@ class MCPServer:
             }
         }
 
-    async def get_metrics(self) -> Dict[str, Any]:
+    async def get_metrics(self) -> dict[str, Any]:
         """Get server metrics"""
         # Collect module metrics
         module_metrics = {}

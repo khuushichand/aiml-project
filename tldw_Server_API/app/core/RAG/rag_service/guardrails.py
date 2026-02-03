@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple, Set, Optional
 from html.parser import HTMLParser
+from typing import Any
 
 from loguru import logger
 
@@ -29,7 +29,7 @@ except Exception:  # pragma: no cover - fallback for tests
     class Document:  # type: ignore
         id: str
         content: str
-        metadata: Dict[str, Any]
+        metadata: dict[str, Any]
         score: float = 0.0
 
 
@@ -82,7 +82,7 @@ def detect_injection_score(text: str) -> float:
     return min(1.0, len(matches) / 3.0)
 
 
-def downweight_injection_docs(docs: List[Document], strength: float = 0.5) -> Dict[str, Any]:
+def downweight_injection_docs(docs: list[Document], strength: float = 0.5) -> dict[str, Any]:
     """Down-weight suspicious documents in-place and return summary stats.
 
     - strength in (0,1]: multiplicative factor when risk>0 (default 0.5)
@@ -154,7 +154,7 @@ def _normalize_number_token(tok: str) -> str:
     return t + unit
 
 
-def _extract_numeric_tokens(text: str) -> Set[str]:
+def _extract_numeric_tokens(text: str) -> set[str]:
     """Extract normalized numeric tokens with basic unit/word handling.
 
     - Captures digits with optional decimal and suffix (%/k/m/b)
@@ -171,8 +171,8 @@ def _extract_numeric_tokens(text: str) -> Set[str]:
             toks.append(f"{num}{unit}")
     except Exception:
         logger.debug("Guardrail numeric word-pair extraction failed", exc_info=True)
-    base: Set[str] = set()
-    expanded: Set[str] = set()
+    base: set[str] = set()
+    expanded: set[str] = set()
     for raw in toks:
         nrm = _normalize_number_token(raw)
         if not nrm:
@@ -214,36 +214,36 @@ def _extract_numeric_tokens(text: str) -> Set[str]:
 class NumericDeviation:
     """Represents a numeric deviation between claim and source."""
     claim_value: str
-    source_value: Optional[str]
-    deviation_percent: Optional[float]
+    source_value: str | None
+    deviation_percent: float | None
     is_match: bool
 
 
 @dataclass
 class NumericFidelityResult:
     """Result of numeric fidelity check."""
-    present: Set[str]
-    missing: Set[str]
-    union_source_numbers: Set[str]
-    deviations: List[NumericDeviation] = field(default_factory=list)
+    present: set[str]
+    missing: set[str]
+    union_source_numbers: set[str]
+    deviations: list[NumericDeviation] = field(default_factory=list)
     precision_mode: str = "standard"
     all_within_tolerance: bool = True
 
 
-def check_numeric_fidelity(answer: str, docs: List[Document]) -> NumericFidelityResult:
+def check_numeric_fidelity(answer: str, docs: list[Document]) -> NumericFidelityResult:
     """Check whether numeric tokens in the answer appear in sources.
 
     This is a best-effort heuristic: we consider presence if a normalized
     token (including unit suffix) appears in any source document.
     """
     answer_nums = _extract_numeric_tokens(answer or "")
-    union: Set[str] = set()
+    union: set[str] = set()
     for d in docs or []:
         union |= _extract_numeric_tokens(getattr(d, "content", ""))
     # A token is considered present if itself or its expanded numeric alias exists in sources
-    def _exp_single(n: str) -> Set[str]:
+    def _exp_single(n: str) -> set[str]:
         n = (n or "").strip()
-        out: Set[str] = {n}
+        out: set[str] = {n}
         try:
             unit = n[-1] if n and n[-1].lower() in {"k", "m", "b", "%"} else ""
             if unit in {"k", "m", "b"}:
@@ -267,7 +267,7 @@ def check_numeric_fidelity(answer: str, docs: List[Document]) -> NumericFidelity
     return NumericFidelityResult(present=present, missing=missing, union_source_numbers=union)
 
 
-def _parse_numeric_value(token: str) -> Optional[float]:
+def _parse_numeric_value(token: str) -> float | None:
     """Parse a numeric token to a float value."""
     if not token:
         return None
@@ -295,7 +295,7 @@ def _parse_numeric_value(token: str) -> Optional[float]:
 
 def check_numeric_precision(
     answer: str,
-    docs: List[Document],
+    docs: list[Document],
     tolerance_percent: float = 0.0,
     mode: str = "standard"
 ) -> NumericFidelityResult:
@@ -321,7 +321,7 @@ def check_numeric_precision(
 
     answer_nums = _extract_numeric_tokens(answer or "")
     source_nums = set()
-    source_values: Dict[str, float] = {}
+    source_values: dict[str, float] = {}
 
     for d in docs or []:
         doc_nums = _extract_numeric_tokens(getattr(d, "content", ""))
@@ -333,7 +333,7 @@ def check_numeric_precision(
 
     present = set()
     missing = set()
-    deviations: List[NumericDeviation] = []
+    deviations: list[NumericDeviation] = []
     all_within_tolerance = True
 
     for ans_tok in answer_nums:
@@ -423,7 +423,7 @@ def check_numeric_precision(
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[\.!?])\s+")
 
 
-def _find_offsets(doc_text: str, target: str) -> Tuple[int, int]:
+def _find_offsets(doc_text: str, target: str) -> tuple[int, int]:
     """Best-effort offsets of target within doc_text.
 
     Strategy:
@@ -450,15 +450,15 @@ def _find_offsets(doc_text: str, target: str) -> Tuple[int, int]:
 
 def build_hard_citations(
     answer: str,
-    docs: List[Document],
-    claims_payload: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
+    docs: list[Document],
+    claims_payload: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Return a mapping suitable for response metadata under 'hard_citations'.
 
     If claims_payload is provided (from ClaimsEngine), use its citations (doc_id, start, end).
     Otherwise, heuristically map sentences to best matching spans by substring search.
     """
-    out: Dict[str, Any] = {"sentences": [], "coverage": 0.0, "total": 0, "supported": 0}
+    out: dict[str, Any] = {"sentences": [], "coverage": 0.0, "total": 0, "supported": 0}
     if not isinstance(answer, str) or not answer.strip():
         return out
     clipped_answer = _clip_guardrail_text(answer)
@@ -472,10 +472,10 @@ def build_hard_citations(
             cits = (c or {}).get("citations") or []
             if isinstance(text, str) and len(text.strip()) >= 6:
                 total += 1
-                entry = {"text": text, "citations": []}
+                entry_claim: dict[str, Any] = {"text": text, "citations": []}
                 for cit in cits:
                     try:
-                        entry["citations"].append({
+                        entry_claim["citations"].append({
                             "doc_id": str(cit.get("doc_id")),
                             "start": int(cit.get("start", 0)),
                             "end": int(cit.get("end", 0)),
@@ -483,9 +483,9 @@ def build_hard_citations(
                     except Exception:
                         logger.debug("Guardrail citation mapping failed for claim", exc_info=True)
                         continue
-                if entry["citations"]:
+                if entry_claim["citations"]:
                     supported += 1
-                out["sentences"].append(entry)
+                out["sentences"].append(entry_claim)
         out["total"] = total
         out["supported"] = supported
         out["coverage"] = (supported / total) if total else 0.0
@@ -499,13 +499,13 @@ def build_hard_citations(
         if len(s) < 6:
             continue
         total += 1
-        entry = {"text": s, "citations": []}
+        entry_sentence: dict[str, Any] = {"text": s, "citations": []}
         # Search for best offset in top docs
         for d in (docs or [])[:10]:
             try:
                 start, end = _find_offsets(getattr(d, "content", ""), s)
                 if end > start:
-                    entry["citations"].append({
+                    entry_sentence["citations"].append({
                         "doc_id": getattr(d, "id", ""),
                         "start": int(start),
                         "end": int(end),
@@ -513,9 +513,9 @@ def build_hard_citations(
             except Exception:
                 logger.debug("Guardrail hard citation mapping failed", exc_info=True)
                 continue
-        if entry["citations"]:
+        if entry_sentence["citations"]:
             supported += 1
-        out["sentences"].append(entry)
+        out["sentences"].append(entry_sentence)
     out["total"] = total
     out["supported"] = supported
     out["coverage"] = (supported / total) if total else 0.0
@@ -539,17 +539,17 @@ def _verify_offsets(doc_text: str, start: int, end: int, target: str) -> bool:
         return False
 
 
-def build_quote_citations(answer: str, docs: List[Document]) -> Dict[str, Any]:
+def build_quote_citations(answer: str, docs: list[Document]) -> dict[str, Any]:
     """Extract quoted spans from answer and map to source offsets.
 
     Returns a structure with entries: {text, citations:[{doc_id,start,end,verified}]} and coverage ratio.
     """
-    out: Dict[str, Any] = {"quotes": [], "total": 0, "supported": 0, "coverage": 0.0}
+    out: dict[str, Any] = {"quotes": [], "total": 0, "supported": 0, "coverage": 0.0}
     if not isinstance(answer, str) or not answer.strip():
         return out
     clipped_answer = _clip_guardrail_text(answer)
     matches = _QUOTE_RE.findall(clipped_answer)
-    quotes: List[str] = []
+    quotes: list[str] = []
     for a, b in matches:
         q = a or b
         if q and len(q.strip()) >= 4:
@@ -557,13 +557,13 @@ def build_quote_citations(answer: str, docs: List[Document]) -> Dict[str, Any]:
     out["total"] = len(quotes)
     supported = 0
     for q in quotes:
-        entry = {"text": q, "citations": []}
+        entry_quote: dict[str, Any] = {"text": q, "citations": []}
         for d in (docs or [])[:10]:
             try:
                 start, end = _find_offsets(getattr(d, "content", ""), q)
                 verified = _verify_offsets(getattr(d, "content", ""), start, end, q)
                 if end > start:
-                    entry["citations"].append({
+                    entry_quote["citations"].append({
                         "doc_id": getattr(d, "id", ""),
                         "start": int(start),
                         "end": int(end),
@@ -572,9 +572,9 @@ def build_quote_citations(answer: str, docs: List[Document]) -> Dict[str, Any]:
             except Exception:
                 logger.debug("Guardrail quote citation mapping failed", exc_info=True)
                 continue
-        if entry["citations"]:
+        if entry_quote["citations"]:
             supported += 1
-        out["quotes"].append(entry)
+        out["quotes"].append(entry_quote)
     out["supported"] = supported
     out["coverage"] = (supported / out["total"]) if out["total"] else 0.0
     return out
@@ -595,7 +595,7 @@ _PII_RE = re.compile("|".join(_PII_PATTERNS), re.IGNORECASE)
 _PHI_RE = re.compile("|".join(_PHI_PATTERNS), re.IGNORECASE)
 
 
-def detect_pii_phi(text: str) -> Dict[str, int]:
+def detect_pii_phi(text: str) -> dict[str, int]:
     if not isinstance(text, str) or not text:
         return {"pii": 0, "phi": 0}
     pii = len(_PII_RE.findall(text))
@@ -604,10 +604,10 @@ def detect_pii_phi(text: str) -> Dict[str, int]:
 
 
 def apply_content_policy(
-    docs: List[Document],
-    policy_types: List[str],
+    docs: list[Document],
+    policy_types: list[str],
     mode: str = "redact",
-) -> Dict[str, int]:
+) -> dict[str, int]:
     """Apply a lightweight content policy to documents.
 
     - policy_types: subset of ["pii", "phi"]
@@ -617,7 +617,7 @@ def apply_content_policy(
     redact_token = "[REDACTED]"
     dropped = 0
     affected = 0
-    kept: List[Document] = []
+    kept: list[Document] = []
     for d in (docs or []):
         txt = getattr(d, "content", "") or ""
         flags = detect_pii_phi(txt)
@@ -650,11 +650,11 @@ def apply_content_policy(
 # -------------------- HTML sanitizer (allow-list) --------------------
 
 class _AllowlistHTMLStripper(HTMLParser):
-    def __init__(self, allowed_tags: Set[str], allowed_attrs: Set[str]):
+    def __init__(self, allowed_tags: set[str], allowed_attrs: set[str]):
         super().__init__()
         self.allowed_tags = allowed_tags
         self.allowed_attrs = allowed_attrs
-        self.output: List[str] = []
+        self.output: list[str] = []
 
     def handle_starttag(self, tag, attrs):
         if tag in self.allowed_tags:
@@ -677,7 +677,7 @@ class _AllowlistHTMLStripper(HTMLParser):
         return "".join(self.output)
 
 
-def sanitize_html_allowlist(text: str, allowed_tags: Optional[List[str]] = None, allowed_attrs: Optional[List[str]] = None) -> str:
+def sanitize_html_allowlist(text: str, allowed_tags: list[str] | None = None, allowed_attrs: list[str] | None = None) -> str:
     if not isinstance(text, str) or not text:
         return text or ""
     tags = set((allowed_tags or ["p", "b", "i", "strong", "em", "code", "pre", "ul", "ol", "li", "br"]))
@@ -694,12 +694,12 @@ def sanitize_html_allowlist(text: str, allowed_tags: Optional[List[str]] = None,
 
 # -------------------- OCR confidence gating --------------------
 
-def gate_docs_by_ocr_confidence(docs: List[Document], threshold: float = 0.0) -> int:
+def gate_docs_by_ocr_confidence(docs: list[Document], threshold: float = 0.0) -> int:
     """Drop documents whose metadata.ocr_confidence falls below threshold.
 
     Returns number of dropped docs.
     """
-    kept: List[Document] = []
+    kept: list[Document] = []
     dropped = 0
     for d in (docs or []):
         md = getattr(d, "metadata", None) or {}

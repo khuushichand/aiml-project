@@ -1,22 +1,23 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 try:
-    from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
+    from playwright.sync_api import Page, sync_playwright
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 except ImportError:  # pragma: no cover - optional dependency guard
     Page = Any  # type: ignore[misc,assignment]
     PlaywrightTimeoutError = TimeoutError  # type: ignore[misc,assignment]
     sync_playwright = None
 
-CAPTCHA_FINGERPRINTS: Dict[str, List[str]] = {
+CAPTCHA_FINGERPRINTS: dict[str, list[str]] = {
     "reCAPTCHA": ["google.com/recaptcha", "recaptcha/api.js", "g-recaptcha"],
     "hCaptcha": ["hcaptcha.com", "hcaptcha-box", "h-captcha"],
     "Cloudflare Turnstile": ["challenges.cloudflare.com/turnstile", "cf-turnstile"],
 }
 
 
-def _scan_for_captcha_fingerprints(page: Page, network_requests: List[str]) -> Optional[str]:
+def _scan_for_captcha_fingerprints(page: Page, network_requests: list[str]) -> str | None:
     """
     Scan the page's HTML and network requests for known CAPTCHA signatures.
 
@@ -33,7 +34,7 @@ def _scan_for_captcha_fingerprints(page: Page, network_requests: List[str]) -> O
     return None
 
 
-def detect_captcha(url: str) -> Dict[str, Any]:
+def detect_captcha(url: str) -> dict[str, Any]:
     """
     Analyze the URL to detect the presence and type of CAPTCHA.
     """
@@ -49,7 +50,7 @@ def detect_captcha(url: str) -> Dict[str, Any]:
             browser = playwright.chromium.launch(headless=True)
             try:
                 page = browser.new_page()
-                captured_requests: List[str] = []
+                captured_requests: list[str] = []
 
                 def capture_request(request) -> None:
                     captured_requests.append(request.url.lower())

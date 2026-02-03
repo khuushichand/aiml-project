@@ -7,30 +7,29 @@ from __future__ import annotations
 import re
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
-
+from typing import Any
 from urllib.parse import quote as urlquote
-from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 BIO_RXIV_API_BASE = "https://api.biorxiv.org"
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def _validate_date(d: Optional[str]) -> Optional[str]:
+def _validate_date(d: str | None) -> str | None:
     if d and _DATE_RE.match(d):
         return d
     return None
 
 
-def _default_date_range() -> Tuple[str, str]:
+def _default_date_range() -> tuple[str, str]:
     # Default to last 30 days if user did not specify
     end = datetime.utcnow().date()
     start = end - timedelta(days=30)
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
-def _get_json(url: str, params: Optional[Dict[str, Any]] = None, timeout: int = 15) -> Dict[str, Any]:
+def _get_json(url: str, params: dict[str, Any] | None = None, timeout: int = 15) -> dict[str, Any]:
     return fetch_json(method="GET", url=url, params=params, headers={"Accept": "application/json"}, timeout=timeout)
 
 
@@ -47,7 +46,7 @@ def _media_type_for_format(fmt: str) -> str:
     return "application/octet-stream"
 
 
-def _raw_get(path: str, fmt: Optional[str] = None, params: Optional[Dict[str, Any]] = None) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+def _raw_get(path: str, fmt: str | None = None, params: dict[str, Any] | None = None) -> tuple[bytes | None, str | None, str | None]:
     """Low-level fetch for passthrough endpoints. Returns (content, media_type, error)."""
     try:
         url = f"{BIO_RXIV_API_BASE}{path}{('/' + fmt) if fmt else ''}"
@@ -60,7 +59,7 @@ def _raw_get(path: str, fmt: Optional[str] = None, params: Optional[Dict[str, An
         return None, None, f"BioRxiv error: {str(e)}"
 
 
-def _normalize_item(raw: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_item(raw: dict[str, Any]) -> dict[str, Any]:
     # Expected fields from BioRxiv API (best-effort):
     # doi, title, authors, category, date, abstract, server, version
     doi = raw.get("doi") or ""
@@ -93,7 +92,7 @@ def _normalize_item(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _normalize_published_item(raw: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_published_item(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize /pubs record to a consistent shape for the API layer."""
     return {
         "biorxiv_doi": raw.get("biorxiv_doi") or raw.get("preprint_doi") or "",
@@ -112,16 +111,16 @@ def _normalize_published_item(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def search_biorxiv(
-    query: Optional[str],
+    query: str | None,
     server: str = "biorxiv",
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
-    category: Optional[str] = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    category: str | None = None,
     offset: int = 0,
     limit: int = 10,
-    recent_days: Optional[int] = None,
-    recent_count: Optional[int] = None,
-) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
+    recent_days: int | None = None,
+    recent_count: int | None = None,
+) -> tuple[list[dict[str, Any]] | None, int, str | None]:
     """
     Search BioRxiv/MedRxiv API and return (items, total_results, error_message).
 
@@ -157,7 +156,7 @@ def search_biorxiv(
                 return f"/details/{server_norm}/{interval}/{cursor}"
             return f"/details/{server_norm}/{f}/{t}/{cursor}"
 
-        def _fetch(cursor: int) -> Tuple[List[Dict[str, Any]], int]:
+        def _fetch(cursor: int) -> tuple[list[dict[str, Any]], int]:
             # Rely on /details; apply keyword/category filters client-side; pass category as query param too when possible
             path = _details_path(cursor)
             url = f"{BIO_RXIV_API_BASE}{path}"
@@ -193,7 +192,7 @@ def search_biorxiv(
             return normed, total
 
         # Gather enough batches to satisfy post-filter slicing
-        collected: List[Dict[str, Any]] = []
+        collected: list[dict[str, Any]] = []
         cursor = first_cursor
         max_batches = 5  # safety cap
         batches = 0
@@ -205,7 +204,7 @@ def search_biorxiv(
             # Apply client-side filters (ensure results reflect requested filters even if server ignores params)
             if query and query.strip():
                 ql = query.strip().lower()
-                def _match(item: Dict[str, Any]) -> bool:
+                def _match(item: dict[str, Any]) -> bool:
                     return (
                         (item.get("title") or "").lower().find(ql) >= 0
                         or (item.get("abstract") or "").lower().find(ql) >= 0
@@ -233,7 +232,7 @@ def search_biorxiv(
 def get_biorxiv_by_doi(
     doi: str,
     server: str = "biorxiv",
-) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+) -> tuple[dict[str, Any] | None, str | None]:
     """Fetch a single manuscript by DOI via /details/{server}/{DOI}/na.
 
     Returns (item_dict, error_message). item_dict is normalized to BioRxivPaper shape.
@@ -262,14 +261,14 @@ def get_biorxiv_by_doi(
 
 def search_biorxiv_pubs(
     server: str = "biorxiv",
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
     offset: int = 0,
     limit: int = 10,
-    recent_days: Optional[int] = None,
-    recent_count: Optional[int] = None,
-    q: Optional[str] = None,
-) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
+    recent_days: int | None = None,
+    recent_count: int | None = None,
+    q: str | None = None,
+) -> tuple[list[dict[str, Any]] | None, int, str | None]:
     """Search published article details via /pubs endpoint (bioRxiv/medRxiv)."""
     try:
         server_norm = server.lower().strip() if server else "biorxiv"
@@ -296,7 +295,7 @@ def search_biorxiv_pubs(
                 return f"/pubs/{server_norm}/{interval}/{cursor}"
             return f"/pubs/{server_norm}/{f}/{t}/{cursor}"
 
-        def _fetch(cursor: int) -> Tuple[List[Dict[str, Any]], int]:
+        def _fetch(cursor: int) -> tuple[list[dict[str, Any]], int]:
             url = f"{BIO_RXIV_API_BASE}{_interval_path(cursor)}"
             data = _get_json(url, timeout=15)
             cnt = 0
@@ -310,7 +309,7 @@ def search_biorxiv_pubs(
             time.sleep(0.2)
             return coll, cnt
 
-        collected: List[Dict[str, Any]] = []
+        collected: list[dict[str, Any]] = []
         cursor = first_cursor
         batches = 0
         max_batches = 5
@@ -337,7 +336,7 @@ def search_biorxiv_pubs(
 def get_biorxiv_published_by_doi(
     doi: str,
     server: str = "biorxiv",
-) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+) -> tuple[dict[str, Any] | None, str | None]:
     """Fetch published metadata by DOI via /pubs/{server}/{DOI}/na."""
     try:
         if not doi or not doi.strip():
@@ -360,13 +359,13 @@ def get_biorxiv_published_by_doi(
 
 def search_biorxiv_publisher(
     publisher_prefix: str,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
     offset: int = 0,
     limit: int = 10,
-    recent_days: Optional[int] = None,
-    recent_count: Optional[int] = None,
-) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
+    recent_days: int | None = None,
+    recent_count: int | None = None,
+) -> tuple[list[dict[str, Any]] | None, int, str | None]:
     """Search by publisher prefix via /publisher/{prefix}/{interval}/{cursor} (bioRxiv only)."""
     try:
         if not publisher_prefix or not publisher_prefix.strip():
@@ -391,7 +390,7 @@ def search_biorxiv_publisher(
                 return f"/publisher/{publisher_prefix}/{interval}/{cursor}"
             return f"/publisher/{publisher_prefix}/{f}/{t}/{cursor}"
 
-        def _fetch(cursor: int) -> Tuple[List[Dict[str, Any]], int]:
+        def _fetch(cursor: int) -> tuple[list[dict[str, Any]], int]:
             url = f"{BIO_RXIV_API_BASE}{_interval_path(cursor)}"
             data = _get_json(url, timeout=15)
             cnt = 0
@@ -405,7 +404,7 @@ def search_biorxiv_publisher(
             time.sleep(0.2)
             return coll, cnt
 
-        collected: List[Dict[str, Any]] = []
+        collected: list[dict[str, Any]] = []
         cursor = first_cursor
         total_count = 0
         batches = 0
@@ -427,13 +426,13 @@ def search_biorxiv_publisher(
 
 
 def search_biorxiv_pub(
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
     offset: int = 0,
     limit: int = 10,
-    recent_days: Optional[int] = None,
-    recent_count: Optional[int] = None,
-) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
+    recent_days: int | None = None,
+    recent_count: int | None = None,
+) -> tuple[list[dict[str, Any]] | None, int, str | None]:
     """Published article detail via /pub endpoint (bioRxiv only)."""
     try:
         f = _validate_date(from_date)
@@ -454,7 +453,7 @@ def search_biorxiv_pub(
                 return f"/pub/{recent_count}/{cursor}"
             return f"/pub/{f}/{t}/{cursor}"
 
-        def _fetch(cursor: int) -> Tuple[List[Dict[str, Any]], int]:
+        def _fetch(cursor: int) -> tuple[list[dict[str, Any]], int]:
             url = f"{BIO_RXIV_API_BASE}{_interval_path(cursor)}"
             data = _get_json(url, timeout=15)
             cnt = 0
@@ -468,7 +467,7 @@ def search_biorxiv_pub(
             time.sleep(0.2)
             return coll, cnt
 
-        collected: List[Dict[str, Any]] = []
+        collected: list[dict[str, Any]] = []
         cursor = first_cursor
         batches = 0
         max_batches = 5
@@ -489,7 +488,7 @@ def search_biorxiv_pub(
         return None, 0, f"BioRxiv error: {str(e)}"
 
 
-def _normalize_funder_item(raw: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_funder_item(raw: dict[str, Any]) -> dict[str, Any]:
     base = _normalize_item(raw)
     # Attach funder info best-effort
     base["funder"] = raw.get("funder")
@@ -499,14 +498,14 @@ def _normalize_funder_item(raw: Dict[str, Any]) -> Dict[str, Any]:
 def search_biorxiv_funder(
     server: str,
     ror_id: str,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
     offset: int = 0,
     limit: int = 10,
-    recent_days: Optional[int] = None,
-    recent_count: Optional[int] = None,
-    category: Optional[str] = None,
-) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
+    recent_days: int | None = None,
+    recent_count: int | None = None,
+    category: str | None = None,
+) -> tuple[list[dict[str, Any]] | None, int, str | None]:
     """Search /funder/{server}/{interval}/{ror_id}/{cursor} with optional category."""
     try:
         if not ror_id or not ror_id.strip():
@@ -532,7 +531,7 @@ def search_biorxiv_funder(
                 return f"/funder/{server_norm}/{recent_count}/{ror_id}/{cursor}"
             return f"/funder/{server_norm}/{f}/{t}/{ror_id}/{cursor}"
 
-        def _fetch(cursor: int) -> Tuple[List[Dict[str, Any]], int]:
+        def _fetch(cursor: int) -> tuple[list[dict[str, Any]], int]:
             url = f"{BIO_RXIV_API_BASE}{_interval_path(cursor)}"
             params = None
             if category and category.strip():
@@ -550,7 +549,7 @@ def search_biorxiv_funder(
             time.sleep(0.2)
             return coll, cnt
 
-        collected: List[Dict[str, Any]] = []
+        collected: list[dict[str, Any]] = []
         cursor = first_cursor
         batches = 0
         max_batches = 5
@@ -571,7 +570,7 @@ def search_biorxiv_funder(
         return None, 0, f"BioRxiv error: {str(e)}"
 
 
-def get_biorxiv_summary(interval: str = "m") -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+def get_biorxiv_summary(interval: str = "m") -> tuple[list[dict[str, Any]] | None, str | None]:
     """Content summary statistics via /sum/{interval}. interval: 'm' or 'y'."""
     try:
         iv = interval.lower().strip()
@@ -590,7 +589,7 @@ def get_biorxiv_summary(interval: str = "m") -> Tuple[Optional[List[Dict[str, An
         return None, f"BioRxiv error: {str(e)}"
 
 
-def get_biorxiv_usage(interval: str = "m") -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+def get_biorxiv_usage(interval: str = "m") -> tuple[list[dict[str, Any]] | None, str | None]:
     """Usage statistics via /usage/{interval}. interval: 'm' or 'y'."""
     try:
         iv = interval.lower().strip()
@@ -611,15 +610,15 @@ def get_biorxiv_usage(interval: str = "m") -> Tuple[Optional[List[Dict[str, Any]
 
 def raw_details(
     server: str,
-    from_date: Optional[str],
-    to_date: Optional[str],
-    recent_days: Optional[int],
-    recent_count: Optional[int],
-    doi: Optional[str],
+    from_date: str | None,
+    to_date: str | None,
+    recent_days: int | None,
+    recent_count: int | None,
+    doi: str | None,
     cursor: int = 0,
-    category: Optional[str] = None,
-    fmt: Optional[str] = None,
-) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+    category: str | None = None,
+    fmt: str | None = None,
+) -> tuple[bytes | None, str | None, str | None]:
     server_norm = (server or "biorxiv").lower()
     if doi and doi.strip():
         doi_enc = urlquote(doi.strip(), safe="/")
@@ -644,14 +643,14 @@ def raw_details(
 
 def raw_pubs(
     server: str,
-    from_date: Optional[str],
-    to_date: Optional[str],
-    recent_days: Optional[int],
-    recent_count: Optional[int],
-    doi: Optional[str],
+    from_date: str | None,
+    to_date: str | None,
+    recent_days: int | None,
+    recent_count: int | None,
+    doi: str | None,
     cursor: int = 0,
-    fmt: Optional[str] = None,
-) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+    fmt: str | None = None,
+) -> tuple[bytes | None, str | None, str | None]:
     server_norm = (server or "biorxiv").lower()
     if doi and doi.strip():
         doi_enc = urlquote(doi.strip(), safe="/")
@@ -672,13 +671,13 @@ def raw_pubs(
 
 
 def raw_pub(
-    from_date: Optional[str],
-    to_date: Optional[str],
-    recent_days: Optional[int],
-    recent_count: Optional[int],
+    from_date: str | None,
+    to_date: str | None,
+    recent_days: int | None,
+    recent_count: int | None,
     cursor: int = 0,
-    fmt: Optional[str] = None,
-) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+    fmt: str | None = None,
+) -> tuple[bytes | None, str | None, str | None]:
     f = _validate_date(from_date)
     t = _validate_date(to_date)
     if not (f and t) and not (recent_days or recent_count):
@@ -696,14 +695,14 @@ def raw_pub(
 def raw_funder(
     server: str,
     ror_id: str,
-    from_date: Optional[str],
-    to_date: Optional[str],
-    recent_days: Optional[int],
-    recent_count: Optional[int],
+    from_date: str | None,
+    to_date: str | None,
+    recent_days: int | None,
+    recent_count: int | None,
     cursor: int = 0,
-    category: Optional[str] = None,
-    fmt: Optional[str] = None,
-) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+    category: str | None = None,
+    fmt: str | None = None,
+) -> tuple[bytes | None, str | None, str | None]:
     server_norm = (server or "biorxiv").lower()
     f = _validate_date(from_date)
     t = _validate_date(to_date)
@@ -722,13 +721,13 @@ def raw_funder(
     return _raw_get(path, fmt, params)
 
 
-def raw_sum(interval: str = "m", fmt: Optional[str] = None) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+def raw_sum(interval: str = "m", fmt: str | None = None) -> tuple[bytes | None, str | None, str | None]:
     iv = (interval or "m").lower()
     path = f"/sum/{iv}"
     return _raw_get(path, fmt)
 
 
-def raw_usage(interval: str = "m", fmt: Optional[str] = None) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+def raw_usage(interval: str = "m", fmt: str | None = None) -> tuple[bytes | None, str | None, str | None]:
     iv = (interval or "m").lower()
     path = f"/usage/{iv}"
     return _raw_get(path, fmt)

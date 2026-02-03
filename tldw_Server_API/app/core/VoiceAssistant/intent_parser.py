@@ -10,7 +10,7 @@
 import json
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -67,7 +67,7 @@ class IntentParser:
         self,
         text: str,
         user_id: int = 0,
-        context: Optional[Dict[str, Any]] = None,
+        context: Optional[dict[str, Any]] = None,
     ) -> ParsedIntent:
         """
         Parse transcribed text into an intent.
@@ -207,7 +207,7 @@ class IntentParser:
         text: str,
         matched_phrase: str,
         command: VoiceCommand,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Extract entities from text based on command configuration."""
         entities = {}
         text_lower = text.lower()
@@ -279,7 +279,7 @@ class IntentParser:
         self,
         text: str,
         user_id: int,
-        context: Optional[Dict[str, Any]] = None,
+        context: Optional[dict[str, Any]] = None,
     ) -> Optional[ParsedIntent]:
         """Use LLM to parse complex or ambiguous intents."""
         try:

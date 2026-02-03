@@ -9,17 +9,16 @@ This module provides comprehensive performance tracking including:
 - Performance metrics export
 """
 
-import time
-import psutil
-import asyncio
-from typing import Dict, Any, List, Optional, Callable
-from dataclasses import dataclass, field, asdict
-from collections import deque, defaultdict
-from datetime import datetime, timedelta
-from contextlib import contextmanager
 import json
+import time
+from collections import defaultdict, deque
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
+from typing import Any, Optional
 
+import psutil
 from loguru import logger
 
 
@@ -29,22 +28,22 @@ class TimingMetric:
     name: str
     duration: float
     timestamp: float
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class PerformanceMetrics:
     """Comprehensive performance metrics."""
     total_duration: float
-    component_timings: Dict[str, float]
+    component_timings: dict[str, float]
     query_count: int
     cache_hit_rate: float
     memory_usage_mb: float
     cpu_percent: float
     timestamp: float
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return asdict(self)
 
@@ -89,7 +88,7 @@ class PerformanceMonitor:
         self._component_stats: defaultdict = defaultdict(list)
 
         # Current timing context
-        self._current_timers: Dict[str, float] = {}
+        self._current_timers: dict[str, float] = {}
 
         # Resource monitoring
         self._process = psutil.Process() if enable_resource_monitoring else None
@@ -103,7 +102,7 @@ class PerformanceMonitor:
         logger.info(f"PerformanceMonitor initialized with history_size={history_size}")
 
     @contextmanager
-    def timer(self, name: str, metadata: Optional[Dict[str, Any]] = None):
+    def timer(self, name: str, metadata: Optional[dict[str, Any]] = None):
         """
         Context manager for timing operations.
 
@@ -146,7 +145,7 @@ class PerformanceMonitor:
         self,
         name: str,
         duration: float,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> None:
         """
         Record a timing metric.
@@ -174,7 +173,7 @@ class PerformanceMonitor:
         self,
         query: str,
         total_duration: float,
-        component_timings: Dict[str, float],
+        component_timings: dict[str, float],
         cache_hit: bool = False,
         error: Optional[str] = None
     ) -> None:
@@ -235,7 +234,7 @@ class PerformanceMonitor:
                 f"Components: {component_timings}"
             )
 
-    def get_component_stats(self, component: str) -> Dict[str, float]:
+    def get_component_stats(self, component: str) -> dict[str, float]:
         """
         Get statistics for a component.
 
@@ -271,7 +270,7 @@ class PerformanceMonitor:
             "p99": sorted_timings[int(count * 0.99)] if count > 100 else sorted_timings[-1]
         }
 
-    def get_summary_stats(self) -> Dict[str, Any]:
+    def get_summary_stats(self) -> dict[str, Any]:
         """Get summary statistics."""
         # Calculate average query time
         recent_queries = list(self._query_metrics)[-100:]  # Last 100 queries
@@ -300,7 +299,7 @@ class PerformanceMonitor:
         total = self.cache_hits + self.cache_misses
         return self.cache_hits / total if total > 0 else 0.0
 
-    def get_resource_usage(self) -> Dict[str, float]:
+    def get_resource_usage(self) -> dict[str, float]:
         """Get current resource usage."""
         if not self._process or not self.enable_resource_monitoring:
             return {"memory_mb": 0.0, "cpu_percent": 0.0}
@@ -314,7 +313,7 @@ class PerformanceMonitor:
         except Exception:
             return {"memory_mb": 0.0, "cpu_percent": 0.0}
 
-    def identify_bottlenecks(self, threshold_percentile: float = 0.9) -> List[str]:
+    def identify_bottlenecks(self, threshold_percentile: float = 0.9) -> list[str]:
         """
         Identify performance bottlenecks.
 
@@ -385,7 +384,7 @@ class AsyncPerformanceMonitor(PerformanceMonitor):
     """Async version of performance monitor."""
 
     @contextmanager
-    async def async_timer(self, name: str, metadata: Optional[Dict[str, Any]] = None):
+    async def async_timer(self, name: str, metadata: Optional[dict[str, Any]] = None):
         """Async context manager for timing."""
         start_time = time.time()
 
@@ -405,7 +404,7 @@ class QueryProfiler:
 
     def __init__(self):
         """Initialize query profiler."""
-        self.events: List[Dict[str, Any]] = []
+        self.events: list[dict[str, Any]] = []
         self.start_time: Optional[float] = None
 
     def start(self) -> None:
@@ -417,7 +416,7 @@ class QueryProfiler:
     def add_event(
         self,
         name: str,
-        data: Optional[Dict[str, Any]] = None,
+        data: Optional[dict[str, Any]] = None,
         duration: Optional[float] = None
     ) -> None:
         """
@@ -430,6 +429,7 @@ class QueryProfiler:
         """
         if self.start_time is None:
             self.start()
+        assert self.start_time is not None
 
         event = {
             "name": name,
@@ -441,7 +441,7 @@ class QueryProfiler:
 
         self.events.append(event)
 
-    def get_profile(self) -> Dict[str, Any]:
+    def get_profile(self) -> dict[str, Any]:
         """Get complete profile."""
         if not self.events:
             return {}
@@ -461,7 +461,7 @@ class QueryProfiler:
             "summary": self._generate_summary()
         }
 
-    def _generate_summary(self) -> Dict[str, Any]:
+    def _generate_summary(self) -> dict[str, Any]:
         """Generate profiling summary."""
         if not self.events:
             return {}

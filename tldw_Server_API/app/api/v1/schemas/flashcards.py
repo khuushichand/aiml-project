@@ -1,6 +1,7 @@
-from typing import List, Optional, Literal
 import json
+from typing import Literal, Optional
 from uuid import UUID
+
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -27,7 +28,7 @@ class FlashcardCreate(BaseModel):
     notes: Optional[str] = None
     extra: Optional[str] = None
     is_cloze: Optional[bool] = False
-    tags: Optional[List[str]] = Field(None, description="List of tags; stored as JSON array")
+    tags: Optional[list[str]] = Field(None, description="List of tags; stored as JSON array")
     source_ref_type: Optional[Literal['media', 'message', 'note', 'manual']] = 'manual'
     source_ref_id: Optional[str] = None
     model_type: Optional[Literal['basic','basic_reverse','cloze']] = None
@@ -44,7 +45,7 @@ class Flashcard(BaseModel):
     extra: Optional[str] = None
     is_cloze: bool
     tags_json: Optional[str] = None
-    tags: List[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     ef: float
     interval_days: int
     repetitions: int
@@ -81,7 +82,7 @@ class Flashcard(BaseModel):
 
 
 class FlashcardListResponse(BaseModel):
-    items: List[Flashcard]
+    items: list[Flashcard]
     count: int
     total: int | None = None
 
@@ -111,14 +112,14 @@ class FlashcardUpdate(BaseModel):
     notes: Optional[str] = None
     extra: Optional[str] = None
     is_cloze: Optional[bool] = None
-    tags: Optional[List[str]] = None  # Optional: set/replace tags
+    tags: Optional[list[str]] = None  # Optional: set/replace tags
     expected_version: Optional[int] = None
     model_type: Optional[Literal['basic','basic_reverse','cloze']] = None
     reverse: Optional[bool] = None
 
 
 class FlashcardTagsUpdate(BaseModel):
-    tags: List[str]
+    tags: list[str]
 
 
 class FlashcardQuery(BaseModel):

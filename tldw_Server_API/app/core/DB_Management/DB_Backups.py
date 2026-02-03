@@ -7,16 +7,18 @@ import sqlite3
 import subprocess
 import urllib.parse
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Optional
 
 from loguru import logger
+
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseBackend
 
 # Local Imports:
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
-from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
 from tldw_Server_API.app.core.Utils.path_utils import safe_join
-from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseBackend, BackendType
+from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
+
 #
 # End of Imports
 
@@ -402,7 +404,7 @@ def restore_single_db_backup(db_path: str, backup_dir: str, db_name: str, backup
         return error_msg
 
 
-def setup_backup_config(user_id: Optional[int] = None) -> Dict[str, Dict[str, str]]:
+def setup_backup_config(user_id: Optional[int] = None) -> dict[str, dict[str, str]]:
     """Setup configuration for database backups using centralized path utils.
 
     Returns a mapping of logical database names to their backup configuration.
@@ -426,7 +428,7 @@ def setup_backup_config(user_id: Optional[int] = None) -> Dict[str, Dict[str, st
         'audit': str(DatabasePaths.get_audit_db_path(uid)),
     }
 
-    configs: Dict[str, Dict[str, str]] = {}
+    configs: dict[str, dict[str, str]] = {}
     for name, path in db_paths.items():
         subdir = os.path.join(backup_base_dir, name)
         os.makedirs(subdir, exist_ok=True)

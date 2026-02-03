@@ -8,12 +8,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
-
 
 # Default quota values (in MB)
 DEFAULT_ORG_QUOTA_MB = 10240  # 10 GB
@@ -38,7 +37,7 @@ class AuthnzStorageQuotasRepo:
         return getattr(self.db_pool, "pool", None) is not None
 
     @staticmethod
-    def _normalize_record(row: Any) -> Dict[str, Any]:
+    def _normalize_record(row: Any) -> dict[str, Any]:
         """Normalize backend-specific row types to a consistent dict."""
         if row is None:
             return {}
@@ -68,7 +67,7 @@ class AuthnzStorageQuotasRepo:
 
         return record
 
-    async def get_org_quota(self, org_id: int) -> Optional[Dict[str, Any]]:
+    async def get_org_quota(self, org_id: int) -> dict[str, Any] | None:
         """Get storage quota for an organization."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -92,7 +91,7 @@ class AuthnzStorageQuotasRepo:
             logger.error(f"AuthnzStorageQuotasRepo.get_org_quota failed: {exc}")
             raise
 
-    async def get_team_quota(self, team_id: int) -> Optional[Dict[str, Any]]:
+    async def get_team_quota(self, team_id: int) -> dict[str, Any] | None:
         """Get storage quota for a team."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -123,7 +122,7 @@ class AuthnzStorageQuotasRepo:
         quota_mb: int = DEFAULT_ORG_QUOTA_MB,
         soft_limit_pct: int = DEFAULT_SOFT_LIMIT_PCT,
         hard_limit_pct: int = DEFAULT_HARD_LIMIT_PCT,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create or update storage quota for an organization."""
         now_iso = datetime.now(timezone.utc).isoformat()
         try:
@@ -182,7 +181,7 @@ class AuthnzStorageQuotasRepo:
         quota_mb: int = DEFAULT_TEAM_QUOTA_MB,
         soft_limit_pct: int = DEFAULT_SOFT_LIMIT_PCT,
         hard_limit_pct: int = DEFAULT_HARD_LIMIT_PCT,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create or update storage quota for a team."""
         now_iso = datetime.now(timezone.utc).isoformat()
         try:
@@ -403,7 +402,7 @@ class AuthnzStorageQuotasRepo:
         *,
         offset: int = 0,
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """List all storage quotas (for admin purposes)."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -442,9 +441,9 @@ class AuthnzStorageQuotasRepo:
     async def check_quota_status(
         self,
         *,
-        org_id: Optional[int] = None,
-        team_id: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        org_id: int | None = None,
+        team_id: int | None = None,
+    ) -> dict[str, Any]:
         """
         Check quota status for an org or team.
 
@@ -492,9 +491,9 @@ class AuthnzStorageQuotasRepo:
         self,
         size_bytes: int,
         *,
-        org_id: Optional[int] = None,
-        team_id: Optional[int] = None,
-    ) -> Tuple[bool, str]:
+        org_id: int | None = None,
+        team_id: int | None = None,
+    ) -> tuple[bool, str]:
         """
         Check if additional storage can be allocated.
 
@@ -530,4 +529,3 @@ class AuthnzStorageQuotasRepo:
 
 
 # Type alias for import convenience
-from typing import Tuple

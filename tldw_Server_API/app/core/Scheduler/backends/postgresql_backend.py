@@ -5,14 +5,14 @@ Leverages PostgreSQL-specific features for optimal performance.
 
 import asyncio
 import json
-from typing import List, Optional, Dict, Any, Tuple
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-import uuid
+from typing import Any, Optional
 
 try:
     import asyncpg
-    from asyncpg import Pool, Connection
+    from asyncpg import Connection, Pool
     HAS_ASYNCPG = True
 except ImportError:
     HAS_ASYNCPG = False
@@ -21,12 +21,9 @@ except ImportError:
 
 from loguru import logger
 
-from ..base import Task, TaskStatus, TaskPriority
+from ..base import Task, TaskStatus
+from ..base.exceptions import BackendError
 from ..base.queue_backend import QueueBackend
-from ..base.exceptions import (
-    BackendError, TaskNotFoundError, DependencyError,
-    LeaseError, PayloadError
-)
 from ..config import SchedulerConfig
 
 
@@ -58,7 +55,7 @@ class PostgreSQLBackend(QueueBackend):
         self.config = config
         self.pool: Optional[Pool] = None
         self._listener_task: Optional[asyncio.Task] = None
-        self._notifications: Dict[str, asyncio.Queue] = {}
+        self._notifications: dict[str, asyncio.Queue] = {}
 
         # Parse connection string
         self.dsn = config.database_url
@@ -284,7 +281,7 @@ class PostgreSQLBackend(QueueBackend):
                 logger.error(f"Failed to enqueue task: {e}")
                 raise BackendError(f"Enqueue failed: {e}")
 
-    async def bulk_enqueue(self, tasks: List[Task]) -> List[str]:
+    async def bulk_enqueue(self, tasks: list[Task]) -> list[str]:
         """
         Efficiently enqueue multiple tasks in a single transaction.
         """
@@ -467,7 +464,7 @@ class PostgreSQLBackend(QueueBackend):
             """, lease_id)
             return affected != "UPDATE 0"
 
-    async def get_expired_leases(self) -> List[Dict[str, Any]]:
+    async def get_expired_leases(self) -> list[dict[str, Any]]:
         """Get expired leases."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
@@ -566,11 +563,11 @@ class PostgreSQLBackend(QueueBackend):
             """, queue_name)
             return len(rows)
 
-    async def get_dead_letter_queue(self) -> List[Task]:
+    async def get_dead_letter_queue(self) -> list[Task]:
         """Get DLQ tasks."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("SELECT * FROM dead_letter_queue")
-        tasks: List[Task] = []
+        tasks: list[Task] = []
         for row in rows:
             row_dict = dict(row)
             payload = row_dict.get('payload')
@@ -631,7 +628,7 @@ class PostgreSQLBackend(QueueBackend):
 
         return True
 
-    async def get_ready_tasks(self, queue_name: Optional[str] = None) -> List[str]:
+    async def get_ready_tasks(self, queue_name: Optional[str] = None) -> list[str]:
         """
         Get IDs of tasks ready to run (dependencies satisfied).
         Uses efficient CTE for dependency checking.
@@ -740,7 +737,7 @@ class PostgreSQLBackend(QueueBackend):
         async with self.pool.acquire() as conn:
             return await conn.execute(query, *args)
 
-    async def fetch(self, query: str, *args) -> List[Dict[str, Any]]:
+    async def fetch(self, query: str, *args) -> list[dict[str, Any]]:
         """Execute query and fetch rows as dictionaries."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(query, *args)
@@ -751,7 +748,7 @@ class PostgreSQLBackend(QueueBackend):
         async with self.pool.acquire() as conn:
             return await conn.fetchval(query, *args)
 
-    async def fetchrow(self, query: str, *args) -> Optional[Dict[str, Any]]:
+    async def fetchrow(self, query: str, *args) -> Optional[dict[str, Any]]:
         """Execute query and fetch a single row as dictionary."""
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(query, *args)
@@ -764,7 +761,7 @@ class PostgreSQLBackend(QueueBackend):
             async with conn.transaction():
                 yield conn
 
-    async def _store_external_payload(self, conn: Connection, task_id: str, payload: Dict) -> str:
+    async def _store_external_payload(self, conn: Connection, task_id: str, payload: dict) -> str:
         """
         Store large payload externally.
         """
@@ -785,7 +782,7 @@ class PostgreSQLBackend(QueueBackend):
 
         return payload_id
 
-    async def _load_external_payload(self, conn: Connection, payload_ref: str) -> Optional[Dict]:
+    async def _load_external_payload(self, conn: Connection, payload_ref: str) -> Optional[dict]:
         """
         Load externally stored payload.
         """
@@ -914,7 +911,7 @@ class PostgreSQLBackend(QueueBackend):
         except asyncio.TimeoutError:
             return False
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """
         Get backend status for monitoring.
         """

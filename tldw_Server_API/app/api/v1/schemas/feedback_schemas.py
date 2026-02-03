@@ -1,7 +1,9 @@
 """Schemas for explicit feedback collection (chat + RAG)."""
 
-from typing import List, Optional, Literal
+from typing import Literal, Optional
+
 from pydantic import BaseModel
+
 try:
     from pydantic import model_validator  # type: ignore
 except ImportError:
@@ -11,6 +13,7 @@ try:
 except ImportError:
     root_validator = None  # type: ignore
 from pydantic import ConfigDict
+
 from ._compat import Field
 
 _ERR_QUERY_REQUIRED = "query is required when message_id is not provided"
@@ -39,10 +42,10 @@ class ExplicitFeedbackRequest(BaseModel):
     feedback_type: Literal["helpful", "relevance", "report"] = Field(..., description="Feedback category")
     helpful: Optional[bool] = Field(default=None, description="Helpful vote when feedback_type=helpful")
     relevance_score: Optional[int] = Field(default=None, ge=1, le=5, description="1-5 rating")
-    document_ids: Optional[List[str]] = Field(default=None, description="Document ids rated")
-    chunk_ids: Optional[List[str]] = Field(default=None, description="Chunk ids rated")
+    document_ids: Optional[list[str]] = Field(default=None, description="Document ids rated")
+    chunk_ids: Optional[list[str]] = Field(default=None, description="Chunk ids rated")
     corpus: Optional[str] = Field(default=None, description="Corpus/namespace for source-level feedback")
-    issues: Optional[List[str]] = Field(default=None, description="Issue category ids")
+    issues: Optional[list[str]] = Field(default=None, description="Issue category ids")
     user_notes: Optional[str] = Field(default=None, description="Free-form notes")
     query: Optional[str] = Field(default=None, description="Query text (required when message_id is absent)")
     session_id: Optional[str] = Field(default=None, description="Client session id")

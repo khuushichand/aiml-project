@@ -5,34 +5,36 @@ with the existing tldw_server API structure.
 """
 
 import asyncio
+import json
 import time
 import uuid
-from typing import Optional, List, Dict, Any, Union
 from datetime import datetime
-import json
 from pathlib import Path
+from typing import Any, Optional
 
 from fastapi import HTTPException
 from loguru import logger
-from tldw_Server_API.app.core.Metrics import get_metrics_registry
+
+from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import ContentMetadataHandler, is_content_page
 
 # Import the enhanced scraper
 from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import (
-    EnhancedWebScraper, ScrapingJob, JobPriority, JobStatus,
-    create_enhanced_scraper
+    EnhancedWebScraper,
+    JobPriority,
+    JobStatus,
+    ScrapingJob,
+    create_enhanced_scraper,
 )
 
 # Import existing components
 from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
-from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
-from tldw_Server_API.app.core.Chunking.chunker import Chunker
-from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
-from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
-    is_content_page, ContentMetadataHandler
-)
 
 
 class WebScrapingService:
@@ -41,7 +43,7 @@ class WebScrapingService:
     def __init__(self):
         self.scraper: Optional[EnhancedWebScraper] = None
         self._initialized = False
-        self._active_jobs: Dict[str, ScrapingJob] = {}
+        self._active_jobs: dict[str, ScrapingJob] = {}
 
     async def initialize(self):
         """Initialize the scraping service"""
@@ -82,17 +84,17 @@ class WebScrapingService:
         custom_titles: Optional[str] = None,
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
-        custom_cookies: Optional[List[Dict[str, Any]]] = None,
+        custom_cookies: Optional[list[dict[str, Any]]] = None,
         mode: str = "persist",
         priority: str = "normal",
         user_id: Optional[int] = None,
         user_agent: Optional[str] = None,
-        custom_headers: Optional[Dict[str, str]] = None,
+        custom_headers: Optional[dict[str, str]] = None,
         # Crawl overrides from UI/clients
         crawl_strategy: Optional[str] = None,
         include_external: Optional[bool] = None,
         score_threshold: Optional[float] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Process web scraping task with enhanced features.
 
@@ -237,13 +239,13 @@ class WebScrapingService:
         summarize: bool, custom_prompt: Optional[str],
         api_name: Optional[str], api_key: Optional[str],
         keywords: str, system_prompt: Optional[str],
-        temperature: float, custom_cookies: Optional[List[Dict[str, Any]]],
+        temperature: float, custom_cookies: Optional[list[dict[str, Any]]],
         priority: JobPriority,
         user_agent: Optional[str],
-        custom_headers: Optional[Dict[str, str]],
+        custom_headers: Optional[dict[str, str]],
         *,
         user_id: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Scrape individual URLs with enhanced features"""
         # Parse URLs and titles
         urls = [url.strip() for url in url_input.split('\n') if url.strip()]
@@ -299,13 +301,13 @@ class WebScrapingService:
         api_name: Optional[str], api_key: Optional[str],
         keywords: str, system_prompt: Optional[str],
         temperature: float, priority: JobPriority,
-        custom_cookies: Optional[List[Dict[str, Any]]],
+        custom_cookies: Optional[list[dict[str, Any]]],
         user_agent: Optional[str],
-        custom_headers: Optional[Dict[str, str]],
+        custom_headers: Optional[dict[str, str]],
         *,
         user_id: Optional[int] = None,
         task_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Scrape from sitemap with filtering"""
         # Check if scraper is available
         if self.scraper is None:
@@ -349,16 +351,16 @@ class WebScrapingService:
         api_name: Optional[str], api_key: Optional[str],
         keywords: str, system_prompt: Optional[str],
         temperature: float, priority: JobPriority,
-        custom_cookies: Optional[List[Dict[str, Any]]],
+        custom_cookies: Optional[list[dict[str, Any]]],
         user_agent: Optional[str],
-        custom_headers: Optional[Dict[str, str]],
+        custom_headers: Optional[dict[str, str]],
         *,
         user_id: Optional[int] = None,
         include_external: Optional[bool] = None,
         score_threshold: Optional[float] = None,
         crawl_strategy: Optional[str] = None,
         task_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Scrape by URL level"""
         # Define URL level filter
         def url_level_filter(url: str) -> bool:
@@ -406,17 +408,17 @@ class WebScrapingService:
         summarize: bool, custom_prompt: Optional[str],
         api_name: Optional[str], api_key: Optional[str],
         keywords: str, system_prompt: Optional[str],
-        temperature: float, custom_cookies: Optional[List[Dict[str, Any]]],
+        temperature: float, custom_cookies: Optional[list[dict[str, Any]]],
         priority: JobPriority,
         user_agent: Optional[str],
-        custom_headers: Optional[Dict[str, str]],
+        custom_headers: Optional[dict[str, str]],
         *,
         user_id: Optional[int] = None,
         include_external: Optional[bool] = None,
         score_threshold: Optional[float] = None,
         crawl_strategy: Optional[str] = None,
         task_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Recursive scraping with progress tracking"""
         # Create progress file for resumability
         progress_file = Path(f"./scrape_progress_{uuid.uuid4().hex[:8]}.json")
@@ -491,8 +493,8 @@ class WebScrapingService:
             return "Summary generation failed"
 
     async def _store_ephemeral(
-        self, result: Dict[str, Any], task_id: str, user_id: Optional[int]
-    ) -> Dict[str, Any]:
+        self, result: dict[str, Any], task_id: str, user_id: Optional[int]
+    ) -> dict[str, Any]:
         """Store results in ephemeral storage"""
         ephemeral_data = {
             "task_id": task_id,
@@ -516,8 +518,8 @@ class WebScrapingService:
         }
 
     async def _store_persistent(
-        self, result: Dict[str, Any], keywords: str, user_id: Optional[int]
-    ) -> Dict[str, Any]:
+        self, result: dict[str, Any], keywords: str, user_id: Optional[int]
+    ) -> dict[str, Any]:
         """Store results in database"""
         media_ids = []
         errors = []
@@ -726,7 +728,7 @@ class WebScrapingService:
             return False
         return job.user_id is not None and str(job.user_id) == str(user_id)
 
-    async def get_job_status(self, job_id: str, current_user: Any) -> Dict[str, Any]:
+    async def get_job_status(self, job_id: str, current_user: Any) -> dict[str, Any]:
         """Get status of a scraping job (scoped to the requesting user)."""
         if not self._initialized:
             raise HTTPException(status_code=503, detail="Service not initialized")
@@ -743,7 +745,7 @@ class WebScrapingService:
 
         return job.to_dict()
 
-    async def cancel_job(self, job_id: str, current_user: Any) -> Dict[str, Any]:
+    async def cancel_job(self, job_id: str, current_user: Any) -> dict[str, Any]:
         """Cancel a scraping job (best-effort, scoped to the requesting user)."""
         if not self._initialized:
             raise HTTPException(status_code=503, detail="Service not initialized")
@@ -769,7 +771,7 @@ class WebScrapingService:
             "message": "Job cancellation requested" if cancelled.status != JobStatus.CANCELLED else "Job cancelled",
         }
 
-    def get_service_status(self) -> Dict[str, Any]:
+    def get_service_status(self) -> dict[str, Any]:
         """Get service status and statistics"""
         if not self._initialized:
             return {
@@ -805,7 +807,7 @@ def get_web_scraping_service() -> WebScrapingService:
 
 
 # Integration with existing API
-async def process_web_scraping_task(**kwargs) -> Dict[str, Any]:
+async def process_web_scraping_task(**kwargs) -> dict[str, Any]:
     """
     Process web scraping task - drop-in replacement for the placeholder function.
 

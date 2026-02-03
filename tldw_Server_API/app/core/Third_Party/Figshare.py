@@ -12,15 +12,15 @@ Docs:
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple, List, Dict, Any
-from tldw_Server_API.app.core.http_client import fetch, fetch_json
+from typing import Any
 
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 BASE_URL = "https://api.figshare.com/v2"
 OAI_BASE = f"{BASE_URL}/oai"
 
 
-def _join_authors(item: Dict[str, Any]) -> Optional[str]:
+def _join_authors(item: dict[str, Any]) -> str | None:
     try:
         authors = item.get("authors") or []
         names = []
@@ -33,7 +33,7 @@ def _join_authors(item: Dict[str, Any]) -> Optional[str]:
         return None
 
 
-def _pick_pdf_from_files(files: List[Dict[str, Any]]) -> Optional[str]:
+def _pick_pdf_from_files(files: list[dict[str, Any]]) -> str | None:
     try:
         for f in files or []:
             name = (f or {}).get("name") or ""
@@ -51,7 +51,7 @@ def _pick_pdf_from_files(files: List[Dict[str, Any]]) -> Optional[str]:
         return None
 
 
-def _normalize_article(item: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_article(item: dict[str, Any]) -> dict[str, Any]:
     doi = item.get("doi") or None
     title = item.get("title") or ""
     url = item.get("url_public_html") or item.get("figshare_url") or item.get("url_public_api") or item.get("url")
@@ -74,23 +74,23 @@ def _normalize_article(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def search_articles(
-    q: Optional[str],
+    q: str | None,
     page: int,
     page_size: int,
-    order: Optional[str] = None,
-    order_direction: Optional[str] = None,
-    search_for: Optional[str] = None,
-) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
+    order: str | None = None,
+    order_direction: str | None = None,
+    search_for: str | None = None,
+) -> tuple[list[dict[str, Any]] | None, int, str | None]:
     """Search Figshare records. Uses POST /articles/search with JSON body.
 
     Returns normalized GenericPaper-like records (without expensive file lookups).
     """
     try:
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "page": max(1, page),
             "page_size": max(1, min(page_size, 1000)),
         }
-        body: Dict[str, Any] = {}
+        body: dict[str, Any] = {}
         # Figshare defaults to all metadata fields; allow either raw text query or fielded search_for
         if search_for:
             body["search_for"] = search_for
@@ -122,7 +122,7 @@ def search_articles(
         return None, 0, f"Figshare error: {str(e)}"
 
 
-def get_article_by_id(article_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_article_by_id(article_id: str) -> tuple[dict[str, Any] | None, str | None]:
     try:
         r = fetch(method="GET", url=f"{BASE_URL}/articles/{article_id}", headers={"Accept": "application/json"}, timeout=20)
         if r.status_code == 404:
@@ -137,7 +137,7 @@ def get_article_by_id(article_id: str) -> Tuple[Optional[Dict[str, Any]], Option
         return None, f"Figshare error: {str(e)}"
 
 
-def get_article_raw(article_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_article_raw(article_id: str) -> tuple[dict[str, Any] | None, str | None]:
     """Return raw Figshare article JSON for inspection."""
     try:
         data = fetch_json(method="GET", url=f"{BASE_URL}/articles/{article_id}", headers={"Accept": "application/json"}, timeout=20)
@@ -146,7 +146,7 @@ def get_article_raw(article_id: str) -> Tuple[Optional[Dict[str, Any]], Optional
         return None, f"Figshare error: {str(e)}"
 
 
-def get_article_files(article_id: str) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+def get_article_files(article_id: str) -> tuple[list[dict[str, Any]] | None, str | None]:
     try:
         data = fetch_json(method="GET", url=f"{BASE_URL}/articles/{article_id}/files", headers={"Accept": "application/json"}, timeout=20)
         if not isinstance(data, list):
@@ -156,7 +156,7 @@ def get_article_files(article_id: str) -> Tuple[Optional[List[Dict[str, Any]]], 
         return None, f"Figshare error: {str(e)}"
 
 
-def get_article_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_article_by_doi(doi: str) -> tuple[dict[str, Any] | None, str | None]:
     """Best-effort DOI lookup via search_for fielded query (:doi: DOI)."""
     try:
         items, _, err = search_articles(None, page=1, page_size=1, search_for=f":doi: {doi}")
@@ -169,7 +169,7 @@ def get_article_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[str
         return None, f"Figshare error: {str(e)}"
 
 
-def oai_raw(params: Dict[str, Any]) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+def oai_raw(params: dict[str, Any]) -> tuple[bytes | None, str | None, str | None]:
     """Raw OAI-PMH passthrough to Figshare OAI endpoint."""
     try:
         r = fetch(method="GET", url=OAI_BASE, params=params, headers={"Accept": "application/xml"}, timeout=20)
@@ -181,7 +181,7 @@ def oai_raw(params: Dict[str, Any]) -> Tuple[Optional[bytes], Optional[str], Opt
         return None, None, f"Figshare OAI-PMH error: {str(e)}"
 
 
-def extract_pdf_download_url(article: Dict[str, Any]) -> Optional[str]:
+def extract_pdf_download_url(article: dict[str, Any]) -> str | None:
     """Get a direct download URL for a PDF file from a raw article JSON if available."""
     try:
         files = article.get("files") or []

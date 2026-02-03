@@ -2,26 +2,26 @@
 # Description: Handler for Llama.cpp models, managing server processes and inference.
 #
 import asyncio
-import socket
-import time
 import os
 import platform
 import signal
 import subprocess  # For synchronous fallback if needed
+import time
 from pathlib import Path
-from typing import List, Optional, Dict, Any
-# Local imports
-from .LLM_Base_Handler import BaseLLMHandler
-from .LLM_Inference_Exceptions import ModelNotFoundError, ServerError, InferenceError
-from .LLM_Inference_Schemas import LlamaCppConfig
-from tldw_Server_API.app.core.Local_LLM import http_utils
-from tldw_Server_API.app.core.Local_LLM import handler_utils
+from typing import Any, Optional
+
 from tldw_Server_API.app.core.LLM_Calls.sse import (
     ensure_sse_line,
-    sse_done,
-    sse_data,
     openai_delta_chunk,
+    sse_data,
+    sse_done,
 )
+from tldw_Server_API.app.core.Local_LLM import handler_utils, http_utils
+
+# Local imports
+from .LLM_Base_Handler import BaseLLMHandler
+from .LLM_Inference_Exceptions import InferenceError, ModelNotFoundError, ServerError
+from .LLM_Inference_Schemas import LlamaCppConfig
 
 
 def create_async_client(*args, **kwargs):
@@ -42,7 +42,7 @@ async def wait_for_http_ready(*args, **kwargs):
 # Functions:
 
 class LlamaCppHandler(BaseLLMHandler):
-    def __init__(self, config: LlamaCppConfig, global_app_config: Dict[str, Any]):
+    def __init__(self, config: LlamaCppConfig, global_app_config: dict[str, Any]):
         super().__init__(config, global_app_config)
         self.config: LlamaCppConfig  # For type hinting
         # self.logger = logger # Or use self.logger from BaseLLMHandler if already set
@@ -76,7 +76,7 @@ class LlamaCppHandler(BaseLLMHandler):
             "inference_time_sum": 0.0,
         }
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         return dict(self.metrics)
 
     # --- Utilities (delegating to shared handler_utils) ---
@@ -94,7 +94,7 @@ class LlamaCppHandler(BaseLLMHandler):
                 return candidate
         return start_port  # Fallback
 
-    def _denylist_check(self, args: Dict[str, Any]):
+    def _denylist_check(self, args: dict[str, Any]):
         try:
             handler_utils.check_denylist(
                 args,
@@ -206,8 +206,8 @@ class LlamaCppHandler(BaseLLMHandler):
         endpoint = f"/{api_endpoint.lstrip('/')}"
         return endpoint.lower().endswith("/chat/completions")
 
-    def _messages_to_prompt(self, messages: List[Dict[str, str]]) -> str:
-        parts: List[str] = []
+    def _messages_to_prompt(self, messages: list[dict[str, str]]) -> str:
+        parts: list[str] = []
         for msg in messages:
             if isinstance(msg, dict):
                 role = str(msg.get("role", "user"))
@@ -218,7 +218,7 @@ class LlamaCppHandler(BaseLLMHandler):
             parts.append(f"{role}: {content}")
         return "\n".join(parts)
 
-    async def list_models(self) -> List[str]:
+    async def list_models(self) -> list[str]:
         """Lists locally available GGUF models."""
         if not self.models_dir.exists():
             return []
@@ -233,7 +233,7 @@ class LlamaCppHandler(BaseLLMHandler):
         return (self.models_dir / model_filename).is_file()
 
     # --- Server Management (Core of the swapping logic) ---
-    async def start_server(self, model_filename: str, server_args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def start_server(self, model_filename: str, server_args: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         """
         Starts the Llama.cpp server with the specified model.
         If a server is already running managed by this handler, it will be stopped first (model swap).
@@ -281,7 +281,7 @@ class LlamaCppHandler(BaseLLMHandler):
 
         # Allowlist of supported args (internal key -> formatter)
         # Each formatter extends the command list with the mapped CLI args.
-        allowed_formatters: Dict[str, Any] = {
+        allowed_formatters: dict[str, Any] = {
             "port": lambda v: ["--port", str(int(v))],
             "host": lambda v: ["--host", str(v)],
             "threads": lambda v: ["-t", str(int(v))],
@@ -668,7 +668,7 @@ class LlamaCppHandler(BaseLLMHandler):
             self._active_server_host = None
             raise ServerError(f"Error stopping Llama.cpp server: {e}")
 
-    async def get_server_status(self) -> Dict[str, Any]:
+    async def get_server_status(self) -> dict[str, Any]:
         if self._active_server_process and self._active_server_process.returncode is None:
             return {
                 "status": "running",
@@ -681,9 +681,9 @@ class LlamaCppHandler(BaseLLMHandler):
             }
         return {"status": "stopped", "model": None, "pid": None, "port": None, "host": None}
 
-    async def inference(self, prompt: Optional[str] = None, messages: Optional[List[Dict[str, str]]] = None,
+    async def inference(self, prompt: Optional[str] = None, messages: Optional[list[dict[str, str]]] = None,
                         api_endpoint: str = "/v1/chat/completions",  # or /completion
-                        **kwargs) -> Dict[str, Any]:
+                        **kwargs) -> dict[str, Any]:
         if not self._active_server_process or self._active_server_process.returncode is not None:
             raise ServerError("Llama.cpp server is not running or not managed by this handler.")
 
@@ -767,7 +767,7 @@ class LlamaCppHandler(BaseLLMHandler):
                 self.metrics["inference_error_count"] += 1
                 raise InferenceError(f"Unexpected error during Llama.cpp inference: {error_text}")
 
-    async def stream_inference(self, prompt: Optional[str] = None, messages: Optional[List[Dict[str, str]]] = None,
+    async def stream_inference(self, prompt: Optional[str] = None, messages: Optional[list[dict[str, str]]] = None,
                                api_endpoint: str = "/v1/chat/completions", **kwargs):
         if not self._active_server_process or self._active_server_process.returncode is not None:
             raise ServerError("Llama.cpp server is not running or not managed by this handler.")

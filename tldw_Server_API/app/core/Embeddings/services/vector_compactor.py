@@ -15,7 +15,6 @@ import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from loguru import logger
 
@@ -41,7 +40,7 @@ if ChromaError is not None:
     _CHROMA_CLOSE_EXCEPTIONS = (*_CHROMA_CLOSE_EXCEPTIONS, ChromaError)
 
 
-def _sanitize_media_db_path(user_id: str, db_path: Optional[str]) -> str:
+def _sanitize_media_db_path(user_id: str, db_path: str | None) -> str:
     """
     Resolve and validate the media DB path for the given user.
 
@@ -101,15 +100,15 @@ def _collection_name_for(user_id: str, media_id: int) -> str:
     return f"user_{user_id}_media_{media_id}"
 
 
-async def compact_once(user_id: str, db_path: Optional[str] = None) -> int:
+async def compact_once(user_id: str, db_path: str | None = None) -> int:
     """Run a single compaction pass for the given user.
 
     Returns the number of collections touched.
     """
     touched = 0
     try:
-        from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
         from tldw_Server_API.app.core.config import settings
+        from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
     except Exception as e:  # pragma: no cover
         logger.error(f"Compactor initialization failed: {e}")
         return 0
@@ -145,7 +144,7 @@ async def compact_once(user_id: str, db_path: Optional[str] = None) -> int:
     return touched
 
 
-async def run(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run(stop_event: asyncio.Event | None = None) -> None:
     """Run the periodic compactor loop.
 
     Environment variables:
@@ -154,7 +153,6 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
     - MEDIA_DB_PATH (optional)
     """
     try:
-        from tldw_Server_API.app.core.config import settings
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import is_single_user_mode
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
     except Exception as e:  # pragma: no cover

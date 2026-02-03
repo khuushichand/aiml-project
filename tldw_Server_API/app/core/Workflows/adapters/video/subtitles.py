@@ -11,7 +11,7 @@ from __future__ import annotations
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -24,9 +24,9 @@ from tldw_Server_API.app.core.Workflows.adapters._common import (
 )
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.video._config import (
+    SubtitleBurnConfig,
     SubtitleGenerateConfig,
     SubtitleTranslateConfig,
-    SubtitleBurnConfig,
 )
 
 
@@ -38,7 +38,7 @@ from tldw_Server_API.app.core.Workflows.adapters.video._config import (
     config_model=SubtitleGenerateConfig,
     tags=["video", "subtitles"],
 )
-async def run_subtitle_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_subtitle_generate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate subtitles from audio/video using speech-to-text.
 
     Config:
@@ -124,7 +124,7 @@ async def run_subtitle_generate_adapter(config: Dict[str, Any], context: Dict[st
     config_model=SubtitleTranslateConfig,
     tags=["video", "subtitles"],
 )
-async def run_subtitle_translate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_subtitle_translate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Translate subtitles to a different language.
 
     Config:
@@ -196,7 +196,7 @@ async def run_subtitle_translate_adapter(config: Dict[str, Any], context: Dict[s
     config_model=SubtitleBurnConfig,
     tags=["video", "subtitles"],
 )
-async def run_subtitle_burn_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_subtitle_burn_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Burn (hardcode) subtitles into a video file.
 
     Config:

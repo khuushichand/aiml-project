@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Optional, Tuple
 
 
-def truncate_text(value: Optional[str], limit: int = 400) -> Optional[str]:
+def truncate_text(value: str | None, limit: int = 400) -> str | None:
     if not value:
         return None
     stripped = str(value).strip()
@@ -14,7 +13,7 @@ def truncate_text(value: Optional[str], limit: int = 400) -> Optional[str]:
     return stripped[: max(0, limit - 3)].rstrip() + "..."
 
 
-def hash_text_sha256(value: Optional[str]) -> Optional[str]:
+def hash_text_sha256(value: str | None) -> str | None:
     if not value:
         return None
     try:
@@ -23,7 +22,7 @@ def hash_text_sha256(value: Optional[str]) -> Optional[str]:
         return None
 
 
-def word_count(value: Optional[str]) -> Optional[int]:
+def word_count(value: str | None) -> int | None:
     if not value:
         return None
     words = [w for w in str(value).split() if w]
@@ -33,7 +32,7 @@ def word_count(value: Optional[str]) -> Optional[int]:
 HIGHLIGHT_CONTEXT_WINDOW = 64
 
 
-def build_highlight_context(text: str, start_offset: int, end_offset: int, window: int = HIGHLIGHT_CONTEXT_WINDOW) -> Tuple[str, str]:
+def build_highlight_context(text: str, start_offset: int, end_offset: int, window: int = HIGHLIGHT_CONTEXT_WINDOW) -> tuple[str, str]:
     if not text:
         return "", ""
     start_offset = max(0, min(start_offset, len(text)))
@@ -47,12 +46,12 @@ def find_highlight_span(
     text: str,
     quote: str,
     *,
-    start_offset: Optional[int] = None,
-    end_offset: Optional[int] = None,
-    context_before: Optional[str] = None,
-    context_after: Optional[str] = None,
+    start_offset: int | None = None,
+    end_offset: int | None = None,
+    context_before: str | None = None,
+    context_after: str | None = None,
     anchor_strategy: str = "fuzzy_quote",
-) -> Optional[Tuple[int, int]]:
+) -> tuple[int, int] | None:
     if not text or not quote:
         return None
 

@@ -2,19 +2,17 @@
 # Prompt generation for Prompt Studio
 
 import json
+import os
 import re
-from typing import Dict, Any, List, Optional
-from datetime import datetime
-from enum import Enum
 from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Optional
+
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
-    PromptStudioDatabase, DatabaseError
-)
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError, PromptStudioDatabase
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-import os
 
 ########################################################################################################################
 # Enums and Data Classes
@@ -46,9 +44,9 @@ class PromptTemplate:
     type: PromptType
     system_template: str = ""
     user_template: str = ""
-    variables: List[str] = field(default_factory=list)
-    few_shot_examples: List[Dict[str, Any]] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    variables: list[str] = field(default_factory=list)
+    few_shot_examples: list[dict[str, Any]] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> bool:
         """Validate the template."""
@@ -68,7 +66,7 @@ class PromptTemplate:
         return True
 
 
-def _call_openai_adapter(request: Dict[str, Any]) -> Dict[str, Any]:
+def _call_openai_adapter(request: dict[str, Any]) -> dict[str, Any]:
     registry = get_registry()
     adapter = registry.get_adapter("openai")
     if adapter is None:
@@ -124,8 +122,8 @@ class PromptGenerator:
         """
         self.db = db
         self.client_id = db.client_id if db else None
-        self.templates: Dict[str, PromptTemplate] = {}
-        self.strategies: List[GenerationStrategy] = list(GenerationStrategy)
+        self.templates: dict[str, PromptTemplate] = {}
+        self.strategies: list[GenerationStrategy] = list(GenerationStrategy)
         self._init_builtin_templates()
         # Policy switch for chain-of-thought helpers (default enabled unless env says otherwise)
         if enable_chain_of_thought is None:
@@ -140,7 +138,7 @@ class PromptGenerator:
     def generate_prompt(self, project_id: int, task_description: str,
                              template_name: str = "default",
                              signature_id: Optional[int] = None,
-                             model_name: str = "gpt-4") -> Dict[str, Any]:
+                             model_name: str = "gpt-4") -> dict[str, Any]:
         """
         Generate a prompt based on task description.
 
@@ -219,8 +217,8 @@ INSTRUCTIONS:
             raise DatabaseError(f"Failed to generate prompt: {e}")
 
     def generate_from_template(self, project_id: int, template_name: str,
-                              variables: Dict[str, str],
-                              signature_id: Optional[int] = None) -> Dict[str, Any]:
+                              variables: dict[str, str],
+                              signature_id: Optional[int] = None) -> dict[str, Any]:
         """
         Generate a prompt from a template.
 
@@ -267,7 +265,7 @@ INSTRUCTIONS:
             raise DatabaseError(f"Failed to generate from template: {e}")
 
     def generate_chain_of_thought(self, project_id: int, task: str,
-                                       model_name: str = "gpt-4") -> Dict[str, Any]:
+                                       model_name: str = "gpt-4") -> dict[str, Any]:
         """
         Generate a Chain-of-Thought prompt.
 
@@ -288,8 +286,8 @@ INSTRUCTIONS:
         )
 
     def generate_react_prompt(self, project_id: int, task: str,
-                                   tools: List[str] = None,
-                                   model_name: str = "gpt-4") -> Dict[str, Any]:
+                                   tools: list[str] = None,
+                                   model_name: str = "gpt-4") -> dict[str, Any]:
         """
         Generate a ReAct framework prompt.
 
@@ -385,7 +383,7 @@ INSTRUCTIONS:
             instructions.strip()
         )
 
-    def get_available_templates(self) -> List[Dict[str, Any]]:
+    def get_available_templates(self) -> list[dict[str, Any]]:
         """
         Get list of available templates.
 
@@ -414,7 +412,7 @@ INSTRUCTIONS:
         }
         return descriptions.get(template_name, "Custom template")
 
-    def _extract_variables(self, template: str) -> List[str]:
+    def _extract_variables(self, template: str) -> list[str]:
         """Extract variables from template string."""
         return re.findall(r'\{(\w+)\}', template)
 
@@ -447,18 +445,18 @@ INSTRUCTIONS:
     def generate(self, type: PromptType = PromptType.BASIC,
                  prompt_type: Optional[PromptType] = None,
                  task_description: str = "",
-                 variables: Dict[str, str] = None,
+                 variables: dict[str, str] = None,
                  strategy: GenerationStrategy = GenerationStrategy.AUTO,
                  template_name: str = None,
-                 few_shot_examples: List[Dict] = None,
-                 constraints: List[str] = None,
-                 modules: List[Dict] = None,
+                 few_shot_examples: list[dict] = None,
+                 constraints: list[str] = None,
+                 modules: list[dict] = None,
                  use_cache: bool = False,
                  max_length: int = None,
                  persona: str = None,
-                 output_schema: Dict = None,
+                 output_schema: dict = None,
                  dynamic_selection: bool = False,
-                 max_examples: int = None) -> Dict[str, str]:
+                 max_examples: int = None) -> dict[str, str]:
         """Generate a prompt with various options."""
         # Determine effective prompt type (avoid builtin shadowing downstream)
         effective_type = prompt_type if prompt_type is not None else type
@@ -650,7 +648,7 @@ Thought:"""
         """Add a custom template."""
         self.templates[template.name] = template
 
-    def list_templates(self) -> List[PromptTemplate]:
+    def list_templates(self) -> list[PromptTemplate]:
         """List all available templates."""
         return list(self.templates.values())
 
@@ -669,7 +667,7 @@ Thought:"""
             return True
         return False
 
-    def generate_batch(self, type: PromptType, tasks: List[Dict]) -> List[Dict[str, str]]:
+    def generate_batch(self, type: PromptType, tasks: list[dict]) -> list[dict[str, str]]:
         """Generate multiple prompts."""
         results = []
         for task in tasks:
@@ -681,9 +679,9 @@ Thought:"""
             results.append(prompt)
         return results
 
-    def compose_templates(self, templates: List[PromptType],
+    def compose_templates(self, templates: list[PromptType],
                          task_description: str,
-                         few_shot_examples: List[Dict] = None) -> Dict[str, str]:
+                         few_shot_examples: list[dict] = None) -> dict[str, str]:
         """Compose multiple templates."""
         system_parts = []
         user_parts = []
@@ -704,14 +702,14 @@ Thought:"""
             "user": "\n\n".join(user_parts)
         }
 
-    def validate_variables(self, template_vars: List[str],
-                          provided_vars: Dict[str, str]) -> bool:
+    def validate_variables(self, template_vars: list[str],
+                          provided_vars: dict[str, str]) -> bool:
         """Validate that all required variables are provided."""
         return all(var in provided_vars for var in template_vars)
 
     def generate_conditional(self, base_type: PromptType,
                            task_description: str,
-                           conditions: Dict[str, Any]) -> Dict[str, str]:
+                           conditions: dict[str, Any]) -> dict[str, str]:
         """Generate prompt with conditions."""
         prompt = self.generate(type=base_type, task_description=task_description)
 
@@ -726,7 +724,7 @@ Thought:"""
 
         return prompt
 
-    def create_chain(self, steps: List[Dict]) -> List[Dict[str, str]]:
+    def create_chain(self, steps: list[dict]) -> list[dict[str, str]]:
         """Create a chain of prompts."""
         chain = []
         for step in steps:
@@ -737,9 +735,9 @@ Thought:"""
             chain.append(prompt)
         return chain
 
-    def mutate_prompt(self, original: Dict[str, str],
-                     strategies: List[str],
-                     count: int = 3) -> List[Dict[str, str]]:
+    def mutate_prompt(self, original: dict[str, str],
+                     strategies: list[str],
+                     count: int = 3) -> list[dict[str, str]]:
         """Create mutations of a prompt."""
         mutations = []
 

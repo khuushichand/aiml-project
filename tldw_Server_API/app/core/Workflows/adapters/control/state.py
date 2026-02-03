@@ -8,17 +8,17 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry, get_adapter
 from tldw_Server_API.app.core.Workflows.adapters._common import resolve_artifacts_dir
+from tldw_Server_API.app.core.Workflows.adapters._registry import get_adapter, registry
 from tldw_Server_API.app.core.Workflows.adapters.control._config import (
     BatchConfig,
     CacheResultConfig,
-    RetryConfig,
     CheckpointConfig,
+    RetryConfig,
 )
 
 
@@ -30,7 +30,7 @@ from tldw_Server_API.app.core.Workflows.adapters.control._config import (
     tags=["control", "data"],
     config_model=BatchConfig,
 )
-async def run_batch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_batch_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Batch items into chunks for processing.
 
     Config:
@@ -68,7 +68,7 @@ async def run_batch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
     tags=["control", "cache"],
     config_model=CacheResultConfig,
 )
-async def run_cache_result_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_cache_result_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Cache step result by key for reuse.
 
     Config:
@@ -159,7 +159,7 @@ async def run_cache_result_adapter(config: Dict[str, Any], context: Dict[str, An
     tags=["control", "error-handling"],
     config_model=RetryConfig,
 )
-async def run_retry_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_retry_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Wrap a step with retry logic.
 
     Config:
@@ -231,7 +231,7 @@ async def run_retry_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
     tags=["control", "state"],
     config_model=CheckpointConfig,
 )
-async def run_checkpoint_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_checkpoint_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Save workflow state for recovery.
 
     Config:

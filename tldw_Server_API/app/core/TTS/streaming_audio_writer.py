@@ -3,7 +3,6 @@
 # Based on Kokoro-FastAPI implementation
 #
 import os
-import struct
 import tempfile
 import wave
 from io import BytesIO
@@ -12,6 +11,7 @@ from typing import Optional
 import av
 import numpy as np
 from loguru import logger
+
 
 class StreamingAudioWriter:
     """Handles streaming audio format conversions for TTS output.

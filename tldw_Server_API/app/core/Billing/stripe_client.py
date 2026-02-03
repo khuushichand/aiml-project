@@ -10,7 +10,7 @@ import asyncio
 import os
 import threading
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Union
+from typing import Any, Union
 
 from loguru import logger
 
@@ -47,15 +47,15 @@ class PortalSession:
 class StripeConfig:
     """Stripe configuration."""
     api_key: str
-    webhook_secret: Optional[str] = None
+    webhook_secret: str | None = None
     # Default product/price IDs (can be overridden per plan in DB)
-    price_pro_monthly: Optional[str] = None
-    price_pro_yearly: Optional[str] = None
-    price_enterprise_monthly: Optional[str] = None
-    price_enterprise_yearly: Optional[str] = None
+    price_pro_monthly: str | None = None
+    price_pro_yearly: str | None = None
+    price_enterprise_monthly: str | None = None
+    price_enterprise_yearly: str | None = None
 
 
-def get_stripe_config() -> Optional[StripeConfig]:
+def get_stripe_config() -> StripeConfig | None:
     """Load Stripe configuration from environment."""
     api_key = os.environ.get("STRIPE_API_KEY")
     if not api_key:
@@ -79,7 +79,7 @@ class StripeClient:
     for subscription management.
     """
 
-    def __init__(self, config: Optional[StripeConfig] = None):
+    def __init__(self, config: StripeConfig | None = None):
         self.config = config or get_stripe_config()
         self._initialized = False
 
@@ -103,8 +103,8 @@ class StripeClient:
         self,
         *,
         email: str,
-        name: Optional[str] = None,
-        metadata: Optional[Dict[str, str]] = None,
+        name: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> str:
         """
         Create a Stripe customer.
@@ -139,8 +139,8 @@ class StripeClient:
         price_id: str,
         success_url: str,
         cancel_url: str,
-        trial_days: Optional[int] = None,
-        metadata: Optional[Dict[str, str]] = None,
+        trial_days: int | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> CheckoutSession:
         """
         Create a Stripe Checkout session for subscription.
@@ -159,7 +159,7 @@ class StripeClient:
         self._require_stripe()
 
         try:
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "customer": customer_id,
                 "mode": "subscription",
                 "line_items": [{"price": price_id, "quantity": 1}],
@@ -215,7 +215,7 @@ class StripeClient:
         subscription_id: str,
         *,
         at_period_end: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Cancel a subscription.
 
@@ -252,7 +252,7 @@ class StripeClient:
             logger.error(f"Failed to cancel subscription: {e}")
             raise
 
-    async def resume_subscription(self, subscription_id: str) -> Dict[str, Any]:
+    async def resume_subscription(self, subscription_id: str) -> dict[str, Any]:
         """
         Resume a subscription that was set to cancel at period end.
 
@@ -280,7 +280,7 @@ class StripeClient:
             logger.error(f"Failed to resume subscription: {e}")
             raise
 
-    async def get_subscription(self, subscription_id: str) -> Optional[Dict[str, Any]]:
+    async def get_subscription(self, subscription_id: str) -> dict[str, Any] | None:
         """
         Get subscription details from Stripe.
 
@@ -360,7 +360,7 @@ class StripeClient:
             logger.warning(f"Webhook signature verification failed: {e}")
             raise ValueError("Invalid webhook signature")
 
-    def get_price_id(self, plan_name: str, billing_cycle: str = "monthly") -> Optional[str]:
+    def get_price_id(self, plan_name: str, billing_cycle: str = "monthly") -> str | None:
         """
         Get the Stripe price ID for a plan.
 
@@ -385,7 +385,7 @@ class StripeClient:
 
 
 # Singleton instance with thread-safe initialization
-_stripe_client: Optional[StripeClient] = None
+_stripe_client: StripeClient | None = None
 _stripe_client_lock = threading.Lock()
 
 

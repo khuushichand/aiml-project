@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
 import asyncio
 import json
 import threading
 import time
+from collections.abc import AsyncIterator, Iterable
+from typing import Any
 
 from loguru import logger
 
-from .base import ChatProvider
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAPIError,
     ChatAuthenticationError,
@@ -16,13 +16,9 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatProviderError,
     ChatRateLimitError,
 )
+from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from tldw_Server_API.app.core.LLM_Calls.chat_calls import _safe_cast
-from tldw_Server_API.app.core.LLM_Calls.payload_utils import (
-    _sanitize_payload_for_logging,
-    merge_extra_body,
-    merge_extra_headers,
-)
 from tldw_Server_API.app.core.LLM_Calls.error_utils import (
     get_http_error_text,
     get_http_status_from_exception,
@@ -30,18 +26,24 @@ from tldw_Server_API.app.core.LLM_Calls.error_utils import (
     is_http_status_error,
     is_network_error,
 )
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import (
+    _sanitize_payload_for_logging,
+    merge_extra_body,
+    merge_extra_headers,
+)
 from tldw_Server_API.app.core.LLM_Calls.sse import (
     finalize_stream,
     openai_delta_chunk,
     sse_data,
     sse_done,
 )
-from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Utils.Utils import logging
 
+from .base import ChatProvider
 
-def _summarize_response_for_logging(response: Any) -> Dict[str, Any]:
-    summary: Dict[str, Any] = {}
+
+def _summarize_response_for_logging(response: Any) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
     if not isinstance(response, dict):
         return {"type": type(response).__name__}
     summary["keys"] = list(response.keys())
@@ -70,26 +72,26 @@ def _summarize_response_for_logging(response: Any) -> Dict[str, Any]:
 
 
 def _cohere_request(
-    input_data: List[Dict[str, Any]],
-    model: Optional[str] = None,
-    api_key: Optional[str] = None,
-    system_prompt: Optional[str] = None,
-    temp: Optional[float] = None,
-    streaming: Optional[bool] = False,
-    topp: Optional[float] = None,
-    topk: Optional[int] = None,
-    max_tokens: Optional[int] = None,
-    stop_sequences: Optional[List[str]] = None,
-    seed: Optional[int] = None,
-    num_generations: Optional[int] = None,
-    frequency_penalty: Optional[float] = None,
-    presence_penalty: Optional[float] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    custom_prompt_arg: Optional[str] = None,
-    app_config: Optional[Dict[str, Any]] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    base_url: Optional[str] = None,
+    input_data: list[dict[str, Any]],
+    model: str | None = None,
+    api_key: str | None = None,
+    system_prompt: str | None = None,
+    temp: float | None = None,
+    streaming: bool | None = False,
+    topp: float | None = None,
+    topk: int | None = None,
+    max_tokens: int | None = None,
+    stop_sequences: list[str] | None = None,
+    seed: int | None = None,
+    num_generations: int | None = None,
+    frequency_penalty: float | None = None,
+    presence_penalty: float | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    custom_prompt_arg: str | None = None,
+    app_config: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    base_url: str | None = None,
 ):
     logging.debug(f"Cohere Chat: Request process starting for model '{model}' (Streaming: {streaming})")
     loaded_config_data = app_config or load_and_log_configs()
@@ -194,7 +196,7 @@ def _cohere_request(
         elif role == "assistant":
             transformed_history.append({"role": "CHATBOT", "message": str(content)})
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "model": final_model,
         "message": current_user_message_str,
     }
@@ -427,14 +429,14 @@ def _cohere_request(
 class CohereAdapter(ChatProvider):
     name = "cohere"
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "supports_streaming": True,
             "supports_tools": True,
             "default_timeout_seconds": 180,
         }
 
-    def _to_handler_args(self, request: Dict[str, Any], *, streaming: Optional[bool] = None) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any], *, streaming: bool | None = None) -> dict[str, Any]:
         stream_flag = request.get("stream")
         if stream_flag is None:
             stream_flag = request.get("streaming")
@@ -464,22 +466,22 @@ class CohereAdapter(ChatProvider):
             "base_url": request.get("base_url"),
         }
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         request = validate_payload(self.name, request or {})
         if timeout is not None:
             logger.debug("Cohere adapter ignoring explicit timeout override.")
         return _cohere_request(**self._to_handler_args(request, streaming=False))
 
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
         if timeout is not None:
             logger.debug("Cohere adapter ignoring explicit timeout override.")
         return _cohere_request(**self._to_handler_args(request, streaming=True))
 
-    async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
-    async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
+    async def astream(self, request: dict[str, Any], *, timeout: float | None = None) -> AsyncIterator[str]:
         gen = self.stream(request, timeout=timeout)
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[Any] = asyncio.Queue()

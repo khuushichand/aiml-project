@@ -4,9 +4,9 @@ Pydantic schemas for character chat sessions and messages.
 """
 
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Literal
+from typing import Any, Literal, Optional
+
 from pydantic import BaseModel, Field, field_validator, model_validator
-from uuid import UUID
 
 ALLOWED_CONVERSATION_STATES = ("in-progress", "resolved", "backlog", "non-viable")
 
@@ -95,7 +95,7 @@ class ChatSessionResponse(BaseModel):
 
 class ChatSessionListResponse(BaseModel):
     """Schema for listing chat sessions."""
-    chats: List[ChatSessionResponse] = Field(..., description="List of chat sessions")
+    chats: list[ChatSessionResponse] = Field(..., description="List of chat sessions")
     total: int = Field(..., description="Total number of chats")
     limit: int = Field(..., description="Number of items per page")
     offset: int = Field(..., description="Offset for pagination")
@@ -158,15 +158,15 @@ class MessageResponse(BaseModel):
     ranking: Optional[int] = Field(None, description="Message ranking/rating")
     has_image: bool = Field(False, description="Whether message has an attached image")
     version: int = Field(1, description="Version number for optimistic locking")
-    tool_calls: Optional[List[Dict[str, Any]]] = Field(None, description="Tool calls associated with this message (if any)")
-    metadata_extra: Optional[Dict[str, Any]] = Field(None, description="Additional stored metadata for this message (if requested)")
+    tool_calls: Optional[list[dict[str, Any]]] = Field(None, description="Tool calls associated with this message (if any)")
+    metadata_extra: Optional[dict[str, Any]] = Field(None, description="Additional stored metadata for this message (if requested)")
 
     model_config = {"from_attributes": True}
 
 
 class MessageListResponse(BaseModel):
     """Schema for listing messages."""
-    messages: List[MessageResponse] = Field(..., description="List of messages")
+    messages: list[MessageResponse] = Field(..., description="List of messages")
     total: int = Field(..., description="Total number of messages")
     limit: int = Field(..., description="Number of items per page")
     offset: int = Field(..., description="Offset for pagination")
@@ -199,7 +199,7 @@ class CharacterChatCompletionV1Response(BaseModel):
     """Schema for chat completion responses."""
     response: str = Field(..., description="AI response")
     message_id: str = Field(..., description="ID of the created message")
-    usage: Optional[Dict[str, int]] = Field(None, description="Token usage statistics")
+    usage: Optional[dict[str, int]] = Field(None, description="Token usage statistics")
 
     model_config = {"json_schema_extra": {
         "example": {
@@ -237,7 +237,7 @@ class CharacterChatCompletionPrepResponse(BaseModel):
     chat_id: str
     character_id: int
     character_name: Optional[str] = None
-    messages: List[Dict[str, Any]]
+    messages: list[dict[str, Any]]
     total: int
     usage_instructions: str = "Use these messages with POST /api/v1/chat/completions"
 
@@ -263,8 +263,8 @@ class CharacterChatCompletionV2Request(BaseModel):
     model: Optional[str] = Field(None, description="Model identifier. Defaults to a local test model if omitted.")
     temperature: Optional[float] = Field(None, description="Sampling temperature")
     max_tokens: Optional[int] = Field(None, description="Max tokens in the completion")
-    tools: Optional[List[Dict[str, Any]]] = Field(None, description="Tool definitions")
-    tool_choice: Optional[Dict[str, Any]] = Field(None, description="Tool choice specification")
+    tools: Optional[list[dict[str, Any]]] = Field(None, description="Tool definitions")
+    tool_choice: Optional[dict[str, Any]] = Field(None, description="Tool choice specification")
     stream: Optional[bool] = Field(False, description="If true, stream the assistant response (SSE)")
 
 
@@ -287,8 +287,8 @@ class CharacterChatStreamPersistRequest(BaseModel):
     """
     assistant_content: str = Field(..., min_length=1, max_length=1_000_000, description="Assistant text to persist (max 1MB)")
     user_message_id: Optional[str] = Field(None, description="Optional parent user message id to link threading")
-    tool_calls: Optional[List[Dict[str, Any]]] = Field(None, description="Optional tool_calls metadata to store")
-    usage: Optional[Dict[str, int]] = Field(None, description="Optional token usage stats: prompt_tokens, completion_tokens, total_tokens")
+    tool_calls: Optional[list[dict[str, Any]]] = Field(None, description="Optional tool_calls metadata to store")
+    usage: Optional[dict[str, int]] = Field(None, description="Optional token usage stats: prompt_tokens, completion_tokens, total_tokens")
     chat_rating: Optional[int] = Field(None, ge=1, le=5, description="Optional conversation rating to set (1-5)")
     ranking: Optional[int] = Field(None, description="Optional ranking for the assistant message")
 
@@ -317,8 +317,8 @@ class ChatHistoryExport(BaseModel):
     character_id: int = Field(..., description="Character ID")
     title: Optional[str] = Field(None, description="Chat title")
     created_at: datetime = Field(..., description="Creation timestamp")
-    messages: List[Dict[str, Any]] = Field(..., description="Message history")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    messages: list[dict[str, Any]] = Field(..., description="Message history")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Additional metadata")
 
     model_config = {"json_schema_extra": {
         "example": {
@@ -369,7 +369,7 @@ class ChatErrorResponse(BaseModel):
 
 class CharacterTagFilter(BaseModel):
     """Schema for filtering characters by tags."""
-    tags: List[str] = Field(..., description="Tags to filter by", min_length=1)
+    tags: list[str] = Field(..., description="Tags to filter by", min_length=1)
     match_all: bool = Field(False, description="Require all tags to match (AND) vs any tag (OR)")
 
     model_config = {"json_schema_extra": {

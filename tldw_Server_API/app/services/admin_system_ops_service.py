@@ -7,13 +7,12 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from uuid import uuid4
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Utils.Utils import get_database_dir
-
 
 _FLAG_SCOPES = {"global", "org", "user"}
 _INCIDENT_STATUSES = {"open", "investigating", "mitigating", "resolved"}
@@ -97,7 +96,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _default_store() -> Dict[str, Any]:
+def _default_store() -> dict[str, Any]:
     return {
         "maintenance": {
             "enabled": False,
@@ -112,7 +111,7 @@ def _default_store() -> Dict[str, Any]:
     }
 
 
-def _parse_iso(value: Optional[str]) -> datetime:
+def _parse_iso(value: str | None) -> datetime:
     if not value:
         return datetime.min.replace(tzinfo=timezone.utc)
     raw = str(value).replace("Z", "+00:00")
@@ -122,7 +121,7 @@ def _parse_iso(value: Optional[str]) -> datetime:
         return datetime.min.replace(tzinfo=timezone.utc)
 
 
-def _load_store() -> Dict[str, Any]:
+def _load_store() -> dict[str, Any]:
     if not _STORE_PATH.exists():
         return _default_store()
     try:
@@ -139,7 +138,7 @@ def _load_store() -> Dict[str, Any]:
     return data
 
 
-def _save_store(store: Dict[str, Any]) -> None:
+def _save_store(store: dict[str, Any]) -> None:
     _STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
     _STORE_PATH.write_text(json.dumps(store, indent=2, sort_keys=False), encoding="utf-8")
 
@@ -151,7 +150,7 @@ def _normalize_flag_scope(scope: str) -> str:
     return value
 
 
-def _normalize_allowlist_ids(values: Optional[List[int]]) -> List[int]:
+def _normalize_allowlist_ids(values: list[int] | None) -> list[int]:
     if not values:
         return []
     cleaned = []
@@ -163,7 +162,7 @@ def _normalize_allowlist_ids(values: Optional[List[int]]) -> List[int]:
     return sorted(set(cleaned))
 
 
-def _normalize_allowlist_emails(values: Optional[List[str]]) -> List[str]:
+def _normalize_allowlist_emails(values: list[str] | None) -> list[str]:
     if not values:
         return []
     cleaned = []
@@ -174,7 +173,7 @@ def _normalize_allowlist_emails(values: Optional[List[str]]) -> List[str]:
     return sorted({val for val in cleaned if val})
 
 
-def get_maintenance_state() -> Dict[str, Any]:
+def get_maintenance_state() -> dict[str, Any]:
     with _locked_store() as store:
         return dict(store["maintenance"])
 
@@ -182,11 +181,11 @@ def get_maintenance_state() -> Dict[str, Any]:
 def update_maintenance_state(
     *,
     enabled: bool,
-    message: Optional[str],
-    allowlist_user_ids: Optional[List[int]],
-    allowlist_emails: Optional[List[str]],
-    actor: Optional[str],
-) -> Dict[str, Any]:
+    message: str | None,
+    allowlist_user_ids: list[int] | None,
+    allowlist_emails: list[str] | None,
+    actor: str | None,
+) -> dict[str, Any]:
     with _locked_store(write=True) as store:
         maintenance = store["maintenance"]
         maintenance["enabled"] = bool(enabled)
@@ -201,10 +200,10 @@ def update_maintenance_state(
 
 def list_feature_flags(
     *,
-    scope: Optional[str] = None,
-    org_id: Optional[int] = None,
-    user_id: Optional[int] = None,
-) -> List[Dict[str, Any]]:
+    scope: str | None = None,
+    org_id: int | None = None,
+    user_id: int | None = None,
+) -> list[dict[str, Any]]:
     with _locked_store() as store:
         flags = list(store.get("feature_flags", []))
     if scope:
@@ -227,12 +226,12 @@ def upsert_feature_flag(
     key: str,
     scope: str,
     enabled: bool,
-    description: Optional[str],
-    org_id: Optional[int],
-    user_id: Optional[int],
-    actor: Optional[str],
-    note: Optional[str],
-) -> Dict[str, Any]:
+    description: str | None,
+    org_id: int | None,
+    user_id: int | None,
+    actor: str | None,
+    note: str | None,
+) -> dict[str, Any]:
     normalized_key = (key or "").strip()
     if not normalized_key:
         raise ValueError("invalid_key")
@@ -287,8 +286,8 @@ def delete_feature_flag(
     *,
     key: str,
     scope: str,
-    org_id: Optional[int],
-    user_id: Optional[int],
+    org_id: int | None,
+    user_id: int | None,
 ) -> None:
     normalized_key = (key or "").strip()
     scope_norm = _normalize_flag_scope(scope)
@@ -315,12 +314,12 @@ def delete_feature_flag(
 
 def list_incidents(
     *,
-    status: Optional[str],
-    severity: Optional[str],
-    tag: Optional[str],
+    status: str | None,
+    severity: str | None,
+    tag: str | None,
     limit: int,
     offset: int,
-) -> Tuple[List[Dict[str, Any]], int]:
+) -> tuple[list[dict[str, Any]], int]:
     with _locked_store() as store:
         incidents = list(store.get("incidents", []))
     if status:
@@ -344,12 +343,12 @@ def list_incidents(
 def create_incident(
     *,
     title: str,
-    status: Optional[str],
-    severity: Optional[str],
-    summary: Optional[str],
-    tags: Optional[List[str]],
-    actor: Optional[str],
-) -> Dict[str, Any]:
+    status: str | None,
+    severity: str | None,
+    summary: str | None,
+    tags: list[str] | None,
+    actor: str | None,
+) -> dict[str, Any]:
     title_norm = (title or "").strip()
     if not title_norm:
         raise ValueError("invalid_title")
@@ -390,14 +389,14 @@ def create_incident(
 def update_incident(
     *,
     incident_id: str,
-    title: Optional[str],
-    status: Optional[str],
-    severity: Optional[str],
-    summary: Optional[str],
-    tags: Optional[List[str]],
-    update_message: Optional[str],
-    actor: Optional[str],
-) -> Dict[str, Any]:
+    title: str | None,
+    status: str | None,
+    severity: str | None,
+    summary: str | None,
+    tags: list[str] | None,
+    update_message: str | None,
+    actor: str | None,
+) -> dict[str, Any]:
     now = _now_iso()
     with _locked_store(write=True) as store:
         incidents = store.get("incidents", [])
@@ -440,8 +439,8 @@ def add_incident_event(
     *,
     incident_id: str,
     message: str,
-    actor: Optional[str],
-) -> Dict[str, Any]:
+    actor: str | None,
+) -> dict[str, Any]:
     note = (message or "").strip()
     if not note:
         raise ValueError("invalid_message")

@@ -1,23 +1,22 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
-
 import asyncio
 import functools
+from typing import Any, Callable
 
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
     ClaimsJobBudget,
     resolve_claims_job_budget,
 )
+from tldw_Server_API.app.core.Claims_Extraction.extractor_catalog import resolve_claims_extractor_mode
 from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import (
     extract_claims_for_chunks,
     store_claims,
 )
-from tldw_Server_API.app.core.Claims_Extraction.extractor_catalog import resolve_claims_extractor_mode
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 
 def claims_extraction_enabled(form_data: Any) -> bool:
@@ -36,7 +35,7 @@ def claims_extraction_enabled(form_data: Any) -> bool:
         return False
 
 
-def resolve_claims_parameters(form_data: Any) -> Tuple[str, int]:
+def resolve_claims_parameters(form_data: Any) -> tuple[str, int]:
     """
     Resolve extractor mode and max claims per chunk from request or settings.
     """
@@ -66,16 +65,16 @@ def resolve_claims_parameters(form_data: Any) -> Tuple[str, int]:
 
 
 def prepare_claims_chunks(
-    process_result: Dict[str, Any],
-) -> Tuple[List[Dict[str, Any]], Dict[int, str]]:
+    process_result: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[int, str]]:
     """
     Build a chunk list and index->text map suitable for claim extraction.
 
     Prefers existing chunks, falls back to segments, and finally full content.
     Mirrors `_legacy_media._prepare_claims_chunks`.
     """
-    prepared_chunks: List[Dict[str, Any]] = []
-    chunk_text_map: Dict[int, str] = {}
+    prepared_chunks: list[dict[str, Any]] = []
+    chunk_text_map: dict[int, str] = {}
 
     raw_chunks = process_result.get("chunks")
     if isinstance(raw_chunks, list):
@@ -117,10 +116,10 @@ def prepare_claims_chunks(
 
 
 async def extract_claims_if_requested(
-    process_result: Dict[str, Any],
+    process_result: dict[str, Any],
     form_data: Any,
     loop: asyncio.AbstractEventLoop,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """
     Optionally extract claims for a processing result.
 
@@ -156,7 +155,7 @@ async def extract_claims_if_requested(
             "max_per_chunk": max_per_chunk,
         }
 
-    budget: Optional[ClaimsJobBudget] = None
+    budget: ClaimsJobBudget | None = None
     try:
         budget_usd = getattr(form_data, "claims_budget_usd", None)
     except Exception:
@@ -186,7 +185,7 @@ async def extract_claims_if_requested(
         strict=budget_strict if isinstance(budget_strict, bool) else None,
     )
 
-    extraction_callable: Callable[[], List[Dict[str, Any]]] = functools.partial(
+    extraction_callable: Callable[[], list[dict[str, Any]]] = functools.partial(
         extract_claims_for_chunks,
         prepared_chunks,
         extractor_mode=extractor_mode,
@@ -240,12 +239,12 @@ async def extract_claims_if_requested(
 
 
 async def persist_claims_if_applicable(
-    claims_context: Optional[Dict[str, Any]],
-    media_id: Optional[int],
+    claims_context: dict[str, Any] | None,
+    media_id: int | None,
     db_path: str,
     client_id: str,
     loop: asyncio.AbstractEventLoop,
-    process_result: Dict[str, Any],
+    process_result: dict[str, Any],
 ) -> None:
     """
     Persist extracted claims to the database when a media id is available.

@@ -4,14 +4,11 @@ Database management commands for tldw Evaluations CLI.
 
 import sys
 from pathlib import Path
-from datetime import datetime
 
 import click
 from loguru import logger
 
-from tldw_Server_API.cli.utils.output import (
-    print_error, print_success, print_info, print_table, print_json
-)
+from tldw_Server_API.cli.utils.output import print_error, print_info, print_json, print_success, print_table
 
 
 @click.group()
@@ -55,7 +52,7 @@ def db_status(ctx, output_format):
     try:
         cli_context.load_config()
 
-        from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection_stats, get_connection_health
+        from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection_health, get_connection_stats
 
         stats = get_connection_stats()
         health = get_connection_health()

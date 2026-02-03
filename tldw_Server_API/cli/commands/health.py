@@ -7,15 +7,20 @@ for all evaluation system components.
 
 import asyncio
 import sys
-from typing import Dict, Any
+from typing import Any
 
 import click
 from loguru import logger
 
 from tldw_Server_API.cli.utils.output import (
-    print_error, print_success, print_info, print_health_status,
-    print_table, print_json, print_metrics_summary, format_timestamp,
-    format_bytes, format_duration
+    format_bytes,
+    format_duration,
+    format_timestamp,
+    print_error,
+    print_health_status,
+    print_info,
+    print_json,
+    print_metrics_summary,
 )
 
 
@@ -124,7 +129,7 @@ def metrics(ctx, component, output_format):
         sys.exit(1)
 
 
-def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dict[str, Any]:
+def _perform_health_check(config: dict[str, Any], detailed: bool = False) -> dict[str, Any]:
     """Perform comprehensive health check."""
     health_data = {
         'status': 'healthy',
@@ -176,8 +181,8 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
 
     # Rate limiting service health
     try:
-        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
+        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
         # Use per-user limiter bound to single-user ID for health checks
         _uid = _DP.get_single_user_id()
         _limiter = get_user_rate_limiter_for_user(_uid)
@@ -198,7 +203,6 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
 
     # Webhook service health
     try:
-        from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager
         webhook_health = {
             'status': 'ok',
             'message': 'Webhook service operational'
@@ -259,7 +263,7 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
     return health_data
 
 
-def _get_system_status(config: Dict[str, Any]) -> Dict[str, Any]:
+def _get_system_status(config: dict[str, Any]) -> dict[str, Any]:
     """Get current system status."""
     status_data = {
         'timestamp': format_timestamp(None),
@@ -316,7 +320,7 @@ def _get_system_status(config: Dict[str, Any]) -> Dict[str, Any]:
     return status_data
 
 
-def _get_system_metrics(config: Dict[str, Any], component: str = None) -> Dict[str, Any]:
+def _get_system_metrics(config: dict[str, Any], component: str = None) -> dict[str, Any]:
     """Get system metrics."""
     metrics_data = {}
 
@@ -369,9 +373,10 @@ def _get_system_metrics(config: Dict[str, Any], component: str = None) -> Dict[s
     return metrics_data
 
 
-def _display_status_table(status_data: Dict[str, Any]):
+def _display_status_table(status_data: dict[str, Any]):
     """Display status data in table format."""
     from rich.table import Table
+
     from tldw_Server_API.cli.utils.output import console
 
     # Configuration table

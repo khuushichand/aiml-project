@@ -4,8 +4,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Response
+from typing import Any
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
@@ -13,25 +14,24 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_roles,
 )
 from tldw_Server_API.app.api.v1.schemas.moderation_schemas import (
-    ModerationUserOverride,
-    ModerationBlocklistUpdate,
-    ModerationUserOverridesResponse,
-    BlocklistManagedResponse,
-    BlocklistManagedItem,
     BlocklistAppendRequest,
     BlocklistAppendResponse,
     BlocklistDeleteResponse,
+    BlocklistLintItem,
     BlocklistLintRequest,
     BlocklistLintResponse,
-    BlocklistLintItem,
-    ModerationTestRequest,
-    ModerationTestResponse,
+    BlocklistManagedItem,
+    BlocklistManagedResponse,
+    ModerationBlocklistUpdate,
     ModerationSettingsResponse,
     ModerationSettingsUpdate,
+    ModerationTestRequest,
+    ModerationTestResponse,
+    ModerationUserOverride,
+    ModerationUserOverridesResponse,
 )
-from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
-
+from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 
 router = APIRouter(
     dependencies=[
@@ -41,7 +41,7 @@ router = APIRouter(
 )
 
 
-def _normalize_etag_list(value: Optional[str]) -> list[str]:
+def _normalize_etag_list(value: str | None) -> list[str]:
     if not value:
         return []
     tokens: list[str] = []
@@ -153,7 +153,7 @@ async def update_blocklist(data: ModerationBlocklistUpdate) -> dict[str, Any]:
     summary="Inspect effective moderation policy for a user",
     tags=["moderation"],
 )
-async def get_effective_policy(user_id: Optional[str] = Query(None, description="User ID to compute effective policy; optional")) -> dict[str, Any]:
+async def get_effective_policy(user_id: str | None = Query(None, description="User ID to compute effective policy; optional")) -> dict[str, Any]:
     """Return the effective moderation policy snapshot for an optional user."""
     svc = get_moderation_service()
     try:
@@ -265,7 +265,7 @@ async def get_blocklist_managed(response: Response) -> BlocklistManagedResponse:
 async def append_blocklist_line(
     payload: BlocklistAppendRequest,
     response: Response,
-    if_match: Optional[str] = Header(None, alias="If-Match"),
+    if_match: str | None = Header(None, alias="If-Match"),
 ) -> BlocklistAppendResponse:
     """Append a blocklist line using optimistic concurrency via If-Match."""
     tokens = _normalize_etag_list(if_match)
@@ -315,7 +315,7 @@ async def append_blocklist_line(
 async def delete_blocklist_item(
     item_id: int,
     response: Response,
-    if_match: Optional[str] = Header(None, alias="If-Match"),
+    if_match: str | None = Header(None, alias="If-Match"),
 ) -> BlocklistDeleteResponse:
     """Delete a blocklist entry by index using optimistic concurrency."""
     tokens = _normalize_etag_list(if_match)

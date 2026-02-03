@@ -1,20 +1,18 @@
 # prompt_improver.py
 # Prompt improvement and optimization for Prompt Studio
 
-import json
 import asyncio
-from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime
-from enum import Enum
+import json
+import os
 from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Optional
+
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
-    PromptStudioDatabase, DatabaseError
-)
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError, PromptStudioDatabase
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-import os
 
 ########################################################################################################################
 # Enums and Data Classes
@@ -40,9 +38,9 @@ class PromptAnalysis:
     specificity_score: float = 0.0
     structure_score: float = 0.0
     completeness_score: float = 0.0
-    issues: List[str] = field(default_factory=list)
-    suggestions: List[str] = field(default_factory=list)
-    metrics: Dict[str, Any] = field(default_factory=dict)
+    issues: list[str] = field(default_factory=list)
+    suggestions: list[str] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
 
     def overall_score(self) -> float:
         """Calculate overall quality score."""
@@ -50,7 +48,7 @@ class PromptAnalysis:
                  self.structure_score, self.completeness_score]
         return sum(scores) / len(scores)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "clarity_score": self.clarity_score,
@@ -69,9 +67,9 @@ class ImprovementResult:
     original_prompt: str
     improved_prompt: str
     strategy: ImprovementStrategy
-    improvements_made: List[str] = field(default_factory=list)
+    improvements_made: list[str] = field(default_factory=list)
     score_change: float = 0.0
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     before_analysis: Optional[PromptAnalysis] = None
     after_analysis: Optional[PromptAnalysis] = None
 
@@ -82,7 +80,7 @@ class ImprovementResult:
         return self.score_change
 
 
-def _call_openai_adapter(request: Dict[str, Any]) -> Dict[str, Any]:
+def _call_openai_adapter(request: dict[str, Any]) -> dict[str, Any]:
     registry = get_registry()
     adapter = registry.get_adapter("openai")
     if adapter is None:
@@ -196,8 +194,8 @@ class PromptImprover:
         return analysis
 
     def improve(self, prompt: str, strategy: ImprovementStrategy = ImprovementStrategy.AUTO,
-                context: Dict[str, Any] = None, examples: List[Dict] = None,
-                constraints: List[str] = None, fallback: bool = False) -> ImprovementResult:
+                context: dict[str, Any] = None, examples: list[dict] = None,
+                constraints: list[str] = None, fallback: bool = False) -> ImprovementResult:
         """Improve a prompt using specified strategy."""
         # Validate input
         if not prompt or not prompt.strip():
@@ -248,7 +246,7 @@ class PromptImprover:
             logger.error(f"Prompt improvement failed: strategy={strategy.value}, error={e}")
             raise
 
-    def improve_multi(self, prompt: str, strategies: List[ImprovementStrategy]) -> ImprovementResult:
+    def improve_multi(self, prompt: str, strategies: list[ImprovementStrategy]) -> ImprovementResult:
         """Apply multiple improvement strategies."""
         current = prompt
         all_improvements = []
@@ -270,7 +268,7 @@ class PromptImprover:
         return self.improve(prompt, strategy=ImprovementStrategy.AUTO)
 
     def improve_iterative(self, prompt: str, max_iterations: int = 3,
-                         target_score: float = 0.8) -> List[ImprovementResult]:
+                         target_score: float = 0.8) -> list[ImprovementResult]:
         """Iteratively improve a prompt."""
         results = []
         current = prompt
@@ -292,11 +290,11 @@ class PromptImprover:
         await asyncio.sleep(0.01)
         return self.improve(prompt, strategy)
 
-    def improve_batch(self, prompts: List[str], strategy: ImprovementStrategy) -> List[ImprovementResult]:
+    def improve_batch(self, prompts: list[str], strategy: ImprovementStrategy) -> list[ImprovementResult]:
         """Improve multiple prompts."""
         return [self.improve(p, strategy) for p in prompts]
 
-    def compare(self, prompt1: str, prompt2: str) -> Dict[str, Any]:
+    def compare(self, prompt1: str, prompt2: str) -> dict[str, Any]:
         """Compare two prompts."""
         analysis1 = self.analyze(prompt1)
         analysis2 = self.analyze(prompt2)
@@ -339,7 +337,7 @@ class PromptImprover:
                 score -= 0.1
         return max(0, score)
 
-    def detect_ambiguity(self, prompt: str) -> List[str]:
+    def detect_ambiguity(self, prompt: str) -> list[str]:
         """Detect ambiguous language."""
         issues = []
         ambiguous = ["thing", "stuff", "it", "there", "do"]
@@ -369,7 +367,7 @@ class PromptImprover:
         matches = sum(1 for word in task_words if word in prompt_words)
         return min(1.0, matches / max(1, len(task_words)))
 
-    def fuzzy_compare_outputs(self, actual: Dict, expected: Dict, threshold: float = 0.9) -> bool:
+    def fuzzy_compare_outputs(self, actual: dict, expected: dict, threshold: float = 0.9) -> bool:
         """Fuzzy comparison of outputs."""
         if "text" in actual and "text" in expected:
             # Simple similarity check
@@ -382,8 +380,8 @@ class PromptImprover:
     # Strategy Implementation
 
     def _apply_strategy(self, prompt: str, strategy: ImprovementStrategy,
-                       context: Dict = None, examples: List = None,
-                       constraints: List = None) -> str:
+                       context: dict = None, examples: list = None,
+                       constraints: list = None) -> str:
         """Apply improvement strategy."""
         if strategy == ImprovementStrategy.CLARITY:
             return self._improve_clarity(prompt)
@@ -423,7 +421,7 @@ class PromptImprover:
 
         return improved.strip()
 
-    def _improve_specificity(self, prompt: str, context: Dict = None) -> str:
+    def _improve_specificity(self, prompt: str, context: dict = None) -> str:
         """Improve specificity."""
         improved = prompt
         if context:
@@ -468,14 +466,14 @@ class PromptImprover:
 
         return prompt
 
-    def _add_examples(self, prompt: str, examples: List[Dict]) -> str:
+    def _add_examples(self, prompt: str, examples: list[dict]) -> str:
         """Add examples."""
         improved = prompt + "\n\nExamples:\n"
         for ex in examples:
             improved += f"Input: {ex.get('input', '')}\nOutput: {ex.get('output', '')}\n\n"
         return improved
 
-    def _add_constraints(self, prompt: str, constraints: List[str]) -> str:
+    def _add_constraints(self, prompt: str, constraints: list[str]) -> str:
         """Add constraints."""
         improved = prompt + "\n\nConstraints:\n"
         for constraint in constraints:
@@ -518,7 +516,7 @@ class PromptImprover:
             prompt = prompt.replace(old, new)
         return prompt
 
-    def _make_technical(self, prompt: str, context: Dict = None) -> str:
+    def _make_technical(self, prompt: str, context: dict = None) -> str:
         """Make prompt more technical."""
         improved = prompt
         if context and "task" in context and "unit testing" in context["task"]:
@@ -572,7 +570,7 @@ class PromptImprover:
         else:
             return ImprovementStrategy.EXPAND
 
-    def _list_improvements(self, original: str, improved: str) -> List[str]:
+    def _list_improvements(self, original: str, improved: str) -> list[str]:
         """List improvements made."""
         improvements = []
         if len(improved) > len(original):
@@ -591,7 +589,7 @@ class PromptImprover:
         if self.cache is not None:
             self.cache.clear()
 
-    def export_improvements(self, results: List[ImprovementResult], format: str = "json") -> str:
+    def export_improvements(self, results: list[ImprovementResult], format: str = "json") -> str:
         """Export improvements."""
         if format == "json":
             data = []
@@ -606,11 +604,11 @@ class PromptImprover:
             return json.dumps(data, indent=2)
         return ""
 
-    def import_strategies(self, strategies: Dict[str, Any]):
+    def import_strategies(self, strategies: dict[str, Any]):
         """Import custom strategies."""
         self.custom_strategies = strategies
 
-    def create_pipeline(self, strategies: List[ImprovementStrategy]):
+    def create_pipeline(self, strategies: list[ImprovementStrategy]):
         """Create improvement pipeline."""
         class Pipeline:
             def __init__(self, improver, strategies):
@@ -625,8 +623,8 @@ class PromptImprover:
     ####################################################################################################################
     # Improvement Methods
 
-    def improve_prompt(self, prompt_id: int, strategies: List[str] = None,
-                            model_name: str = "gpt-4") -> Dict[str, Any]:
+    def improve_prompt(self, prompt_id: int, strategies: list[str] = None,
+                            model_name: str = "gpt-4") -> dict[str, Any]:
         """
         Improve an existing prompt using specified strategies.
 
@@ -718,7 +716,7 @@ class PromptImprover:
             logger.error(f"Failed to improve prompt: {e}")
             raise DatabaseError(f"Failed to improve prompt: {e}")
 
-    def analyze_prompt(self, prompt_id: int, model_name: str = "gpt-4") -> Dict[str, Any]:
+    def analyze_prompt(self, prompt_id: int, model_name: str = "gpt-4") -> dict[str, Any]:
         """
         Analyze a prompt for potential improvements.
 
@@ -789,7 +787,7 @@ Format as JSON.
             logger.error(f"Failed to analyze prompt: {e}")
             raise DatabaseError(f"Failed to analyze prompt: {e}")
 
-    def standardize_to_xml(self, prompt_id: int) -> Dict[str, Any]:
+    def standardize_to_xml(self, prompt_id: int) -> dict[str, Any]:
         """
         Convert a prompt to XML format for better structure.
 
@@ -863,7 +861,7 @@ Format as JSON.
     ####################################################################################################################
     # Helper Methods
 
-    def _improve_text(self, text: str, strategies: List[str],
+    def _improve_text(self, text: str, strategies: list[str],
                            text_type: str, model_name: str) -> str:
         """
         Improve a text using specified strategies.
@@ -939,7 +937,7 @@ Provide only the improved text, no explanations.
         raise ValueError("LLM response did not contain any assistant content.")
 
     def _analyze_improvements(self, old_system: str, new_system: str,
-                            old_user: str, new_user: str) -> Dict[str, Any]:
+                            old_user: str, new_user: str) -> dict[str, Any]:
         """
         Analyze the improvements made.
 
@@ -964,7 +962,7 @@ Provide only the improved text, no explanations.
             "total_length_change": (len(new_system) + len(new_user)) - (len(old_system) + len(old_user))
         }
 
-    def _recommend_strategies(self, analysis: Dict[str, Any]) -> List[str]:
+    def _recommend_strategies(self, analysis: dict[str, Any]) -> list[str]:
         """
         Recommend improvement strategies based on analysis.
 

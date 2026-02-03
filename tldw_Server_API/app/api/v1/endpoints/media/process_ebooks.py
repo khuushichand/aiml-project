@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-
 import asyncio
 import functools
 from pathlib import Path
+from typing import Any
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     File,
     UploadFile,
@@ -18,8 +16,20 @@ from loguru import logger
 from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
+    get_process_ebooks_form,
+)
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    UsageEventLogger,
+    get_usage_event_logger,
+)
+from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessEbooksForm
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
+from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
+    apply_chunking_template_if_any,
+    prepare_chunking_options_dict,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
     save_uploaded_files,
@@ -28,20 +38,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
     ProcessItem,
     run_batch_processor,
 )
-
-from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
-    UsageEventLogger,
-    get_usage_event_logger,
-)
-from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
-    get_process_ebooks_form,
-)
-from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessEbooksForm
-from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
-    prepare_chunking_options_dict,
-    apply_chunking_template_if_any,
-)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
 
 router = APIRouter()
 
@@ -52,19 +49,19 @@ ALLOWED_EBOOK_EXTENSIONS = [".epub"]
 def _process_single_ebook(
     ebook_path: Path,
     original_ref: str,
-    title_override: Optional[str],
-    author_override: Optional[str],
-    keywords: Optional[List[str]],
+    title_override: str | None,
+    author_override: str | None,
+    keywords: list[str] | None,
     perform_chunking: bool,
-    chunk_options: Optional[Dict[str, Any]],
+    chunk_options: dict[str, Any] | None,
     perform_analysis: bool,
     summarize_recursively: bool,
-    api_name: Optional[str],
-    custom_prompt: Optional[str],
-    system_prompt: Optional[str],
+    api_name: str | None,
+    custom_prompt: str | None,
+    system_prompt: str | None,
     extraction_method: str,
-    base_dir: Optional[Path],
-) -> Dict[str, Any]:
+    base_dir: Path | None,
+) -> dict[str, Any]:
     """Synchronous worker for EPUB processing (mirrors legacy helper)."""
     try:
         result_dict = media_mod.books.process_epub(
@@ -127,7 +124,7 @@ def _process_single_ebook(
 async def process_ebooks_endpoint(
     db: MediaDatabase = Depends(get_media_db_for_user),
     form_data: ProcessEbooksForm = Depends(get_process_ebooks_form),
-    files: Optional[List[UploadFile]] = File(
+    files: list[UploadFile] | None = File(
         None, description="EPUB file uploads (.epub)"
     ),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
@@ -162,10 +159,10 @@ async def process_ebooks_endpoint(
     # the legacy implementation (including the "At least one 'url'..." detail).
     media_mod._validate_inputs("ebook", form_data.urls, files)  # type: ignore[arg-type]
 
-    batch: Dict[str, Any] = {"results": [], "errors": []}
-    items: List[ProcessItem] = []
-    saved_files_info: List[Dict[str, Any]] = []
-    chunk_options_dict: Optional[Dict[str, Any]] = None
+    batch: dict[str, Any] = {"results": [], "errors": []}
+    items: list[ProcessItem] = []
+    saved_files_info: list[dict[str, Any]] = []
+    chunk_options_dict: dict[str, Any] | None = None
 
     with TempDirManager(prefix="process_ebooks_") as temp_dir:
         temp_dir_path = Path(temp_dir)
@@ -285,7 +282,7 @@ async def process_ebooks_endpoint(
         # - 207 when we have result entries (all errors)
         # - 400 when no inputs at all (handled by _validate_inputs above)
         if not items:
-            async def _noop_processor(_: List[ProcessItem]) -> List[Dict[str, Any]]:
+            async def _noop_processor(_: list[ProcessItem]) -> list[dict[str, Any]]:
                 return []
 
             batch = await run_batch_processor(
@@ -329,9 +326,9 @@ async def process_ebooks_endpoint(
             chunk_options_dict = None
 
         async def _ebook_batch_processor(
-            process_items: List[ProcessItem],
-        ) -> List[Dict[str, Any]]:
-            results: List[Dict[str, Any]] = []
+            process_items: list[ProcessItem],
+        ) -> list[dict[str, Any]]:
+            results: list[dict[str, Any]] = []
             loop = asyncio.get_running_loop()
 
             for item in process_items:

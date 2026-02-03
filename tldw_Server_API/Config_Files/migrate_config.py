@@ -11,15 +11,13 @@ Usage:
     python migrate_config.py [--dry-run] [--backup]
 """
 
-import os
-import sys
-import shutil
-import configparser
-import re
-from pathlib import Path
-from datetime import datetime
-from typing import Dict, List, Tuple, Optional
 import argparse
+import configparser
+import shutil
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
 
 
 class ConfigMigrator:
@@ -74,7 +72,7 @@ class ConfigMigrator:
         self.extracted_keys = {}
         self.existing_env_keys = {}
 
-    def backup_files(self) -> Tuple[Optional[Path], Optional[Path]]:
+    def backup_files(self) -> tuple[Optional[Path], Optional[Path]]:
         """Create backups of existing config files"""
         self.backup_dir.mkdir(exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -94,7 +92,7 @@ class ConfigMigrator:
 
         return config_backup, env_backup
 
-    def extract_keys_from_config(self) -> Dict[str, str]:
+    def extract_keys_from_config(self) -> dict[str, str]:
         """Extract API keys and sensitive data from config.txt"""
         if not self.config_file.exists():
             print(f"⚠ Config file not found: {self.config_file}")
@@ -147,7 +145,7 @@ class ConfigMigrator:
         self.extracted_keys = extracted
         return extracted
 
-    def read_existing_env(self) -> Dict[str, str]:
+    def read_existing_env(self) -> dict[str, str]:
         """Read existing .env file if it exists"""
         if not self.env_file.exists():
             return {}
@@ -163,7 +161,7 @@ class ConfigMigrator:
         self.existing_env_keys = existing
         return existing
 
-    def write_env_file(self, keys: Dict[str, str], preserve_existing: bool = True):
+    def write_env_file(self, keys: dict[str, str], preserve_existing: bool = True):
         """Write the .env file with migrated keys"""
         # Read template for structure
         template_lines = []

@@ -1,66 +1,62 @@
 # auth_deps.py
 # Description: FastAPI dependency injection for authentication services
 #
-from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List, Callable, Awaitable
-from collections.abc import Mapping
-import inspect
 import asyncio
-import threading
-import re
+import inspect
 import os
+import re
+import threading
 import time
+from collections.abc import Awaitable, Mapping
+from datetime import datetime, timezone
+from typing import Any, Callable, Optional
 from weakref import WeakKeyDictionary
+
 #
 # 3rd-party imports
-from fastapi import Depends, HTTPException, status, Request, Header, Response
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Depends, Header, HTTPException, Request, Response, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
+
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
+from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
+    get_auth_principal as _resolve_auth_principal,
+)
+
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
+from tldw_Server_API.app.core.AuthNZ.exceptions import (
+    InvalidTokenError,
+    TokenExpiredError,
+)
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
+    is_single_user_ip_allowed,
+    resolve_client_ip,
+)
+from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService, get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService, get_password_service
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal, is_single_user_principal
-from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService, get_jwt_service
+from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager, get_session_manager
 from tldw_Server_API.app.core.AuthNZ.settings import (
     get_settings,
     is_single_user_mode,
     is_single_user_profile_mode,
 )
-from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_limiter
-from tldw_Server_API.app.services.registration_service import RegistrationService, get_registration_service
-from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService, get_storage_service
-from tldw_Server_API.app.core.AuthNZ.exceptions import (
-    AuthenticationError,
-    InvalidTokenError,
-    TokenExpiredError,
-    UserNotFoundError,
-    AccountInactiveError,
-    InsufficientPermissionsError
-)
-from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
-from tldw_Server_API.app.core.DB_Management.Users_DB import get_users_db
-from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
-from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
-from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     authenticate_api_key_user,
     verify_jwt_and_fetch_user,
 )
+from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
 from tldw_Server_API.app.core.exceptions import InactiveUserError
-from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
-from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
-    get_auth_principal as _resolve_auth_principal,
-)
 from tldw_Server_API.app.core.External_Sources.connectors_service import get_policy
 from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
-from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
-from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
-    is_single_user_ip_allowed,
-    resolve_client_ip,
-)
 from tldw_Server_API.app.core.MCP_unified.monitoring import metrics
+from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+from tldw_Server_API.app.services.registration_service import RegistrationService, get_registration_service
+from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService, get_storage_service
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
@@ -76,7 +72,7 @@ _SENSITIVE_USER_KEY_PATTERN = re.compile(
 )
 
 
-def _public_user_dict(user: Mapping[str, Any]) -> Dict[str, Any]:
+def _public_user_dict(user: Mapping[str, Any]) -> dict[str, Any]:
     """
     Return a sanitized shallow copy of a user mapping.
 
@@ -85,7 +81,7 @@ def _public_user_dict(user: Mapping[str, Any]) -> Dict[str, Any]:
     (passwords, tokens, secrets, API keys, SSNs) so dependency returns never
     expose sensitive fields.
     """
-    safe: Dict[str, Any] = {}
+    safe: dict[str, Any] = {}
     for key, value in dict(user).items():
         if isinstance(key, str) and _SENSITIVE_USER_KEY_PATTERN.search(key):
             continue
@@ -99,7 +95,7 @@ def _looks_like_jwt(token: Optional[str]) -> bool:
     return token.count(".") == 2
 
 
-async def _authenticate_api_key_from_request(request: Request, api_key: str) -> Dict[str, Any]:
+async def _authenticate_api_key_from_request(request: Request, api_key: str) -> dict[str, Any]:
     test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
     if test_mode:
         # SECURITY: Warn loudly about TEST_MODE and block in production unless explicitly allowed
@@ -145,6 +141,7 @@ async def _authenticate_api_key_from_request(request: Request, api_key: str) -> 
             try:
                 if settings and isinstance(settings.DATABASE_URL, str) and settings.DATABASE_URL.startswith("sqlite:///"):
                     from pathlib import Path as _Path
+
                     from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure_authnz_tables
                     db_path = settings.DATABASE_URL.replace("sqlite:///", "")
                     _ensure_authnz_tables(_Path(db_path))
@@ -242,8 +239,8 @@ def _activate_scope_context(
     request: Request,
     *,
     user_id: Optional[int],
-    org_ids: Optional[List[int]],
-    team_ids: Optional[List[int]],
+    org_ids: Optional[list[int]],
+    team_ids: Optional[list[int]],
     is_admin: bool,
 ) -> None:
     """Record content scope information for downstream database access."""
@@ -404,7 +401,8 @@ async def get_session_manager_dep() -> SessionManager:
     """Get session manager dependency"""
     # In pytest/TEST_MODE contexts, return a lightweight stub to avoid heavy init
     try:
-        import os as _os, sys as _sys
+        import os as _os
+        import sys as _sys
 
         force_real = _os.getenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", "").lower() in ("1", "true", "yes")
         if not force_real and (_os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes") or "pytest" in _sys.modules):
@@ -557,7 +555,7 @@ async def get_current_user(
     session_manager: SessionManager = Depends(get_session_manager_dep),
     db_pool: DatabasePool = Depends(get_db_pool),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY")
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Resolve and return the current authenticated user.
 
@@ -614,7 +612,7 @@ async def get_current_user(
             else:
                 # Normalize to a plain dict to preserve existing return shape
                 if isinstance(cached_user, Mapping):
-                    user_dict: Dict[str, Any] = dict(cached_user)
+                    user_dict: dict[str, Any] = dict(cached_user)
                 else:
                     dump = getattr(cached_user, "model_dump", None) or getattr(cached_user, "dict", None)
                     user_dict = dict(dump())
@@ -913,7 +911,7 @@ def require_api_key_scope(
         ):
             ...
     """
-    from tldw_Server_API.app.core.AuthNZ.api_key_manager import normalize_scope, has_scope
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import has_scope, normalize_scope
 
     required_scopes = frozenset(s.strip().lower() for s in scopes if s)
 
@@ -1023,8 +1021,8 @@ async def require_service_principal(
 
 
 async def get_current_active_user(
-    current_user: Dict[str, Any] = Depends(get_current_user)
-) -> Dict[str, Any]:
+    current_user: dict[str, Any] = Depends(get_current_user)
+) -> dict[str, Any]:
     """
     Get current active user (verified and not locked)
 
@@ -1055,8 +1053,8 @@ async def get_current_active_user(
 async def get_user_org_policy(
     db: Any = Depends(get_db_transaction),  # noqa: B008
     principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
-    current_user: Dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
-) -> Dict[str, Any]:
+    current_user: dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
+) -> dict[str, Any]:
     """
     Deprecated compatibility shim for user-dict org policy lookups.
 
@@ -1071,7 +1069,7 @@ async def get_user_org_policy(
     )
 
 
-async def _load_org_policy(db: Any, org_id: int) -> Dict[str, Any]:
+async def _load_org_policy(db: Any, org_id: int) -> dict[str, Any]:
     """
     Internal helper to load an organization policy with consistent error handling.
     """
@@ -1095,8 +1093,8 @@ async def _load_org_policy(db: Any, org_id: int) -> Dict[str, Any]:
 async def get_org_policy_from_principal(
     db: Any = Depends(get_db_transaction),  # noqa: B008
     principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
-    current_user: Dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
-) -> Dict[str, Any]:
+    current_user: dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
+) -> dict[str, Any]:
     """
     Resolve organization policy primarily from ``AuthPrincipal``, with fallbacks.
 
@@ -1175,8 +1173,8 @@ async def get_org_policy_from_principal(
 
 
 async def require_admin(
-    current_user: Dict[str, Any] = Depends(get_current_active_user)  # noqa: B008
-) -> Dict[str, Any]:
+    current_user: dict[str, Any] = Depends(get_current_active_user)  # noqa: B008
+) -> dict[str, Any]:
     """
     Require admin role for access (legacy shim).
 
@@ -1229,8 +1227,8 @@ def require_role(role: str):
         Dependency function that checks for the role
     """
     async def role_checker(
-        current_user: Dict[str, Any] = Depends(get_current_active_user)  # noqa: B008
-    ) -> Dict[str, Any]:
+        current_user: dict[str, Any] = Depends(get_current_active_user)  # noqa: B008
+    ) -> dict[str, Any]:
         user_role = current_user.get("role", "user")
 
         # Admin can access everything
@@ -1256,7 +1254,7 @@ async def get_optional_current_user(
     session_manager: SessionManager = Depends(get_session_manager_dep),
     db_pool: DatabasePool = Depends(get_db_pool),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
-) -> Optional[Dict[str, Any]]:
+) -> Optional[dict[str, Any]]:
     """
     Legacy shim - do not use in new code.
 
@@ -1863,9 +1861,13 @@ def require_token_scope(
         if api_key:
             try:
                 from tldw_Server_API.app.core.AuthNZ.api_key_manager import (
-                    normalize_scope as _normalize_scope,
-                    has_scope as _has_scope,
                     VALID_SCOPE_VALUES as _VALID_SCOPE_VALUES,
+                )
+                from tldw_Server_API.app.core.AuthNZ.api_key_manager import (
+                    has_scope as _has_scope,
+                )
+                from tldw_Server_API.app.core.AuthNZ.api_key_manager import (
+                    normalize_scope as _normalize_scope,
                 )
 
                 def _required_scope_for_api_key(scope_value: str, method: str) -> Optional[str]:

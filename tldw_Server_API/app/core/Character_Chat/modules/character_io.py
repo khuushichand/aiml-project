@@ -12,16 +12,21 @@ import os
 import struct
 import time
 import uuid
-import yaml
 import zlib
-from typing import Dict, List, Optional, Tuple, Any, Union, Set
+from typing import Any, Optional, Union
 
-from PIL import Image
+import yaml
 from loguru import logger
+from PIL import Image
 
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError, ConflictError, InputError
 from tldw_Server_API.app.core.Character_Chat.character_limits import get_character_limits
 from tldw_Server_API.app.core.Character_Chat.constants import MAX_PNG_METADATA_BYTES
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
 
 # Import validation and parsing functions from character_validation module
 from . import character_validation as _character_validation
@@ -58,7 +63,7 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
     """
     file_name_for_log = "image_stream"
 
-    def _create_image_source() -> Tuple[Optional[io.BytesIO], Optional[bytes], str]:
+    def _create_image_source() -> tuple[Optional[io.BytesIO], Optional[bytes], str]:
         """Create BytesIO source from various input types. Returns (source, raw_bytes, filename)."""
         nonlocal file_name_for_log
         raw_bytes: Optional[bytes] = None
@@ -178,8 +183,8 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
             return _try_base64_json(raw_value, context_label=context_label)
         return None
 
-    def _iter_metadata_items(metadata: Dict[str, Any]) -> List[Tuple[Any, Any]]:
-        items: List[Tuple[Any, Any]] = []
+    def _iter_metadata_items(metadata: dict[str, Any]) -> list[tuple[Any, Any]]:
+        items: list[tuple[Any, Any]] = []
         for key, value in metadata.items():
             items.append((key, value))
             if isinstance(value, dict):
@@ -187,11 +192,11 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                     items.append((sub_key, sub_value))
         return items
 
-    def _extract_from_metadata_items(items: List[Tuple[Any, Any]], source_label: str) -> Optional[str]:
+    def _extract_from_metadata_items(items: list[tuple[Any, Any]], source_label: str) -> Optional[str]:
         if not items:
             return None
         preferred_keys = {"chara", "character"}
-        attempted_keys: Set[str] = set()
+        attempted_keys: set[str] = set()
         for key, value in items:
             normalized_key = _normalize_key(key)
             if normalized_key not in preferred_keys:
@@ -219,11 +224,11 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
         )
         return None
 
-    def _extract_png_text_chunks(raw_bytes: bytes) -> Dict[str, str]:
+    def _extract_png_text_chunks(raw_bytes: bytes) -> dict[str, str]:
         if not raw_bytes.startswith(b'\x89PNG\r\n\x1a\n'):
             return {}
         pos = 8
-        chunks: Dict[str, str] = {}
+        chunks: dict[str, str] = {}
 
         def _safe_decompress(data: bytes) -> Optional[bytes]:
             if not data:
@@ -315,7 +320,7 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
         return _extract_from_metadata_items(list(chunks.items()), "png-chunks")
 
     def _extract_metadata(img_obj: Image.Image, raw_bytes: Optional[bytes]) -> Optional[str]:
-        metadata_sources: List[Tuple[str, Dict[str, Any]]] = []
+        metadata_sources: list[tuple[str, dict[str, Any]]] = []
         if hasattr(img_obj, 'info') and isinstance(img_obj.info, dict):
             metadata_sources.append(("info", img_obj.info))
         text_metadata = getattr(img_obj, 'text', None)
@@ -384,7 +389,7 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
     return None
 
 
-def import_character_card_from_json_string(json_content_str: str) -> Optional[Dict[str, Any]]:
+def import_character_card_from_json_string(json_content_str: str) -> Optional[dict[str, Any]]:
     """Imports and parses a character card from a JSON string.
 
     This function attempts to parse a character card from the provided JSON
@@ -412,7 +417,7 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
     try:
         card_data_dict = json.loads(json_content_str.strip())
 
-        parsed_card: Optional[Dict[str, Any]] = None
+        parsed_card: Optional[dict[str, Any]] = None
 
         # Enhanced format detection supporting more character card formats
         # Check for various format indicators
@@ -443,7 +448,7 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
         if is_explicit_v3_spec or is_explicit_v3_version:
             logger.debug("Attempting V3 validation based on card structure/spec.")
             try:
-                from tldw_Server_API.app.core.Character_Chat.ccv3_parser import validate_v3_card, parse_v3_card
+                from tldw_Server_API.app.core.Character_Chat.ccv3_parser import parse_v3_card, validate_v3_card
                 is_valid_v3_struct, v3_errors = validate_v3_card(card_data_dict)
                 if is_valid_v3_struct:
                     parsed_card = parse_v3_card(card_data_dict)
@@ -532,7 +537,7 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
     return None
 
 
-def load_character_card_from_string_content(content_str: str) -> Optional[Dict[str, Any]]:
+def load_character_card_from_string_content(content_str: str) -> Optional[dict[str, Any]]:
     """Load a character card from a string (JSON or YAML format).
 
     Args:
@@ -603,9 +608,9 @@ def _infer_character_name_from_filename(file_name: Optional[str]) -> str:
     return base_name or "Imported Character"
 
 
-def _build_image_only_character(file_name: Optional[str], image_bytes: Optional[bytes]) -> Dict[str, Any]:
+def _build_image_only_character(file_name: Optional[str], image_bytes: Optional[bytes]) -> dict[str, Any]:
     name = _infer_character_name_from_filename(file_name)
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "name": name,
         "description": "Imported from image file without embedded character data.",
         "personality": "Image-only import.",
@@ -627,7 +632,7 @@ def import_and_save_character_from_file(
     file_type: Optional[str] = None,
     file_name: Optional[str] = None,
     allow_image_only: bool = False
-) -> Tuple[bool, str, Optional[int]]:
+) -> tuple[bool, str, Optional[int]]:
     """Import and save a character from a file.
 
     Args:
@@ -734,7 +739,7 @@ def load_chat_history_from_file_and_save_to_db(
     file_content: Optional[str] = None,
     title: Optional[str] = None,
     user_name_for_placeholders: Optional[str] = None,
-) -> Tuple[Optional[str], Optional[int]]:
+) -> tuple[Optional[str], Optional[int]]:
     """Load chat history from a file and persist it for the given character.
 
     Historically this returned ``(conversation_id, character_id)``; the behaviour
@@ -768,7 +773,7 @@ def load_chat_history_from_file_and_save_to_db(
             return None, None
 
         # Parse content - prefer JSON, fall back to YAML, finally treat as plain text
-        def _normalise_chat_data(raw_data: Any) -> Optional[Dict[str, Any]]:
+        def _normalise_chat_data(raw_data: Any) -> Optional[dict[str, Any]]:
             if isinstance(raw_data, dict):
                 return raw_data
             if isinstance(raw_data, list):
@@ -808,7 +813,7 @@ def load_chat_history_from_file_and_save_to_db(
         def _normalize_message_content(raw_content: Any) -> Optional[str]:
             """Flatten structured message content into a plain string when possible."""
 
-            collected_parts: List[str] = []
+            collected_parts: list[str] = []
             appended_via_fallback = False
 
             def _collect(item: Any) -> None:
@@ -872,11 +877,11 @@ def load_chat_history_from_file_and_save_to_db(
                 return None
             return None
 
-        user_aliases_for_resolution: Set[str] = {"user", "human", "speaker", "speaker1", "speaker 1", "speaker-1"}
+        user_aliases_for_resolution: set[str] = {"user", "human", "speaker", "speaker1", "speaker 1", "speaker-1"}
         if inferred_user_name:
             user_aliases_for_resolution.add(str(inferred_user_name).strip().lower())
 
-        def _resolve_sender(role_value: Any, entry_data: Any) -> Tuple[bool, Optional[str]]:
+        def _resolve_sender(role_value: Any, entry_data: Any) -> tuple[bool, Optional[str]]:
             """Determine whether a message is from the user and capture explicit role labels."""
             if role_value is None:
                 return True, None
@@ -926,7 +931,7 @@ def load_chat_history_from_file_and_save_to_db(
             # Preserve unknown roles explicitly so downstream can inspect them.
             return False, normalized
 
-        from .character_chat import start_new_chat_session, post_message_to_conversation
+        from .character_chat import post_message_to_conversation, start_new_chat_session
         (
             conversation_id,
             char_data,
@@ -1030,7 +1035,7 @@ def load_chat_history_from_file_and_save_to_db(
                 current_message_count += 1
 
             # Helper to process pair-based history entries (legacy export format)
-            def _process_pair_history(entries: List[Any]) -> None:
+            def _process_pair_history(entries: list[Any]) -> None:
                 for idx, entry in enumerate(entries):
                     if not isinstance(entry, (list, tuple)):
                         logger.warning("Skipping malformed message pair at index {}: not a list", idx)

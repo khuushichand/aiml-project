@@ -9,16 +9,16 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 try:
     from tldw_Server_API.app.core.RAG.rag_service.types import (
         ClaimType,
-        VerificationStatus,
         MatchLevel,
         SourceAuthority,
+        VerificationStatus,
     )
 except Exception:
     from enum import Enum
@@ -52,8 +52,8 @@ class EvidenceReport:
     snippet: str
     score: float
     authority: str
-    start_offset: Optional[int] = None
-    end_offset: Optional[int] = None
+    start_offset: int | None = None
+    end_offset: int | None = None
 
 
 @dataclass
@@ -67,11 +67,11 @@ class ClaimReport:
     match_level: str
     source_authority: str
     requires_external_knowledge: bool
-    rationale: Optional[str]
-    evidence: List[EvidenceReport] = field(default_factory=list)
-    citations: List[Dict[str, Any]] = field(default_factory=list)
+    rationale: str | None
+    evidence: list[EvidenceReport] = field(default_factory=list)
+    citations: list[dict[str, Any]] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "claim_id": self.claim_id,
@@ -98,8 +98,8 @@ class VerificationReport:
     """
     report_id: str
     generated_at: str
-    query: Optional[str]
-    answer_text: Optional[str]
+    query: str | None
+    answer_text: str | None
     total_claims: int
     verified_count: int
     refuted_count: int
@@ -111,16 +111,16 @@ class VerificationReport:
     verification_rate: float
     precision: float
     coverage: float
-    claims: List[ClaimReport] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    claims: list[ClaimReport] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_verification_result(
         cls,
-        verifications: List[Any],
-        query: Optional[str] = None,
-        answer_text: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        verifications: list[Any],
+        query: str | None = None,
+        answer_text: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> "VerificationReport":
         """
         Create a VerificationReport from a list of ClaimVerification objects.
@@ -145,7 +145,7 @@ class VerificationReport:
         numerical_error = 0
         misquoted = 0
         citation_not_found = 0
-        claim_reports: List[ClaimReport] = []
+        claim_reports: list[ClaimReport] = []
 
         for v in verifications:
             status = getattr(v, "status", None)
@@ -232,7 +232,7 @@ class VerificationReport:
             metadata=metadata or {},
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert report to dictionary for serialization."""
         return {
             "report_id": self.report_id,
@@ -258,7 +258,7 @@ class VerificationReport:
         """Convert report to JSON string."""
         return json.dumps(self.to_dict(), indent=indent)
 
-    def get_summary(self) -> Dict[str, Any]:
+    def get_summary(self) -> dict[str, Any]:
         """Get a summary of the verification report."""
         return {
             "report_id": self.report_id,
@@ -274,27 +274,27 @@ class VerificationReport:
             "coverage": self.coverage,
         }
 
-    def get_problematic_claims(self) -> List[ClaimReport]:
+    def get_problematic_claims(self) -> list[ClaimReport]:
         """Get claims that have issues (not verified)."""
         problematic_statuses = {
             "refuted", "hallucination", "numerical_error", "misquoted", "citation_not_found"
         }
         return [c for c in self.claims if c.status in problematic_statuses]
 
-    def get_claims_by_status(self, status: str) -> List[ClaimReport]:
+    def get_claims_by_status(self, status: str) -> list[ClaimReport]:
         """Get claims filtered by status."""
         return [c for c in self.claims if c.status == status]
 
-    def get_claims_requiring_external_knowledge(self) -> List[ClaimReport]:
+    def get_claims_requiring_external_knowledge(self) -> list[ClaimReport]:
         """Get claims that require external knowledge to verify."""
         return [c for c in self.claims if c.requires_external_knowledge]
 
 
 def generate_verification_report(
-    verifications: List[Any],
-    query: Optional[str] = None,
-    answer_text: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
+    verifications: list[Any],
+    query: str | None = None,
+    answer_text: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> VerificationReport:
     """
     Generate a structured verification report from verification results.

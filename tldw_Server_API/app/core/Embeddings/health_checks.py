@@ -2,20 +2,20 @@
 # Comprehensive health monitoring for the embeddings service
 
 import asyncio
-import time
-import psutil
 import os
-from typing import Dict, Any, List, Optional, Tuple
+import time
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from dataclasses import dataclass, asdict
-import json
+from typing import Any, Optional
 
+import psutil
 from loguru import logger
-from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
+
 from tldw_Server_API.app.core.Embeddings.connection_pool import get_pool_manager
-from tldw_Server_API.app.core.Embeddings.multi_tier_cache import get_multi_tier_cache
 from tldw_Server_API.app.core.Embeddings.error_recovery import get_recovery_manager
+from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
+from tldw_Server_API.app.core.Embeddings.multi_tier_cache import get_multi_tier_cache
 from tldw_Server_API.app.core.Embeddings.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.Embeddings.simplified_config import get_config
 
@@ -35,14 +35,14 @@ class ComponentHealth:
     status: HealthStatus
     message: str
     latency_ms: Optional[float] = None
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = None
     checked_at: datetime = None
 
     def __post_init__(self):
         if self.checked_at is None:
             self.checked_at = datetime.utcnow()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary"""
         result = asdict(self)
         result['status'] = self.status.value
@@ -79,7 +79,7 @@ class HealthChecker:
         }
 
         # Health history
-        self.health_history: List[Dict[str, Any]] = []
+        self.health_history: list[dict[str, Any]] = []
         self.max_history = 100
 
         # Thresholds
@@ -95,7 +95,7 @@ class HealthChecker:
 
         logger.info("Health checker initialized")
 
-    async def check_health(self, detailed: bool = False) -> Dict[str, Any]:
+    async def check_health(self, detailed: bool = False) -> dict[str, Any]:
         """
         Perform comprehensive health check.
 
@@ -474,7 +474,7 @@ class HealthChecker:
 
     def _calculate_overall_status(
         self,
-        component_results: Dict[str, ComponentHealth]
+        component_results: dict[str, ComponentHealth]
     ) -> HealthStatus:
         """Calculate overall health status from component results"""
 
@@ -501,7 +501,7 @@ class HealthChecker:
         else:
             return HealthStatus.HEALTHY
 
-    async def _get_detailed_metrics(self) -> Dict[str, Any]:
+    async def _get_detailed_metrics(self) -> dict[str, Any]:
         """Get detailed metrics for all components"""
         metrics = {}
 
@@ -523,7 +523,7 @@ class HealthChecker:
 
         return metrics
 
-    def _update_history(self, health_report: Dict[str, Any]):
+    def _update_history(self, health_report: dict[str, Any]):
         """Update health history"""
         # Add to history
         self.health_history.append({
@@ -536,7 +536,7 @@ class HealthChecker:
         if len(self.health_history) > self.max_history:
             self.health_history = self.health_history[-self.max_history:]
 
-    def get_health_trends(self, minutes: int = 60) -> Dict[str, Any]:
+    def get_health_trends(self, minutes: int = 60) -> dict[str, Any]:
         """
         Get health trends over time.
 
@@ -618,7 +618,7 @@ def get_health_checker() -> HealthChecker:
 
 
 # FastAPI integration
-async def health_endpoint(detailed: bool = False) -> Dict[str, Any]:
+async def health_endpoint(detailed: bool = False) -> dict[str, Any]:
     """
     Health check endpoint for FastAPI.
 
@@ -632,7 +632,7 @@ async def health_endpoint(detailed: bool = False) -> Dict[str, Any]:
     return await checker.check_health(detailed=detailed)
 
 
-async def liveness_endpoint() -> Dict[str, str]:
+async def liveness_endpoint() -> dict[str, str]:
     """Liveness endpoint for Kubernetes."""
     is_alive = await liveness_probe()
 
@@ -642,7 +642,7 @@ async def liveness_endpoint() -> Dict[str, str]:
         raise Exception("Liveness check failed")
 
 
-async def readiness_endpoint() -> Dict[str, str]:
+async def readiness_endpoint() -> dict[str, str]:
     """Readiness endpoint for Kubernetes."""
     is_ready = await readiness_probe()
 

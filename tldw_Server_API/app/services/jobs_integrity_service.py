@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Optional
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
-async def run_jobs_integrity_sweeper(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_jobs_integrity_sweeper(stop_event: asyncio.Event | None = None) -> None:
     """Periodically validate and optionally repair Jobs invariants.
 
     Controlled by env flags:

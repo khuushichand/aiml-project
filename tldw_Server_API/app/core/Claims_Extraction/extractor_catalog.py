@@ -4,14 +4,13 @@ import json
 import re
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from tldw_Server_API.app.core.config import settings as _settings
 
-
 NO_SPACE_LANGS = {"zh", "zh-cn", "zh-tw", "ja", "ko", "th"}
 
-_SCRIPT_LANGUAGE_HINTS: List[Tuple[str, str]] = [
+_SCRIPT_LANGUAGE_HINTS: list[tuple[str, str]] = [
     (r"[\u4e00-\u9fff]", "zh"),
     (r"[\u3040-\u309f\u30a0-\u30ff]", "ja"),
     (r"[\u0e00-\u0e7f]", "th"),
@@ -21,7 +20,7 @@ _SCRIPT_LANGUAGE_HINTS: List[Tuple[str, str]] = [
     (r"[\u0600-\u06ff]", "ar"),
 ]
 
-DEFAULT_NER_MODEL_MAP: Dict[str, str] = {
+DEFAULT_NER_MODEL_MAP: dict[str, str] = {
     "en": "en_core_web_sm",
     "es": "es_core_news_sm",
     "fr": "fr_core_news_sm",
@@ -59,11 +58,11 @@ class ClaimsExtractorCatalogItem:
     label: str
     description: str
     execution: str
-    supports_languages: Optional[List[str]] = None
-    providers: Optional[List[str]] = None
+    supports_languages: list[str] | None = None
+    providers: list[str] | None = None
     auto_selectable: bool = False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         payload = {
             "mode": self.mode,
             "label": self.label,
@@ -76,7 +75,7 @@ class ClaimsExtractorCatalogItem:
         return {k: v for k, v in payload.items() if v is not None}
 
 
-def _load_custom_ner_model_map() -> Dict[str, str]:
+def _load_custom_ner_model_map() -> dict[str, str]:
     raw = _settings.get("CLAIMS_LOCAL_NER_MODEL_MAP")
     if isinstance(raw, dict):
         return {str(k).lower(): str(v) for k, v in raw.items() if v}
@@ -90,7 +89,7 @@ def _load_custom_ner_model_map() -> Dict[str, str]:
     return {}
 
 
-def resolve_ner_model_name(language: Optional[str]) -> str:
+def resolve_ner_model_name(language: str | None) -> str:
     lang = (language or "").strip().lower()
     custom_map = _load_custom_ner_model_map()
     if lang in custom_map:
@@ -102,7 +101,7 @@ def resolve_ner_model_name(language: Optional[str]) -> str:
 
 
 @lru_cache(maxsize=8)
-def get_spacy_pipeline(model_name: str, language: str) -> Optional[Any]:
+def get_spacy_pipeline(model_name: str, language: str) -> Any | None:
     try:
         import spacy  # type: ignore
     except Exception:
@@ -133,7 +132,7 @@ def get_spacy_pipeline(model_name: str, language: str) -> Optional[Any]:
     return nlp
 
 
-def detect_claims_language(text: Optional[str], default: Optional[str] = None) -> str:
+def detect_claims_language(text: str | None, default: str | None = None) -> str:
     fallback = (default or str(_settings.get("CLAIMS_EXTRACTOR_LANGUAGE_DEFAULT", "en"))).strip() or "en"
     if not text:
         return fallback
@@ -148,11 +147,11 @@ def detect_claims_language(text: Optional[str], default: Optional[str] = None) -
 
 def split_claims_sentences(
     text: str,
-    language: Optional[str],
+    language: str | None,
     *,
-    min_length: Optional[int] = None,
-    max_sentences: Optional[int] = None,
-) -> List[str]:
+    min_length: int | None = None,
+    max_sentences: int | None = None,
+) -> list[str]:
     cleaned = (text or "").strip()
     if not cleaned:
         return []
@@ -182,9 +181,9 @@ def split_claims_sentences(
 
 
 def resolve_claims_extractor_mode(
-    requested: Optional[str],
-    text: Optional[str],
-) -> Tuple[str, str]:
+    requested: str | None,
+    text: str | None,
+) -> tuple[str, str]:
     normalized = (requested or "heuristic").strip().lower()
     language = detect_claims_language(text)
 
@@ -202,7 +201,7 @@ def resolve_claims_extractor_mode(
     return "heuristic", language
 
 
-def get_claims_extractor_catalog() -> List[Dict[str, Any]]:
+def get_claims_extractor_catalog() -> list[dict[str, Any]]:
     lang_support = sorted(set(DEFAULT_NER_MODEL_MAP.keys()))
     providers = sorted(LLM_PROVIDER_MODES)
     items = [

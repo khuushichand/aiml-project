@@ -7,31 +7,29 @@
 # - Delete embeddings for a media item
 
 import os
-from typing import Annotated, Optional, Dict, Any, List, Tuple
-from fastapi import APIRouter, Depends, HTTPException, status as http_status
-from fastapi.responses import Response
-from pydantic import BaseModel, Field
-from pydantic import ConfigDict
+from typing import Annotated, Any, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi import status as http_status
 from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field
+
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 
 # Local imports
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
-    get_request_user,
     User,
+    get_request_user,
     resolve_user_id_for_request,
 )
-from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import (
-    ChromaDBManager,
-    store_in_chroma
-)
-from tldw_Server_API.app.core.config import settings, load_comprehensive_config
-from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.Chunking.base import ChunkerConfig
+from tldw_Server_API.app.core.Chunking.chunker import Chunker
+from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager, store_in_chroma
 from tldw_Server_API.app.core.Embeddings.jobs_adapter import EmbeddingsJobsAdapter
-from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
 
 router = APIRouter(prefix="/media", tags=["media-embeddings"])
 
@@ -41,7 +39,7 @@ DEFAULT_EMBEDDING_PROVIDER = "huggingface"
 FALLBACK_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 
-def _user_embedding_config() -> Dict[str, Any]:
+def _user_embedding_config() -> dict[str, Any]:
     cfg = settings.get("EMBEDDING_CONFIG", {}).copy()
     cfg["USER_DB_BASE_DIR"] = settings.get("USER_DB_BASE_DIR")
     return cfg
@@ -57,7 +55,7 @@ def _safe_int(value: Any) -> Optional[int]:
 
 
 
-def _parse_media_type_list(raw: Any) -> List[str]:
+def _parse_media_type_list(raw: Any) -> list[str]:
     if raw is None:
         return []
     if isinstance(raw, str):
@@ -67,7 +65,7 @@ def _parse_media_type_list(raw: Any) -> List[str]:
     return []
 
 
-def _allow_zero_embeddings_for_media(media_item: Dict[str, Any]) -> bool:
+def _allow_zero_embeddings_for_media(media_item: dict[str, Any]) -> bool:
     media_type = str(media_item.get("media_type") or media_item.get("type") or "").strip().lower()
     if not media_type:
         return False
@@ -92,7 +90,7 @@ def _allow_zero_embeddings_for_media(media_item: Dict[str, Any]) -> bool:
 def _resolve_model_provider(
     embedding_model: Optional[str],
     embedding_provider: Optional[str],
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     try:
         from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
             _resolve_model_and_provider,
@@ -164,7 +162,7 @@ class GenerateEmbeddingsResponse(BaseModel):
 
 
 class BatchMediaEmbeddingsRequest(BaseModel):
-    media_ids: List[int] = Field(..., min_length=1, description="List of media IDs to embed")
+    media_ids: list[int] = Field(..., min_length=1, description="List of media IDs to embed")
     embedding_model: Optional[str] = Field(None, alias="model")
     embedding_provider: Optional[str] = Field(None, alias="provider")
     chunk_size: int = Field(1000, description="Chunk size to use for each media item")
@@ -177,7 +175,7 @@ class BatchMediaEmbeddingsRequest(BaseModel):
 
 class BatchMediaEmbeddingsResponse(BaseModel):
     status: str
-    job_ids: List[str]
+    job_ids: list[str]
     submitted: int
 
 
@@ -187,7 +185,7 @@ class EmbeddingsSearchRequest(BaseModel):
     collection: Optional[str] = Field(None, description="Target collection to search")
     embedding_model: Optional[str] = Field(None, alias="model")
     embedding_provider: Optional[str] = Field(None, alias="provider")
-    filters: Optional[Dict[str, Any]] = Field(None, description="Optional metadata filters")
+    filters: Optional[dict[str, Any]] = Field(None, description="Optional metadata filters")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -195,16 +193,16 @@ class EmbeddingsSearchRequest(BaseModel):
 class EmbeddingsSearchResult(BaseModel):
     id: Optional[str]
     document: Optional[str]
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     distance: Optional[float] = None
 
 
 class EmbeddingsSearchResponse(BaseModel):
-    results: List[EmbeddingsSearchResult]
+    results: list[EmbeddingsSearchResult]
     count: int
 
 
-async def get_media_content(media_id: int, db: MediaDatabase) -> Dict[str, Any]:
+async def get_media_content(media_id: int, db: MediaDatabase) -> dict[str, Any]:
     """Retrieve media content from database"""
     try:
         # Get media item details
@@ -249,7 +247,7 @@ async def get_media_content(media_id: int, db: MediaDatabase) -> Dict[str, Any]:
         )
 
 
-def chunk_media_content(text: str, chunk_size: int = 1000, overlap: int = 200, method: str = "words") -> List[Dict[str, Any]]:
+def chunk_media_content(text: str, chunk_size: int = 1000, overlap: int = 200, method: str = "words") -> list[dict[str, Any]]:
     """
     Split text into overlapping chunks using the Chunking module.
 
@@ -300,19 +298,17 @@ def chunk_media_content(text: str, chunk_size: int = 1000, overlap: int = 200, m
 
 async def generate_embeddings_for_media(
     media_id: int,
-    media_content: Dict[str, Any],
+    media_content: dict[str, Any],
     embedding_model: str,
     embedding_provider: str,
     chunk_size: int,
     chunk_overlap: int,
     user_id: str = "1"
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Generate embeddings for media content"""
     request_metadata = {"user_id": str(user_id)}
     try:
-        from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
-            create_embeddings_batch_async
-        )
+        from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import create_embeddings_batch_async
 
         # Extract text content
         allow_zero_embeddings = _allow_zero_embeddings_for_media(media_content.get("media_item", {}))
@@ -728,7 +724,7 @@ async def generate_embeddings_batch(
         )
 
     adapter = EmbeddingsJobsAdapter()
-    job_ids: List[str] = []
+    job_ids: list[str] = []
     for media_id in media_ids:
         media_item = db.get_media_by_id(media_id)
         if not media_item:
@@ -786,9 +782,7 @@ async def search_embeddings(
     )
 
     try:
-        from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
-            create_embeddings_batch_async
-        )
+        from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import create_embeddings_batch_async
         query_metadata = {"user_id": user_id}
 
         query_embeddings = await create_embeddings_batch_async(
@@ -838,9 +832,9 @@ async def search_embeddings(
     metadatas = (query_result.get("metadatas") or [[]])[0]
     distances = (query_result.get("distances") or [[]])[0]
 
-    results: List[EmbeddingsSearchResult] = []
+    results: list[EmbeddingsSearchResult] = []
     for idx, item_id in enumerate(ids):
-        metadata_obj: Dict[str, Any] = {}
+        metadata_obj: dict[str, Any] = {}
         if idx < len(metadatas) and isinstance(metadatas[idx], dict):
             metadata_obj = metadatas[idx]
         document_text = documents[idx] if idx < len(documents) else None
@@ -865,7 +859,7 @@ async def delete_embeddings(
     media_id: int,
     db: Annotated[MediaDatabase, Depends(get_media_db_for_user)],
     current_user: Annotated[User, Depends(get_request_user)],
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Delete embeddings for a media item"""
     try:
         # Check if media exists

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -91,12 +91,12 @@ class AuthnzTokenBlacklistRepo:
         self,
         *,
         jti: str,
-        user_id: Optional[int],
+        user_id: int | None,
         token_type: str,
         expires_at: datetime,
-        reason: Optional[str],
-        revoked_by: Optional[int],
-        ip_address: Optional[str],
+        reason: str | None,
+        revoked_by: int | None,
+        ip_address: str | None,
     ) -> None:
         """
         Insert a blacklisted token row (or no-op on duplicate JTI).
@@ -188,7 +188,7 @@ class AuthnzTokenBlacklistRepo:
 
     async def get_active_expiry_for_jti(
         self, jti: str, now: datetime
-    ) -> Optional[datetime]:
+    ) -> datetime | None:
         """
         Return the latest non-expired ``expires_at`` for a given JTI, or None.
         """
@@ -263,8 +263,8 @@ class AuthnzTokenBlacklistRepo:
         self,
         *,
         now: datetime,
-        user_id: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        user_id: int | None = None,
+    ) -> dict[str, Any]:
         """
         Return blacklist statistics for all users or a single user.
         """
@@ -340,7 +340,7 @@ class AuthnzTokenBlacklistRepo:
                     }
 
                 if hasattr(row, "keys"):
-                    stats: Dict[str, Any] = dict(row)
+                    stats: dict[str, Any] = dict(row)
                 else:
                     if user_id:
                         stats = {

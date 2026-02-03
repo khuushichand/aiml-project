@@ -1,15 +1,15 @@
 # metrics.py
 # Metrics endpoint for Prometheus and health monitoring
 
-from fastapi import APIRouter, Response, HTTPException, status, Depends
-from typing import Dict, Any, Optional
 from datetime import datetime, timezone
+from typing import Any
 
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
 from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
 
 router = APIRouter(tags=["metrics"])
 
@@ -60,7 +60,8 @@ async def get_prometheus_metrics() -> Response:
             logger.debug("metrics: embeddings modules not available for import")
         prometheus_text = registry.export_prometheus_format() or ""
         try:
-            from prometheus_client import REGISTRY as PC_REGISTRY, generate_latest as pc_generate_latest
+            from prometheus_client import REGISTRY as PC_REGISTRY
+            from prometheus_client import generate_latest as pc_generate_latest
             prometheus_text = (prometheus_text + "\n" + pc_generate_latest(PC_REGISTRY).decode('utf-8')).strip() + "\n"
         except Exception:
             logger.debug("metrics: failed to augment with prometheus_client registry")
@@ -83,8 +84,8 @@ async def get_prometheus_metrics() -> Response:
 
 @router.get("/metrics/json",
             summary="Get metrics in JSON format",
-            response_model=Dict[str, Any])
-async def get_json_metrics() -> Dict[str, Any]:
+            response_model=dict[str, Any])
+async def get_json_metrics() -> dict[str, Any]:
     """
     Get all metrics in JSON format.
 
@@ -113,8 +114,8 @@ async def get_json_metrics() -> Dict[str, Any]:
 
 @router.get("/metrics/health",
             summary="Health check with metrics",
-            response_model=Dict[str, Any])
-async def health_check_with_metrics() -> Dict[str, Any]:
+            response_model=dict[str, Any])
+async def health_check_with_metrics() -> dict[str, Any]:
     """
     Health check endpoint with basic metrics.
 
@@ -153,8 +154,8 @@ async def health_check_with_metrics() -> Dict[str, Any]:
 
 @router.get("/metrics/chat",
             summary="Get chat-specific metrics",
-            response_model=Dict[str, Any])
-async def get_chat_metrics_endpoint() -> Dict[str, Any]:
+            response_model=dict[str, Any])
+async def get_chat_metrics_endpoint() -> dict[str, Any]:
     """
     Get detailed chat-specific metrics.
 
@@ -206,10 +207,10 @@ async def get_chat_metrics_endpoint() -> Dict[str, Any]:
 @router.post(
     "/metrics/reset",
     summary="Reset registry metrics (admin only)",
-    response_model=Dict[str, str],
+    response_model=dict[str, str],
     dependencies=[Depends(require_roles("admin"))],
 )
-async def reset_metrics() -> Dict[str, str]:
+async def reset_metrics() -> dict[str, str]:
     """
     Reset registry-backed metrics to their initial state.
 

@@ -13,7 +13,7 @@ avoid breaking request flows during upgrades.
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
@@ -24,11 +24,11 @@ try:  # pragma: no cover - DAL optional in early startup/tests
 except Exception:  # pragma: no cover - safe fallback
     ResourceDailyLedger = None  # type: ignore
 
-_daily_ledger: Optional["ResourceDailyLedger"] = None  # type: ignore[name-defined]
+_daily_ledger: "ResourceDailyLedger" | None = None  # type: ignore[name-defined]
 _daily_ledger_lock = asyncio.Lock()
 
 
-async def _get_ledger() -> Optional["ResourceDailyLedger"]:
+async def _get_ledger() -> "ResourceDailyLedger" | None:
     global _daily_ledger
     if ResourceDailyLedger is None:
         return None
@@ -48,7 +48,7 @@ async def _get_ledger() -> Optional["ResourceDailyLedger"]:
             return None
 
 
-def _seconds_until_next_utc_day(now_dt: Optional[datetime] = None) -> int:
+def _seconds_until_next_utc_day(now_dt: datetime | None = None) -> int:
     dt = now_dt or datetime.now(timezone.utc)
     dt = dt.astimezone(timezone.utc)
     tomorrow = dt.date() + timedelta(days=1)
@@ -66,8 +66,8 @@ async def check_daily_cap(
     category: str,
     daily_cap: int,
     units: int,
-    day_utc: Optional[str] = None,
-) -> Tuple[bool, int, Dict[str, Any]]:
+    day_utc: str | None = None,
+) -> tuple[bool, int, dict[str, Any]]:
     """
     Check whether an entity has remaining daily headroom for the given category.
 

@@ -45,6 +45,17 @@ const parseJsonObject = (value?: string) => {
   return undefined
 }
 
+const filterExecutableTools = (
+  tools?: Record<string, unknown>[]
+): Record<string, unknown>[] | undefined => {
+  if (!Array.isArray(tools)) return tools
+  return tools.filter((tool) => {
+    if (!tool || typeof tool !== "object") return false
+    if (!("canExecute" in tool)) return true
+    return Boolean((tool as Record<string, unknown>).canExecute)
+  })
+}
+
 export const pageAssistModel = async ({
   model,
   toolChoice,
@@ -69,7 +80,7 @@ export const pageAssistModel = async ({
     healthState: mcpHealthState
   } = useMcpToolsStore.getState()
   const resolvedToolChoice = toolChoice ?? storedToolChoice
-  const resolvedTools = tools ?? storedTools
+  const resolvedTools = filterExecutableTools(tools ?? storedTools)
   const normalizedModelId = String(model || "").replace(/^tldw:/, "")
   let modelSupportsTools = false
   let modelSupportsMultimodal = false

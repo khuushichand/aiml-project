@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import json
 import asyncio
+import json
 import random
 import socket
 import ssl
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
@@ -15,9 +15,9 @@ from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     record_claims_review_email_delivery,
     record_claims_review_webhook_delivery,
 )
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.exceptions import EgressPolicyError, RetryExhaustedError
 
 
@@ -25,8 +25,8 @@ def record_review_assignment_notifications(
     *,
     db: MediaDatabase,
     owner_user_id: str,
-    assignments: List[Dict[str, Any]],
-) -> List[int]:
+    assignments: list[dict[str, Any]],
+) -> list[int]:
     if not assignments:
         return []
     uuids = [str(item.get("uuid")) for item in assignments if item.get("uuid")]
@@ -34,7 +34,7 @@ def record_review_assignment_notifications(
         return []
     rows = db.get_claims_by_uuid(uuids)
     row_by_uuid = {str(row.get("uuid")): row for row in rows if row.get("uuid")}
-    inserted_ids: List[int] = []
+    inserted_ids: list[int] = []
     for item in assignments:
         claim_uuid = str(item.get("uuid") or "")
         row = row_by_uuid.get(claim_uuid)
@@ -71,9 +71,9 @@ def record_watchlist_cluster_notifications(
     *,
     db: MediaDatabase,
     owner_user_id: str,
-    clusters: Dict[int, Dict[str, Any]],
-    member_counts: Dict[int, int],
-    subscriptions: Dict[int, List[int]],
+    clusters: dict[int, dict[str, Any]],
+    member_counts: dict[int, int],
+    subscriptions: dict[int, list[int]],
 ) -> int:
     if not subscriptions:
         return 0
@@ -122,7 +122,7 @@ def record_watchlist_cluster_notifications(
     return inserted
 
 
-def _parse_email_recipients(raw_value: Optional[str]) -> List[str]:
+def _parse_email_recipients(raw_value: str | None) -> list[str]:
     if raw_value is None:
         return []
     text = str(raw_value).strip()
@@ -137,7 +137,7 @@ def _parse_email_recipients(raw_value: Optional[str]) -> List[str]:
     return [item.strip() for item in text.split(",") if item.strip()]
 
 
-def _normalize_review_channels(config_row: Dict[str, Any]) -> Dict[str, bool]:
+def _normalize_review_channels(config_row: dict[str, Any]) -> dict[str, bool]:
     slack_url = config_row.get("slack_webhook_url")
     webhook_url = config_row.get("webhook_url")
     email_recipients = _parse_email_recipients(config_row.get("email_recipients"))
@@ -148,7 +148,7 @@ def _normalize_review_channels(config_row: Dict[str, Any]) -> Dict[str, bool]:
     }
 
 
-def _normalize_notification_row(row: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_notification_row(row: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(row)
     raw = normalized.get("payload_json")
     try:
@@ -159,7 +159,7 @@ def _normalize_notification_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def _classify_httpx_exception(exc: Exception, msg: str) -> Optional[str]:
+def _classify_httpx_exception(exc: Exception, msg: str) -> str | None:
     module = getattr(exc.__class__, "__module__", "")
     if not module.startswith("httpx"):
         return None
@@ -197,11 +197,11 @@ def _classify_webhook_exception(exc: Exception) -> str:
 def _deliver_review_webhook(
     *,
     url: str,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     channel: str,
 ) -> bool:
     try:
-        from tldw_Server_API.app.core.http_client import create_client, fetch, RetryPolicy
+        from tldw_Server_API.app.core.http_client import RetryPolicy, create_client, fetch
     except Exception:
         return False
     backoff_schedule = [5, 15, 45, 120, 300]
@@ -246,7 +246,7 @@ def _deliver_review_webhook(
 
 async def _deliver_review_email(
     *,
-    recipients: List[str],
+    recipients: list[str],
     subject: str,
     html_body: str,
     text_body: str,
@@ -258,7 +258,7 @@ async def _deliver_review_email(
     except Exception:
         return False
     service = get_email_service()
-    deliveries: List[bool] = []
+    deliveries: list[bool] = []
     for addr in recipients:
         try:
             ok = await service.send_email(
@@ -275,7 +275,7 @@ async def _deliver_review_email(
 
 def _deliver_review_email_sync(
     *,
-    recipients: List[str],
+    recipients: list[str],
     subject: str,
     html_body: str,
     text_body: str,
@@ -304,8 +304,8 @@ def _deliver_review_email_sync(
 def _build_review_digest_payload(
     *,
     user_id: str,
-    notifications: List[Dict[str, Any]],
-) -> Dict[str, Any]:
+    notifications: list[dict[str, Any]],
+) -> dict[str, Any]:
     return {
         "event": "claims_review_notifications",
         "user_id": str(user_id),
@@ -314,9 +314,9 @@ def _build_review_digest_payload(
     }
 
 
-def _build_review_email_bodies(notifications: List[Dict[str, Any]]) -> Tuple[str, str]:
-    lines: List[str] = []
-    html_lines: List[str] = []
+def _build_review_email_bodies(notifications: list[dict[str, Any]]) -> tuple[str, str]:
+    lines: list[str] = []
+    html_lines: list[str] = []
     for item in notifications:
         kind = str(item.get("kind") or "notification")
         payload = item.get("payload") or {}
@@ -337,7 +337,7 @@ def dispatch_claim_review_notifications(
     *,
     db_path: str,
     owner_user_id: str,
-    notification_ids: List[int],
+    notification_ids: list[int],
 ) -> None:
     if not notification_ids:
         return

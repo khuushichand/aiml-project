@@ -3,15 +3,14 @@
 
 import asyncio
 import json
-import time
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List, Callable
 from enum import Enum
-from dataclasses import dataclass, asdict
-import pickle
 from pathlib import Path
+from typing import Any, Callable, Optional
 
 from loguru import logger
+
 from tldw_Server_API.app.core.Embeddings.audit_adapter import log_security_violation
 
 
@@ -40,9 +39,9 @@ class FailedJob:
     attempt_count: int
     first_failed_at: datetime
     last_failed_at: datetime
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization"""
         result = asdict(self)
         result['failure_reason'] = self.failure_reason.value
@@ -51,7 +50,7 @@ class FailedJob:
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'FailedJob':
+    def from_dict(cls, data: dict[str, Any]) -> 'FailedJob':
         """Create from dictionary"""
         data['failure_reason'] = FailureReason(data['failure_reason'])
         data['first_failed_at'] = datetime.fromisoformat(data['first_failed_at'])
@@ -84,7 +83,7 @@ class DeadLetterQueue:
 
         self.max_size = max_size
         self.retention_days = retention_days
-        self.failed_jobs: List[FailedJob] = []
+        self.failed_jobs: list[FailedJob] = []
 
         # Load existing failed jobs
         self._load_from_disk()
@@ -107,7 +106,7 @@ class DeadLetterQueue:
         provider: str,
         error: Exception,
         user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> str:
         """
         Add a failed job to the DLQ.
@@ -216,7 +215,7 @@ class DeadLetterQueue:
         self,
         max_attempts: int = 3,
         older_than_minutes: int = 5
-    ) -> List[FailedJob]:
+    ) -> list[FailedJob]:
         """
         Get jobs that can be retried.
 
@@ -293,7 +292,7 @@ class DeadLetterQueue:
 
         return removed
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get DLQ statistics"""
         by_provider = {}
         by_model = {}
@@ -368,7 +367,7 @@ class ErrorRecoveryManager:
             dlq: Dead letter queue instance
         """
         self.dlq = dlq or DeadLetterQueue()
-        self.recovery_strategies: Dict[FailureReason, Callable] = {}
+        self.recovery_strategies: dict[FailureReason, Callable] = {}
         self._setup_default_strategies()
 
     def _setup_default_strategies(self):
@@ -402,7 +401,7 @@ class ErrorRecoveryManager:
         self,
         job_id: str,
         error: Exception,
-        context: Dict[str, Any]
+        context: dict[str, Any]
     ) -> bool:
         """
         Handle a failure with appropriate recovery strategy.

@@ -12,12 +12,12 @@ Evaluates:
 """
 
 import asyncio
-import re
-from typing import Dict, Any, Optional, List
+from typing import Any, Optional
+
 from loguru import logger
 
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Evaluations.circuit_breaker import llm_circuit_breaker
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 
 
 class ResponseQualityEvaluator:
@@ -28,11 +28,11 @@ class ResponseQualityEvaluator:
         prompt: str,
         response: str,
         expected_format: Optional[str] = None,
-        custom_criteria: Optional[Dict[str, str]] = None,
+        custom_criteria: Optional[dict[str, str]] = None,
         api_name: str = "openai",
         api_key: Optional[str] = None,
         model: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Evaluate the quality of a generated response.
 
@@ -400,7 +400,7 @@ class ResponseQualityEvaluator:
                 "explanation": f"Evaluation failed: {str(e)}"
             })
 
-    def _generate_improvements(self, results: Dict[str, Any]) -> List[str]:
+    def _generate_improvements(self, results: dict[str, Any]) -> list[str]:
         """Generate improvement suggestions based on evaluation results"""
         improvements = []
 

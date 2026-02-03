@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 try:
-    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    from playwright.sync_api import sync_playwright
 except ImportError:  # pragma: no cover - optional dependency guard
     PlaywrightTimeoutError = TimeoutError  # type: ignore[misc,assignment]
     sync_playwright = None
 
 
-FUNCTIONS_TO_CHECK: List[str] = [
+FUNCTIONS_TO_CHECK: list[str] = [
     "HTMLCanvasElement.prototype.toDataURL",
     "HTMLCanvasElement.prototype.getImageData",
     "HTMLCanvasElement.prototype.getContext",
@@ -23,7 +24,7 @@ FUNCTIONS_TO_CHECK: List[str] = [
     "console.log",
 ]
 
-FUNCTION_SUSPICION_MAP: Dict[str, str] = {
+FUNCTION_SUSPICION_MAP: dict[str, str] = {
     "HTMLCanvasElement.prototype.toDataURL": "Strong indicator of Canvas fingerprinting.",
     "HTMLCanvasElement.prototype.getImageData": "Strong indicator of Canvas fingerprinting.",
     "HTMLCanvasElement.prototype.getContext": "Strong indicator of Canvas fingerprinting.",
@@ -38,7 +39,7 @@ FUNCTION_SUSPICION_MAP: Dict[str, str] = {
 }
 
 
-def _get_function_signatures(page, functions: List[str]) -> Dict[str, str]:
+def _get_function_signatures(page, functions: list[str]) -> dict[str, str]:
     """
     Execute JS in the page to get string representations of functions.
     """
@@ -66,7 +67,7 @@ def _get_function_signatures(page, functions: List[str]) -> Dict[str, str]:
     return page.evaluate(js_script, functions)
 
 
-def analyze_function_integrity(url: str) -> Dict[str, Any]:
+def analyze_function_integrity(url: str) -> dict[str, Any]:
     """
     Compare critical browser function signatures between a clean page and the target.
     """
@@ -77,7 +78,7 @@ def analyze_function_integrity(url: str) -> Dict[str, Any]:
             "error_code": "missing_dependency",
         }
 
-    results: Dict[str, Any] = {
+    results: dict[str, Any] = {
         "status": "error",
         "message": "Analysis did not complete.",
         "modified_functions": {},
@@ -113,7 +114,7 @@ def analyze_function_integrity(url: str) -> Dict[str, Any]:
             finally:
                 browser.close()
 
-        modified: Dict[str, str] = {}
+        modified: dict[str, str] = {}
         for func_path, clean_sig in clean_signatures.items():
             target_sig = target_signatures.get(func_path)
             if clean_sig != target_sig:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -11,7 +11,7 @@ from tldw_Server_API.app.core.Image_Generation.adapter_registry import get_regis
 from tldw_Server_API.app.core.Image_Generation.config import get_image_generation_config
 
 
-def _path_exists(raw: Optional[str]) -> bool:
+def _path_exists(raw: str | None) -> bool:
     if not raw:
         return False
     try:
@@ -36,7 +36,7 @@ def _is_swarmui_configured(cfg, enabled: bool) -> bool:
     return bool(getattr(cfg, "swarmui_base_url", None))
 
 
-def _resolve_supported_formats(name: str) -> Optional[List[str]]:
+def _resolve_supported_formats(name: str) -> list[str] | None:
     registry = get_registry()
     try:
         adapter_cls = registry.get_adapter_class(name)
@@ -54,7 +54,7 @@ def _resolve_supported_formats(name: str) -> Optional[List[str]]:
     return sorted(cleaned) if cleaned else None
 
 
-def list_image_models_for_catalog() -> List[Dict[str, Any]]:
+def list_image_models_for_catalog() -> list[dict[str, Any]]:
     cfg = get_image_generation_config()
     registry = get_registry()
     enabled_backends = set(cfg.enabled_backends or [])
@@ -62,7 +62,7 @@ def list_image_models_for_catalog() -> List[Dict[str, Any]]:
     if not names:
         return []
 
-    entries: List[Dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
     for name in names:
         enabled = name in enabled_backends
         is_configured = enabled
@@ -79,7 +79,7 @@ def list_image_models_for_catalog() -> List[Dict[str, Any]]:
                 logger.debug("Image backend config check failed for %s: %s", name, exc)
                 is_configured = False
 
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "provider": "image",
             "id": f"image/{name}",
             "name": name,

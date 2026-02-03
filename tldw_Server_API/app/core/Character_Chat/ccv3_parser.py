@@ -9,11 +9,12 @@ Supports cards with:
 Maps to DB schema fields consistent with V1/V2 parsers.
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
+
 from loguru import logger
 
 
-def validate_v3_card(card_data: Dict[str, Any]) -> Tuple[bool, list[str]]:
+def validate_v3_card(card_data: dict[str, Any]) -> tuple[bool, list[str]]:
     errors: list[str] = []
     try:
         # Top-level spec markers are helpful but not mandatory for leniency
@@ -31,7 +32,7 @@ def validate_v3_card(card_data: Dict[str, Any]) -> Tuple[bool, list[str]]:
         return False, [str(e)]
 
 
-def parse_v3_card(card_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def parse_v3_card(card_data: dict[str, Any]) -> Optional[dict[str, Any]]:
     try:
         data = card_data.get("data", card_data)
         if not isinstance(data, dict):

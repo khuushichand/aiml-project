@@ -4,7 +4,6 @@ import asyncio
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
 
 from loguru import logger
 

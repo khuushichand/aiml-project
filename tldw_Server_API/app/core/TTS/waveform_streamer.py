@@ -1,7 +1,7 @@
 # waveform_streamer.py
 # Description: Shared helpers to progressively encode and stream waveforms
 
-from typing import AsyncGenerator, Optional
+from collections.abc import AsyncGenerator
 
 import numpy as np
 
@@ -28,8 +28,8 @@ async def stream_encoded_waveform(
     """
     # Lazy import to avoid heavy deps at import time
     from tldw_Server_API.app.core.TTS.streaming_audio_writer import (
-        StreamingAudioWriter,
         AudioNormalizer,
+        StreamingAudioWriter,
     )
 
     # Ensure numpy float array

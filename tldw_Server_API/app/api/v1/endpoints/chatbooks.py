@@ -26,18 +26,16 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensu
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
 
 from ....core.AuthNZ.User_DB_Handling import User, get_request_user
-from ....core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from ....core.DB_Management.db_path_utils import DatabasePaths
-from ....core.Chatbooks.quota_manager import QuotaManager
 from ....core.Chatbooks.chatbook_models import ContentType, ExportJob, ExportStatus
 from ....core.Chatbooks.chatbook_service import ChatbookService
 from ....core.Chatbooks.chatbook_validators import ChatbookValidator
+from ....core.Chatbooks.quota_manager import QuotaManager
+from ....core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from ....core.DB_Management.db_path_utils import DatabasePaths
 from ..API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user as get_chacha_db
 from ..schemas.chatbook_schemas import (
     CancelJobResponse,
-    RemoveJobResponse,
     ChatbookManifestResponse,
-    ChatbookVersion as SchemaChatbookVersion,
     CleanupExpiredExportsResponse,
     CreateChatbookRequest,
     CreateChatbookResponse,
@@ -48,6 +46,10 @@ from ..schemas.chatbook_schemas import (
     ListExportJobsResponse,
     ListImportJobsResponse,
     PreviewChatbookResponse,
+    RemoveJobResponse,
+)
+from ..schemas.chatbook_schemas import (
+    ChatbookVersion as SchemaChatbookVersion,
 )
 
 router = APIRouter(prefix="/chatbooks", tags=["chatbooks"])
@@ -249,7 +251,7 @@ async def create_chatbook(
             else:
                 # Sync mode - create a completed export job with a UUID as job_id
                 import uuid
-                from datetime import datetime, timedelta, timezone
+                from datetime import datetime, timezone
 
                 job_id = str(uuid.uuid4())
                 file_path = Path(result).resolve()
@@ -449,7 +451,7 @@ async def import_chatbook(
         try:
             temp_file_resolved.relative_to(temp_dir_resolved)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid file path")
+            raise HTTPException(status_code=400, detail="Invalid file path") from None
         temp_file = temp_file_resolved
 
         with open(temp_file, 'wb') as f:
@@ -644,7 +646,7 @@ async def preview_chatbook(
         try:
             temp_file_resolved.relative_to(temp_dir_resolved)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid file path")
+            raise HTTPException(status_code=400, detail="Invalid file path") from None
         temp_file = temp_file_resolved
 
         with open(temp_file, 'wb') as f:
@@ -1033,7 +1035,8 @@ async def download_chatbook(
         # Enforce expiration (config-gated)
         enforce_expiry = str(os.getenv("CHATBOOKS_ENFORCE_EXPIRY", "true")).lower() in {"1","true","yes"}
         if enforce_expiry and getattr(job, 'expires_at', None) is not None:
-            from datetime import datetime as _dt, timezone as _tz
+            from datetime import datetime as _dt
+            from datetime import timezone as _tz
             now_utc = _dt.now(_tz.utc)
             expires_at = job.expires_at
             # Handle naive datetime from database by assuming UTC
@@ -1060,7 +1063,8 @@ async def download_chatbook(
             if time.time() > exp_int:
                 raise HTTPException(status_code=410, detail="Signed URL expired")
             # Verify signature
-            import hmac, hashlib
+            import hashlib
+            import hmac
             msg = f"{job_id}:{exp_int}".encode("utf-8")
             expected = hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
             if not hmac.compare_digest(expected, token):

@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
@@ -62,7 +62,7 @@ def _lazy_import_torch():
         return None
 
 
-def _repo_root_with_models() -> Optional[Path]:
+def _repo_root_with_models() -> Path | None:
     """
     Best-effort discovery of the repo root that contains a models/ directory.
 
@@ -72,7 +72,7 @@ def _repo_root_with_models() -> Optional[Path]:
     """
     here = Path(__file__).resolve()
     parents = [here.parent] + list(here.parents)
-    fallback: Optional[Path] = None
+    fallback: Path | None = None
     for parent in parents:
         models_dir = parent / "models"
         if not models_dir.exists():
@@ -84,7 +84,7 @@ def _repo_root_with_models() -> Optional[Path]:
     return fallback
 
 
-def _find_local_silero_repo(models_dir: Path) -> Optional[Path]:
+def _find_local_silero_repo(models_dir: Path) -> Path | None:
     """
     Discover a locally checked-out Silero VAD repo under models/.
 
@@ -107,7 +107,7 @@ def _find_local_silero_repo(models_dir: Path) -> Optional[Path]:
     return None
 
 
-def _lazy_import_silero_vad() -> Tuple[Optional[Any], Optional[Any]]:
+def _lazy_import_silero_vad() -> tuple[Any | None, Any | None]:
     """
     Load and cache the Silero VAD model and its utility functions from torch.hub.
 

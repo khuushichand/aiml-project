@@ -21,10 +21,9 @@ Limits:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from tldw_Server_API.app.core.http_client import fetch_json, fetch
-
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 EUTILS_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
@@ -40,10 +39,10 @@ def _build_term(query: str, free_full_text: bool) -> str:
     return term
 
 
-def _normalize_authors(author_list: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+def _normalize_authors(author_list: list[dict[str, Any]] | None) -> str | None:
     if not author_list:
         return None
-    names: List[str] = []
+    names: list[str] = []
     for a in author_list:
         name = a.get("name") or a.get("authtype")
         if name:
@@ -51,8 +50,8 @@ def _normalize_authors(author_list: Optional[List[Dict[str, Any]]]) -> Optional[
     return ", ".join(names) if names else None
 
 
-def _extract_article_ids(articleids: Optional[List[Dict[str, Any]]]) -> Dict[str, Optional[str]]:
-    out: Dict[str, Optional[str]] = {"doi": None, "pmcid": None}
+def _extract_article_ids(articleids: list[dict[str, Any]] | None) -> dict[str, str | None]:
+    out: dict[str, str | None] = {"doi": None, "pmcid": None}
     if not articleids:
         return out
     for it in articleids:
@@ -68,7 +67,7 @@ def _extract_article_ids(articleids: Optional[List[Dict[str, Any]]]) -> Dict[str
     return out
 
 
-def _normalize_item(uid: str, raw: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_item(uid: str, raw: dict[str, Any]) -> dict[str, Any]:
     title = raw.get("title") or "N/A"
     journal = raw.get("fulljournalname") or raw.get("source")
     pubdate = raw.get("pubdate") or raw.get("epubdate") or raw.get("sortpubdate")
@@ -100,10 +99,10 @@ def search_pubmed(
     query: str,
     offset: int = 0,
     limit: int = 10,
-    from_year: Optional[int] = None,
-    to_year: Optional[int] = None,
+    from_year: int | None = None,
+    to_year: int | None = None,
     free_full_text: bool = False,
-) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
+) -> tuple[list[dict[str, Any]] | None, int, str | None]:
     """
     Search PubMed via ESearch and hydrate items via ESummary.
 
@@ -115,7 +114,7 @@ def search_pubmed(
 
         # 1) ESearch: find PMIDs
         term = _build_term(query, free_full_text)
-        esearch_params: Dict[str, Any] = {
+        esearch_params: dict[str, Any] = {
             "db": "pubmed",
             "term": term,
             "retmode": "json",
@@ -137,7 +136,7 @@ def search_pubmed(
         esearch_url = f"{EUTILS_BASE}/esearch.fcgi"
         data = fetch_json(method="GET", url=esearch_url, params=esearch_params, timeout=15)
         esr = data.get("esearchresult") or {}
-        idlist: List[str] = esr.get("idlist") or []
+        idlist: list[str] = esr.get("idlist") or []
         total = int(esr.get("count") or 0)
         if not idlist:
             return [], total, None
@@ -150,7 +149,7 @@ def search_pubmed(
         result = j.get("result") or {}
         # UIDs list in j['result']['uids'] may be present
         uids = result.get("uids") or idlist
-        items: List[Dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         for uid in uids:
             raw = result.get(str(uid))
             if not isinstance(raw, dict):
@@ -164,7 +163,7 @@ def search_pubmed(
         return None, 0, f"Unexpected error during PubMed search: {str(e)}"
 
 
-def get_pubmed_by_id(pmid: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_pubmed_by_id(pmid: str) -> tuple[dict[str, Any] | None, str | None]:
     """Fetch PubMed record details by PMID, including abstract via EFetch XML.
 
     Returns (item_dict, error_message). Shape aligns with PubMedPaper.

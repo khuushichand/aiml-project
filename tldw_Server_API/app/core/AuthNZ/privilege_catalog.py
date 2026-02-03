@@ -10,14 +10,14 @@ AuthNZ and privilege-mapping subsystems.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from datetime import datetime
-from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set
 from functools import lru_cache
+from pathlib import Path
 
+import yaml
 from loguru import logger
 from pydantic import AnyUrl, BaseModel, Field, ValidationError, model_validator, validator
-import yaml
 
 
 def _default_catalog_path() -> Path:
@@ -60,7 +60,7 @@ class OwnershipPredicateEntry(BaseModel):
 
     id: str
     evaluator: str
-    description: Optional[str]
+    description: str | None
 
     @validator("id")
     def validate_id(cls, value: str) -> str:
@@ -81,7 +81,7 @@ class RateLimitClassEntry(BaseModel):
     id: str
     requests_per_min: int
     burst: int
-    notes: Optional[str]
+    notes: str | None
 
     @validator("id")
     def validate_id(cls, value: str) -> str:
@@ -102,8 +102,8 @@ class FeatureFlagEntry(BaseModel):
     id: str
     description: str
     default_state: str
-    allowed_roles: List[str] = Field(default_factory=list)
-    expires_at: Optional[str]
+    allowed_roles: list[str] = Field(default_factory=list)
+    expires_at: str | None
 
     @validator("id")
     def validate_id(cls, value: str) -> str:
@@ -124,13 +124,13 @@ class ScopeEntry(BaseModel):
 
     id: str
     description: str
-    resource_tags: List[str] = Field(default_factory=list)
+    resource_tags: list[str] = Field(default_factory=list)
     sensitivity_tier: str
     rate_limit_class: str
-    default_roles: List[str] = Field(default_factory=list)
-    feature_flag_id: Optional[str]
-    ownership_predicates: List[str] = Field(default_factory=list)
-    doc_url: Optional[AnyUrl]
+    default_roles: list[str] = Field(default_factory=list)
+    feature_flag_id: str | None
+    ownership_predicates: list[str] = Field(default_factory=list)
+    doc_url: AnyUrl | None
 
     @validator("id")
     def validate_id(cls, value: str) -> str:
@@ -169,10 +169,10 @@ class PrivilegeCatalog(BaseModel):
 
     version: str
     updated_at: datetime
-    scopes: List[ScopeEntry]
-    feature_flags: List[FeatureFlagEntry] = Field(default_factory=list)
-    rate_limit_classes: List[RateLimitClassEntry] = Field(default_factory=list)
-    ownership_predicates: List[OwnershipPredicateEntry] = Field(default_factory=list)
+    scopes: list[ScopeEntry]
+    feature_flags: list[FeatureFlagEntry] = Field(default_factory=list)
+    rate_limit_classes: list[RateLimitClassEntry] = Field(default_factory=list)
+    ownership_predicates: list[OwnershipPredicateEntry] = Field(default_factory=list)
 
     @validator("version")
     def validate_version(cls, value: str) -> str:
@@ -182,10 +182,10 @@ class PrivilegeCatalog(BaseModel):
 
     @model_validator(mode="after")
     def validate_cross_references(self) -> "PrivilegeCatalog":
-        scopes: List[ScopeEntry] = self.scopes
-        feature_flags: List[FeatureFlagEntry] = self.feature_flags
-        limit_classes: List[RateLimitClassEntry] = self.rate_limit_classes
-        ownership_predicates: List[OwnershipPredicateEntry] = self.ownership_predicates
+        scopes: list[ScopeEntry] = self.scopes
+        feature_flags: list[FeatureFlagEntry] = self.feature_flags
+        limit_classes: list[RateLimitClassEntry] = self.rate_limit_classes
+        ownership_predicates: list[OwnershipPredicateEntry] = self.ownership_predicates
 
         self._assert_unique([scope.id for scope in scopes], "scope id")
         feature_flag_ids = {flag.id for flag in feature_flags}
@@ -214,7 +214,7 @@ class PrivilegeCatalog(BaseModel):
 
     @staticmethod
     def _assert_unique(values: Iterable[str], label: str) -> None:
-        seen: Set[str] = set()
+        seen: set[str] = set()
         for value in values:
             if value in seen:
                 raise ValueError(f"Duplicate {label} detected: '{value}'")
@@ -222,7 +222,7 @@ class PrivilegeCatalog(BaseModel):
 
 
 @lru_cache(maxsize=8)
-def load_catalog(path: Optional[Path] = None) -> PrivilegeCatalog:
+def load_catalog(path: Path | None = None) -> PrivilegeCatalog:
     """
     Load and validate the privilege catalog from YAML.
 

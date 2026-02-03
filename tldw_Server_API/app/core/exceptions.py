@@ -1,7 +1,8 @@
+from typing import Any, Optional
+
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from loguru import logger
-from typing import Any, Optional
 
 
 class VideoProcessingError(Exception):
@@ -30,6 +31,14 @@ class TokenizerUnavailable(Exception):
 
 class BadRequestError(ValueError):
     """Raised when a caller provides invalid arguments for an operation."""
+
+
+class ValidationError(BadRequestError):
+    """Raised when validation of input parameters fails."""
+
+
+class SyncCallInEventLoopError(BadRequestError):
+    """Raised when a sync chat call is made inside a running event loop."""
 
 
 class StreamingProtocolError(Exception):

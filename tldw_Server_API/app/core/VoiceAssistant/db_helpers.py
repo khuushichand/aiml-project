@@ -5,7 +5,7 @@
 import json
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -104,7 +104,7 @@ def get_user_voice_commands(
     user_id: int,
     include_system: bool = True,
     enabled_only: bool = True,
-) -> List[VoiceCommand]:
+) -> list[VoiceCommand]:
     """
     Get all voice commands for a user.
 
@@ -265,7 +265,7 @@ def get_user_voice_sessions(
     db,
     user_id: int,
     limit: int = 10,
-) -> List[VoiceSessionContext]:
+) -> list[VoiceSessionContext]:
     """
     Get recent voice sessions for a user.
 
@@ -396,7 +396,7 @@ def get_voice_command_usage_stats(
     command_id: str,
     user_id: int,
     days: Optional[int] = None,
-) -> Optional[Dict[str, Any]]:
+) -> Optional[dict[str, Any]]:
     """
     Get usage statistics for a specific voice command.
 
@@ -409,7 +409,7 @@ def get_voice_command_usage_stats(
     Returns:
         Dict with usage stats or None if no data
     """
-    params: List[Any] = [command_id, user_id]
+    params: list[Any] = [command_id, user_id]
     date_filter = ""
     if days is not None:
         date_filter = " AND created_at >= datetime('now', ?)"
@@ -456,7 +456,7 @@ def get_voice_top_commands(
     user_id: int,
     days: Optional[int] = None,
     limit: int = 10,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Get top voice commands by usage.
 
@@ -469,7 +469,7 @@ def get_voice_top_commands(
     Returns:
         List of usage stats for top commands
     """
-    params: List[Any] = [user_id]
+    params: list[Any] = [user_id]
     date_filter = ""
     if days is not None:
         date_filter = " AND created_at >= datetime('now', ?)"
@@ -520,7 +520,7 @@ def get_voice_usage_by_day(
     *,
     user_id: Optional[int] = None,
     days: int = 7,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Get daily voice usage metrics.
 
@@ -532,7 +532,7 @@ def get_voice_usage_by_day(
     Returns:
         List of daily analytics dicts
     """
-    params: List[Any] = [f"-{days} days"]
+    params: list[Any] = [f"-{days} days"]
     user_filter = ""
     if user_id is not None:
         user_filter = " AND user_id = ?"
@@ -576,7 +576,7 @@ def get_voice_analytics_summary_stats(
     *,
     user_id: Optional[int] = None,
     days: int = 7,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Get aggregate voice analytics stats.
 
@@ -588,7 +588,7 @@ def get_voice_analytics_summary_stats(
     Returns:
         Dict with total, success_rate, avg_response_time_ms
     """
-    params: List[Any] = [f"-{days} days"]
+    params: list[Any] = [f"-{days} days"]
     user_filter = ""
     if user_id is not None:
         user_filter = " AND user_id = ?"
@@ -658,7 +658,7 @@ def get_voice_command_counts(
     db,
     *,
     user_id: int,
-) -> Dict[str, int]:
+) -> dict[str, int]:
     """
     Count total and enabled voice commands for a user (excluding system commands).
 
@@ -688,7 +688,7 @@ def get_voice_command_counts(
     return {"total": row.get("total_commands") or 0, "enabled": row.get("enabled_commands") or 0}
 
 
-def _row_to_voice_command(row: Dict[str, Any]) -> VoiceCommand:
+def _row_to_voice_command(row: dict[str, Any]) -> VoiceCommand:
     """Convert a database row to a VoiceCommand."""
     if not isinstance(row, dict):
         row = dict(row)
@@ -724,7 +724,7 @@ def _row_to_voice_command(row: Dict[str, Any]) -> VoiceCommand:
     )
 
 
-def _row_to_voice_session(row: Dict[str, Any]) -> VoiceSessionContext:
+def _row_to_voice_session(row: dict[str, Any]) -> VoiceSessionContext:
     """Convert a database row to a VoiceSessionContext."""
     from .schemas import VoiceIntent
 

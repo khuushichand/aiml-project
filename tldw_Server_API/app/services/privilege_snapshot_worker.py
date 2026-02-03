@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any
 from uuid import uuid4
 
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.schemas.privileges import PrivilegeSnapshotSummary
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.PrivilegeMaps import (
     PrivilegeMapService,
@@ -15,14 +16,13 @@ from tldw_Server_API.app.core.PrivilegeMaps import (
     get_privilege_map_service,
     get_privilege_snapshot_store,
 )
-from tldw_Server_API.app.api.v1.schemas.privileges import PrivilegeSnapshotSummary
 
 
 async def process_snapshot_job(
     *,
-    payload: Dict[str, Any],
-    service: Optional[PrivilegeMapService] = None,
-    store: Optional[PrivilegeSnapshotStore] = None,
+    payload: dict[str, Any],
+    service: PrivilegeMapService | None = None,
+    store: PrivilegeSnapshotStore | None = None,
 ) -> str:
     """Generate and persist a privilege snapshot based on job payload."""
     service = service or get_privilege_map_service()
@@ -75,7 +75,7 @@ async def process_snapshot_job(
     return snapshot_id
 
 
-async def run_privilege_snapshot_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_privilege_snapshot_worker(stop_event: asyncio.Event | None = None) -> None:
     """Continuously process queued privilege snapshot jobs."""
     logger.info("Starting privilege snapshot worker loop")
     poll_interval = float(os.getenv("PRIVILEGE_SNAPSHOT_POLL_SECONDS", "1.0") or "1.0")

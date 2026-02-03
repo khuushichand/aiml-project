@@ -5,10 +5,12 @@
 import base64
 import pathlib
 from datetime import datetime
-from typing import List, Any, Dict, Optional, Tuple
+from typing import Any, Optional
+
 #
 # Third-party Libraries
-from fastapi import HTTPException, Depends, Query, UploadFile, File, Form, APIRouter, Path as FastAPIPath
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import Path as FastAPIPath
 from fastapi.responses import JSONResponse
 from loguru import logger
 from starlette import status
@@ -57,7 +59,7 @@ def _detect_mime_type(data: bytes) -> Optional[str]:
     return None
 
 
-def _validate_file_type(data: bytes, filename: Optional[str]) -> Tuple[bool, str, Optional[str]]:
+def _validate_file_type(data: bytes, filename: Optional[str]) -> tuple[bool, str, Optional[str]]:
     """
     Validate file type via both magic bytes and extension.
 
@@ -112,25 +114,54 @@ def _validate_file_type(data: bytes, filename: Optional[str]) -> Tuple[bool, str
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import get_character_rate_limiter
-from tldw_Server_API.app.core.Character_Chat.character_limits import get_character_limits
-from tldw_Server_API.app.api.v1.schemas.character_schemas import CharacterResponse, CharacterImportResponse, \
-    CharacterCreate, CharacterUpdate, DeletionResponse
-from tldw_Server_API.app.api.v1.schemas.world_book_schemas import (
-    WorldBookCreate, WorldBookUpdate, WorldBookResponse, WorldBookWithEntries,
-    WorldBookListResponse, WorldBookEntryCreate, WorldBookEntryUpdate,
-    WorldBookEntryResponse, EntryListResponse, CharacterWorldBookAttachment,
-    CharacterWorldBookResponse, ProcessContextRequest, ProcessContextResponse,
-    WorldBookImportRequest, WorldBookImportResponse, WorldBookExport,
-    WorldBookStatistics, BulkEntryOperation, BulkOperationResponse
+from tldw_Server_API.app.api.v1.schemas.character_schemas import (
+    CharacterCreate,
+    CharacterImportResponse,
+    CharacterResponse,
+    CharacterUpdate,
+    DeletionResponse,
 )
-from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import import_and_save_character_from_file, \
-    search_characters_by_query_text, delete_character_from_db, get_character_details, update_existing_character_details, \
-    create_new_character_from_data, restore_character_from_db
+from tldw_Server_API.app.api.v1.schemas.world_book_schemas import (
+    BulkEntryOperation,
+    BulkOperationResponse,
+    CharacterWorldBookAttachment,
+    CharacterWorldBookResponse,
+    EntryListResponse,
+    ProcessContextRequest,
+    ProcessContextResponse,
+    WorldBookCreate,
+    WorldBookEntryCreate,
+    WorldBookEntryResponse,
+    WorldBookEntryUpdate,
+    WorldBookExport,
+    WorldBookImportRequest,
+    WorldBookImportResponse,
+    WorldBookListResponse,
+    WorldBookResponse,
+    WorldBookStatistics,
+    WorldBookUpdate,
+    WorldBookWithEntries,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
+    create_new_character_from_data,
+    delete_character_from_db,
+    get_character_details,
+    import_and_save_character_from_file,
+    restore_character_from_db,
+    search_characters_by_query_text,
+    update_existing_character_details,
+)
+from tldw_Server_API.app.core.Character_Chat.character_limits import get_character_limits
+from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import get_character_rate_limiter
 from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import ConflictError, InputError, CharactersRAGDBError
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
+
 #
 #######################################################################################################################
 #
@@ -143,7 +174,7 @@ router = APIRouter()
 
 
 # --- Helper Functions (Keep _convert_db_char_to_response_model as is) ---
-def _convert_db_char_to_response_model(char_dict_from_db: Dict[str, Any]) -> CharacterResponse:
+def _convert_db_char_to_response_model(char_dict_from_db: dict[str, Any]) -> CharacterResponse:
     response_data = char_dict_from_db.copy()
     if response_data.get('image') and isinstance(response_data['image'], bytes):
         try:
@@ -350,7 +381,7 @@ async def import_character_endpoint(
 
 
 
-@router.get("/", response_model=List[CharacterResponse], summary="List characters", tags=["characters"])
+@router.get("/", response_model=list[CharacterResponse], summary="List characters", tags=["characters"])
 async def list_all_characters(  # Renamed from list_characters to avoid conflict with Python's list
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         limit: int = Query(100, ge=1, le=1000),
@@ -429,10 +460,10 @@ async def create_new_character_endpoint(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
 
 
-@router.get("/filter", response_model=List[CharacterResponse],
+@router.get("/filter", response_model=list[CharacterResponse],
             summary="Filter characters by tags", tags=["characters"])
 async def filter_characters_by_tags(
-    tags: List[str] = Query([], description="List of tags to filter by"),
+    tags: list[str] = Query([], description="List of tags to filter by"),
     match_all: bool = Query(False, description="Require all tags (AND) vs any tag (OR)"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -701,7 +732,7 @@ async def restore_character_endpoint(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
 
 
-@router.get("/search/", response_model=List[CharacterResponse], summary="Search characters", tags=["characters"])
+@router.get("/search/", response_model=list[CharacterResponse], summary="Search characters", tags=["characters"])
 async def search_characters_endpoint(
         query: str = Query(..., description="Search term for character name, description, etc."),
         limit: int = Query(10, ge=1, le=100),
@@ -1232,7 +1263,7 @@ async def detach_world_book_from_character(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
 
 
-@router.get("/{character_id:int}/world-books", response_model=List[CharacterWorldBookResponse],
+@router.get("/{character_id:int}/world-books", response_model=list[CharacterWorldBookResponse],
             summary="List character's world books", tags=["World Books"])
 async def get_character_world_books(
         character_id: int = FastAPIPath(..., description="Character ID", gt=0),
@@ -1547,7 +1578,7 @@ async def bulk_entry_operations(
 # ========================================================================
 
 
-@router.get("/{character_id}/export", response_model=Dict[str, Any],
+@router.get("/{character_id}/export", response_model=dict[str, Any],
             summary="Export character in various formats", tags=["characters"])
 async def export_character(
     character_id: int = FastAPIPath(..., description="Character ID to export", gt=0),

@@ -1,55 +1,57 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, List, Union
+from collections.abc import Iterable
+from typing import Any, Union
 
-from .base import ChatProvider, apply_tool_choice
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError, ChatProviderError
+from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from tldw_Server_API.app.core.LLM_Calls.chat_calls import (
-    _safe_cast,
     _parse_data_url_for_multimodal,
+    _safe_cast,
 )
-from tldw_Server_API.app.core.LLM_Calls.error_utils import raise_chat_error_from_http
-from tldw_Server_API.app.core.LLM_Calls.payload_utils import (
-    _sanitize_payload_for_logging,
-    merge_extra_body,
-    merge_extra_headers,
-)
-from tldw_Server_API.app.core.LLM_Calls.streaming import iter_sse_lines_requests
-from tldw_Server_API.app.core.LLM_Calls.sse import finalize_stream
 from tldw_Server_API.app.core.LLM_Calls.error_utils import (
     get_http_error_text,
     get_http_status_from_exception,
     is_http_status_error,
     is_network_error,
+    raise_chat_error_from_http,
 )
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import (
+    _sanitize_payload_for_logging,
+    merge_extra_body,
+    merge_extra_headers,
+)
+from tldw_Server_API.app.core.LLM_Calls.sse import finalize_stream
+from tldw_Server_API.app.core.LLM_Calls.streaming import iter_sse_lines_requests
 from tldw_Server_API.app.core.Utils.Utils import logging
-from tldw_Server_API.app.core.config import load_and_log_configs
+
+from .base import ChatProvider, apply_tool_choice
 
 
 def _moonshot_request(
-    input_data: List[Dict[str, Any]],
-    model: Optional[str] = None,
-    api_key: Optional[str] = None,
-    system_message: Optional[str] = None,
-    temp: Optional[float] = None,
-    maxp: Optional[float] = None,
-    streaming: Optional[bool] = False,
-    frequency_penalty: Optional[float] = None,
-    max_tokens: Optional[int] = None,
-    n: Optional[int] = None,
-    presence_penalty: Optional[float] = None,
-    response_format: Optional[Dict[str, str]] = None,
-    seed: Optional[int] = None,
-    stop: Optional[Union[str, List[str]]] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-    user: Optional[str] = None,
-    custom_prompt_arg: Optional[str] = None,
-    app_config: Optional[Dict[str, Any]] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    base_url: Optional[str] = None,
+    input_data: list[dict[str, Any]],
+    model: str | None = None,
+    api_key: str | None = None,
+    system_message: str | None = None,
+    temp: float | None = None,
+    maxp: float | None = None,
+    streaming: bool | None = False,
+    frequency_penalty: float | None = None,
+    max_tokens: int | None = None,
+    n: int | None = None,
+    presence_penalty: float | None = None,
+    response_format: dict[str, str] | None = None,
+    seed: int | None = None,
+    stop: Union[str, list[str]] | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: Union[str, dict[str, Any]] | None = None,
+    user: str | None = None,
+    custom_prompt_arg: str | None = None,
+    app_config: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    base_url: str | None = None,
 ):
     loaded_config_data = app_config or load_and_log_configs()
     moonshot_config = loaded_config_data.get("moonshot_api", {})
@@ -85,7 +87,7 @@ def _moonshot_request(
             "'input_data' and 'system_message' are used correctly."
         )
 
-    api_messages: List[Dict[str, Any]] = []
+    api_messages: list[dict[str, Any]] = []
     has_system_message_in_input = any(msg.get("role") == "system" for msg in input_data)
     if system_message and not has_system_message_in_input:
         api_messages.append({"role": "system", "content": system_message})
@@ -141,7 +143,7 @@ def _moonshot_request(
         else:
             api_messages.append({"role": role, "content": content})
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "model": final_model,
         "messages": api_messages,
         "stream": final_streaming,
@@ -261,7 +263,7 @@ def _moonshot_request(
 class MoonshotAdapter(ChatProvider):
     name = "moonshot"
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "supports_streaming": True,
             "supports_tools": True,
@@ -269,7 +271,7 @@ class MoonshotAdapter(ChatProvider):
             "max_output_tokens_default": 8192,
         }
 
-    def _to_handler_args(self, request: Dict[str, Any], *, streaming: Optional[bool]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any], *, streaming: bool | None) -> dict[str, Any]:
         stream_flag = request.get("stream")
         if streaming is not None:
             stream_flag = streaming
@@ -298,10 +300,10 @@ class MoonshotAdapter(ChatProvider):
             "base_url": request.get("base_url"),
         }
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         sanitized = validate_payload(self.name, request or {})
         return _moonshot_request(**self._to_handler_args(sanitized, streaming=False))
 
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         sanitized = validate_payload(self.name, request or {})
         return _moonshot_request(**self._to_handler_args(sanitized, streaming=True))

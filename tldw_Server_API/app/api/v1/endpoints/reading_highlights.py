@@ -13,23 +13,23 @@ DB access must be implemented via app.core.DB_Management (no raw SQL here).
 """
 
 import json
-from typing import Any, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Path, Body
+from typing import Any, Optional
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Path
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.schemas.reading_highlights_schemas import (
+    Highlight,
     HighlightCreateRequest,
     HighlightUpdateRequest,
-    Highlight,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Collections.utils import (
     build_highlight_context,
     find_highlight_span,
     hash_text_sha256,
 )
-
 
 router = APIRouter(tags=["reading-highlights"])  # no prefix; use absolute paths below
 
@@ -115,12 +115,12 @@ async def create_highlight(
     )
 
 
-@router.get("/reading/items/{item_id}/highlights", response_model=List[Highlight], summary="List highlights for an item")
+@router.get("/reading/items/{item_id}/highlights", response_model=list[Highlight], summary="List highlights for an item")
 async def list_highlights_for_item(
     item_id: int = Path(..., ge=1),
     current_user: User = Depends(get_request_user),
     db = Depends(get_collections_db_for_user),
-) -> List[Highlight]:
+) -> list[Highlight]:
     rows = db.list_highlights_by_item(item_id=item_id)
     return [
         Highlight(

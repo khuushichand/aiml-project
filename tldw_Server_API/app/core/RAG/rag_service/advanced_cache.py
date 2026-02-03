@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 
 @dataclass
@@ -13,7 +13,7 @@ class CacheEntry:
     access_count, ttl, plus helpers update_access() and is_expired().
     """
     value: Any = None
-    ttl: Optional[int] = None
+    ttl: int | None = None
     created_at: float = field(default_factory=lambda: time.time())
     last_accessed: float = field(default_factory=lambda: time.time())
     access_count: int = 0
@@ -35,9 +35,9 @@ class MemoryCache:
     """Simple in-process key/value cache with per-item TTL."""
 
     def __init__(self) -> None:
-        self._store: Dict[str, CacheEntry] = {}
+        self._store: dict[str, CacheEntry] = {}
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         entry = self._store.get(key)
         if not entry:
             return None
@@ -50,7 +50,7 @@ class MemoryCache:
         entry.update_access()
         return entry.value
 
-    def set(self, key: str, value: Any, ttl_sec: Optional[int] = None) -> None:
+    def set(self, key: str, value: Any, ttl_sec: int | None = None) -> None:
         self._store[key] = CacheEntry(value=value, ttl=ttl_sec)
 
     def delete(self, key: str) -> bool:
@@ -68,9 +68,9 @@ class AdvancedAgenticCache:
     """
 
     def __init__(self):
-        self._store: Dict[Tuple[str, str], Tuple[float, Any]] = {}
+        self._store: dict[tuple[str, str], tuple[float, Any]] = {}
 
-    def get(self, namespace: str, key: str) -> Optional[Any]:
+    def get(self, namespace: str, key: str) -> Any | None:
         k = (namespace, key)
         item = self._store.get(k)
         if not item:
@@ -129,7 +129,7 @@ class RAGCache:
         self.cache = _AsyncClearable()
         self.warmer = None  # Placeholder; can be wired to a real warmer later
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Return lightweight cache stats compatible with rag_health expectations."""
         # Since this is a stub, report zeros and consistent structure
         overall = {

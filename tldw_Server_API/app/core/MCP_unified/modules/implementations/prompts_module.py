@@ -5,12 +5,12 @@ Search/get prompts via PromptsDatabase (per-user prompts DB path).
 """
 
 import asyncio
-from typing import Dict, Any, List, Optional
+from typing import Any
+
 from loguru import logger
 
-from ..base import BaseModule, ModuleConfig, create_tool_definition
 from ....DB_Management.Prompts_DB import PromptsDatabase
-from ....DB_Management.db_path_utils import DatabasePaths
+from ..base import BaseModule, create_tool_definition
 
 
 class PromptsModule(BaseModule):
@@ -20,7 +20,7 @@ class PromptsModule(BaseModule):
     async def on_shutdown(self) -> None:
         logger.info(f"Shutting down Prompts module: {self.name}")
 
-    async def check_health(self) -> Dict[str, bool]:
+    async def check_health(self) -> dict[str, bool]:
         checks = {"initialized": True, "driver_available": False, "disk_space": False}
         try:
             _ = PromptsDatabase  # noqa: F401
@@ -50,7 +50,7 @@ class PromptsModule(BaseModule):
 
         return checks
 
-    async def get_tools(self) -> List[Dict[str, Any]]:
+    async def get_tools(self) -> list[dict[str, Any]]:
         return [
             create_tool_definition(
                 name="prompts.search",
@@ -80,7 +80,7 @@ class PromptsModule(BaseModule):
             ),
         ]
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any | None = None) -> Any:
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
@@ -100,9 +100,9 @@ class PromptsModule(BaseModule):
             raise ValueError("Prompts DB path not available in context")
         return PromptsDatabase(db_path=ppath, client_id=f"mcp_prompts_{self.config.name}")
 
-    async def _search(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _search(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         query: str = args.get("query")
-        fields: List[str] = args.get("fields") or []
+        fields: list[str] = args.get("fields") or []
         limit: int = int(args.get("limit", 10))
         offset: int = int(args.get("offset", 0))
         snippet_len: int = int(args.get("snippet_length", 300))
@@ -116,7 +116,7 @@ class PromptsModule(BaseModule):
             snippet_len,
         )
 
-    async def _get(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _get(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         ident: str = args.get("prompt_id_or_name")
         return await asyncio.to_thread(self._get_sync, context, ident)
 
@@ -124,11 +124,11 @@ class PromptsModule(BaseModule):
         self,
         context: Any | None,
         query: str,
-        fields: List[str],
+        fields: list[str],
         limit: int,
         offset: int,
         snippet_len: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             page_size = max(1, limit)
@@ -180,7 +180,7 @@ class PromptsModule(BaseModule):
             except Exception as exc:
                 logger.debug("Failed to close Prompts DB connections after prompts search: {}", exc)
 
-    def _get_sync(self, context: Any | None, ident: str) -> Dict[str, Any]:
+    def _get_sync(self, context: Any | None, ident: str) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             row = None
@@ -217,7 +217,7 @@ class PromptsModule(BaseModule):
             except Exception as exc:
                 logger.debug("Failed to close Prompts DB connections after prompts get: {}", exc)
 
-    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+    def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):
         if tool_name == "prompts.search":
             q = arguments.get("query")
             if not isinstance(q, str) or not (1 <= len(q) <= 1000):

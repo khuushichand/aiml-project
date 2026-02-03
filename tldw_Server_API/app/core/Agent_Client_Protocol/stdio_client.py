@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -16,11 +17,11 @@ class ACPResponseError(RuntimeError):
 @dataclass
 class ACPMessage:
     jsonrpc: str
-    id: Optional[Any] = None
-    method: Optional[str] = None
-    params: Optional[Any] = None
-    result: Optional[Any] = None
-    error: Optional[Dict[str, Any]] = None
+    id: Any | None = None
+    method: str | None = None
+    params: Any | None = None
+    result: Any | None = None
+    error: dict[str, Any] | None = None
 
 
 RequestHandler = Callable[[ACPMessage], Awaitable[ACPMessage]]
@@ -32,21 +33,21 @@ class ACPStdioClient:
         self,
         command: str,
         args: list[str],
-        env: Optional[Dict[str, str]] = None,
-        cwd: Optional[str] = None,
+        env: dict[str, str] | None = None,
+        cwd: str | None = None,
     ) -> None:
         self.command = command
         self.args = args
         self.env = env or {}
         self.cwd = cwd
-        self._proc: Optional[asyncio.subprocess.Process] = None
-        self._reader_task: Optional[asyncio.Task] = None
-        self._stderr_task: Optional[asyncio.Task] = None
-        self._pending: Dict[str, asyncio.Future] = {}
+        self._proc: asyncio.subprocess.Process | None = None
+        self._reader_task: asyncio.Task | None = None
+        self._stderr_task: asyncio.Task | None = None
+        self._pending: dict[str, asyncio.Future] = {}
         self._next_id = 1
         self._write_lock = asyncio.Lock()
-        self._request_handler: Optional[RequestHandler] = None
-        self._notification_handler: Optional[NotificationHandler] = None
+        self._request_handler: RequestHandler | None = None
+        self._notification_handler: NotificationHandler | None = None
 
     def set_request_handler(self, handler: RequestHandler) -> None:
         self._request_handler = handler
@@ -93,7 +94,7 @@ class ACPStdioClient:
             self._stderr_task.cancel()
         self._proc = None
 
-    async def call(self, method: str, params: Optional[Any] = None) -> ACPMessage:
+    async def call(self, method: str, params: Any | None = None) -> ACPMessage:
         if self._proc is None:
             raise ACPResponseError("ACP process not started")
 
@@ -114,7 +115,7 @@ class ACPStdioClient:
             raise ACPResponseError(resp.error.get("message", "ACP error"))
         return resp
 
-    async def notify(self, method: str, params: Optional[Any] = None) -> None:
+    async def notify(self, method: str, params: Any | None = None) -> None:
         if self._proc is None:
             raise ACPResponseError("ACP process not started")
         payload = {
@@ -124,7 +125,7 @@ class ACPStdioClient:
         }
         await self._send(payload)
 
-    async def _send(self, payload: Dict[str, Any]) -> None:
+    async def _send(self, payload: dict[str, Any]) -> None:
         if self._proc is None or self._proc.stdin is None:
             raise ACPResponseError("ACP stdin not available")
         data = json.dumps(payload, separators=(",", ":"))

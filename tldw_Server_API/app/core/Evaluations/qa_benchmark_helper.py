@@ -6,11 +6,10 @@ question-answer benchmarks for evaluating language models.
 """
 
 import json
-import re
-from typing import List, Dict, Any, Optional, Union
-from pathlib import Path
-from loguru import logger
 from difflib import SequenceMatcher
+from typing import Any
+
+from loguru import logger
 
 logger = logger
 
@@ -59,7 +58,7 @@ Respond with: SCORE: X.X EXPLANATION: [brief explanation]"""
         return text.strip()
 
     def score_exact_match(self, model_answer: str, expected_answer: str,
-                         alternative_answers: List[str] = None) -> float:
+                         alternative_answers: list[str] = None) -> float:
         """Score using exact match.
 
         Args:
@@ -85,7 +84,7 @@ Respond with: SCORE: X.X EXPLANATION: [brief explanation]"""
         return 0.0
 
     def score_contains(self, model_answer: str, expected_answer: str,
-                      required_keywords: List[str] = None) -> float:
+                      required_keywords: list[str] = None) -> float:
         """Score based on keyword presence.
 
         Args:
@@ -156,7 +155,7 @@ Respond with: SCORE: X.X EXPLANATION: [brief explanation]"""
         )
 
     def score(self, question: str, model_answer: str, expected_answer: str,
-             alternative_answers: List[str] = None, **kwargs) -> Dict[str, Any]:
+             alternative_answers: list[str] = None, **kwargs) -> dict[str, Any]:
         """Score a QA pair using the configured method.
 
         Args:
@@ -212,8 +211,8 @@ class QADatasetBuilder:
     """Helper for building QA datasets."""
 
     @staticmethod
-    def create_from_pairs(qa_pairs: List[tuple],
-                         category: str = "general") -> Dict[str, Any]:
+    def create_from_pairs(qa_pairs: list[tuple],
+                         category: str = "general") -> dict[str, Any]:
         """Create dataset from simple Q&A pairs.
 
         Args:
@@ -242,8 +241,8 @@ class QADatasetBuilder:
         }
 
     @staticmethod
-    def create_from_dict(data: Dict[str, str],
-                        category: str = "general") -> Dict[str, Any]:
+    def create_from_dict(data: dict[str, str],
+                        category: str = "general") -> dict[str, Any]:
         """Create dataset from question->answer dictionary.
 
         Args:
@@ -257,8 +256,8 @@ class QADatasetBuilder:
         return QADatasetBuilder.create_from_pairs(qa_pairs, category)
 
     @staticmethod
-    def add_metadata(dataset: Dict[str, Any],
-                     metadata: Dict[str, Any]) -> Dict[str, Any]:
+    def add_metadata(dataset: dict[str, Any],
+                     metadata: dict[str, Any]) -> dict[str, Any]:
         """Add or update metadata in dataset.
 
         Args:
@@ -272,7 +271,7 @@ class QADatasetBuilder:
         return dataset
 
     @staticmethod
-    def save_dataset(dataset: Dict[str, Any], filepath: str):
+    def save_dataset(dataset: dict[str, Any], filepath: str):
         """Save dataset to JSON file.
 
         Args:
@@ -284,7 +283,7 @@ class QADatasetBuilder:
         logger.info(f"Dataset saved to {filepath}")
 
     @staticmethod
-    def load_dataset(filepath: str) -> Dict[str, Any]:
+    def load_dataset(filepath: str) -> dict[str, Any]:
         """Load dataset from JSON file.
 
         Args:
@@ -301,7 +300,7 @@ class QABenchmarkAnalyzer:
     """Analyzer for QA benchmark results."""
 
     @staticmethod
-    def calculate_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def calculate_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
         """Calculate aggregate metrics from results.
 
         Args:
@@ -360,8 +359,8 @@ class QABenchmarkAnalyzer:
         return metrics
 
     @staticmethod
-    def identify_weaknesses(results: List[Dict[str, Any]],
-                           threshold: float = 0.5) -> List[Dict[str, Any]]:
+    def identify_weaknesses(results: list[dict[str, Any]],
+                           threshold: float = 0.5) -> list[dict[str, Any]]:
         """Identify questions where the model performed poorly.
 
         Args:
@@ -385,7 +384,7 @@ class QABenchmarkAnalyzer:
         return sorted(weaknesses, key=lambda x: x['score'])
 
     @staticmethod
-    def generate_report(results: List[Dict[str, Any]],
+    def generate_report(results: list[dict[str, Any]],
                        benchmark_name: str = "QA Benchmark") -> str:
         """Generate a text report of benchmark results.
 

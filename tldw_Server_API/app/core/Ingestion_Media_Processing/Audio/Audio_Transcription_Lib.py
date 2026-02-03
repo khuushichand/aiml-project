@@ -15,39 +15,39 @@
 # Import necessary libraries to run solo for testing
 import asyncio
 import gc
-import glob
-import inspect
 import hashlib
+import inspect
 import json
 import multiprocessing
 import os
+import queue
 import re
 import shutil
-from pathlib import Path
-from datetime import datetime, timedelta
 import subprocess
-import sys
 import tempfile
 import threading
 import time
-import queue
+from collections.abc import Sequence
+from datetime import datetime
 from functools import lru_cache
-from typing import Optional, Sequence, Union, List, Dict, Any, Tuple, Callable
+from pathlib import Path
+from typing import Any, Callable, Optional, Union
+
+import numpy as np
+import torch
+
 #
 # DEBUG Imports
 #from memory_profiler import profile
 # Third-Party Imports
 from faster_whisper import WhisperModel as OriginalWhisperModel
-import numpy as np
-import torch
-from scipy.io import wavfile
 from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
 
 # Import diarization module (optional dependency)
 try:
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib import (
-        DiarizationService,
         DiarizationError,
+        DiarizationService,
         load_diarization_config,
     )
     DIARIZATION_AVAILABLE = True
@@ -58,18 +58,16 @@ except ImportError:
     load_diarization_config = lambda: {}  # type: ignore[assignment]
 #
 # Import Local
-from tldw_Server_API.app.core.Utils.Utils import sanitize_filename, logging
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram, timeit
 from tldw_Server_API.app.core.config import (
+    get_stt_config,
     load_and_log_configs,
     loaded_config_data,
-    get_stt_config,
-    settings,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.exceptions import TranscriptionCancelled, CancelCheckError
-
+from tldw_Server_API.app.core.exceptions import CancelCheckError, TranscriptionCancelled
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram, timeit
+from tldw_Server_API.app.core.Utils.Utils import logging, sanitize_filename
 
 #
 #######################################################################################################################
@@ -216,7 +214,7 @@ PROJECT_ROOT_DIR = _resolve_project_root()
 WHISPER_MODEL_BASE_DIR = (PROJECT_ROOT_DIR / "models" / "Whisper").resolve()
 TRANSCRIPT_CACHE_DIR_NAME = "transcripts_cache"
 
-_AUDIO_VALIDATION_CACHE: Dict[str, tuple] = {}
+_AUDIO_VALIDATION_CACHE: dict[str, tuple] = {}
 _PRUNE_DISABLED_LOGGED: bool = False
 
 
@@ -256,7 +254,7 @@ def _assert_no_symlink(path: Path, *, label: str) -> None:
 
 
 _HUGGINGFACE_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-_ALLOWED_MEDIA_BASE_DIRS: Optional[List[Path]] = None
+_ALLOWED_MEDIA_BASE_DIRS: Optional[list[Path]] = None
 allowed_media_base_dirs_lock = threading.Lock()
 
 
@@ -276,13 +274,13 @@ def _path_is_within(path: Path, base_dir: Path) -> bool:
         return False
 
 
-def _get_allowed_media_base_dirs() -> List[Path]:
+def _get_allowed_media_base_dirs() -> list[Path]:
     global _ALLOWED_MEDIA_BASE_DIRS
     with allowed_media_base_dirs_lock:
         if _ALLOWED_MEDIA_BASE_DIRS is not None:
             return list(_ALLOWED_MEDIA_BASE_DIRS)
 
-        roots: List[Path] = []
+        roots: list[Path] = []
     try:
         roots.append(Path(tempfile.gettempdir()).resolve(strict=False))
     except (OSError, PermissionError, ValueError) as exc:
@@ -569,7 +567,7 @@ def prune_transcript_cache(
 
     # Per-source limit (group by base name before ".segments")
     if max_files_per_source is not None and max_files_per_source > 0:
-        grouped: Dict[str, List[Path]] = {}
+        grouped: dict[str, list[Path]] = {}
         for f in files:
             key = f.name.split(".segments")[0]
             grouped.setdefault(key, []).append(f)
@@ -784,9 +782,14 @@ def perform_transcription(
         if diarize:
             logging.info(f"Processing with diarization for {audio_file_path}")
 
-            # Check if diarization is available
-            if not DIARIZATION_AVAILABLE:
-                logging.warning("Diarization requested but not available. Install with: pip install tldw-server[diarization]")
+            diarization_config = load_diarization_config()
+            backend = str(diarization_config.get("backend", "embedding") or "embedding").lower()
+
+            # Only require embedding diarization deps when using embedding backend.
+            if not DIARIZATION_AVAILABLE and backend != "nemo_multitalk":
+                logging.warning(
+                    "Diarization requested but not available. Install with: pip install tldw-server[diarization]"
+                )
                 logging.info("Falling back to regular transcription without diarization")
                 diarize = False  # Fall back to regular transcription
 
@@ -816,8 +819,6 @@ def perform_transcription(
                         # Continue to regenerate
 
                 # Optional: NeMo multitalk diarization (coupled Parakeet ASR)
-                diarization_config = load_diarization_config()
-                backend = str(diarization_config.get("backend", "embedding") or "embedding").lower()
                 if backend == "nemo_multitalk":
                     provider = None
                     variant = None
@@ -837,11 +838,21 @@ def perform_transcription(
                         )
                         diarize = False
                     elif variant not in (None, "standard"):
-                        logging.error(
-                            "NeMo multitalk diarization only supports Parakeet 'standard' (NeMo) variant; "
-                            f"got '{variant}'. Disabling diarization."
-                        )
-                        diarize = False
+                        raw_model = str(transcription_model or "").strip().lower()
+                        # If the user did not explicitly request a variant, allow multitalk by
+                        # forcing the NeMo-standard path (tests expect base "parakeet" to work).
+                        if raw_model == "parakeet":
+                            logging.info(
+                                "NeMo multitalk diarization requires Parakeet 'standard' variant; "
+                                "overriding base 'parakeet' to standard for multitalk."
+                            )
+                            variant = "standard"
+                        else:
+                            logging.error(
+                                "NeMo multitalk diarization only supports Parakeet 'standard' (NeMo) variant; "
+                                f"got '{variant}'. Disabling diarization."
+                            )
+                            diarize = False
                     if diarize and provider == "parakeet":
                         try:
                             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Nemo_Multitalk import (
@@ -1208,13 +1219,13 @@ class PartialTranscriptionThread(threading.Thread):
 
                     if provider == 'parakeet':
                         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                            transcribe_with_parakeet
+                            transcribe_with_parakeet,
                         )
                         variant = config['STT-Settings'].get('nemo_model_variant', 'standard') if config else 'standard'
                         partial_text = transcribe_with_parakeet(audio_np, self.sample_rate, variant)
                     elif provider == 'canary':
                         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                            transcribe_with_canary
+                            transcribe_with_canary,
                         )
                         partial_text = transcribe_with_canary(audio_np, self.sample_rate, "en")
                     else:
@@ -1303,7 +1314,7 @@ def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate
         logging.info("Transcribing using Parakeet")
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                transcribe_with_parakeet
+                transcribe_with_parakeet,
             )
             # Get model variant from config
             variant = stt_cfg.get('nemo_model_variant', 'standard')
@@ -1320,7 +1331,7 @@ def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate
         logging.info("Transcribing using Canary")
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                transcribe_with_canary
+                transcribe_with_canary,
             )
             return transcribe_with_canary(audio_data, sample_rate, speaker_lang)
         except ImportError as e:
@@ -1334,7 +1345,7 @@ def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate
         logging.info("Transcribing using external provider")
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider import (
-                transcribe_with_external_provider
+                transcribe_with_external_provider,
             )
             # Check if a specific provider is specified (e.g., "external:myapi")
             provider_name = "default"
@@ -1470,7 +1481,7 @@ def to_normalized_stt_artifact(
     duration_seconds: Optional[float] = None,
     diarization_enabled: bool = False,
     diarization_speakers: Optional[int] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Build a normalized STT artifact from text/segments.
 
@@ -1479,7 +1490,7 @@ def to_normalized_stt_artifact(
     (REST, media ingestion, workers) assemble transcripts differently.
     """
     # Normalize segments into a list
-    seg_list: List[Dict[str, Any]] = []
+    seg_list: list[dict[str, Any]] = []
     try:
         if isinstance(segments, dict):
             maybe = segments.get("segments")
@@ -1580,7 +1591,7 @@ def _map_openai_audio_model_to_whisper_for_jobs(model: Optional[str]) -> str:
     return default_model
 
 
-def _normalize_hotwords(hotwords: Optional[Sequence[str] | str]) -> Optional[List[str]]:
+def _normalize_hotwords(hotwords: Optional[Sequence[str] | str]) -> Optional[list[str]]:
     """Normalize hotwords from either a list/sequence or a JSON/CSV string."""
     if hotwords is None:
         return None
@@ -1630,7 +1641,7 @@ def run_stt_batch_via_registry(
     duration_seconds: Optional[float] = None,
     base_dir: Optional[Path] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Run batch STT via the shared provider registry and return a normalized artifact.
 
@@ -1713,7 +1724,7 @@ def run_stt_job_via_registry(
     language: Optional[str],
     hotwords: Optional[Sequence[str] | str] = None,
     base_dir: Optional[Path] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Run STT for Jobs via the shared provider registry and return a normalized artifact.
 
@@ -1971,7 +1982,7 @@ def set_model_download_status(model_name: str, status: str, message: str):
     }
     logging.info(f"Model download status for {model_name}: {status} - {message}")
 
-def get_model_download_status(model_name: str) -> Optional[Dict[str, Any]]:
+def get_model_download_status(model_name: str) -> Optional[dict[str, Any]]:
     """
     Get the current download status for a model.
 
@@ -2013,13 +2024,13 @@ class WhisperModel(OriginalWhisperModel):
         self,
         model_size_or_path: str,
         device: str = processing_choice,
-        device_index: Union[int, List[int]] = 0,
+        device_index: Union[int, list[int]] = 0,
         compute_type: str = "default",
         cpu_threads: int = 0,#total_thread_count, FIXME - I think this should be 0
         num_workers: int = 1,
         download_root: Optional[str] = None,
         local_files_only: bool = False,
-        files: Optional[Dict[str, Any]] = None,
+        files: Optional[dict[str, Any]] = None,
         **model_kwargs: Any
     ):
         """
@@ -2172,7 +2183,7 @@ def unload_all_transcription_models():
     # Unload Nemo models
     try:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-            unload_nemo_models
+            unload_nemo_models,
         )
         unload_nemo_models()
     except ImportError:
@@ -2613,7 +2624,8 @@ def speech_to_text_parakeet(
             # Use MLX implementation (macOS only)
             try:
                 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
-                    transcribe_with_parakeet_mlx, check_mlx_available
+                    check_mlx_available,
+                    transcribe_with_parakeet_mlx,
                 )
 
                 if not check_mlx_available():
@@ -2642,7 +2654,8 @@ def speech_to_text_parakeet(
                         use_buffered = audio_duration is None or audio_duration > chunk_duration
                         if use_buffered:
                             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
-                                transcribe_long_audio, MergeAlgorithm
+                                MergeAlgorithm,
+                                transcribe_long_audio,
                             )
 
                             merge_algo = stt_cfg.get("buffered_merge_algo", "middle")
@@ -2689,13 +2702,12 @@ def speech_to_text_parakeet(
                 variant = "standard"
 
         # For other variants or fallback, use Nemo implementation
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-            transcribe_with_parakeet
-        )
+        import librosa
 
         # Load audio data for Nemo implementation
-        import numpy as np
-        import librosa
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
+            transcribe_with_parakeet,
+        )
         audio_data, sample_rate = librosa.load(audio_file_path, sr=16000, mono=True)
 
         # Transcribe with Parakeet
@@ -2730,7 +2742,7 @@ def speech_to_text_canary(
         logging.info("Transcribing with Canary model")
 
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-            transcribe_with_canary
+            transcribe_with_canary,
         )
 
         audio_path = _resolve_audio_input_path_for_provider(
@@ -2741,7 +2753,6 @@ def speech_to_text_canary(
         audio_file_path = str(audio_path)
 
         # Load audio data
-        import numpy as np
         import librosa
         audio_data, sample_rate = librosa.load(audio_file_path, sr=16000, mono=True)
 
@@ -2787,7 +2798,6 @@ def speech_to_text_qwen2audio(
         audio_file_path = str(audio_path)
 
         # Load audio data
-        import numpy as np
         import librosa
         audio_data, sample_rate = librosa.load(audio_file_path, sr=16000, mono=True)
 
@@ -2823,7 +2833,7 @@ def speech_to_text(
     input_sample_rate: Optional[int] = None,
     base_dir: Optional[Path] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
-) -> Union[List[Dict[str, Any]], Tuple[List[Dict[str, Any]], Optional[str]]]:
+) -> Union[list[dict[str, Any]], tuple[list[dict[str, Any]], Optional[str]]]:
     """
     Canonical file/segment-based speech-to-text helper.
 
@@ -3654,7 +3664,7 @@ def convert_to_wav(
         str(out_path)
     ])
 
-    def _run_ffmpeg_command(cmd: List[str], *, label: str) -> subprocess.CompletedProcess:
+    def _run_ffmpeg_command(cmd: list[str], *, label: str) -> subprocess.CompletedProcess:
         if cancel_check is None:
             return subprocess.run(
                 cmd,

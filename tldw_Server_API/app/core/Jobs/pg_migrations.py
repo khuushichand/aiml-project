@@ -278,8 +278,9 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
             pass
         # Optional: enable RLS on core tables when requested via env.
         try:
-            import psycopg  # noqa: F401
             import os as _os
+
+            import psycopg  # noqa: F401
             if str(_os.getenv("JOBS_PG_RLS_ENABLE", "")).lower() in {"1","true","yes","y","on"}:
                 with psycopg.connect(_dsn, autocommit=True) as _c_rls:
                     with _c_rls.cursor() as _p:
@@ -402,6 +403,7 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
         return
     import os
     import re as _re
+
     from .pg_util import negotiate_pg_dsn
     _dsn = negotiate_pg_dsn(db_url)
     debug = str(os.getenv("JOBS_PG_RLS_DEBUG", "")).lower() in {"1", "true", "yes", "on"}

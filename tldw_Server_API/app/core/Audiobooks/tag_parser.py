@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
-from typing import List, Optional
+from dataclasses import dataclass
 
 from tldw_Server_API.app.api.v1.schemas.audiobook_schemas import ChapterPreview
 
@@ -15,8 +14,8 @@ _CHAPTER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 @dataclass(frozen=True)
 class ChapterMarker:
     offset: int
-    chapter_id: Optional[str]
-    title: Optional[str]
+    chapter_id: str | None
+    title: str | None
 
 
 @dataclass(frozen=True)
@@ -40,11 +39,11 @@ class TimestampMarker:
 @dataclass
 class TagParseResult:
     clean_text: str
-    chapter_markers: List[ChapterMarker]
-    voice_markers: List[ScalarMarker]
-    speed_markers: List[SpeedMarker]
-    ts_markers: List[TimestampMarker]
-    warnings: List[str]
+    chapter_markers: list[ChapterMarker]
+    voice_markers: list[ScalarMarker]
+    speed_markers: list[SpeedMarker]
+    ts_markers: list[TimestampMarker]
+    warnings: list[str]
 
     def as_metadata(self) -> dict:
         return {
@@ -60,16 +59,16 @@ class TagParseResult:
 
 
 def parse_tagged_text(text: str) -> TagParseResult:
-    clean_parts: List[str] = []
-    chapter_markers: List[ChapterMarker] = []
-    voice_markers: List[ScalarMarker] = []
-    speed_markers: List[SpeedMarker] = []
-    ts_markers: List[TimestampMarker] = []
-    warnings: List[str] = []
+    clean_parts: list[str] = []
+    chapter_markers: list[ChapterMarker] = []
+    voice_markers: list[ScalarMarker] = []
+    speed_markers: list[SpeedMarker] = []
+    ts_markers: list[TimestampMarker] = []
+    warnings: list[str] = []
 
-    pending_chapter_offset: Optional[int] = None
-    pending_chapter_id: Optional[str] = None
-    pending_chapter_title: Optional[str] = None
+    pending_chapter_offset: int | None = None
+    pending_chapter_id: str | None = None
+    pending_chapter_title: str | None = None
 
     offset = 0
     for line in text.splitlines(keepends=True):
@@ -152,12 +151,12 @@ def parse_tagged_text(text: str) -> TagParseResult:
     )
 
 
-def build_chapters_from_markers(text: str, markers: List[ChapterMarker]) -> List[ChapterPreview]:
+def build_chapters_from_markers(text: str, markers: list[ChapterMarker]) -> list[ChapterPreview]:
     if not markers:
         return []
     length = len(text)
     ordered = sorted(markers, key=lambda m: m.offset)
-    chapters: List[ChapterPreview] = []
+    chapters: list[ChapterPreview] = []
     for idx, marker in enumerate(ordered):
         start = max(0, min(marker.offset, length))
         next_offset = length
@@ -179,7 +178,7 @@ def build_chapters_from_markers(text: str, markers: List[ChapterMarker]) -> List
     return chapters
 
 
-def _parse_timestamp_ms(value: str) -> Optional[int]:
+def _parse_timestamp_ms(value: str) -> int | None:
     match = re.match(r"^(\d{1,2}):(\d{2}):(\d{2})\.(\d{1,3})$", value)
     if not match:
         return None

@@ -8,11 +8,10 @@ Quota Manager for Chatbook Operations
 Manages user quotas for storage, export/import operations, and rate limits.
 """
 
-import sys
 import os
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -87,9 +86,9 @@ class QuotaManager:
         self._quotas_disabled = _env_flag("CHATBOOKS_DISABLE_QUOTAS") or _env_flag("TEST_MODE") or _env_flag("TESTING") or bool(os.getenv("PYTEST_CURRENT_TEST"))
 
         # Usage tracking (in production, use database)
-        self.usage_cache: Dict[str, Any] = {}
+        self.usage_cache: dict[str, Any] = {}
 
-    def _get_quotas_for_tier(self, tier: str) -> Dict[str, int]:
+    def _get_quotas_for_tier(self, tier: str) -> dict[str, int]:
         """Get quota limits based on user tier."""
         if tier == 'premium':
             return self.PREMIUM_QUOTAS.copy()
@@ -106,7 +105,7 @@ class QuotaManager:
         else:
             return self.DEFAULT_QUOTAS.copy()
 
-    async def check_storage_quota(self, additional_bytes: int = 0) -> Tuple[bool, str]:
+    async def check_storage_quota(self, additional_bytes: int = 0) -> tuple[bool, str]:
         """
         Check if user has enough storage quota.
 
@@ -129,7 +128,7 @@ class QuotaManager:
 
         return True, "Storage quota OK"
 
-    async def check_export_quota(self) -> Tuple[bool, str]:
+    async def check_export_quota(self) -> tuple[bool, str]:
         """
         Check if user can perform another export today.
 
@@ -149,7 +148,7 @@ class QuotaManager:
 
         return True, "Export quota OK"
 
-    async def check_import_quota(self) -> Tuple[bool, str]:
+    async def check_import_quota(self) -> tuple[bool, str]:
         """
         Check if user can perform another import today.
 
@@ -169,7 +168,7 @@ class QuotaManager:
 
         return True, "Import quota OK"
 
-    async def check_file_size(self, file_size_bytes: int) -> Tuple[bool, str]:
+    async def check_file_size(self, file_size_bytes: int) -> tuple[bool, str]:
         """
         Check if file size is within limits.
 
@@ -186,7 +185,7 @@ class QuotaManager:
 
         return True, "File size OK"
 
-    async def check_concurrent_jobs(self) -> Tuple[bool, str]:
+    async def check_concurrent_jobs(self) -> tuple[bool, str]:
         """
         Check if user can start another concurrent job.
 
@@ -213,7 +212,7 @@ class QuotaManager:
         # In production, this would update database
         logger.info(f"Recording {operation_type} operation for user {self.user_id} ({size_bytes} bytes)")
 
-    async def get_usage_summary(self) -> Dict[str, Any]:
+    async def get_usage_summary(self) -> dict[str, Any]:
         """
         Get current usage summary for the user.
 

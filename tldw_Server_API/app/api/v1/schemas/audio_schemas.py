@@ -8,9 +8,9 @@
 # Local Imports
 #
 #######################################################################################################################
-from typing import Literal, Optional, Dict, Any, List
+from typing import Any, Literal, Optional
 
-from pydantic import Field, BaseModel
+from pydantic import BaseModel, Field
 
 
 class NormalizationOptions(BaseModel):
@@ -103,7 +103,7 @@ class OpenAISpeechRequest(BaseModel):
         le=60.0,
         description="Minimum duration in seconds for voice reference audio. If provided, will validate reference audio length.",
     )
-    extra_params: Optional[Dict[str, Any]] = Field(
+    extra_params: Optional[dict[str, Any]] = Field(
         default=None,
         description="Provider-specific parameters passed through to adapters (e.g., stability, clarity, cfg_scale).",
     )
@@ -266,23 +266,23 @@ class TranscriptUtterance(BaseModel):
     start: Optional[float] = Field(None, description="Start time in seconds")
     end: Optional[float] = Field(None, description="End time in seconds")
     speaker: Optional[str] = Field(None, description="Speaker label")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Arbitrary extra metadata")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Arbitrary extra metadata")
 
 
 class TranscriptSegmentInfo(BaseModel):
-    indices: List[int]
+    indices: list[int]
     start_index: int
     end_index: int
     start_time: Optional[float] = None
     end_time: Optional[float] = None
-    speakers: List[str] = []
+    speakers: list[str] = []
     text: str
 
 
 class TranscriptSegmentationRequest(BaseModel):
     """Request schema for transcript tree segmentation."""
 
-    entries: List[TranscriptUtterance] = Field(..., description="Transcript utterances")
+    entries: list[TranscriptUtterance] = Field(..., description="Transcript utterances")
     K: int = Field(6, ge=1, description="Maximum number of segments")
     min_segment_size: int = Field(5, ge=1, description="Minimum items per segment")
     lambda_balance: float = Field(0.01, ge=0.0, description="Balance penalty coefficient")
@@ -295,9 +295,9 @@ class TranscriptSegmentationRequest(BaseModel):
 class TranscriptSegmentationResponse(BaseModel):
     """Response schema with transitions vector and segment details."""
 
-    transitions: List[int]
-    transition_indices: List[int] = []
-    segments: List[TranscriptSegmentInfo]
+    transitions: list[int]
+    transition_indices: list[int] = []
+    segments: list[TranscriptSegmentInfo]
 
 
 #######################################################################################################################
@@ -321,7 +321,7 @@ class SpeechChatSTTConfig(BaseModel):
         default=None,
         description="Optional language code (ISO-639-1/2) to bias transcription.",
     )
-    extra_params: Optional[Dict[str, Any]] = Field(
+    extra_params: Optional[dict[str, Any]] = Field(
         default=None,
         description="Provider-specific STT parameters passed through to underlying adapters.",
     )
@@ -349,7 +349,7 @@ class SpeechChatLLMConfig(BaseModel):
         ge=1,
         description="Maximum number of tokens to generate.",
     )
-    extra_params: Optional[Dict[str, Any]] = Field(
+    extra_params: Optional[dict[str, Any]] = Field(
         default=None,
         description="Provider-specific LLM parameters passed through to the orchestrator.",
     )
@@ -380,7 +380,7 @@ class SpeechChatTTSConfig(BaseModel):
         le=4.0,
         description="Optional speed multiplier for synthesized audio.",
     )
-    extra_params: Optional[Dict[str, Any]] = Field(
+    extra_params: Optional[dict[str, Any]] = Field(
         default=None,
         description="Provider-specific TTS parameters passed through to adapters.",
     )
@@ -422,7 +422,7 @@ class SpeechChatRequest(BaseModel):
         default=False,
         description="Optional hint to store raw audio alongside transcripts when enabled server-side.",
     )
-    metadata: Optional[Dict[str, Any]] = Field(
+    metadata: Optional[dict[str, Any]] = Field(
         default=None,
         description="Arbitrary client metadata (trace IDs, UI hints, etc.).",
     )
@@ -481,11 +481,11 @@ class SpeechChatResponse(BaseModel):
         default=None,
         description="Optional token usage summary from the LLM response.",
     )
-    metadata: Optional[Dict[str, Any]] = Field(
+    metadata: Optional[dict[str, Any]] = Field(
         default=None,
         description="Optional metadata echo or server-side annotations.",
     )
-    action_result: Optional[Dict[str, Any]] = Field(
+    action_result: Optional[dict[str, Any]] = Field(
         default=None,
         description="Optional action/workflow execution result derived from the transcript.",
     )

@@ -27,16 +27,14 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Dict, List, Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.config import get_config_value
-
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 _TRUTHY = {"1", "true", "yes", "y", "on"}
-_DEFAULT_RETENTION_DAYS: Dict[str, int] = {
+_DEFAULT_RETENTION_DAYS: dict[str, int] = {
     "completed": 30,
     "failed": 60,
     "cancelled": 60,
@@ -45,14 +43,14 @@ _DEFAULT_RETENTION_DAYS: Dict[str, int] = {
 _NONTERMINAL_STATUSES = ("queued", "processing")
 
 
-def _normalize_value(val: Optional[str]) -> Optional[str]:
+def _normalize_value(val: str | None) -> str | None:
     if val is None:
         return None
     val = str(val).strip()
     return val or None
 
 
-def _raw_setting(env_name: str, config_key: str, default: Optional[str] = None) -> Optional[str]:
+def _raw_setting(env_name: str, config_key: str, default: str | None = None) -> str | None:
     env_val = _normalize_value(os.getenv(env_name))
     if env_val is not None:
         return env_val
@@ -62,13 +60,13 @@ def _raw_setting(env_name: str, config_key: str, default: Optional[str] = None) 
     return _normalize_value(default)
 
 
-def _is_truthy(val: Optional[str]) -> bool:
+def _is_truthy(val: str | None) -> bool:
     if val is None:
         return False
     return str(val).strip().lower() in _TRUTHY
 
 
-def _int_optional(env_name: str, config_key: str) -> Optional[int]:
+def _int_optional(env_name: str, config_key: str) -> int | None:
     raw = _raw_setting(env_name, config_key)
     if raw is None:
         return None
@@ -84,7 +82,7 @@ def _int_setting(env_name: str, config_key: str, default: int) -> int:
     return default if val is None else val
 
 
-def _split_csv(env_name: str, config_key: str) -> List[str]:
+def _split_csv(env_name: str, config_key: str) -> list[str]:
     raw = _raw_setting(env_name, config_key, "") or ""
     if not raw:
         return []
@@ -93,8 +91,8 @@ def _split_csv(env_name: str, config_key: str) -> List[str]:
 
 def _retention_for_status(
     status: str,
-    terminal_override: Optional[int],
-    nonterminal_override: Optional[int],
+    terminal_override: int | None,
+    nonterminal_override: int | None,
 ) -> int:
     per_status = _int_optional(
         f"JOBS_RETENTION_DAYS_{status.upper()}",
@@ -111,11 +109,11 @@ def _retention_for_status(
     return 0
 
 
-def _build_retention_groups() -> Dict[int, List[str]]:
+def _build_retention_groups() -> dict[int, list[str]]:
     terminal_override = _int_optional("JOBS_RETENTION_DAYS_TERMINAL", "retention_days_terminal")
     nonterminal_override = _int_optional("JOBS_RETENTION_DAYS_NONTERMINAL", "retention_days_nonterminal")
     statuses = list(_DEFAULT_RETENTION_DAYS.keys()) + list(_NONTERMINAL_STATUSES)
-    grouped: Dict[int, List[str]] = {}
+    grouped: dict[int, list[str]] = {}
     for status in statuses:
         days = _retention_for_status(status, terminal_override, nonterminal_override)
         if days <= 0:
@@ -124,13 +122,13 @@ def _build_retention_groups() -> Dict[int, List[str]]:
     return grouped
 
 
-def _iter_scopes(values: List[str]) -> List[Optional[str]]:
+def _iter_scopes(values: list[str]) -> list[str | None]:
     if values:
         return values
     return [None]
 
 
-async def start_jobs_prune_scheduler() -> Optional[asyncio.Task]:
+async def start_jobs_prune_scheduler() -> asyncio.Task | None:
     if not _is_truthy(_raw_setting("JOBS_PRUNE_ENFORCE", "prune_enforce")):
         return None
 

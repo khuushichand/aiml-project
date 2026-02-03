@@ -5,15 +5,15 @@ import os
 import sqlite3
 import threading
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
-from .models import RunPhase, RunStatus, RuntimeType
 from tldw_Server_API.app.core.config import settings as app_settings
+
+from .models import RunPhase, RunStatus, RuntimeType
 
 
 def _now_iso() -> str:
@@ -21,7 +21,7 @@ def _now_iso() -> str:
 
 
 class IdempotencyConflict(Exception):
-    def __init__(self, original_id: str, key: Optional[str] = None, created_at: Optional[float] = None, message: str = "Idempotency conflict") -> None:
+    def __init__(self, original_id: str, key: str | None = None, created_at: float | None = None, message: str = "Idempotency conflict") -> None:
         super().__init__(message)
         self.original_id = original_id
         self.key = key
@@ -32,22 +32,22 @@ class IdempotencyConflict(Exception):
 class SandboxStore:
     """Abstract store for runs, idempotency, and usage counters."""
 
-    def check_idempotency(self, endpoint: str, user_id: Any, key: Optional[str], body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def check_idempotency(self, endpoint: str, user_id: Any, key: str | None, body: dict[str, Any]) -> dict[str, Any] | None:
         raise NotImplementedError
 
-    def store_idempotency(self, endpoint: str, user_id: Any, key: Optional[str], body: Dict[str, Any], object_id: str, response: Dict[str, Any]) -> None:
+    def store_idempotency(self, endpoint: str, user_id: Any, key: str | None, body: dict[str, Any], object_id: str, response: dict[str, Any]) -> None:
         raise NotImplementedError
 
     def put_run(self, user_id: Any, st: RunStatus) -> None:
         raise NotImplementedError
 
-    def get_run(self, run_id: str) -> Optional[RunStatus]:
+    def get_run(self, run_id: str) -> RunStatus | None:
         raise NotImplementedError
 
     def update_run(self, st: RunStatus) -> None:
         raise NotImplementedError
 
-    def get_run_owner(self, run_id: str) -> Optional[str]:
+    def get_run_owner(self, run_id: str) -> str | None:
         raise NotImplementedError
 
     def get_user_artifact_bytes(self, user_id: str) -> int:
@@ -60,11 +60,11 @@ class SandboxStore:
     def list_runs(
         self,
         *,
-        image_digest: Optional[str] = None,
-        user_id: Optional[str] = None,
-        phase: Optional[str] = None,
-        started_at_from: Optional[str] = None,
-        started_at_to: Optional[str] = None,
+        image_digest: str | None = None,
+        user_id: str | None = None,
+        phase: str | None = None,
+        started_at_from: str | None = None,
+        started_at_to: str | None = None,
         limit: int = 50,
         offset: int = 0,
         sort_desc: bool = True,
@@ -79,11 +79,11 @@ class SandboxStore:
     def count_runs(
         self,
         *,
-        image_digest: Optional[str] = None,
-        user_id: Optional[str] = None,
-        phase: Optional[str] = None,
-        started_at_from: Optional[str] = None,
-        started_at_to: Optional[str] = None,
+        image_digest: str | None = None,
+        user_id: str | None = None,
+        phase: str | None = None,
+        started_at_from: str | None = None,
+        started_at_to: str | None = None,
     ) -> int:
         raise NotImplementedError
 
@@ -91,11 +91,11 @@ class SandboxStore:
     def list_idempotency(
         self,
         *,
-        endpoint: Optional[str] = None,
-        user_id: Optional[str] = None,
-        key: Optional[str] = None,
-        created_at_from: Optional[str] = None,
-        created_at_to: Optional[str] = None,
+        endpoint: str | None = None,
+        user_id: str | None = None,
+        key: str | None = None,
+        created_at_from: str | None = None,
+        created_at_to: str | None = None,
         limit: int = 50,
         offset: int = 0,
         sort_desc: bool = True,
@@ -105,11 +105,11 @@ class SandboxStore:
     def count_idempotency(
         self,
         *,
-        endpoint: Optional[str] = None,
-        user_id: Optional[str] = None,
-        key: Optional[str] = None,
-        created_at_from: Optional[str] = None,
-        created_at_to: Optional[str] = None,
+        endpoint: str | None = None,
+        user_id: str | None = None,
+        key: str | None = None,
+        created_at_from: str | None = None,
+        created_at_to: str | None = None,
     ) -> int:
         raise NotImplementedError
 
@@ -117,7 +117,7 @@ class SandboxStore:
     def list_usage(
         self,
         *,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
         sort_desc: bool = True,
@@ -127,7 +127,7 @@ class SandboxStore:
     def count_usage(
         self,
         *,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
     ) -> int:
         raise NotImplementedError
 
@@ -144,13 +144,13 @@ class SandboxStore:
 class InMemoryStore(SandboxStore):
     def __init__(self, idem_ttl_sec: int = 600) -> None:
         self.idem_ttl_sec = idem_ttl_sec
-        self._idem: Dict[tuple[str, str, str], tuple[float, str, Dict[str, Any], str]] = {}
-        self._runs: Dict[str, RunStatus] = {}
-        self._owners: Dict[str, str] = {}
-        self._user_bytes: Dict[str, int] = {}
+        self._idem: dict[tuple[str, str, str], tuple[float, str, dict[str, Any], str]] = {}
+        self._runs: dict[str, RunStatus] = {}
+        self._owners: dict[str, str] = {}
+        self._user_bytes: dict[str, int] = {}
         self._lock = threading.RLock()
 
-    def _fp(self, body: Dict[str, Any]) -> str:
+    def _fp(self, body: dict[str, Any]) -> str:
         try:
             canon = json.dumps(body, sort_keys=True, separators=(",", ":"))
         except Exception:
@@ -171,7 +171,7 @@ class InMemoryStore(SandboxStore):
             self._idem.pop(k, None)
         return len(expired)
 
-    def check_idempotency(self, endpoint: str, user_id: Any, key: Optional[str], body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def check_idempotency(self, endpoint: str, user_id: Any, key: str | None, body: dict[str, Any]) -> dict[str, Any] | None:
         if not key:
             return None
         with self._lock:
@@ -187,7 +187,7 @@ class InMemoryStore(SandboxStore):
             # include key and created_at (epoch seconds) for richer error details upstream
             raise IdempotencyConflict(obj_id, key=key, created_at=ts)
 
-    def store_idempotency(self, endpoint: str, user_id: Any, key: Optional[str], body: Dict[str, Any], object_id: str, response: Dict[str, Any]) -> None:
+    def store_idempotency(self, endpoint: str, user_id: Any, key: str | None, body: dict[str, Any], object_id: str, response: dict[str, Any]) -> None:
         if not key:
             return
         with self._lock:
@@ -204,7 +204,7 @@ class InMemoryStore(SandboxStore):
             self._runs[st.id] = st
             self._owners[st.id] = self._user_key(user_id)
 
-    def get_run(self, run_id: str) -> Optional[RunStatus]:
+    def get_run(self, run_id: str) -> RunStatus | None:
         with self._lock:
             return self._runs.get(run_id)
 
@@ -212,7 +212,7 @@ class InMemoryStore(SandboxStore):
         with self._lock:
             self._runs[st.id] = st
 
-    def get_run_owner(self, run_id: str) -> Optional[str]:
+    def get_run_owner(self, run_id: str) -> str | None:
         with self._lock:
             return self._owners.get(run_id)
 
@@ -227,11 +227,11 @@ class InMemoryStore(SandboxStore):
     def list_runs(
         self,
         *,
-        image_digest: Optional[str] = None,
-        user_id: Optional[str] = None,
-        phase: Optional[str] = None,
-        started_at_from: Optional[str] = None,
-        started_at_to: Optional[str] = None,
+        image_digest: str | None = None,
+        user_id: str | None = None,
+        phase: str | None = None,
+        started_at_from: str | None = None,
+        started_at_to: str | None = None,
         limit: int = 50,
         offset: int = 0,
         sort_desc: bool = True,
@@ -284,11 +284,11 @@ class InMemoryStore(SandboxStore):
     def count_runs(
         self,
         *,
-        image_digest: Optional[str] = None,
-        user_id: Optional[str] = None,
-        phase: Optional[str] = None,
-        started_at_from: Optional[str] = None,
-        started_at_to: Optional[str] = None,
+        image_digest: str | None = None,
+        user_id: str | None = None,
+        phase: str | None = None,
+        started_at_from: str | None = None,
+        started_at_to: str | None = None,
     ) -> int:
         return len(self.list_runs(
             image_digest=image_digest,
@@ -304,11 +304,11 @@ class InMemoryStore(SandboxStore):
     def list_idempotency(
         self,
         *,
-        endpoint: Optional[str] = None,
-        user_id: Optional[str] = None,
-        key: Optional[str] = None,
-        created_at_from: Optional[str] = None,
-        created_at_to: Optional[str] = None,
+        endpoint: str | None = None,
+        user_id: str | None = None,
+        key: str | None = None,
+        created_at_from: str | None = None,
+        created_at_to: str | None = None,
         limit: int = 50,
         offset: int = 0,
         sort_desc: bool = True,
@@ -353,11 +353,11 @@ class InMemoryStore(SandboxStore):
     def count_idempotency(
         self,
         *,
-        endpoint: Optional[str] = None,
-        user_id: Optional[str] = None,
-        key: Optional[str] = None,
-        created_at_from: Optional[str] = None,
-        created_at_to: Optional[str] = None,
+        endpoint: str | None = None,
+        user_id: str | None = None,
+        key: str | None = None,
+        created_at_from: str | None = None,
+        created_at_to: str | None = None,
     ) -> int:
         return len(self.list_idempotency(
             endpoint=endpoint,
@@ -373,7 +373,7 @@ class InMemoryStore(SandboxStore):
     def list_usage(
         self,
         *,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
         sort_desc: bool = True,
@@ -407,13 +407,13 @@ class InMemoryStore(SandboxStore):
     def count_usage(
         self,
         *,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
     ) -> int:
         return len(self.list_usage(user_id=user_id, limit=10**9, offset=0, sort_desc=True))
 
 
 class SQLiteStore(SandboxStore):
-    def __init__(self, db_path: Optional[str] = None, idem_ttl_sec: int = 600) -> None:
+    def __init__(self, db_path: str | None = None, idem_ttl_sec: int = 600) -> None:
         self.idem_ttl_sec = idem_ttl_sec
         if not db_path:
             try:
@@ -531,7 +531,7 @@ class SQLiteStore(SandboxStore):
             except (TypeError, ValueError):
                 raise ValueError(f"Invalid created_at filter: {value!r}")
 
-    def _fp(self, body: Dict[str, Any]) -> str:
+    def _fp(self, body: dict[str, Any]) -> str:
         """
         Compute a stable SHA-256 fingerprint for a JSON-like body.
 
@@ -568,7 +568,7 @@ class SQLiteStore(SandboxStore):
         con.execute("DELETE FROM sandbox_idempotency WHERE created_at < ?", (cutoff,))
         return n
 
-    def check_idempotency(self, endpoint: str, user_id: Any, key: Optional[str], body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def check_idempotency(self, endpoint: str, user_id: Any, key: str | None, body: dict[str, Any]) -> dict[str, Any] | None:
         if not key:
             return None
         with self._lock, self._conn() as con:
@@ -593,7 +593,7 @@ class SQLiteStore(SandboxStore):
                 ct = None
             raise IdempotencyConflict(row["object_id"], key=key, created_at=ct)
 
-    def store_idempotency(self, endpoint: str, user_id: Any, key: Optional[str], body: Dict[str, Any], object_id: str, response: Dict[str, Any]) -> None:
+    def store_idempotency(self, endpoint: str, user_id: Any, key: str | None, body: dict[str, Any], object_id: str, response: dict[str, Any]) -> None:
         if not key:
             return
         with self._lock, self._conn() as con:
@@ -655,7 +655,7 @@ class SQLiteStore(SandboxStore):
                 ),
             )
 
-    def get_run(self, run_id: str) -> Optional[RunStatus]:
+    def get_run(self, run_id: str) -> RunStatus | None:
         """
         Retrieve a RunStatus by its run identifier.
 
@@ -698,7 +698,7 @@ class SQLiteStore(SandboxStore):
         # Use same REPLACE logic
         self.put_run(self.get_run_owner(st.id), st)  # type: ignore[arg-type]
 
-    def get_run_owner(self, run_id: str) -> Optional[str]:
+    def get_run_owner(self, run_id: str) -> str | None:
         with self._lock, self._conn() as con:
             cur = con.execute("SELECT user_id FROM sandbox_runs WHERE id=?", (run_id,))
             row = cur.fetchone()
@@ -724,11 +724,11 @@ class SQLiteStore(SandboxStore):
     def list_runs(
         self,
         *,
-        image_digest: Optional[str] = None,
-        user_id: Optional[str] = None,
-        phase: Optional[str] = None,
-        started_at_from: Optional[str] = None,
-        started_at_to: Optional[str] = None,
+        image_digest: str | None = None,
+        user_id: str | None = None,
+        phase: str | None = None,
+        started_at_from: str | None = None,
+        started_at_to: str | None = None,
         limit: int = 50,
         offset: int = 0,
         sort_desc: bool = True,
@@ -780,11 +780,11 @@ class SQLiteStore(SandboxStore):
     def count_runs(
         self,
         *,
-        image_digest: Optional[str] = None,
-        user_id: Optional[str] = None,
-        phase: Optional[str] = None,
-        started_at_from: Optional[str] = None,
-        started_at_to: Optional[str] = None,
+        image_digest: str | None = None,
+        user_id: str | None = None,
+        phase: str | None = None,
+        started_at_from: str | None = None,
+        started_at_to: str | None = None,
     ) -> int:
         where = ["1=1"]
         params: list[Any] = []
@@ -812,11 +812,11 @@ class SQLiteStore(SandboxStore):
     def list_idempotency(
         self,
         *,
-        endpoint: Optional[str] = None,
-        user_id: Optional[str] = None,
-        key: Optional[str] = None,
-        created_at_from: Optional[str] = None,
-        created_at_to: Optional[str] = None,
+        endpoint: str | None = None,
+        user_id: str | None = None,
+        key: str | None = None,
+        created_at_from: str | None = None,
+        created_at_to: str | None = None,
         limit: int = 50,
         offset: int = 0,
         sort_desc: bool = True,
@@ -866,11 +866,11 @@ class SQLiteStore(SandboxStore):
     def count_idempotency(
         self,
         *,
-        endpoint: Optional[str] = None,
-        user_id: Optional[str] = None,
-        key: Optional[str] = None,
-        created_at_from: Optional[str] = None,
-        created_at_to: Optional[str] = None,
+        endpoint: str | None = None,
+        user_id: str | None = None,
+        key: str | None = None,
+        created_at_from: str | None = None,
+        created_at_to: str | None = None,
     ) -> int:
         where = ["1=1"]
         params: list[Any] = []
@@ -898,7 +898,7 @@ class SQLiteStore(SandboxStore):
     def list_usage(
         self,
         *,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
         sort_desc: bool = True,
@@ -947,7 +947,7 @@ class SQLiteStore(SandboxStore):
     def count_usage(
         self,
         *,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
     ) -> int:
         return len(self.list_usage(user_id=user_id, limit=10**9, offset=0, sort_desc=True))
 
@@ -1040,7 +1040,7 @@ class PostgresStore(SandboxStore):
                 _ensure_column("sandbox_runs", "resource_usage", "JSONB")
                 _ensure_column("sandbox_runs", "runtime_version", "TEXT")
 
-    def _fp(self, body: Dict[str, Any]) -> str:
+    def _fp(self, body: dict[str, Any]) -> str:
         try:
             canon = json.dumps(body, sort_keys=True, separators=(",", ":"))
         except Exception:
@@ -1054,7 +1054,7 @@ class PostgresStore(SandboxStore):
         except Exception:
             return ""
 
-    def check_idempotency(self, endpoint: str, user_id: Any, key: Optional[str], body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def check_idempotency(self, endpoint: str, user_id: Any, key: str | None, body: dict[str, Any]) -> dict[str, Any] | None:
         if not key:
             return None
         with self._lock, self._conn() as con:
@@ -1094,7 +1094,7 @@ class PostgresStore(SandboxStore):
                     ct = None
                 raise IdempotencyConflict(row.get("object_id") or "", key=key, created_at=ct)
 
-    def store_idempotency(self, endpoint: str, user_id: Any, key: Optional[str], body: Dict[str, Any], object_id: str, response: Dict[str, Any]) -> None:
+    def store_idempotency(self, endpoint: str, user_id: Any, key: str | None, body: dict[str, Any], object_id: str, response: dict[str, Any]) -> None:
         if not key:
             return
         with self._lock, self._conn() as con:
@@ -1159,7 +1159,7 @@ class PostgresStore(SandboxStore):
                     ),
                 )
 
-    def get_run(self, run_id: str) -> Optional[RunStatus]:
+    def get_run(self, run_id: str) -> RunStatus | None:
         with self._lock, self._conn() as con:
             with con.cursor() as cur:
                 cur.execute("SELECT * FROM sandbox_runs WHERE id=%s", (run_id,))
@@ -1198,7 +1198,7 @@ class PostgresStore(SandboxStore):
         # UPSERT via put_run
         self.put_run(None, st)
 
-    def get_run_owner(self, run_id: str) -> Optional[str]:
+    def get_run_owner(self, run_id: str) -> str | None:
         with self._lock, self._conn() as con:
             with con.cursor() as cur:
                 cur.execute("SELECT user_id FROM sandbox_runs WHERE id=%s", (run_id,))
@@ -1236,11 +1236,11 @@ class PostgresStore(SandboxStore):
     def list_runs(
         self,
         *,
-        image_digest: Optional[str] = None,
-        user_id: Optional[str] = None,
-        phase: Optional[str] = None,
-        started_at_from: Optional[str] = None,
-        started_at_to: Optional[str] = None,
+        image_digest: str | None = None,
+        user_id: str | None = None,
+        phase: str | None = None,
+        started_at_from: str | None = None,
+        started_at_to: str | None = None,
         limit: int = 50,
         offset: int = 0,
         sort_desc: bool = True,
@@ -1293,11 +1293,11 @@ class PostgresStore(SandboxStore):
     def count_runs(
         self,
         *,
-        image_digest: Optional[str] = None,
-        user_id: Optional[str] = None,
-        phase: Optional[str] = None,
-        started_at_from: Optional[str] = None,
-        started_at_to: Optional[str] = None,
+        image_digest: str | None = None,
+        user_id: str | None = None,
+        phase: str | None = None,
+        started_at_from: str | None = None,
+        started_at_to: str | None = None,
     ) -> int:
         where = ["1=1"]
         params: list[Any] = []
@@ -1329,11 +1329,11 @@ class PostgresStore(SandboxStore):
     def list_idempotency(
         self,
         *,
-        endpoint: Optional[str] = None,
-        user_id: Optional[str] = None,
-        key: Optional[str] = None,
-        created_at_from: Optional[str] = None,
-        created_at_to: Optional[str] = None,
+        endpoint: str | None = None,
+        user_id: str | None = None,
+        key: str | None = None,
+        created_at_from: str | None = None,
+        created_at_to: str | None = None,
         limit: int = 50,
         offset: int = 0,
         sort_desc: bool = True,
@@ -1385,11 +1385,11 @@ class PostgresStore(SandboxStore):
     def count_idempotency(
         self,
         *,
-        endpoint: Optional[str] = None,
-        user_id: Optional[str] = None,
-        key: Optional[str] = None,
-        created_at_from: Optional[str] = None,
-        created_at_to: Optional[str] = None,
+        endpoint: str | None = None,
+        user_id: str | None = None,
+        key: str | None = None,
+        created_at_from: str | None = None,
+        created_at_to: str | None = None,
     ) -> int:
         where = ["1=1"]
         params: list[Any] = []
@@ -1421,7 +1421,7 @@ class PostgresStore(SandboxStore):
     def list_usage(
         self,
         *,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
         sort_desc: bool = True,
@@ -1465,12 +1465,12 @@ class PostgresStore(SandboxStore):
     def count_usage(
         self,
         *,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
     ) -> int:
         return len(self.list_usage(user_id=user_id, limit=10**9, offset=0, sort_desc=True))
 
 
-def _resolve_pg_dsn() -> Optional[str]:
+def _resolve_pg_dsn() -> str | None:
     # Prefer explicit SANDBOX_STORE_PG_DSN, then env, then DATABASE_URL
     try:
         dsn = getattr(app_settings, "SANDBOX_STORE_PG_DSN", None)

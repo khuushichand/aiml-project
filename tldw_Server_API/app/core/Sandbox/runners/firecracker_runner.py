@@ -12,15 +12,12 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, List, Tuple
 
-from loguru import logger
-
-from ..models import RunSpec, RunStatus, RunPhase
+from ..models import RunPhase, RunSpec, RunStatus
 from ..streams import get_hub
 
 
-def _truthy(v: Optional[str]) -> bool:
+def _truthy(v: str | None) -> bool:
     return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
@@ -47,8 +44,8 @@ def _virtiofsd_bin() -> str:
     return os.getenv("SANDBOX_FC_VIRTIOFSD") or "virtiofsd"
 
 
-def _preflight_errors() -> List[str]:
-    errors: List[str] = []
+def _preflight_errors() -> list[str]:
+    errors: list[str] = []
     if not sys.platform.startswith("linux"):
         errors.append("linux_required")
     if not os.path.exists("/dev/kvm"):
@@ -74,7 +71,7 @@ def firecracker_available() -> bool:
     return False
 
 
-def firecracker_version() -> Optional[str]:
+def firecracker_version() -> str | None:
     env = os.getenv("TLDW_SANDBOX_FIRECRACKER_VERSION")
     if env:
         return env
@@ -98,7 +95,7 @@ def _sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
-def _fc_api_request(sock_path: str, method: str, path: str, payload: Optional[dict] = None) -> None:
+def _fc_api_request(sock_path: str, method: str, path: str, payload: dict | None = None) -> None:
     body = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
     req = (
         f"{method} {path} HTTP/1.1\r\n"
@@ -112,7 +109,7 @@ def _fc_api_request(sock_path: str, method: str, path: str, payload: Optional[di
         sock.settimeout(3)
         sock.connect(sock_path)
         sock.sendall(req)
-        chunks: List[bytes] = []
+        chunks: list[bytes] = []
         while True:
             data = sock.recv(4096)
             if not data:
@@ -138,7 +135,7 @@ def _fc_api_request(sock_path: str, method: str, path: str, payload: Optional[di
             pass
 
 
-def _write_entry_script(workspace: str, command: List[str]) -> None:
+def _write_entry_script(workspace: str, command: list[str]) -> None:
     import shlex
 
     log_path = "/workspace/run.log"
@@ -168,7 +165,7 @@ exit $exit_code
     os.chmod(entry, 0o755)
 
 
-def _write_env_file(workspace: str, env: Dict[str, str]) -> None:
+def _write_env_file(workspace: str, env: dict[str, str]) -> None:
     if not env:
         return
     lines = []
@@ -198,7 +195,7 @@ def _copy_tree(src: str, dst: str) -> None:
                 pass
 
 
-def _tail_log(run_id: str, log_path: str, stop_flag: Dict[str, bool]) -> None:
+def _tail_log(run_id: str, log_path: str, stop_flag: dict[str, bool]) -> None:
     hub = get_hub()
     max_log = None
     try:
@@ -228,7 +225,7 @@ class FirecrackerRunner:
     def __init__(self) -> None:
         pass
 
-    def start_run(self, run_id: str, spec: RunSpec, session_workspace: Optional[str] = None) -> RunStatus:
+    def start_run(self, run_id: str, spec: RunSpec, session_workspace: str | None = None) -> RunStatus:
         if _truthy(os.getenv("TLDW_SANDBOX_FIRECRACKER_FAKE_EXEC")) or not _real_enabled():
             return self._run_fake(run_id, spec)
         # Real mode preflight
@@ -237,7 +234,7 @@ class FirecrackerRunner:
             raise RuntimeError(f"Firecracker preflight failed: {errs}")
         return self._run_real(run_id, spec, session_workspace=session_workspace)
 
-    def _run_real(self, run_id: str, spec: RunSpec, session_workspace: Optional[str] = None) -> RunStatus:
+    def _run_real(self, run_id: str, spec: RunSpec, session_workspace: str | None = None) -> RunStatus:
         started = datetime.utcnow()
         hub = get_hub()
         try:
@@ -386,7 +383,7 @@ class FirecrackerRunner:
 
         finished = datetime.utcnow()
         # Collect artifacts
-        artifacts_map: Dict[str, bytes] = {}
+        artifacts_map: dict[str, bytes] = {}
         try:
             if spec.capture_patterns:
                 for root, _dirs, files in os.walk(workspace):
@@ -408,7 +405,7 @@ class FirecrackerRunner:
         except Exception:
             log_bytes_total = 0
         art_bytes = sum(len(v) for v in artifacts_map.values()) if artifacts_map else 0
-        usage: Dict[str, int] = {
+        usage: dict[str, int] = {
             "cpu_time_sec": 0,
             "wall_time_sec": int(max(0.0, (finished - started).total_seconds())),
             "peak_rss_mb": 0,
@@ -455,7 +452,7 @@ class FirecrackerRunner:
             pass
 
         # Compute pseudo image digest (string hash or file hash)
-        image_digest: Optional[str] = None
+        image_digest: str | None = None
         base = spec.base_image or ""
         try:
             if base and os.path.exists(base) and os.path.isfile(base):
@@ -475,9 +472,9 @@ class FirecrackerRunner:
         time.sleep(0.01)
 
         # Placeholder artifacts: match capture_patterns against a virtual workspace tree
-        artifacts_map: Dict[str, bytes] = {}
+        artifacts_map: dict[str, bytes] = {}
         try:
-            patterns: List[str] = list(spec.capture_patterns or [])
+            patterns: list[str] = list(spec.capture_patterns or [])
             # In fake mode, generate a tiny artifact per pattern for visibility
             for pat in patterns:
                 # Normalize to posix-like
@@ -509,7 +506,7 @@ class FirecrackerRunner:
             art_bytes = sum(len(v) for v in artifacts_map.values()) if artifacts_map else 0
         except Exception:
             art_bytes = 0
-        usage: Dict[str, int] = {
+        usage: dict[str, int] = {
             "cpu_time_sec": 0,
             "wall_time_sec": int(max(0.0, (finished - started).total_seconds())),
             "peak_rss_mb": 0,

@@ -9,23 +9,24 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from typing import Any, Optional
 
+from cachetools import LRUCache
 from fastapi import Depends, HTTPException, status
 from loguru import logger
-from cachetools import LRUCache
+
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 
 # Local Imports
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
-    SchemaError,
-    InputError,
     ConflictError,
+    InputError,
+    SchemaError,
 )
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 #
@@ -39,7 +40,7 @@ _CHACHA_EXECUTOR_LOCK = threading.Lock()
 _CHACHA_EXECUTOR_MAX_WORKERS = max(1, int(os.getenv("CHACHA_EXECUTOR_MAX_WORKERS", "4")))
 _CHACHA_WATCHDOG_SECS = float(os.getenv("CHACHA_INIT_WATCHDOG_SECS", "5"))
 _CHACHA_HEALTH_LOCK = threading.Lock()
-_CHACHA_HEALTH: Dict[str, Any] = {
+_CHACHA_HEALTH: dict[str, Any] = {
     "init_attempts": 0,
     "init_failures": 0,
     "last_init_ms": None,
@@ -134,7 +135,7 @@ def _track_default_character_future(future: asyncio.Future) -> None:
     future.add_done_callback(_cleanup)
 
 
-def get_chacha_health_snapshot() -> Dict[str, Any]:
+def get_chacha_health_snapshot() -> dict[str, Any]:
     status = "healthy"
     if _CHACHA_HEALTH.get("init_failures"):
         status = "degraded"
@@ -175,8 +176,8 @@ _chacha_db_instances: LRUCache = LRUCache(maxsize=MAX_CACHED_CHACHA_DB_INSTANCES
 logger.info(f"Using LRUCache for ChaChaNotes DB instances (maxsize={MAX_CACHED_CHACHA_DB_INSTANCES}).")
 
 _chacha_db_lock = threading.Lock()
-_chacha_default_char_tasks: Set[asyncio.Task] = set()
-_chacha_default_char_futures: Set[asyncio.Future] = set()
+_chacha_default_char_tasks: set[asyncio.Task] = set()
+_chacha_default_char_futures: set[asyncio.Future] = set()
 _chacha_default_char_futures_lock = threading.Lock()
 
 

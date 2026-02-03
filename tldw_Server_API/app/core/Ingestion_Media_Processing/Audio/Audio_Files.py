@@ -24,34 +24,38 @@
 # Imports
 import json
 import os
-import subprocess
 import tempfile
 import time
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence, List, Dict, Any, Callable
+from typing import Any, Callable, Optional
 from urllib.parse import urlparse
+
 #
 # External Imports
 import yt_dlp
+
 #
 # Local Imports
 from tldw_Server_API.app.core.config import loaded_config_data
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
-from tldw_Server_API.app.core.Utils.Utils import downloaded_files, \
-    sanitize_filename, logging, get_project_root
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import extract_metadata
-from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
-from tldw_Server_API.app.core.http_client import download as http_download, fetch as http_fetch, RetryPolicy
-from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
+from tldw_Server_API.app.core.http_client import RetryPolicy
+from tldw_Server_API.app.core.http_client import download as http_download
+
 # Lazy wrappers to avoid importing heavy transcription deps at module import time
 # Use the ConversionError defined in the transcription library to ensure
 # exception handling is consistent across modules (enables pytest fallback).
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
     ConversionError as TranscriptionConversionError,
 )
-from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import extract_metadata
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+from tldw_Server_API.app.core.Utils.Utils import downloaded_files, get_project_root, logging, sanitize_filename
+
 
 def speech_to_text(*args, **kwargs):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
@@ -65,6 +69,7 @@ def convert_to_wav(*args, **kwargs):
     )
     return _convert_to_wav(*args, **kwargs)
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
+
 #
 #######################################################################################################################
 # Constants
@@ -109,7 +114,7 @@ class AudioConversionError(AudioProcessingError):
 # Function Definitions
 #
 
-def check_transcription_model_status(model_name: str) -> Dict[str, Any]:
+def check_transcription_model_status(model_name: str) -> dict[str, Any]:
     """
     Check if a transcription model is available or needs to be downloaded.
 
@@ -122,11 +127,11 @@ def check_transcription_model_status(model_name: str) -> Dict[str, Any]:
         - 'message': Human-readable status message
         - 'model': The model name
     """
+    from tldw_Server_API.app.core.config import get_stt_config
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
         check_model_exists,
         validate_whisper_model_identifier,
     )
-    from tldw_Server_API.app.core.config import get_stt_config
 
     model_name = (model_name or "").strip()
     model_lower = model_name.lower()
@@ -244,7 +249,7 @@ def download_audio_file(
     url: str,
     target_temp_dir: str,
     use_cookies: bool = False,
-    cookies: Optional[str | Dict] = None,
+    cookies: Optional[str | dict] = None,
     downloader: Optional[Callable[..., Any]] = None,
 ) -> str:
     """
@@ -452,7 +457,7 @@ def download_audio_file(
 
 def process_audio_files(
     # Use 'inputs' to accept both URLs and local paths
-    inputs: List[str],
+    inputs: list[str],
     # Processing parameters
     transcription_model: str,
     transcription_language: Optional[str] = 'en', # Default to 'en'
@@ -482,7 +487,7 @@ def process_audio_files(
     author: Optional[str] = None,
     temp_dir: Optional[str] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Processes a list of audio inputs (URLs or local file paths).
 
@@ -572,9 +577,9 @@ def process_audio_files(
         RuntimeError: Can be raised if critical setup like temporary directory creation fails.
                       Individual item processing errors are caught and reported in the 'results' list.
     """
-    batch_items_results: List[Dict[str, Any]] = []
-    progress_log: List[str] = []
-    temp_files_to_clean: List[str] = []
+    batch_items_results: list[dict[str, Any]] = []
+    progress_log: list[str] = []
+    temp_files_to_clean: list[str] = []
     start_time_all = time.time()
 
     # --- Setup Temporary Directory ---
@@ -624,7 +629,7 @@ def process_audio_files(
             logging.warning(f"cancel_check raised an error: {exc}", exc_info=True)
             return False
 
-    def _cancelled_result(input_ref: str, processing_source: str) -> Dict[str, Any]:
+    def _cancelled_result(input_ref: str, processing_source: str) -> dict[str, Any]:
         """Build a standard cancelled result payload."""
         return {
             "status": "Cancelled",
@@ -656,7 +661,7 @@ def process_audio_files(
     # Optional: preflight model availability check for Whisper models.
     # This is informational only and does not block processing; downloads
     # still occur lazily on first use inside the transcription library.
-    preflight_model_status: Optional[Dict[str, Any]] = None
+    preflight_model_status: Optional[dict[str, Any]] = None
     try:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
             parse_transcription_model,
@@ -678,7 +683,7 @@ def process_audio_files(
             input_ref = input_item if is_url else Path(input_item).name
             update_progress(f"--- Processing item {i}/{len(inputs)}: {input_ref} ---")
 
-            item_result: Dict[str, Any] = { # Explicit typing
+            item_result: dict[str, Any] = { # Explicit typing
                 "status": "Pending",
                 "input_ref": input_ref,
                 "processing_source": input_item, # Initial source
@@ -1192,7 +1197,7 @@ def process_audio_files(
     return final_output
 
 
-def format_transcription_with_timestamps(segments: List[Dict[str, Any]], keep_timestamps: bool = True) -> str:
+def format_transcription_with_timestamps(segments: list[dict[str, Any]], keep_timestamps: bool = True) -> str:
     """
     Formats transcription segments into a single string, optionally with timestamps.
 
@@ -1257,9 +1262,9 @@ HTTPONLY_PREFIX = '#HttpOnly_'
 _HTTPONLY_PREFIX_LOWER = HTTPONLY_PREFIX.lower()
 
 
-def _parse_netscape_cookie_export(text: str) -> List[str]:
+def _parse_netscape_cookie_export(text: str) -> list[str]:
     """Return cookie name=value pairs from a Netscape/Mozilla cookie export blob."""
-    pairs: List[str] = []
+    pairs: list[str] = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
@@ -1312,7 +1317,7 @@ def download_youtube_audio(
     url: str,
     *,
     use_cookies: bool = False,
-    cookies: Optional[str | Dict[str, Any]] = None,
+    cookies: Optional[str | dict[str, Any]] = None,
     output_dir: Optional[str | Path] = None,
 ) -> tuple[Optional[str], str]:
     """

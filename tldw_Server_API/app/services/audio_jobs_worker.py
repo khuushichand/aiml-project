@@ -4,18 +4,22 @@ import asyncio
 import os
 from functools import partial
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.Usage.audio_quota import can_start_job, finish_job, increment_jobs_started, get_limits_for_user
-
+from tldw_Server_API.app.core.Usage.audio_quota import (
+    can_start_job,
+    finish_job,
+    get_limits_for_user,
+    increment_jobs_started,
+)
 
 DOMAIN = "audio"
 
 
-async def _handle_audio_transcribe_stage(payload: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[str]]:
+async def _handle_audio_transcribe_stage(payload: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
     """
     Handle the `audio_transcribe` stage for a single job payload.
 
@@ -69,11 +73,11 @@ async def _handle_audio_transcribe_stage(payload: Dict[str, Any]) -> tuple[Dict[
     # existing consumers that rely only on 'text' and 'segments'.
     updated_payload["normalized_stt"] = artifact
 
-    next_type: Optional[str] = "audio_chunk" if payload.get("perform_chunking") else "audio_store"
+    next_type: str | None = "audio_chunk" if payload.get("perform_chunking") else "audio_store"
     return updated_payload, next_type
 
 
-async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None:
     """MVP in-process worker handling audio pipeline stages.
 
     Stages (job_type):
@@ -95,7 +99,7 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
             return
         # Per-iteration state used in the outer finally block. These must be
         # initialized before any `continue` to avoid leaking previous values.
-        owner: Optional[str] = None
+        owner: str | None = None
         acquired_slot = False
         try:
             lease_seconds = int(os.getenv("JOBS_LEASE_SECONDS", "120") or "120")
@@ -268,9 +272,9 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
             else:
                 acquired_slot = True
 
-            payload: Dict[str, Any] = job.get("payload") or {}
+            payload: dict[str, Any] = job.get("payload") or {}
             jtype = str(job.get("job_type") or "").lower()
-            next_type: Optional[str] = None
+            next_type: str | None = None
             updated_payload = dict(payload)
             ok = True
             msg_err = ""
@@ -281,7 +285,9 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                     temp_dir = payload.get("temp_dir") or os.getenv("AUDIO_JOBS_TEMP", "/tmp")
                     if not url:
                         raise ValueError("missing url in payload")
-                    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import download_audio_file
+                    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (
+                        download_audio_file,
+                    )
                     local_path = await asyncio.to_thread(download_audio_file, url, temp_dir, False, None)
                     updated_payload["local_path"] = local_path
                     next_type = "audio_convert"
@@ -289,7 +295,9 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                     path = payload.get("local_path")
                     if not path:
                         raise ValueError("missing local_path in payload")
-                    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import convert_to_wav
+                    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+                        convert_to_wav,
+                    )
                     out_path = await asyncio.to_thread(convert_to_wav, path, 0, False)
                     updated_payload["wav_path"] = out_path
                     next_type = "audio_transcribe"

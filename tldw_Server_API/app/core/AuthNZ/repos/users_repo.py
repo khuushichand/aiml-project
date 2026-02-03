@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, List, Tuple
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
-from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB, UserNotFoundError, DatabaseError
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings, get_profile
+from tldw_Server_API.app.core.AuthNZ.settings import get_profile, get_settings
+from tldw_Server_API.app.core.DB_Management.Users_DB import DatabaseError, UserNotFoundError, UsersDB
 
 
 @dataclass
@@ -35,7 +35,7 @@ class AuthnzUsersRepo:
         return db
 
     @staticmethod
-    def _normalize_user_record(row: Any) -> Dict[str, Any]:
+    def _normalize_user_record(row: Any) -> dict[str, Any]:
         """
         Normalize backend-specific row types to a consistent dict with
         JSON-friendly UUID strings and primitive types.
@@ -44,7 +44,7 @@ class AuthnzUsersRepo:
             base = dict(row) if hasattr(row, "keys") or isinstance(row, dict) else dict(row or {})
         except Exception:
             base = {}
-        user_dict: Dict[str, Any] = dict(base)
+        user_dict: dict[str, Any] = dict(base)
         if "id" in user_dict:
             try:
                 user_dict["id"] = int(user_dict["id"])
@@ -73,7 +73,7 @@ class AuthnzUsersRepo:
                 pass
         return user_dict
 
-    async def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+    async def get_user_by_id(self, user_id: int) -> dict[str, Any] | None:
         """
         Fetch a user row by integer id.
 
@@ -94,7 +94,7 @@ class AuthnzUsersRepo:
             logger.error(f"AuthnzUsersRepo.get_user_by_id failed: {exc}")
             raise
 
-    async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+    async def get_user_by_username(self, username: str) -> dict[str, Any] | None:
         """Fetch a user row by username."""
         db = await self._users_db()
         try:
@@ -114,10 +114,10 @@ class AuthnzUsersRepo:
         username: str,
         email: str,
         password_hash: str,
-        role: Optional[str] = None,
+        role: str | None = None,
         is_active: bool = True,
         is_verified: bool = False,
-        user_uuid: Optional[str] = None,
+        user_uuid: str | None = None,
     ) -> int:
         """
         Create a new user row, enforcing profile-based invariants.
@@ -150,7 +150,7 @@ class AuthnzUsersRepo:
             logger.error(f"AuthnzUsersRepo.create_user failed: {exc}")
             raise
 
-    async def get_user_by_uuid(self, user_uuid: str) -> Optional[Dict[str, Any]]:
+    async def get_user_by_uuid(self, user_uuid: str) -> dict[str, Any] | None:
         """Fetch a user row by UUID string."""
         db = await self._users_db()
         try:
@@ -169,11 +169,11 @@ class AuthnzUsersRepo:
         *,
         offset: int,
         limit: int,
-        role: Optional[str] = None,
-        is_active: Optional[bool] = None,
-        search: Optional[str] = None,
-        org_ids: Optional[List[int]] = None,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+        role: str | None = None,
+        is_active: bool | None = None,
+        search: str | None = None,
+        org_ids: list[int] | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         Return a window of users and the total count matching the filters.
 
@@ -254,7 +254,7 @@ class AuthnzUsersRepo:
                 q_params = [*params, limit, offset]
                 rows = await db.db_pool.fetchall(query, *q_params)
 
-            users: list[Dict[str, Any]] = []
+            users: list[dict[str, Any]] = []
             for row in rows:
                 if hasattr(row, "keys") or isinstance(row, dict):
                     r = dict(row)

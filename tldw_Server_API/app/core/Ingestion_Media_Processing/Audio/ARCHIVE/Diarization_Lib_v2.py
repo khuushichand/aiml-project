@@ -22,10 +22,11 @@
 # Import necessary libraries
 import warnings
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Union
+from typing import Any, Optional, Union
 
 # Import 3rd Party Libraries
 import yaml
+
 #from pyannote.audio import Pipeline
 #from pyannote.audio.pipelines.speaker_diarization import SpeakerDiarization
 # Filter out UserWarnings from Pyannote/Torch related to lazy loading or specific model features
@@ -144,7 +145,7 @@ def audio_diarization(
     num_speakers: Optional[int] = None, # Allow specifying number of speakers
     min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Performs speaker diarization on an audio file using a PyAnnote pipeline.
 
@@ -233,9 +234,9 @@ def calculate_overlap(start1: float, end1: float, start2: float, end2: float) ->
 
 @timeit
 def combine_transcription_and_diarization(
-    transcription_segments: List[Dict[str, Any]],
-    diarization_segments: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
+    transcription_segments: list[dict[str, Any]],
+    diarization_segments: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """
     Combines transcription segments with speaker diarization information based on maximum overlap.
 

@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
 
-def _csv_env(name: str, default: str = "") -> List[str]:
+def _csv_env(name: str, default: str = "") -> list[str]:
     raw = os.getenv(name, default) or ""
     return [s.strip() for s in raw.split(",") if s.strip()]
 
 
-def get_default_policy_from_env(org_id: int) -> Dict[str, Any]:
+def get_default_policy_from_env(org_id: int) -> dict[str, Any]:
     """Return a default org policy derived from environment variables."""
     return {
         "org_id": org_id,
@@ -29,7 +29,7 @@ def get_default_policy_from_env(org_id: int) -> Dict[str, Any]:
     }
 
 
-def _path_allowed(path: Optional[str], allow: List[str], deny: List[str]) -> bool:
+def _path_allowed(path: str | None, allow: list[str], deny: list[str]) -> bool:
     from fnmatch import fnmatch
     if not path:
         return True
@@ -45,13 +45,13 @@ def _path_allowed(path: Optional[str], allow: List[str], deny: List[str]) -> boo
 
 
 def evaluate_policy_constraints(
-    policy: Dict[str, Any],
+    policy: dict[str, Any],
     *,
     provider: str,
-    remote_path: Optional[str] = None,
-    notion_workspace_id: Optional[str] = None,
-    account_email: Optional[str] = None,
-) -> Tuple[bool, Optional[str]]:
+    remote_path: str | None = None,
+    notion_workspace_id: str | None = None,
+    account_email: str | None = None,
+) -> tuple[bool, str | None]:
     """Check org policy for provider enablement and path/workspace/domain constraints."""
     try:
         enabled = [str(p).lower() for p in (policy.get("enabled_providers") or [])]
@@ -83,7 +83,7 @@ def evaluate_policy_constraints(
         return False, "Policy evaluation failed"
 
 
-def is_file_type_allowed(*, name: Optional[str], mime: Optional[str], allowed: Optional[List[str]]) -> bool:
+def is_file_type_allowed(*, name: str | None, mime: str | None, allowed: list[str] | None) -> bool:
     """Return True if a file name/mime is allowed by 'allowed' list.
 
     - allowed may contain extensions (with/without dot), full mimes, or mime prefixes (e.g., 'text/', 'application/pdf').

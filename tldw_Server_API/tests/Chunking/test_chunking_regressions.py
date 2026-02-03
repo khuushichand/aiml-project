@@ -1,6 +1,8 @@
 import sys
 import types
 
+import pytest
+
 from tldw_Server_API.app.core.Chunking import Chunker, ChunkingError
 from tldw_Server_API.app.core.Chunking.base import ChunkerConfig, ChunkingMethod
 from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
@@ -133,7 +135,8 @@ def test_token_chunk_decode_failure_falls_back():
     assert reconstructed == text.split()
 
 
-def test_process_text_multi_level_fallback_offsets_clamped(monkeypatch):
+@pytest.mark.unit
+def test_process_text_multi_level_fallback_offsets_clamped(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fallback offsets should remain within paragraph bounds even on mismatched chunks."""
     chunker = Chunker()
     text = "short paragraph"

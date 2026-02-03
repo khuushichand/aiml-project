@@ -3,27 +3,25 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from loguru import logger
 
 
 @dataclass
 class SubprocessTask:
-    cmd: List[str]
+    cmd: list[str]
     workdir: Path
     stdout_path: Path
     stderr_path: Path
-    pid: Optional[int] = None
-    pgid: Optional[int] = None
+    pid: int | None = None
+    pgid: int | None = None
     started_at: float = 0.0
 
 
-def start_process(cmd: List[str], workdir: str | Path, log_dir: str | Path) -> SubprocessTask:
+def start_process(cmd: list[str], workdir: str | Path, log_dir: str | Path) -> SubprocessTask:
     """Start a subprocess in a new process group and log stdout/stderr to files.
 
     Returns a SubprocessTask with pid/pgid for later cancellation.
@@ -71,7 +69,7 @@ def start_process(cmd: List[str], workdir: str | Path, log_dir: str | Path) -> S
     return task
 
 
-def terminate_process(task: SubprocessTask, grace_ms: int = 5000) -> Tuple[bool, bool]:
+def terminate_process(task: SubprocessTask, grace_ms: int = 5000) -> tuple[bool, bool]:
     """Terminate a subprocess process-group with escalation.
 
     Returns (terminated, forced_kill)

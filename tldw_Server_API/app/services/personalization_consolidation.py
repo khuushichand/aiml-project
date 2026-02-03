@@ -7,16 +7,14 @@ This is a placeholder; real implementation will integrate embeddings and DB.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from dataclasses import dataclass
-from typing import Optional
 
 from loguru import logger
-from collections import Counter
-from pathlib import Path
 
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
-from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
@@ -26,14 +24,14 @@ class ConsolidationConfig:
 
 
 class PersonalizationConsolidationService:
-    def __init__(self, config: Optional[ConsolidationConfig] = None):
+    def __init__(self, config: ConsolidationConfig | None = None):
         self.config = config or ConsolidationConfig()
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
         self._shutdown = asyncio.Event()
         # In-memory status map of last consolidation tick per user (ISO timestamp)
         self._last_tick: dict[str, str] = {}
 
-    async def start(self) -> Optional[asyncio.Task]:
+    async def start(self) -> asyncio.Task | None:
         if self._task and not self._task.done():
             return self._task
         self._task = asyncio.create_task(self._run_loop(), name="personalization_consolidation_loop")
@@ -56,7 +54,7 @@ class PersonalizationConsolidationService:
                     logger.debug("metrics increment failed for personalization stop_wait_failed")
         logger.info("Personalization consolidation service stopped (scaffold)")
 
-    async def trigger_consolidation(self, user_id: Optional[str] = None) -> bool:
+    async def trigger_consolidation(self, user_id: str | None = None) -> bool:
         """One-off consolidation for a user (scaffold: logs only)."""
         try:
             if not user_id:
@@ -108,7 +106,7 @@ class PersonalizationConsolidationService:
                 continue
 
 
-_singleton: Optional[PersonalizationConsolidationService] = None
+_singleton: PersonalizationConsolidationService | None = None
 
 
 def get_consolidation_service() -> PersonalizationConsolidationService:

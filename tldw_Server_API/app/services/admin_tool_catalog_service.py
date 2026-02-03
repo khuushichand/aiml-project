@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from loguru import logger
+
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 
 
-async def list_tool_catalogs(db, *, org_id: Optional[int], team_id: Optional[int], limit: int, offset: int) -> List[Dict[str, Any]]:
+async def list_tool_catalogs(db, *, org_id: int | None, team_id: int | None, limit: int, offset: int) -> list[dict[str, Any]]:
     pg = await is_postgres_backend()
-    where: List[str] = []
-    params: List[Any] = []
+    where: list[str] = []
+    params: list[Any] = []
     if org_id is not None:
         where.append("org_id = $1" if pg else "org_id = ?")
         params.append(org_id)
@@ -40,7 +42,7 @@ async def list_tool_catalogs(db, *, org_id: Optional[int], team_id: Optional[int
         raise
 
 
-async def create_tool_catalog(db, *, name: str, description: Optional[str], org_id: Optional[int], team_id: Optional[int], is_active: bool) -> Dict[str, Any]:
+async def create_tool_catalog(db, *, name: str, description: str | None, org_id: int | None, team_id: int | None, is_active: bool) -> dict[str, Any]:
     pg = await is_postgres_backend()
     try:
         if pg:
@@ -97,7 +99,7 @@ async def delete_tool_catalog(db, catalog_id: int) -> None:
         raise
 
 
-async def list_tool_catalog_entries(db, catalog_id: int) -> List[Dict[str, Any]]:
+async def list_tool_catalog_entries(db, catalog_id: int) -> list[dict[str, Any]]:
     pg = await is_postgres_backend()
     try:
         if pg:
@@ -111,7 +113,7 @@ async def list_tool_catalog_entries(db, catalog_id: int) -> List[Dict[str, Any]]
         raise
 
 
-async def add_tool_catalog_entry(db, catalog_id: int, tool_name: str, module_id: Optional[str]) -> Dict[str, Any]:
+async def add_tool_catalog_entry(db, catalog_id: int, tool_name: str, module_id: str | None) -> dict[str, Any]:
     pg = await is_postgres_backend()
     try:
         if pg:

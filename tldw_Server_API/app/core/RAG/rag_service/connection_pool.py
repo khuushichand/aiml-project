@@ -5,13 +5,13 @@ This module provides thread-safe connection pooling for SQLite databases
 to improve performance and reduce connection overhead.
 """
 
+import queue
 import sqlite3
 import threading
-import queue
 import time
-from typing import Dict, Optional, Any, Callable
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -56,8 +56,8 @@ class ConnectionPool:
         self.enable_wal = enable_wal
 
         # Pool state
-        self._pool = queue.Queue(maxsize=max_connections)
-        self._all_connections: Dict[int, Dict[str, Any]] = {}
+        self._pool: queue.Queue[sqlite3.Connection] = queue.Queue(maxsize=max_connections)
+        self._all_connections: dict[int, dict[str, Any]] = {}
         self._lock = threading.RLock()
         self._closed = False
 
@@ -264,7 +264,7 @@ class ConnectionPool:
             except Exception as e:
                 logger.error(f"Error closing idle connection: {e}")
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get pool statistics.
 
@@ -318,14 +318,14 @@ class MultiDatabasePool:
     This is useful when working with Media_DB, ChaChaNotes_DB, etc.
     """
 
-    def __init__(self, default_config: Optional[Dict[str, Any]] = None):
+    def __init__(self, default_config: Optional[dict[str, Any]] = None):
         """
         Initialize multi-database pool manager.
 
         Args:
             default_config: Default configuration for new pools
         """
-        self._pools: Dict[str, ConnectionPool] = {}
+        self._pools: dict[str, ConnectionPool] = {}
         self._lock = threading.RLock()
         self._default_config = default_config or {
             "min_connections": 2,
@@ -385,7 +385,7 @@ class MultiDatabasePool:
             for pool in self._pools.values():
                 pool.close_idle_connections()
 
-    def get_all_stats(self) -> Dict[str, Dict[str, Any]]:
+    def get_all_stats(self) -> dict[str, dict[str, Any]]:
         """
         Get statistics for all pools.
 

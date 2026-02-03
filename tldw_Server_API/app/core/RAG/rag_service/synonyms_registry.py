@@ -7,15 +7,14 @@ term -> [aliases]. Used to enrich both FTS (where integrated) and query rewrites
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
-import json
 
 from loguru import logger
 
 
-def _find_project_root(start: Optional[Path] = None) -> Path:
+def _find_project_root(start: Path | None = None) -> Path:
     """Locate the project root by finding a parent that contains 'tldw_Server_API'."""
     p = (start or Path(__file__).resolve())
     for anc in p.parents:
@@ -62,13 +61,13 @@ def _get_config_root() -> Path:
     return candidates[0]
 
 
-def get_corpus_synonyms(corpus: str | None) -> Dict[str, List[str]]:
+def get_corpus_synonyms(corpus: str | None) -> dict[str, list[str]]:
     if not corpus:
         return {}
 
     config_root = _get_config_root()
 
-    candidates: List[Path] = [
+    candidates: list[Path] = [
         config_root / "Synonyms" / f"{corpus}.json",
         config_root / f"{corpus}.json",
     ]
@@ -88,7 +87,7 @@ def get_corpus_synonyms(corpus: str | None) -> Dict[str, List[str]]:
 
     # Deduplicate while preserving order
     seen: set[Path] = set()
-    ordered_candidates: List[Path] = []
+    ordered_candidates: list[Path] = []
     for candidate in candidates:
         if candidate not in seen:
             ordered_candidates.append(candidate)
@@ -107,7 +106,7 @@ def get_corpus_synonyms(corpus: str | None) -> Dict[str, List[str]]:
                 data = json.load(f)
                 if isinstance(data, dict):
                     # normalize to str -> list[str]
-                    out: Dict[str, List[str]] = {}
+                    out: dict[str, list[str]] = {}
                     for k, v in data.items():
                         if isinstance(k, str):
                             if isinstance(v, list):

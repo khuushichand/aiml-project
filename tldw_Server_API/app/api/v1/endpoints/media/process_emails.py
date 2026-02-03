@@ -1,16 +1,26 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-
 import asyncio
 import functools
 from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter, File, UploadFile, Depends, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from loguru import logger
 from starlette.responses import JSONResponse
 
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
+import tldw_Server_API.app.core.Ingestion_Media_Processing.Email.Email_Processing_Lib as email_lib  # type: ignore
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
+    get_process_emails_form,
+)
+from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessEmailsForm
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
+    apply_chunking_template_if_any,
+    prepare_chunking_options_dict,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
     save_uploaded_files,
@@ -19,20 +29,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
     ProcessItem,
     run_batch_processor,
 )
-import tldw_Server_API.app.core.Ingestion_Media_Processing.Email.Email_Processing_Lib as email_lib  # type: ignore
-
-from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
-    get_process_emails_form,
-)
-from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessEmailsForm
-from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-from fastapi import HTTPException
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
-    prepare_chunking_options_dict,
-    apply_chunking_template_if_any,
-)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
 
 router = APIRouter()
 
@@ -45,7 +42,7 @@ router = APIRouter()
 async def process_emails_endpoint(
     db: MediaDatabase = Depends(get_media_db_for_user),
     form_data: ProcessEmailsForm = Depends(get_process_emails_form),
-    files: Optional[List[UploadFile]] = File(None),
+    files: list[UploadFile] | None = File(None),
 ):
     """
     Modularized wrapper for the legacy /process-emails endpoint.
@@ -64,13 +61,13 @@ async def process_emails_endpoint(
 
     logger.info("Request received for /process-emails (no persistence).")
 
-    batch: Dict[str, Any] = {
+    batch: dict[str, Any] = {
         "results": [],
         "errors": [],
     }
-    items: List[ProcessItem] = []
-    saved_files_info: List[Dict[str, Any]] = []
-    chunk_options_dict: Optional[Dict[str, Any]] = None
+    items: list[ProcessItem] = []
+    saved_files_info: list[dict[str, Any]] = []
+    chunk_options_dict: dict[str, Any] | None = None
 
     # Prepare base chunking options before batch processing so the worker
     # closure can use them when invoking the email processing library.
@@ -86,7 +83,7 @@ async def process_emails_endpoint(
     )
 
     # Determine allowed extensions based on form toggles.
-    allowed_exts: List[str] = [".eml"]
+    allowed_exts: list[str] = [".eml"]
     if form_data.accept_archives:
         allowed_exts.append(".zip")
     if getattr(form_data, "accept_mbox", False):
@@ -139,9 +136,9 @@ async def process_emails_endpoint(
             )
 
         async def _email_batch_processor(
-            process_items: List[ProcessItem],
-        ) -> List[Dict[str, Any]]:
-            results: List[Dict[str, Any]] = []
+            process_items: list[ProcessItem],
+        ) -> list[dict[str, Any]]:
+            results: list[dict[str, Any]] = []
             loop = asyncio.get_running_loop()
 
             for item in process_items:

@@ -7,10 +7,11 @@ Provides a shared controller for both HTTP routes and WebSocket connections.
 from __future__ import annotations
 
 import ipaddress
+from collections.abc import Iterable
 from functools import lru_cache
-from typing import Iterable, List, Optional
+
+from fastapi import HTTPException, Request
 from loguru import logger
-from fastapi import Request, HTTPException
 
 from ..config import get_config
 
@@ -33,8 +34,8 @@ class IPAccessController:
         self.trusted_proxy_networks = self._parse_networks(list(trusted_proxies))
 
     @staticmethod
-    def _parse_networks(cidrs: List[str]) -> List[ipaddress._BaseNetwork]:
-        networks: List[ipaddress._BaseNetwork] = []
+    def _parse_networks(cidrs: list[str]) -> list[ipaddress._BaseNetwork]:
+        networks: list[ipaddress._BaseNetwork] = []
         for entry in cidrs:
             if not entry:
                 continue
@@ -49,7 +50,7 @@ class IPAccessController:
                 logger.warning(f"Ignoring invalid IP/CIDR entry in MCP config: {entry}")
         return networks
 
-    def _is_trusted_proxy(self, ip_str: Optional[str]) -> bool:
+    def _is_trusted_proxy(self, ip_str: str | None) -> bool:
         """Return True when the immediate peer is a trusted proxy."""
         if not ip_str:
             return False
@@ -66,10 +67,10 @@ class IPAccessController:
 
     def resolve_client_ip(
         self,
-        remote_addr: Optional[str],
-        forwarded_for: Optional[str],
-        real_ip: Optional[str] = None,
-    ) -> Optional[str]:
+        remote_addr: str | None,
+        forwarded_for: str | None,
+        real_ip: str | None = None,
+    ) -> str | None:
         """Resolve the effective client IP applying X-Forwarded-For rules."""
         candidate = remote_addr or real_ip
         try:
@@ -88,7 +89,7 @@ class IPAccessController:
             candidate = real_ip
         return candidate
 
-    def is_allowed(self, ip_str: Optional[str]) -> bool:
+    def is_allowed(self, ip_str: str | None) -> bool:
         """Return True if the resolved IP passes the allow/block rules."""
         if not ip_str:
             # Unknown IP - only allow when no allowlist is configured.

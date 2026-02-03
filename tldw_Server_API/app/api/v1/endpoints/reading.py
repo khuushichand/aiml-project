@@ -6,7 +6,6 @@ import json
 import os
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -199,7 +198,7 @@ def _build_reading_citation(row: ContentItemRow) -> ReadingCitation:
     )
 
 
-def _tts_content_type(response_format: str) -> Optional[str]:
+def _tts_content_type(response_format: str) -> str | None:
     mapping = {
         "mp3": "audio/mpeg",
         "opus": "audio/opus",
@@ -229,7 +228,7 @@ def _raise_for_tts_error(exc: Exception) -> None:
     raise HTTPException(status_code=500, detail="TTS generation failed")
 
 
-def _parse_import_job_result(result: object) -> Optional[ReadingImportResponse]:
+def _parse_import_job_result(result: object) -> ReadingImportResponse | None:
     if result is None:
         return None
     if isinstance(result, str):
@@ -260,7 +259,7 @@ def _to_import_job_status(job: dict[str, object]) -> ReadingImportJobStatus:
     )
 
 
-def _parse_iso_datetime(raw: Optional[str]) -> Optional[datetime]:
+def _parse_iso_datetime(raw: str | None) -> datetime | None:
     if not raw:
         return None
     try:
@@ -272,7 +271,7 @@ def _parse_iso_datetime(raw: Optional[str]) -> Optional[datetime]:
     return dt
 
 
-def _parse_digest_filters(raw: Optional[str]) -> Optional[ReadingDigestScheduleFilters]:
+def _parse_digest_filters(raw: str | None) -> ReadingDigestScheduleFilters | None:
     if not raw:
         return None
     try:
@@ -287,7 +286,7 @@ def _parse_digest_filters(raw: Optional[str]) -> Optional[ReadingDigestScheduleF
         return None
 
 
-def _validate_cron_or_422(cron: str, timezone_str: Optional[str]) -> None:
+def _validate_cron_or_422(cron: str, timezone_str: str | None) -> None:
     try:
         from apscheduler.triggers.cron import CronTrigger
         CronTrigger.from_crontab(cron, timezone=timezone_str or "UTC")
@@ -301,7 +300,7 @@ def _validate_cron_or_422(cron: str, timezone_str: Optional[str]) -> None:
         ) from exc
 
 
-def _resolve_archive_retention(payload: ReadingArchiveCreateRequest) -> Optional[str]:
+def _resolve_archive_retention(payload: ReadingArchiveCreateRequest) -> str | None:
     if payload.retention_until:
         dt = _parse_iso_datetime(payload.retention_until)
         if dt is None:
@@ -331,9 +330,9 @@ def _sanitize_archive_html(value: str) -> str:
 def _render_archive_html(
     *,
     title: str,
-    url: Optional[str],
-    body_html: Optional[str],
-    body_text: Optional[str],
+    url: str | None,
+    body_html: str | None,
+    body_text: str | None,
 ) -> str:
     safe_title = html.escape(title or "Untitled")
     safe_url = html.escape(url or "")
@@ -430,18 +429,18 @@ async def save_reading_item(
     dependencies=[Depends(rbac_rate_limit("reading.list"))],
 )
 async def list_reading_items(
-    status: Optional[list[str]] = Query(None),
-    tags: Optional[list[str]] = Query(None),
-    favorite: Optional[bool] = Query(None),
-    q: Optional[str] = Query(None),
-    domain: Optional[str] = Query(None),
-    date_from: Optional[str] = Query(None, description="ISO start date inclusive"),
-    date_to: Optional[str] = Query(None, description="ISO end date inclusive"),
+    status: list[str] | None = Query(None),
+    tags: list[str] | None = Query(None),
+    favorite: bool | None = Query(None),
+    q: str | None = Query(None),
+    domain: str | None = Query(None),
+    date_from: str | None = Query(None, description="ISO start date inclusive"),
+    date_to: str | None = Query(None, description="ISO end date inclusive"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
-    offset: Optional[int] = Query(None, ge=0),
-    limit: Optional[int] = Query(None, ge=1, le=200),
-    sort: Optional[str] = Query(
+    offset: int | None = Query(None, ge=0),
+    limit: int | None = Query(None, ge=1, le=200),
+    sort: str | None = Query(
         None,
         description="updated_desc|updated_asc|created_desc|created_asc|title_asc|title_desc|relevance",
     ),
@@ -570,7 +569,7 @@ async def import_reading_items(
     dependencies=[Depends(rbac_rate_limit("reading.import.status"))],
 )
 async def list_reading_import_jobs(
-    status: Optional[str] = Query(None),
+    status: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_request_user),
@@ -917,8 +916,8 @@ async def create_reading_archive(
 
     source = payload.source
     format_value = payload.format
-    body_html: Optional[str] = None
-    body_text: Optional[str] = None
+    body_html: str | None = None
+    body_text: str | None = None
     if source == "clean_html":
         if not clean_html:
             raise HTTPException(status_code=409, detail="reading_archive_no_html")
@@ -1033,11 +1032,11 @@ async def create_reading_archive(
     dependencies=[Depends(rbac_rate_limit("reading.export"))],
 )
 async def export_reading_items(
-    status: Optional[list[str]] = Query(None),
-    tags: Optional[list[str]] = Query(None),
-    favorite: Optional[bool] = Query(None),
-    q: Optional[str] = Query(None),
-    domain: Optional[str] = Query(None),
+    status: list[str] | None = Query(None),
+    tags: list[str] | None = Query(None),
+    favorite: bool | None = Query(None),
+    q: str | None = Query(None),
+    domain: str | None = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(1000, ge=1, le=10000),
     include_metadata: bool = Query(True),
@@ -1269,7 +1268,7 @@ async def delete_reading_digest_schedule(
     dependencies=[Depends(rbac_rate_limit("reading.digests"))],
 )
 async def list_reading_digest_outputs(
-    schedule_id: Optional[str] = Query(None, description="Optional schedule id filter"),
+    schedule_id: str | None = Query(None, description="Optional schedule id filter"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     _current_user: User = Depends(get_request_user),

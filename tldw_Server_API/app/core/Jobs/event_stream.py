@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import time
-import json
-from typing import Optional, Dict, Any
+from typing import Any
+
 from loguru import logger
 
 from .audit_bridge import submit_job_audit_event
@@ -13,7 +14,7 @@ def _events_enabled() -> bool:
     return str(os.getenv("JOBS_EVENTS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}
 
 
-def emit_job_event(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: Optional[Dict[str, Any]] = None) -> None:
+def emit_job_event(event: str, *, job: dict[str, Any] | None = None, attrs: dict[str, Any] | None = None) -> None:
     """Best-effort no-op event emitter.
 
     If `JOBS_EVENTS_ENABLED=true`, logs a compact event line. In future this can
@@ -63,6 +64,7 @@ def emit_job_event(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: O
             if _db_url.startswith("postgres"):
                 try:
                     import psycopg  # type: ignore
+
                     from .pg_util import negotiate_pg_dsn
                     _dsn = negotiate_pg_dsn(_db_url)
                     with psycopg.connect(_dsn) as _conn:
@@ -152,4 +154,4 @@ def emit_job_event(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: O
         pass
 
 # Module-level state for soft rate limiter
-_rate_state: Dict[str, float] = {}
+_rate_state: dict[str, float] = {}

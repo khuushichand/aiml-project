@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
-import shlex
 import json
 import os
-import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
-from typing import Optional
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
 from tldw_Server_API.app.core.Utils.Utils import logging
@@ -60,7 +58,7 @@ class DotsOCRBackend(OCRBackend):
             return shlex.split(env_cmd) + [img_path]
         return [python_exe, "-m", "dots_ocr.parser", img_path, "--prompt", os.getenv("DOTS_OCR_PROMPT", "prompt_ocr")]
 
-    def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
+    def ocr_image(self, image_bytes: bytes, lang: str | None = None) -> str:
         if not self.available():
             logging.warning("DotsOCRBackend not available: set DOTS_VLLM_URL or install dots_ocr module.")
             return ""

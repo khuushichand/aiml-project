@@ -5,23 +5,28 @@ This module provides a factory pattern for instantiating the appropriate
 vector store adapter based on configuration.
 """
 
-from typing import Dict, Type, Optional
 import inspect
+from typing import Any, Optional
+
 from loguru import logger
 
 from .base import VectorStoreAdapter, VectorStoreConfig, VectorStoreType
 from .chromadb_adapter import ChromaDBAdapter
+
+_PGVectorAdapter: Optional[type[VectorStoreAdapter]]
 try:
-    from .pgvector_adapter import PGVectorAdapter
+    from .pgvector_adapter import PGVectorAdapter as _PGVectorAdapter
 except Exception:
-    PGVectorAdapter = None  # Optional
+    _PGVectorAdapter = None  # Optional
+
+PGVectorAdapter: Optional[type[VectorStoreAdapter]] = _PGVectorAdapter
 
 
 class VectorStoreFactory:
     """Factory for creating vector store adapters."""
 
     # Registry of available adapters
-    _adapters: Dict[VectorStoreType, Type[VectorStoreAdapter]] = {
+    _adapters: dict[VectorStoreType, type[VectorStoreAdapter]] = {
         VectorStoreType.CHROMADB: ChromaDBAdapter,
         # Future adapters:
         # VectorStoreType.PINECONE: PineconeAdapter,
@@ -73,7 +78,7 @@ class VectorStoreFactory:
     def register_adapter(
         cls,
         store_type: VectorStoreType,
-        adapter_class: Type[VectorStoreAdapter]
+        adapter_class: type[VectorStoreAdapter]
     ) -> None:
         """
         Register a new adapter type.
@@ -100,7 +105,7 @@ class VectorStoreFactory:
     @classmethod
     def create_from_settings(
         cls,
-        settings: Dict,
+        settings: dict,
         user_id: str = "0"
     ) -> Optional[VectorStoreAdapter]:
         """
@@ -162,7 +167,7 @@ class VectorStoreFactory:
         return cls.create_adapter(config, initialize=False)
 
 
-def create_from_settings_for_user(settings: Dict, user_id: str = "0") -> Optional[VectorStoreAdapter]:
+def create_from_settings_for_user(settings: dict, user_id: str = "0") -> Optional[VectorStoreAdapter]:
     """
     Helper that adapts to runtime monkeypatches of create_from_settings.
 
@@ -177,20 +182,20 @@ def create_from_settings_for_user(settings: Dict, user_id: str = "0") -> Optiona
     except (TypeError, ValueError):
         params = []
 
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     try:
         if params:
             kwargs[params[0].name] = settings
         if len(params) > 1:
             kwargs[params[1].name] = user_id
         if kwargs:
-            return bound(**kwargs)  # type: ignore[arg-type]
+            return bound(**kwargs)
     except TypeError:
         # Fall through to positional attempt
         pass
 
     # Fallback to positional invocation (best-effort)
     try:
-        return bound(settings, user_id)  # type: ignore[misc]
+        return bound(settings, user_id)
     except TypeError:
-        return bound(settings)  # type: ignore[misc]
+        return bound(settings)

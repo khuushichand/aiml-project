@@ -1,19 +1,21 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
 import asyncio
 import os
+from collections.abc import AsyncIterator, Iterable
+from typing import Any
 
-from .base import ChatProvider
-from tldw_Server_API.app.core.LLM_Calls.sse import (
-    normalize_provider_line,
-    is_done_line,
-    sse_done,
-    finalize_stream,
-)
-from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    finalize_stream,
+    is_done_line,
+    normalize_provider_line,
+    sse_done,
+)
+from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
+
+from .base import ChatProvider
 
 
 def _prefer_httpx_in_tests() -> bool:
@@ -22,8 +24,6 @@ def _prefer_httpx_in_tests() -> bool:
 
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
-    fetch as _hc_fetch,
-    RetryPolicy as _HC_RetryPolicy,
 )
 
 http_client_factory = _hc_create_client
@@ -32,7 +32,7 @@ http_client_factory = _hc_create_client
 class OpenRouterAdapter(ChatProvider):
     name = "openrouter"
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "supports_streaming": True,
             "supports_tools": True,
@@ -51,7 +51,7 @@ class OpenRouterAdapter(ChatProvider):
         import os
         return os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
-    def _resolve_base_url(self, request: Dict[str, Any]) -> str:
+    def _resolve_base_url(self, request: dict[str, Any]) -> str:
         override = (request or {}).get("base_url")
         if isinstance(override, str) and override.strip():
             return override.strip()
@@ -65,7 +65,7 @@ class OpenRouterAdapter(ChatProvider):
             pass
         return self._base_url()
 
-    def _resolve_timeout(self, request: Dict[str, Any], fallback: Optional[float]) -> float:
+    def _resolve_timeout(self, request: dict[str, Any], fallback: float | None) -> float:
         try:
             cfg = (request or {}).get("app_config") or {}
             or_cfg = cfg.get("openrouter_api") or {}
@@ -81,7 +81,7 @@ class OpenRouterAdapter(ChatProvider):
             return float(fallback)
         return float(self.capabilities().get("default_timeout_seconds", 90))
 
-    def _headers(self, api_key: Optional[str], request: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    def _headers(self, api_key: str | None, request: dict[str, Any] | None = None) -> dict[str, str]:
         """Build headers including OpenRouter-specific metadata.
 
         - Authorization: Bearer <key>
@@ -108,10 +108,10 @@ class OpenRouterAdapter(ChatProvider):
         h["X-Title"] = site_name or "TLDW-API"
         return h
 
-    def _build_payload(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        messages: List[Dict[str, Any]] = request.get("messages") or []
+    def _build_payload(self, request: dict[str, Any]) -> dict[str, Any]:
+        messages: list[dict[str, Any]] = request.get("messages") or []
         system_message = request.get("system_message")
-        payload_messages: List[Dict[str, Any]] = []
+        payload_messages: list[dict[str, Any]] = []
         if system_message:
             payload_messages.append({"role": "system", "content": system_message})
         payload_messages.extend(messages)
@@ -155,7 +155,7 @@ class OpenRouterAdapter(ChatProvider):
             payload["stop"] = request.get("stop")
         return payload
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         request = validate_payload(self.name, request or {})
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
@@ -177,7 +177,7 @@ class OpenRouterAdapter(ChatProvider):
         # Native disabled -> error to avoid legacy recursion
         raise RuntimeError("OpenRouterAdapter native HTTP disabled by configuration")
 
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
@@ -217,10 +217,10 @@ class OpenRouterAdapter(ChatProvider):
         # Native disabled -> error to avoid legacy recursion
         raise RuntimeError("OpenRouterAdapter native HTTP disabled by configuration")
 
-    async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
-    async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
+    async def astream(self, request: dict[str, Any], *, timeout: float | None = None) -> AsyncIterator[str]:
         async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):
             yield item
 
@@ -230,18 +230,18 @@ class OpenRouterAdapter(ChatProvider):
         OpenRouter is OpenAI-compatible; error bodies often match {error: {message, type}}.
         """
         from tldw_Server_API.app.core.LLM_Calls.error_utils import (
-            get_http_status_from_exception,
             get_http_error_text,
+            get_http_status_from_exception,
             is_http_status_error,
             log_http_400_body,
         )
         if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
-                ChatBadRequestError,
-                ChatAuthenticationError,
-                ChatRateLimitError,
-                ChatProviderError,
                 ChatAPIError,
+                ChatAuthenticationError,
+                ChatBadRequestError,
+                ChatProviderError,
+                ChatRateLimitError,
             )
             resp = getattr(exc, "response", None)
             status = get_http_status_from_exception(exc)

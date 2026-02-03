@@ -17,19 +17,16 @@
 import inspect
 import json
 import os
-from typing import Optional, Union, Generator, Any, Dict, List, Callable
-#
-# Import Local
-from tldw_Server_API.app.core.Chunking import (
-    improved_chunking_process
-)
-from tldw_Server_API.app.core.Utils.Utils import (
-    logging
-)
-from tldw_Server_API.app.core.config import load_and_log_configs
+from collections.abc import Generator
+from typing import Any, Callable, Optional, Union
+
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.streaming_utils import _extract_text_from_upstream_sse
-from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+
+#
+# Import Local
+from tldw_Server_API.app.core.Chunking import improved_chunking_process
+from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
@@ -38,6 +35,9 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
     resolve_provider_section,
 )
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+from tldw_Server_API.app.core.Utils.Utils import logging
+
 #
 #######################################################################################################################
 # Function Definitions
@@ -97,7 +97,7 @@ def _build_summary_prompt(text: str, custom_prompt_arg: Optional[str]) -> str:
     return text
 
 
-def _resolve_adapter_timeout(provider: str, app_config: Dict[str, Any]) -> Optional[float]:
+def _resolve_adapter_timeout(provider: str, app_config: dict[str, Any]) -> Optional[float]:
     section = resolve_provider_section(provider)
     if section:
         raw = (app_config.get(section) or {}).get("api_timeout")
@@ -131,7 +131,7 @@ def _summarize_via_adapter(
     if not model:
         return f"Error: Model is required for provider '{provider}'"
     prompt = _build_summary_prompt(text_to_summarize, custom_prompt_arg)
-    request: Dict[str, Any] = {
+    request: dict[str, Any] = {
         "messages": [{"role": "user", "content": prompt}],
         "system_message": system_message,
         "model": model,
@@ -176,7 +176,7 @@ def _summarize_via_adapter(
 #
 
 # --- Keep existing helper functions ---
-def extract_text_from_segments(segments: List[Dict]) -> str:
+def extract_text_from_segments(segments: list[dict]) -> str:
     # (Keep existing implementation)
     logging.debug(f"Segments received: {segments}")
     logging.debug(f"Type of segments: {type(segments)}")
@@ -202,7 +202,7 @@ def extract_text_from_segments(segments: List[Dict]) -> str:
 
 
 def recursive_summarize_chunks(
-    chunks: List[str],
+    chunks: list[str],
     summarize_func: Callable[[str], str] # Function now only needs to accept the text
 ) -> str:
     """

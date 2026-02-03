@@ -7,7 +7,7 @@ only the schema is required.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -27,11 +27,11 @@ TTS_ENGINES = {'kokoro', 'dia', 'higgs', 'vibevoice', 'echo_tts', 'pocket_tts', 
 
 class STTInstall(BaseModel):
     engine: str
-    models: List[str] = Field(default_factory=list)
+    models: list[str] = Field(default_factory=list)
 
     @model_validator(mode='before')
     @classmethod
-    def _normalise_models(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalise_models(cls, values: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(values, dict):
             return values
         engine = values.get('engine')
@@ -50,7 +50,7 @@ class STTInstall(BaseModel):
 
 class TTSInstall(BaseModel):
     engine: str
-    variants: List[str] = Field(default_factory=list)
+    variants: list[str] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _validate(self) -> 'TTSInstall':
@@ -61,13 +61,13 @@ class TTSInstall(BaseModel):
 
 
 class EmbeddingsInstall(BaseModel):
-    huggingface: List[str] = Field(default_factory=list)
-    custom: List[str] = Field(default_factory=list)
-    onnx: List[str] = Field(default_factory=list)
+    huggingface: list[str] = Field(default_factory=list)
+    custom: list[str] = Field(default_factory=list)
+    onnx: list[str] = Field(default_factory=list)
 
     @model_validator(mode='before')
     @classmethod
-    def _normalise(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalise(cls, values: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(values, dict):
             return values
         normalised = dict(values)
@@ -78,8 +78,8 @@ class EmbeddingsInstall(BaseModel):
 
 
 class InstallPlan(BaseModel):
-    stt: List[STTInstall] = Field(default_factory=list)
-    tts: List[TTSInstall] = Field(default_factory=list)
+    stt: list[STTInstall] = Field(default_factory=list)
+    tts: list[TTSInstall] = Field(default_factory=list)
     embeddings: EmbeddingsInstall = Field(default_factory=EmbeddingsInstall)
 
     def is_empty(self) -> bool:

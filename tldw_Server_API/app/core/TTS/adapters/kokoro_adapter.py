@@ -2,52 +2,45 @@
 # Description: Kokoro TTS adapter implementation
 #
 # Imports
-import builtins
-import os
-import sys
-import platform
-import time
 import asyncio
+import builtins
 import concurrent.futures
-from ctypes.util import find_library as _ctypes_find_library
+import os
+import platform
 import re
+import sys
+import time
+from collections.abc import AsyncGenerator
 from contextlib import contextmanager
-from typing import Optional, Dict, Any, AsyncGenerator, Set, List, Tuple
+from ctypes.util import find_library as _ctypes_find_library
+from typing import Any, Optional
+
 #
 # Third-party Imports
 import numpy as np
 from loguru import logger
-#
-# Local Imports
-from .base import (
-    TTSAdapter,
-    TTSCapabilities,
-    TTSRequest,
-    TTSResponse,
-    AudioFormat,
-    VoiceInfo,
-    ProviderStatus
-)
-from ..tts_exceptions import (
-    TTSProviderNotConfiguredError,
-    TTSProviderInitializationError,
-    TTSModelNotFoundError,
-    TTSModelLoadError,
-    TTSGenerationError,
-    TTSResourceError,
-    TTSInsufficientMemoryError
-)
-from ..tts_validation import validate_tts_request
-from ..utils import parse_bool
-from ..tts_resource_manager import get_resource_manager
+
 from ..phoneme_overrides import (
+    PhonemeOverrideEntry,
     apply_overrides_to_text,
     filter_overrides_for_provider,
     load_override_entries,
     merge_override_entries,
     parse_override_entries,
-    PhonemeOverrideEntry,
 )
+from ..tts_exceptions import (
+    TTSGenerationError,
+    TTSModelLoadError,
+    TTSModelNotFoundError,
+    TTSProviderNotConfiguredError,
+)
+from ..tts_validation import validate_tts_request
+from ..utils import parse_bool
+
+#
+# Local Imports
+from .base import AudioFormat, ProviderStatus, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse, VoiceInfo
+
 #
 #######################################################################################################################
 #
@@ -161,7 +154,7 @@ class KokoroAdapter(TTSAdapter):
         "absolute_max_tokens": 150  # Lowered for testing
     }
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config)
 
         # Determine backend type (ONNX or PyTorch). Default to PyTorch; ONNX is opt-in.
@@ -271,12 +264,12 @@ class KokoroAdapter(TTSAdapter):
             or self.config.get("phoneme_override_path")
             or os.getenv("TTS_PHONEME_OVERRIDES_PATH")
         )
-        self._provider_override_entries: List[PhonemeOverrideEntry] = parse_override_entries(
+        self._provider_override_entries: list[PhonemeOverrideEntry] = parse_override_entries(
             self.config.get("kokoro_phoneme_overrides") or self.config.get("phoneme_overrides"),
             provider_hint="kokoro",
         )
         try:
-            self._global_override_entries: List[PhonemeOverrideEntry] = load_override_entries(self.phoneme_override_path)
+            self._global_override_entries: list[PhonemeOverrideEntry] = load_override_entries(self.phoneme_override_path)
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"{self.provider_name}: Failed to load global phoneme overrides: {exc}")
             self._global_override_entries = []
@@ -316,7 +309,7 @@ class KokoroAdapter(TTSAdapter):
         self.kokoro_pt_pipelines = {}
         self.tokenizer = None
         self.audio_normalizer = None
-        self._dynamic_voices: List[VoiceInfo] = []
+        self._dynamic_voices: list[VoiceInfo] = []
 
     def _ensure_audio_normalizer(self) -> None:
         if self.audio_normalizer is not None:
@@ -392,7 +385,7 @@ class KokoroAdapter(TTSAdapter):
     async def _initialize_onnx(self) -> bool:
         """Initialize ONNX backend"""
         try:
-            from kokoro_onnx import Kokoro, EspeakConfig
+            from kokoro_onnx import EspeakConfig, Kokoro
 
             # Check model file exists
             if not os.path.exists(self.model_path):
@@ -511,14 +504,14 @@ class KokoroAdapter(TTSAdapter):
             #   Actual: tensor(int32), expected: tensor(float)
             # Patch Kokoro._create_audio locally to always pass speed as float.
             try:
-                import numpy as _np  # type: ignore
                 import kokoro_onnx as _konnx  # type: ignore
+                import numpy as _np  # type: ignore
 
                 orig_create_audio = getattr(_konnx.Kokoro, "_create_audio", None)
 
                 if callable(orig_create_audio) and not getattr(_konnx.Kokoro, "_tldw_speed_patch", False):
                     def _patched_create_audio(self_k, phonemes, voice, speed):
-                        from kokoro_onnx.config import SAMPLE_RATE, MAX_PHONEME_LENGTH  # type: ignore
+                        from kokoro_onnx.config import MAX_PHONEME_LENGTH, SAMPLE_RATE  # type: ignore
                         from kokoro_onnx.log import log as _log  # type: ignore
 
                         _log.debug(f"Phonemes: {phonemes}")
@@ -1262,7 +1255,7 @@ class KokoroAdapter(TTSAdapter):
         path = self.voices_json
         if not path or not os.path.exists(path):
             return
-        dyn: List[VoiceInfo] = []
+        dyn: list[VoiceInfo] = []
         existing_ids = set(self.VOICES.keys()) | {v.id for v in self._dynamic_voices}
         try:
             if os.path.isdir(path):
@@ -1371,7 +1364,7 @@ class KokoroAdapter(TTSAdapter):
         # Default to American English code
         return "a"
 
-    def _unpack_stream_item(self, item: Any) -> Tuple[Optional[np.ndarray], Optional[int]]:
+    def _unpack_stream_item(self, item: Any) -> tuple[Optional[np.ndarray], Optional[int]]:
         """
         Normalize stream items from both ONNX and PyTorch backends into (samples, sample_rate).
 
@@ -1455,7 +1448,7 @@ class KokoroAdapter(TTSAdapter):
             return False
         return self.enable_phoneme_overrides
 
-    def _collect_phoneme_overrides(self, request: TTSRequest) -> List[PhonemeOverrideEntry]:
+    def _collect_phoneme_overrides(self, request: TTSRequest) -> list[PhonemeOverrideEntry]:
         """Merge global, provider, and request-level overrides (request wins)."""
         base = filter_overrides_for_provider(self._global_override_entries, "kokoro")
         provider = filter_overrides_for_provider(self._provider_override_entries, "kokoro")
@@ -1537,7 +1530,7 @@ class KokoroAdapter(TTSAdapter):
                 cnt = 0
         return ' '.join(out)
 
-    def chunk_text(self, text: str) -> List[str]:
+    def chunk_text(self, text: str) -> list[str]:
         """
         Chunk text for optimal Kokoro processing.
         Based on Kokoro-FastAPI chunking strategy.

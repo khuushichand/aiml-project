@@ -9,19 +9,17 @@ This module provides:
 """
 
 import re
-import difflib
-from typing import List, Dict, Any, Optional, Tuple, Set
-from dataclasses import dataclass, field
-from enum import Enum
-import hashlib
-from collections import defaultdict, OrderedDict
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
+from typing import Any, Optional
 
-import numpy as np
 from loguru import logger
+
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
-from .types import Document, Citation, CitationType, EvidenceChain, EvidenceNode
+from .types import Document, EvidenceChain, EvidenceNode
 
 
 class CitationStyle(Enum):
@@ -45,7 +43,7 @@ class ChunkCitation:
     confidence: float
     usage_context: str  # How this chunk was used in the answer
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "chunk_id": self.chunk_id,
@@ -61,12 +59,12 @@ class ChunkCitation:
 @dataclass
 class DualCitationResult:
     """Combined result containing both academic and chunk citations."""
-    academic_citations: List[str]  # Formatted academic citations
-    chunk_citations: List[ChunkCitation]  # Chunk-level citations
-    inline_markers: Dict[str, str]  # Mapping of inline markers to chunks
-    citation_map: Dict[str, List[str]]  # Document ID to chunk IDs mapping
+    academic_citations: list[str]  # Formatted academic citations
+    chunk_citations: list[ChunkCitation]  # Chunk-level citations
+    inline_markers: dict[str, str]  # Mapping of inline markers to chunks
+    citation_map: dict[str, list[str]]  # Document ID to chunk IDs mapping
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for API response."""
         return {
             "academic_citations": self.academic_citations,
@@ -81,7 +79,7 @@ class AcademicCitationFormatter:
 
     def format_citation(
         self,
-        metadata: Dict[str, Any],
+        metadata: dict[str, Any],
         style: CitationStyle
     ) -> str:
         """
@@ -107,7 +105,7 @@ class AcademicCitationFormatter:
         else:
             return self._format_generic(metadata)
 
-    def _format_mla(self, meta: Dict[str, Any]) -> str:
+    def _format_mla(self, meta: dict[str, Any]) -> str:
         """
         Format MLA citation.
         Format: Author. "Title." Publication, Date, Pages.
@@ -158,7 +156,7 @@ class AcademicCitationFormatter:
 
         return ". ".join(parts) + "."
 
-    def _format_apa(self, meta: Dict[str, Any]) -> str:
+    def _format_apa(self, meta: dict[str, Any]) -> str:
         """
         Format APA citation.
         Format: Author. (Date). Title. Publication.
@@ -200,7 +198,7 @@ class AcademicCitationFormatter:
 
         return ". ".join(parts) + "."
 
-    def _format_chicago(self, meta: Dict[str, Any]) -> str:
+    def _format_chicago(self, meta: dict[str, Any]) -> str:
         """
         Format Chicago citation (Notes-Bibliography style).
         """
@@ -246,7 +244,7 @@ class AcademicCitationFormatter:
 
         return ". ".join(parts) + "."
 
-    def _format_harvard(self, meta: Dict[str, Any]) -> str:
+    def _format_harvard(self, meta: dict[str, Any]) -> str:
         """
         Format Harvard citation.
         """
@@ -286,7 +284,7 @@ class AcademicCitationFormatter:
 
         return ". ".join(parts) + "."
 
-    def _format_ieee(self, meta: Dict[str, Any], number: int = 1) -> str:
+    def _format_ieee(self, meta: dict[str, Any], number: int = 1) -> str:
         """
         Format IEEE citation.
         """
@@ -323,7 +321,7 @@ class AcademicCitationFormatter:
 
         return " ".join(parts) + "."
 
-    def _format_generic(self, meta: Dict[str, Any]) -> str:
+    def _format_generic(self, meta: dict[str, Any]) -> str:
         """Fallback generic citation format."""
         parts = []
 
@@ -511,7 +509,7 @@ class CitationGenerator:
 
     async def generate_citations(
         self,
-        documents: List[Document],
+        documents: list[Document],
         query: str = "",
         style: CitationStyle = CitationStyle.MLA,
         include_chunks: bool = True,
@@ -570,7 +568,7 @@ class CitationGenerator:
             citation_map=citation_map
         )
 
-    def _group_by_source(self, documents: List[Document]) -> Dict[str, List[Document]]:
+    def _group_by_source(self, documents: list[Document]) -> dict[str, list[Document]]:
         """Group documents by their source document ID."""
         groups = defaultdict(list)
 
@@ -749,7 +747,7 @@ class CitationGenerator:
             return citations
 
         # Build a mapping of document IDs to chain nodes
-        doc_to_nodes = {}
+        doc_to_nodes: dict[str, list[EvidenceNode]] = {}
         for node in chain.nodes:
             if node.document_id not in doc_to_nodes:
                 doc_to_nodes[node.document_id] = []
@@ -795,13 +793,13 @@ class CitationGenerator:
 
     async def generate_citations_with_chains(
         self,
-        documents: List[Document],
+        documents: list[Document],
         query: str = "",
         generated_answer: Optional[str] = None,
         style: CitationStyle = CitationStyle.MLA,
         include_chunks: bool = True,
         max_citations: int = 10,
-    ) -> Tuple[DualCitationResult, Optional[Any]]:
+    ) -> tuple[DualCitationResult, Optional[Any]]:
         """
         Generate citations with evidence chain building.
 

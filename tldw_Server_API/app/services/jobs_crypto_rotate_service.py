@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import os
 import asyncio
-from typing import Optional, List
+import os
+
 from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -29,7 +29,7 @@ async def run_jobs_crypto_rotate(stop_event: asyncio.Event) -> None:
     queue = os.getenv("JOBS_CRYPTO_ROTATE_QUEUE", "").strip() or None
     job_type = os.getenv("JOBS_CRYPTO_ROTATE_JOB_TYPE", "").strip() or None
     fields_env = os.getenv("JOBS_CRYPTO_ROTATE_FIELDS", "payload,result").strip()
-    fields: List[str] = [f.strip() for f in fields_env.split(",") if f.strip() in {"payload", "result"}]
+    fields: list[str] = [f.strip() for f in fields_env.split(",") if f.strip() in {"payload", "result"}]
     if not fields:
         fields = ["payload", "result"]
     jm = JobManager(backend=backend, db_url=db_url)

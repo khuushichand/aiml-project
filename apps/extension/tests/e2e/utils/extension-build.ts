@@ -66,6 +66,15 @@ export async function launchWithBuiltExtension(
     ]
   })
 
+  // Enable E2E debug logs in extension pages.
+  await context.addInitScript(() => {
+    try {
+      ;(globalThis as any).__tldw_e2e_debug = true
+    } catch {
+      // ignore flag set failures
+    }
+  })
+
   // Test-only: redirect sync storage writes to local to avoid sync quota limits.
   await context.addInitScript(() => {
     const patchStorage = (storage: any) => {

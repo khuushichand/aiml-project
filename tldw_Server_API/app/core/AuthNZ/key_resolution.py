@@ -1,27 +1,31 @@
 from __future__ import annotations
-#
-from typing import Optional, Dict, Any, List
+
+import hashlib
+import hmac
 import os
+
+#
+from typing import Any
+
 #
 # Third-Party-Libs
 from loguru import logger
-import hmac
-import hashlib
 
-#
-# Local Imports
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.api_key_crypto import (
     is_kdf_hash,
     parse_api_key,
     verify_kdf_hash,
 )
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
 
+#
+# Local Imports
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
-def _compute_legacy_hmac_digests(api_key: str, key_materials: List[bytes]) -> List[str]:
+
+def _compute_legacy_hmac_digests(api_key: str, key_materials: list[bytes]) -> list[str]:
     """
     Compute legacy HMAC-SHA256 digests for an API key using the provided key materials.
 
@@ -36,7 +40,7 @@ def _compute_legacy_hmac_digests(api_key: str, key_materials: List[bytes]) -> Li
     The implementation MUST remain byte-for-byte compatible with the historical
     HMAC-SHA256 digests so that existing database rows continue to verify correctly.
     """
-    digests: List[str] = []
+    digests: list[str] = []
     for key in key_materials:
         try:
             digest = hmac.new(key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -47,7 +51,7 @@ def _compute_legacy_hmac_digests(api_key: str, key_materials: List[bytes]) -> Li
     return digests
 
 
-async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Dict[str, Any]]:
+async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> dict[str, Any] | None:
     """
     Resolve an API key to its database identity via key_id or legacy HMAC lookup.
 

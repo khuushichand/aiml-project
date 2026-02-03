@@ -6,7 +6,8 @@ Summarization_General_Lib to keep a single LLM call surface.
 """
 from __future__ import annotations
 
-from typing import Any, Generator, Optional, Union
+from collections.abc import Generator
+from typing import Any, Union
 
 from tldw_Server_API.app.core.LLM_Calls import Summarization_General_Lib as sgl
 from tldw_Server_API.app.core.LLM_Calls.deprecation import log_legacy_once
@@ -20,7 +21,7 @@ def _log_legacy() -> None:
     )
 
 
-def _warn_ignored_override(param_name: str, value: Optional[str], default: Optional[str] = None) -> None:
+def _warn_ignored_override(param_name: str, value: str | None, default: str | None = None) -> None:
     if value is None:
         return
     if default is not None and str(value).strip() == str(default).strip():
@@ -34,11 +35,11 @@ def _warn_ignored_override(param_name: str, value: Optional[str], default: Optio
 def _summarize(
     api_name: str,
     input_data: Any,
-    custom_prompt_arg: Optional[str],
+    custom_prompt_arg: str | None,
     *,
-    api_key: Optional[str] = None,
-    system_message: Optional[str] = None,
-    temp: Optional[float] = None,
+    api_key: str | None = None,
+    system_message: str | None = None,
+    temp: float | None = None,
     streaming: bool = False,
 ) -> Union[str, Generator[str, None, None]]:
     _log_legacy()
@@ -55,9 +56,9 @@ def _summarize(
 
 def summarize_with_local_llm(
     input_data: Any,
-    custom_prompt_arg: Optional[str],
-    temp: Optional[float],
-    system_message: Optional[str] = None,
+    custom_prompt_arg: str | None,
+    temp: float | None,
+    system_message: str | None = None,
     streaming: bool = False,
 ) -> Union[str, Generator[str, None, None]]:
     return _summarize(
@@ -72,10 +73,10 @@ def summarize_with_local_llm(
 
 def summarize_with_llama(
     input_data: Any,
-    custom_prompt: Optional[str],
-    api_key: Optional[str] = None,
-    temp: Optional[float] = None,
-    system_message: Optional[str] = None,
+    custom_prompt: str | None,
+    api_key: str | None = None,
+    temp: float | None = None,
+    system_message: str | None = None,
     streaming: bool = False,
 ) -> Union[str, Generator[str, None, None]]:
     return _summarize(
@@ -91,10 +92,10 @@ def summarize_with_llama(
 
 def summarize_with_kobold(
     input_data: Any,
-    api_key: Optional[str],
-    custom_prompt_input: Optional[str],
-    system_message: Optional[str] = None,
-    temp: Optional[float] = None,
+    api_key: str | None,
+    custom_prompt_input: str | None,
+    system_message: str | None = None,
+    temp: float | None = None,
     kobold_api_ip: str = "http://127.0.0.1:5001/api/v1/generate",
     streaming: bool = False,
 ) -> Union[str, Generator[str, None, None]]:
@@ -112,11 +113,11 @@ def summarize_with_kobold(
 
 def summarize_with_oobabooga(
     input_data: Any,
-    api_key: Optional[str],
-    custom_prompt: Optional[str],
-    system_message: Optional[str] = None,
-    temp: Optional[float] = None,
-    api_url: Optional[str] = None,
+    api_key: str | None,
+    custom_prompt: str | None,
+    system_message: str | None = None,
+    temp: float | None = None,
+    api_url: str | None = None,
     streaming: bool = False,
 ) -> Union[str, Generator[str, None, None]]:
     _warn_ignored_override("api_url", api_url)
@@ -133,10 +134,10 @@ def summarize_with_oobabooga(
 
 def summarize_with_tabbyapi(
     input_data: Any,
-    custom_prompt_input: Optional[str],
-    system_message: Optional[str] = None,
-    api_key: Optional[str] = None,
-    temp: Optional[float] = None,
+    custom_prompt_input: str | None,
+    system_message: str | None = None,
+    api_key: str | None = None,
+    temp: float | None = None,
     api_IP: str = "http://127.0.0.1:5000/v1/chat/completions",
     streaming: bool = False,
 ) -> Union[str, Generator[str, None, None]]:
@@ -153,11 +154,11 @@ def summarize_with_tabbyapi(
 
 
 def summarize_with_vllm(
-    api_key: Optional[str],
+    api_key: str | None,
     input_data: Any,
-    custom_prompt_arg: Optional[str],
-    temp: Optional[float] = None,
-    system_message: Optional[str] = None,
+    custom_prompt_arg: str | None,
+    temp: float | None = None,
+    system_message: str | None = None,
     streaming: bool = False,
 ) -> Union[str, Generator[str, None, None]]:
     return _summarize(
@@ -173,16 +174,16 @@ def summarize_with_vllm(
 
 def summarize_with_ollama(
     input_data: Any,
-    custom_prompt: Optional[str],
-    api_url: Optional[str] = None,
-    api_key: Optional[str] = None,
-    temp: Optional[float] = None,
-    system_message: Optional[str] = None,
-    model: Optional[str] = None,
+    custom_prompt: str | None,
+    api_url: str | None = None,
+    api_key: str | None = None,
+    temp: float | None = None,
+    system_message: str | None = None,
+    model: str | None = None,
     max_retries: int = 5,
     retry_delay: int = 20,
     streaming: bool = False,
-    top_p: Optional[float] = None,
+    top_p: float | None = None,
 ) -> Union[str, Generator[str, None, None]]:
     _warn_ignored_override("api_url", api_url)
     return _summarize(
@@ -197,11 +198,11 @@ def summarize_with_ollama(
 
 
 def summarize_with_custom_openai(
-    api_key: Optional[str],
+    api_key: str | None,
     input_data: Any,
-    custom_prompt_arg: Optional[str],
-    temp: Optional[float] = None,
-    system_message: Optional[str] = None,
+    custom_prompt_arg: str | None,
+    temp: float | None = None,
+    system_message: str | None = None,
     streaming: bool = False,
 ) -> Union[str, Generator[str, None, None]]:
     return _summarize(
@@ -216,11 +217,11 @@ def summarize_with_custom_openai(
 
 
 def summarize_with_custom_openai_2(
-    api_key: Optional[str],
+    api_key: str | None,
     input_data: Any,
-    custom_prompt_arg: Optional[str],
-    temp: Optional[float] = None,
-    system_message: Optional[str] = None,
+    custom_prompt_arg: str | None,
+    temp: float | None = None,
+    system_message: str | None = None,
     streaming: bool = False,
 ) -> Union[str, Generator[str, None, None]]:
     return _summarize(

@@ -1,7 +1,7 @@
 # config_schemas.py
 """Schemas for effective configuration diagnostics."""
 
-from typing import Any, Dict, List, Optional, Literal
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -22,15 +22,15 @@ class EffectiveConfigResponse(BaseModel):
     config_root: str = Field(..., description="Resolved config root directory")
     config_file: Optional[str] = Field(None, description="Resolved config.txt path")
     prompts_dir: Optional[str] = Field(None, description="Resolved prompts directory")
-    module_yaml: Dict[str, Optional[str]] = Field(
+    module_yaml: dict[str, Optional[str]] = Field(
         default_factory=dict,
         description="Module YAML paths keyed by module name",
     )
-    values: Dict[str, Dict[str, ConfigValue]] = Field(
+    values: dict[str, dict[str, ConfigValue]] = Field(
         default_factory=dict,
         description="Effective config values by namespace",
     )
-    unknown_sections: List[str] = Field(
+    unknown_sections: list[str] = Field(
         default_factory=list,
         description="Requested config sections that are not recognized",
     )

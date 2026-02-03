@@ -8,42 +8,41 @@ Provides CRUD operations for Kanban boards including:
 - Soft delete and restore boards
 - Get board with nested lists and cards
 """
-from typing import Optional
 from datetime import datetime
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Header, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
-    KanbanDB,
-    KanbanDBError,
-    InputError,
-    ConflictError,
-    NotFoundError,
-)
-from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
-    BoardCreate,
-    BoardUpdate,
-    BoardResponse,
-    BoardListResponse,
-    BoardWithListsResponse,
-    PaginationInfo,
-    DetailResponse,
-    ActivitiesListResponse,
-    ActivityResponse,
-    BoardExportRequest,
-    BoardExportResponse,
-    BoardImportRequest,
-    BoardImportResponse,
-    ImportStatsResponse,
-)
 from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     get_kanban_db_for_user,
     handle_kanban_db_error,
     kanban_rate_limit,
 )
 from tldw_Server_API.app.api.v1.endpoints._kanban_utils import to_db_timestamp
-
+from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
+    ActivitiesListResponse,
+    ActivityResponse,
+    BoardCreate,
+    BoardExportRequest,
+    BoardExportResponse,
+    BoardImportRequest,
+    BoardImportResponse,
+    BoardListResponse,
+    BoardResponse,
+    BoardUpdate,
+    BoardWithListsResponse,
+    DetailResponse,
+    ImportStatsResponse,
+    PaginationInfo,
+)
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
+    ConflictError,
+    InputError,
+    KanbanDB,
+    KanbanDBError,
+    NotFoundError,
+)
 
 router = APIRouter(prefix="/boards", tags=["Kanban Boards"])
 

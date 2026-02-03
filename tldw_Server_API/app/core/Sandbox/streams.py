@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import threading
-from typing import Any, Dict, Optional
 import json
 import os
-import uuid
+import threading
 import time
+import uuid
 
 from loguru import logger
+
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
 
@@ -24,7 +24,7 @@ class RunStreamHub:
         self._log_bytes: dict[str, int] = {}
         self._truncated: set[str] = set()
         self._ended: set[str] = set()
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._lock = threading.RLock()
         self._max_queue = 1000
         self._max_log_bytes_default = 10 * 1024 * 1024
@@ -41,7 +41,7 @@ class RunStreamHub:
         # Optional Redis fan-out (cross-worker broadcast)
         self._redis_enabled: bool = False
         self._redis_client = None
-        self._redis_thread: Optional[threading.Thread] = None
+        self._redis_thread: threading.Thread | None = None
         self._redis_channel: str = str(os.getenv("SANDBOX_WS_REDIS_CHANNEL") or "tldw:sandbox:streams:v1")
         self._instance_id: str = uuid.uuid4().hex
         self._maybe_enable_redis_fanout()
@@ -243,7 +243,7 @@ class RunStreamHub:
             except Exception:
                 pass
 
-    def publish_event(self, run_id: str, event: str, data: Optional[dict] = None) -> None:
+    def publish_event(self, run_id: str, event: str, data: dict | None = None) -> None:
         # Deduplicate final end event to avoid double-emission from runner and service
         if event == "end":
             with self._lock:
@@ -262,13 +262,13 @@ class RunStreamHub:
         """Publish a truncated frame with a reason code."""
         self._publish(run_id, {"type": "truncated", "reason": str(reason)})
 
-    def publish_stdout(self, run_id: str, chunk: bytes, max_log_bytes: Optional[int] = None) -> None:
+    def publish_stdout(self, run_id: str, chunk: bytes, max_log_bytes: int | None = None) -> None:
         self._publish_stream(run_id, "stdout", chunk, max_log_bytes=max_log_bytes)
 
-    def publish_stderr(self, run_id: str, chunk: bytes, max_log_bytes: Optional[int] = None) -> None:
+    def publish_stderr(self, run_id: str, chunk: bytes, max_log_bytes: int | None = None) -> None:
         self._publish_stream(run_id, "stderr", chunk, max_log_bytes=max_log_bytes)
 
-    def _publish_stream(self, run_id: str, kind: str, chunk: bytes, *, max_log_bytes: Optional[int]) -> None:
+    def _publish_stream(self, run_id: str, kind: str, chunk: bytes, *, max_log_bytes: int | None) -> None:
         cap = max_log_bytes or self._max_log_bytes_default
         with self._lock:
             used = self._log_bytes.get(run_id, 0)
@@ -329,10 +329,10 @@ class RunStreamHub:
     # Interactive stdin
     # -----------------
     def configure_stdin(self, run_id: str, *, interactive: bool,
-                         stdin_max_bytes: Optional[int] = None,
-                         stdin_max_frame_bytes: Optional[int] = None,
-                         stdin_bps: Optional[int] = None,
-                         stdin_idle_timeout_sec: Optional[int] = None) -> None:
+                         stdin_max_bytes: int | None = None,
+                         stdin_max_frame_bytes: int | None = None,
+                         stdin_bps: int | None = None,
+                         stdin_idle_timeout_sec: int | None = None) -> None:
         """Configure stdin caps for a run. If interactive is False, clears any config."""
         with self._lock:
             if not interactive:
@@ -359,7 +359,7 @@ class RunStreamHub:
             st.setdefault("last_input", float(_time.time()))
             self._stdin_state[run_id] = st
 
-    def get_stdin_config(self, run_id: str) -> Optional[dict]:
+    def get_stdin_config(self, run_id: str) -> dict | None:
         with self._lock:
             cfg = self._stdin_cfg.get(run_id)
             return dict(cfg) if cfg else None
@@ -383,7 +383,7 @@ class RunStreamHub:
         except Exception:
             return
 
-    def consume_stdin(self, run_id: str, data_len: int) -> tuple[int, Optional[str]]:
+    def consume_stdin(self, run_id: str, data_len: int) -> tuple[int, str | None]:
         """Consume stdin bytes for a run according to configured caps.
 
         Returns a tuple of (allowed_bytes, reason_if_truncated). If allowed_bytes is 0
@@ -397,7 +397,7 @@ class RunStreamHub:
             # refill tokens for rate limiting
             self._refill_tokens(st)
             allowed = int(data_len)
-            reason: Optional[str] = None
+            reason: str | None = None
             # Per-frame cap
             if cfg.get("stdin_max_frame_bytes") is not None:
                 mfb = int(cfg["stdin_max_frame_bytes"])
@@ -433,13 +433,13 @@ class RunStreamHub:
                 st["last_input"] = float(_time.time())
             return (int(allowed), reason)
 
-    def get_stdin_idle_timeout(self, run_id: str) -> Optional[int]:
+    def get_stdin_idle_timeout(self, run_id: str) -> int | None:
         with self._lock:
             cfg = self._stdin_cfg.get(run_id) or {}
             val = cfg.get("stdin_idle_timeout_sec")
             return int(val) if val is not None else None
 
-    def get_last_stdin_input_time(self, run_id: str) -> Optional[float]:
+    def get_last_stdin_input_time(self, run_id: str) -> float | None:
         with self._lock:
             st = self._stdin_state.get(run_id) or {}
             return float(st.get("last_input")) if st.get("last_input") is not None else None

@@ -15,15 +15,16 @@
 #
 ####################
 
-import os
-import sys
 import logging
-from loguru import logger
-import tempfile
+import os
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
-from typing import Optional, Union, Dict, Any, List, Callable
+from typing import Any, Callable, Optional, Union
+
 import numpy as np
+from loguru import logger
 
 # Check if we're on macOS
 IS_MACOS = sys.platform == 'darwin'
@@ -350,7 +351,7 @@ def transcribe_streaming_mlx(
     chunk_size: int = 16000,  # 1 second chunks at 16kHz
     overlap: float = 0.1,      # 10% overlap
     verbose: bool = False
-) -> List[str]:
+) -> list[str]:
     """
     Transcribe audio stream using Parakeet MLX.
 
@@ -443,7 +444,7 @@ def unload_parakeet_mlx_model():
 # Utility Functions
 #
 
-def get_mlx_device_info() -> Dict[str, Any]:
+def get_mlx_device_info() -> dict[str, Any]:
     """Get information about MLX device and capabilities."""
     info = {
         'available': False,
@@ -475,7 +476,7 @@ def get_mlx_device_info() -> Dict[str, Any]:
     return info
 
 
-def benchmark_parakeet_mlx(audio_duration: float = 10.0) -> Dict[str, float]:
+def benchmark_parakeet_mlx(audio_duration: float = 10.0) -> dict[str, float]:
     """
     Benchmark Parakeet MLX performance.
 

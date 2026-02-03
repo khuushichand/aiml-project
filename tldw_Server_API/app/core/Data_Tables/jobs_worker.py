@@ -30,21 +30,19 @@ import os
 import threading
 import time
 import uuid
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Any, Callable
 
 from cachetools import LRUCache
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
-from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
-from tldw_Server_API.app.core.exceptions import DataTablesJobError
-from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 from tldw_Server_API.app.core.config import load_and_log_configs
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     get_user_chacha_db_path,
@@ -55,12 +53,14 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     get_document_version,
     get_latest_transcription,
 )
+from tldw_Server_API.app.core.exceptions import DataTablesJobError
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
 from tldw_Server_API.app.core.Jobs.worker_utils import coerce_int as _coerce_int
 from tldw_Server_API.app.core.Jobs.worker_utils import jobs_manager_from_env as _jobs_manager
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
-
 
 DATA_TABLES_DOMAIN = "data_tables"
 DATA_TABLES_JOB_TYPE = "data_table_generate"
@@ -165,14 +165,14 @@ def _coerce_float(value: Any, default: float) -> float:
         return float(default)
 
 
-def _normalize_user_id(job: Dict[str, Any], payload: Dict[str, Any]) -> str:
+def _normalize_user_id(job: dict[str, Any], payload: dict[str, Any]) -> str:
     owner = payload.get("user_id") or job.get("owner_user_id")
     if owner is None or str(owner).strip() == "":
         return str(DatabasePaths.get_single_user_id())
     return str(owner)
 
 
-def _normalize_payload(raw: Any) -> Dict[str, Any]:
+def _normalize_payload(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return dict(raw)
     if isinstance(raw, str):
@@ -184,7 +184,7 @@ def _normalize_payload(raw: Any) -> Dict[str, Any]:
     return {}
 
 
-def _resolve_max_rows(payload: Dict[str, Any]) -> int:
+def _resolve_max_rows(payload: dict[str, Any]) -> int:
     raw = payload.get("max_rows")
     requested = _coerce_int(raw, _DEFAULT_MAX_ROWS)
     if requested <= 0:
@@ -192,7 +192,7 @@ def _resolve_max_rows(payload: Dict[str, Any]) -> int:
     return max(1, min(requested, _MAX_ROWS_LIMIT))
 
 
-def _resolve_model(provider: str, model: Optional[str], app_config: Dict[str, Any]) -> Optional[str]:
+def _resolve_model(provider: str, model: str | None, app_config: dict[str, Any]) -> str | None:
     if model:
         return model
     key = f"{provider.replace('-', '_').replace('.', '_')}_api"
@@ -213,7 +213,7 @@ def _truncate_text(text: str, limit: int) -> str:
     return text[: max(0, limit - 3)] + "..."
 
 
-def _normalize_column_type(raw: Any) -> Optional[str]:
+def _normalize_column_type(raw: Any) -> str | None:
     if raw is None:
         return None
     text = str(raw).strip().lower()
@@ -222,8 +222,8 @@ def _normalize_column_type(raw: Any) -> Optional[str]:
     return _COLUMN_TYPE_ALIASES.get(text)
 
 
-def _normalize_column_hints(raw: Any) -> List[Dict[str, Any]]:
-    hints: List[Dict[str, Any]] = []
+def _normalize_column_hints(raw: Any) -> list[dict[str, Any]]:
+    hints: list[dict[str, Any]] = []
     if not isinstance(raw, list):
         return hints
     for item in raw:
@@ -253,9 +253,9 @@ def _normalize_column_key(value: str) -> str:
     return str(value or "").strip().lower()
 
 
-def _dedupe_column_names(names: Sequence[str]) -> List[str]:
-    counts: Dict[str, int] = {}
-    output: List[str] = []
+def _dedupe_column_names(names: Sequence[str]) -> list[str]:
+    counts: dict[str, int] = {}
+    output: list[str] = []
     for name in names:
         base = str(name or "").strip() or "Column"
         if base not in counts:
@@ -269,9 +269,9 @@ def _dedupe_column_names(names: Sequence[str]) -> List[str]:
 
 def _normalize_columns(
     raw_columns: Any,
-    column_hints: Optional[Sequence[Dict[str, Any]]] = None,
-) -> List[Dict[str, Any]]:
-    columns: List[Dict[str, Any]] = []
+    column_hints: Sequence[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    columns: list[dict[str, Any]] = []
     if isinstance(raw_columns, list):
         for raw in raw_columns:
             if isinstance(raw, dict):
@@ -361,15 +361,15 @@ def _safe_cell_value(value: Any) -> Any:
     return str(value)
 
 
-def _normalize_rows(raw_rows: Any, columns: List[Dict[str, Any]]) -> List[List[Any]]:
+def _normalize_rows(raw_rows: Any, columns: list[dict[str, Any]]) -> list[list[Any]]:
     if not isinstance(raw_rows, list):
         return []
     col_count = len(columns)
     col_lookup = {_normalize_column_key(col["name"]): idx for idx, col in enumerate(columns)}
-    normalized: List[List[Any]] = []
+    normalized: list[list[Any]] = []
 
     for raw in raw_rows:
-        row_values: Optional[List[Any]] = None
+        row_values: list[Any] | None = None
         if isinstance(raw, dict):
             row_values = [None] * col_count
             for key, value in raw.items():
@@ -433,7 +433,7 @@ def _extract_json_payload(raw: Any) -> Any:
     raise DataTablesJobError("llm_response_invalid_json", retryable=False)
 
 
-def _extract_text_from_snapshot(snapshot: Any) -> Optional[str]:
+def _extract_text_from_snapshot(snapshot: Any) -> str | None:
     if snapshot is None:
         return None
     if isinstance(snapshot, str):
@@ -478,7 +478,7 @@ def _extract_text_from_snapshot(snapshot: Any) -> Optional[str]:
     return None
 
 
-def _normalize_rag_sources(raw_sources: Any) -> List[str]:
+def _normalize_rag_sources(raw_sources: Any) -> list[str]:
     if not raw_sources:
         return ["media_db"]
     if isinstance(raw_sources, str):
@@ -487,7 +487,7 @@ def _normalize_rag_sources(raw_sources: Any) -> List[str]:
         sources = raw_sources
     else:
         return ["media_db"]
-    normalized: List[str] = []
+    normalized: list[str] = []
     for src in sources:
         name = str(src).strip().lower()
         if name in {"media", "media_db"}:
@@ -501,7 +501,7 @@ def _normalize_rag_sources(raw_sources: Any) -> List[str]:
     return normalized or ["media_db"]
 
 
-def _normalize_rag_document(doc: Any) -> Tuple[str, str, Dict[str, Any], float]:
+def _normalize_rag_document(doc: Any) -> tuple[str, str, dict[str, Any], float]:
     if hasattr(doc, "content"):
         doc_id = str(getattr(doc, "id", "") or "")
         content = getattr(doc, "content", "") or ""
@@ -520,16 +520,16 @@ def _normalize_rag_document(doc: Any) -> Tuple[str, str, Dict[str, Any], float]:
 def _build_rag_snapshot(
     *,
     query: str,
-    retrieval_params: Dict[str, Any],
+    retrieval_params: dict[str, Any],
     documents: Sequence[Any],
-) -> Dict[str, Any]:
-    chunks: List[Dict[str, Any]] = []
+) -> dict[str, Any]:
+    chunks: list[dict[str, Any]] = []
     for idx, doc in enumerate(documents, start=1):
         doc_id, content, metadata, score = _normalize_rag_document(doc)
         if not content:
             continue
         text = _truncate_text(content, _MAX_SNAPSHOT_CHARS)
-        chunk: Dict[str, Any] = {
+        chunk: dict[str, Any] = {
             "chunk_id": doc_id or f"chunk_{idx}",
             "chunk_text": text,
             "chunk_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
@@ -551,8 +551,8 @@ def _build_rag_snapshot(
     }
 
 
-def _build_sources_text(resolved: List[Dict[str, Any]]) -> str:
-    parts: List[str] = []
+def _build_sources_text(resolved: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
     total_chars = 0
     for idx, src in enumerate(resolved, start=1):
         text = str(src.get("text") or "")
@@ -576,7 +576,7 @@ def _build_sources_text(resolved: List[Dict[str, Any]]) -> str:
     return "\n\n".join(parts)
 
 
-def _render_column_hints(column_hints: Sequence[Dict[str, Any]]) -> str:
+def _render_column_hints(column_hints: Sequence[dict[str, Any]]) -> str:
     if not column_hints:
         return "None"
     lines = []
@@ -601,8 +601,8 @@ def _render_column_hints(column_hints: Sequence[Dict[str, Any]]) -> str:
 def _build_prompt(
     *,
     prompt: str,
-    sources: List[Dict[str, Any]],
-    column_hints: Sequence[Dict[str, Any]],
+    sources: list[dict[str, Any]],
+    column_hints: Sequence[dict[str, Any]],
     max_rows: int,
 ) -> str:
     sources_text = _build_sources_text(sources)
@@ -720,7 +720,7 @@ def _extract_media_text(db: MediaDatabase, media_id: int) -> str:
 
 
 def _extract_chat_text(db: CharactersRAGDB, conversation_id: str) -> str:
-    messages: List[Dict[str, Any]] = []
+    messages: list[dict[str, Any]] = []
     offset = 0
     while len(messages) < _CHAT_MAX_MESSAGES:
         batch = db.get_messages_for_conversation(
@@ -736,7 +736,7 @@ def _extract_chat_text(db: CharactersRAGDB, conversation_id: str) -> str:
         offset += len(batch)
         if len(batch) < _CHAT_BATCH_SIZE:
             break
-    lines: List[str] = []
+    lines: list[str] = []
     for msg in messages:
         content = str(msg.get("content") or "").strip()
         if not content:
@@ -754,9 +754,9 @@ async def _resolve_rag_query_source(
     query: str,
     media_db: MediaDatabase,
     chacha_db: CharactersRAGDB,
-    retrieval_params: Dict[str, Any],
+    retrieval_params: dict[str, Any],
     user_id: str,
-) -> Tuple[str, Dict[str, Any]]:
+) -> tuple[str, dict[str, Any]]:
     sources = _normalize_rag_sources(retrieval_params.get("sources"))
     search_mode = str(retrieval_params.get("search_mode") or "hybrid")
     fts_level = str(retrieval_params.get("fts_level") or "chunk")
@@ -801,13 +801,13 @@ def _is_job_cancelled(jm: JobManager, job_id: int) -> bool:
     return status == "cancelled"
 
 
-async def _handle_job(job: Dict[str, Any], jm: JobManager) -> Dict[str, Any]:
+async def _handle_job(job: dict[str, Any], jm: JobManager) -> dict[str, Any]:
     """Handle a single data tables job and persist the generated table."""
     payload = _normalize_payload(job.get("payload"))
     user_id = _normalize_user_id(job, payload)
     table_id = _coerce_int(payload.get("table_id"), 0)
-    db: Optional[MediaDatabase] = None
-    table_row: Optional[Dict[str, Any]] = None
+    db: MediaDatabase | None = None
+    table_row: dict[str, Any] | None = None
     try:
         job_type = str(job.get("job_type") or payload.get("job_type") or "").strip().lower()
         if job_type and job_type != DATA_TABLES_JOB_TYPE:
@@ -874,8 +874,8 @@ async def _handle_job(job: Dict[str, Any], jm: JobManager) -> Dict[str, Any]:
             db.update_data_table(table_id, status="cancelled", last_error=None, owner_user_id=user_id)
             return {"cancelled": True, "table_id": table_id}
 
-        resolved_sources: List[Dict[str, Any]] = []
-        sources_db_payload: List[Dict[str, Any]] = []
+        resolved_sources: list[dict[str, Any]] = []
+        sources_db_payload: list[dict[str, Any]] = []
 
         for source in sources:
             if not isinstance(source, dict):
@@ -1040,7 +1040,7 @@ async def _handle_job(job: Dict[str, Any], jm: JobManager) -> Dict[str, Any]:
         if len(rows) > max_rows:
             rows = rows[:max_rows]
 
-        column_records: List[Dict[str, Any]] = []
+        column_records: list[dict[str, Any]] = []
         for idx, col in enumerate(columns):
             column_records.append(
                 {
@@ -1053,7 +1053,7 @@ async def _handle_job(job: Dict[str, Any], jm: JobManager) -> Dict[str, Any]:
                 }
             )
 
-        row_records: List[Dict[str, Any]] = []
+        row_records: list[dict[str, Any]] = []
         for idx, row in enumerate(rows):
             row_json = {
                 column_records[c_idx]["column_id"]: _safe_cell_value(value)
@@ -1114,7 +1114,7 @@ async def _handle_job(job: Dict[str, Any], jm: JobManager) -> Dict[str, Any]:
         raise DataTablesJobError(str(exc), retryable=False) from exc
 
 
-async def run_data_tables_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_data_tables_jobs_worker(stop_event: asyncio.Event | None = None) -> None:
     """Run the data tables jobs worker loop until stopped."""
     worker_id = (os.getenv("DATA_TABLES_JOBS_WORKER_ID") or f"data-tables-jobs-{os.getpid()}").strip()
     queue = (os.getenv("DATA_TABLES_JOBS_QUEUE") or "default").strip() or "default"
@@ -1132,7 +1132,7 @@ async def run_data_tables_jobs_worker(stop_event: Optional[asyncio.Event] = None
     )
     jm = _jobs_manager()
     sdk = WorkerSDK(jm, cfg)
-    stop_watcher_task: Optional[asyncio.Task[None]] = None
+    stop_watcher_task: asyncio.Task[None] | None = None
 
     if stop_event is not None:
         async def _watch_stop() -> None:
@@ -1146,7 +1146,7 @@ async def run_data_tables_jobs_worker(stop_event: Optional[asyncio.Event] = None
         queue,
         worker_id,
     )
-    async def _handler(job: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handler(job: dict[str, Any]) -> dict[str, Any]:
         return await _handle_job(job, jm)
 
     try:

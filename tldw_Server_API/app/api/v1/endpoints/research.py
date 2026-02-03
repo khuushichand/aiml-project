@@ -4,43 +4,45 @@
 # Imports
 import asyncio
 import math
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import Any, Optional
+
 #
 # 3rd-Party Libraries
-from fastapi import APIRouter, Query, HTTPException, Depends, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.schemas.research_schemas import (
-    ArxivSearchResponse,
+    ArxivPaper,
     ArxivSearchRequestForm,
-    ArxivPaper, SemanticScholarSearchResponse, SemanticScholarSearchRequestForm, SemanticScholarPaper
+    ArxivSearchResponse,
+    SemanticScholarPaper,
+    SemanticScholarSearchRequestForm,
+    SemanticScholarSearchResponse,
 )
-from tldw_Server_API.app.core.Third_Party.Arxiv import (
-    search_arxiv_custom_api,
-    fetch_arxiv_xml,
-    convert_xml_to_markdown
-)
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User  # For User dependency
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.Third_Party.Semantic_Scholar import search_papers_semantic_scholar
 from tldw_Server_API.app.api.v1.schemas.websearch_schemas import (
-    WebSearchRequest, WebSearchRawResponse, WebSearchAggregateResponse
+    WebSearchAggregateResponse,
+    WebSearchRawResponse,
+    WebSearchRequest,
 )
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user  # For User dependency
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.Third_Party.Arxiv import convert_xml_to_markdown, fetch_arxiv_xml, search_arxiv_custom_api
+from tldw_Server_API.app.core.Third_Party.Semantic_Scholar import search_papers_semantic_scholar
 from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs
-from concurrent.futures import ThreadPoolExecutor
 
 
-def generate_and_search(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+def generate_and_search(*args: Any, **kwargs: Any) -> dict[str, Any]:
     """Wrapper that defers to the web search module, keeping monkeypatches effective."""
     return WebSearch_APIs.generate_and_search(*args, **kwargs)
 
 
-async def analyze_and_aggregate(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+async def analyze_and_aggregate(*args: Any, **kwargs: Any) -> dict[str, Any]:
     """Async wrapper around the aggregation stage for the same monkeypatch semantics."""
     return await WebSearch_APIs.analyze_and_aggregate(*args, **kwargs)
 

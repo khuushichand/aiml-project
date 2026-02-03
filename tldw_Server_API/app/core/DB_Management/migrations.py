@@ -6,9 +6,10 @@ without losing data or causing runtime detection issues.
 """
 
 import sqlite3
-from pathlib import Path
-from typing import List, Dict, Any, Optional, Callable
 from datetime import datetime
+from pathlib import Path
+from typing import Callable, Optional
+
 from loguru import logger
 
 
@@ -55,7 +56,7 @@ class MigrationManager:
             db_path: Path to the database file
         """
         self.db_path = db_path
-        self.migrations: List[Migration] = []
+        self.migrations: list[Migration] = []
         self._init_migration_table()
 
     def _init_migration_table(self) -> None:
@@ -86,7 +87,7 @@ class MigrationManager:
             result = cursor.fetchone()
             return result[0] if result and result[0] else 0
 
-    def get_pending_migrations(self) -> List[Migration]:
+    def get_pending_migrations(self) -> list[Migration]:
         """Get list of migrations that haven't been applied yet."""
         current_version = self.get_current_version()
         return [m for m in self.migrations if m.version > current_version]

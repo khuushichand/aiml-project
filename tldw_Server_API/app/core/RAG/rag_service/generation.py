@@ -7,23 +7,30 @@ with support for multiple providers, streaming, and fallback strategies.
 """
 
 import asyncio
-import re
 import json
+import re
 import time
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, AsyncIterator, List, Union, Protocol
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from enum import Enum
+from typing import TYPE_CHECKING, Any, Optional, Protocol, Union, cast
 
 from loguru import logger
 
 # Import LLM infrastructure
 from ...Chat.Chat_Deps import ChatConfigurationError
 from ...LLM_Calls.adapter_registry import get_registry
-
 from .types import Document
+
+if TYPE_CHECKING:
+    from .claims import ClaimsEngine as ClaimsEngineType
+else:
+    ClaimsEngineType = Any
+
+ClaimsEngine: Optional[type[ClaimsEngineType]] = None
 try:
-    from .claims import ClaimsEngine
+    from . import claims as _claims_mod
+    ClaimsEngine = cast(Optional[type[ClaimsEngineType]], getattr(_claims_mod, "ClaimsEngine", None))
 except Exception:
     ClaimsEngine = None
 
@@ -36,11 +43,11 @@ class GenerationStrategy(Protocol):
         context: Any,  # RAGPipelineContext
         query: str,
         **kwargs
-    ) -> str:
+    ) -> "GenerationResult":
         """Generate a response using the context and query."""
         ...
 
-    async def generate_stream(
+    def generate_stream(
         self,
         context: Any,
         query: str,
@@ -75,7 +82,7 @@ class GenerationResult:
     generation_time: float
     provider: str
     model: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class PromptTemplates:
@@ -216,7 +223,7 @@ class BaseGenerator(ABC):
         self.config = config
         self.prompt_template = PromptTemplates.get_template(config.prompt_template)
 
-    def format_context(self, documents: List[Document]) -> str:
+    def format_context(self, documents: list[Document]) -> str:
         """Format documents into context string."""
         if not documents:
             return "No relevant context found."
@@ -291,7 +298,9 @@ class LLMGenerator(BaseGenerator):
                 full_prompt = prompt
 
             # Call appropriate LLM provider
-            response = await self._call_llm(full_prompt, **kwargs)
+            response: Any = await self._call_llm(full_prompt, **kwargs)
+            if asyncio.iscoroutine(response):
+                response = await response
 
             # Extract text from response
             response_text = _extract_openai_content(response)
@@ -340,7 +349,7 @@ class LLMGenerator(BaseGenerator):
         max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
         timeout = kwargs.get("timeout", self.config.timeout)
 
-        request: Dict[str, Any] = {
+        request: dict[str, Any] = {
             "messages": [{"role": "user", "content": prompt}],
             "model": model,
             "api_key": api_key,
@@ -480,7 +489,7 @@ class FallbackGenerator(BaseGenerator):
         )
 
 
-def create_generator(config: Union[GenerationConfig, Dict[str, Any]]) -> GenerationStrategy:
+def create_generator(config: Union[GenerationConfig, dict[str, Any]]) -> GenerationStrategy:
     """Factory function to create appropriate generator."""
     if isinstance(config, dict):
         config = GenerationConfig(**config)
@@ -535,7 +544,7 @@ class AnswerGenerator:
     def __init__(self, model: Optional[str] = None, provider: Optional[str] = None, system_prompt: Optional[str] = None):
         # Lazy-configure provider/model from env/config when not provided
         try:
-            from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+            from tldw_Server_API.app.core.config import load_and_log_configs
             cfg = load_and_log_configs() or {}
         except Exception:
             cfg = {}
@@ -551,7 +560,7 @@ class AnswerGenerator:
         prompt_template: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
-    ) -> Union[str, Dict[str, Any]]:
+    ) -> Union[str, dict[str, Any]]:
         # Build a minimal GenerationConfig and use LLMGenerator under the hood
         gcfg = GenerationConfig(
             provider=self.provider,
@@ -564,7 +573,7 @@ class AnswerGenerator:
 
         # Create a tiny context holder compatible with BaseGenerator expectations
         class _Ctx:
-            def __init__(self, documents: List[Document], query: str):
+            def __init__(self, documents: list[Document], query: str):
                 self.documents = documents
                 self.query = query
 
@@ -601,7 +610,6 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
 
     if enable_claims and ClaimsEngine is not None:
         try:
-            import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
 
             def _analyze(api_name: str, input_data: Any, custom_prompt_arg: Optional[str] = None,
                          api_key: Optional[str] = None, system_message: Optional[str] = None,

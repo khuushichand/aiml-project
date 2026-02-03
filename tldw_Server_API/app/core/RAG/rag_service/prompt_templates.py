@@ -6,12 +6,13 @@ This module provides customizable prompt templates for different use cases
 and contexts, with support for dynamic variable substitution.
 """
 
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass
-from enum import Enum
 import json
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Optional
 
 from loguru import logger
+
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 
@@ -32,18 +33,15 @@ class PromptTemplate:
     template: str
     type: TemplateType
     description: Optional[str] = None
-    variables: List[str] = None
-    metadata: Dict[str, Any] = None
+    variables: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """Extract variables from template if not provided."""
-        if self.variables is None:
+        if not self.variables:
             import re
             # Find all {variable} patterns
             self.variables = re.findall(r'\{(\w+)\}', self.template)
-
-        if self.metadata is None:
-            self.metadata = {}
 
     def format(self, **kwargs) -> str:
         """Format the template with provided variables."""
@@ -54,7 +52,7 @@ class PromptTemplate:
             # Return template with missing variables as-is
             return self.template
 
-    def validate_variables(self, variables: Dict[str, Any]) -> bool:
+    def validate_variables(self, variables: dict[str, Any]) -> bool:
         """Check if all required variables are provided."""
         return all(var in variables for var in self.variables)
 
@@ -64,7 +62,7 @@ class PromptTemplateLibrary:
 
     def __init__(self):
         """Initialize with default templates."""
-        self.templates: Dict[str, PromptTemplate] = {}
+        self.templates: dict[str, PromptTemplate] = {}
         self._load_default_templates()
 
     def _load_default_templates(self):
@@ -286,7 +284,7 @@ Please base your answer on the provided context and indicate if additional infor
         """Get a template by name."""
         return self.templates.get(name)
 
-    def list_templates(self, type: Optional[TemplateType] = None) -> List[str]:
+    def list_templates(self, type: Optional[TemplateType] = None) -> list[str]:
         """List available template names, optionally filtered by type."""
         if type:
             return [
@@ -314,7 +312,7 @@ Please base your answer on the provided context and indicate if additional infor
 
     def format_context_documents(
         self,
-        documents: List[Any],
+        documents: list[Any],
         template_name: str = "context_with_metadata"
     ) -> str:
         """Format a list of documents using a context template."""

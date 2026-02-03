@@ -12,11 +12,11 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Optional
 
 from loguru import logger
 
-from .types import Document, DataSource
+from .types import DataSource, Document
 
 
 @dataclass
@@ -29,21 +29,21 @@ class KnowledgeStrip:
     start_offset: int
     end_offset: int
     relevance_score: float
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class KnowledgeStripsResult:
     """Result of processing documents into knowledge strips."""
 
-    strips: List[KnowledgeStrip]
-    documents: List[Document]  # Documents rebuilt from strips
+    strips: list[KnowledgeStrip]
+    documents: list[Document]  # Documents rebuilt from strips
     total_strips: int
     relevant_strips: int
     filtered_strips: int
     avg_relevance: float
     processing_time_ms: int
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -58,7 +58,7 @@ def _estimate_tokens(text: str) -> int:
 def _split_into_strips(
     text: str,
     strip_size_tokens: int = 100,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Split text into semantic strips.
 
@@ -80,8 +80,8 @@ def _split_into_strips(
     sentence_pattern = r'(?<=[.!?])\s+(?=[A-Z])'
     sentences = re.split(sentence_pattern, text)
 
-    strips = []
-    current_strip = []
+    strips: list[dict[str, Any]] = []
+    current_strip: list[str] = []
     current_tokens = 0
     current_start = 0
 
@@ -186,7 +186,7 @@ class KnowledgeStripsProcessor:
     async def process(
         self,
         query: str,
-        documents: List[Document],
+        documents: list[Document],
         top_k: int = 20,
     ) -> KnowledgeStripsResult:
         """
@@ -214,7 +214,7 @@ class KnowledgeStripsProcessor:
             )
 
         # Step 1: Extract strips from all documents
-        all_strips: List[KnowledgeStrip] = []
+        all_strips: list[KnowledgeStrip] = []
 
         for doc in documents:
             doc_id = getattr(doc, "id", str(uuid.uuid4().hex[:8]))
@@ -298,8 +298,8 @@ class KnowledgeStripsProcessor:
     def _score_strips_heuristic(
         self,
         query: str,
-        strips: List[KnowledgeStrip],
-    ) -> List[KnowledgeStrip]:
+        strips: list[KnowledgeStrip],
+    ) -> list[KnowledgeStrip]:
         """Score strips using keyword matching heuristic."""
         for strip in strips:
             strip.relevance_score = _score_strip_relevance(query, strip.text)
@@ -308,14 +308,18 @@ class KnowledgeStripsProcessor:
     async def _score_strips_llm(
         self,
         query: str,
-        strips: List[KnowledgeStrip],
-    ) -> List[KnowledgeStrip]:
+        strips: list[KnowledgeStrip],
+    ) -> list[KnowledgeStrip]:
         """
         Score strips using LLM-based grading.
 
         Uses batch processing for efficiency.
         """
         import json
+
+        analyze_fn = self._analyze
+        if analyze_fn is None:
+            return self._score_strips_heuristic(query, strips)
 
         # Process in small batches
         batch_size = 5
@@ -345,7 +349,7 @@ JSON:"""
 
             try:
                 raw_response = await asyncio.to_thread(
-                    self._analyze,
+                    analyze_fn,
                     "openai",
                     "",
                     prompt,
@@ -375,9 +379,9 @@ JSON:"""
 
     def _rebuild_documents(
         self,
-        strips: List[KnowledgeStrip],
-        original_docs: List[Document],
-    ) -> List[Document]:
+        strips: list[KnowledgeStrip],
+        original_docs: list[Document],
+    ) -> list[Document]:
         """
         Rebuild documents from filtered strips.
 
@@ -387,7 +391,7 @@ JSON:"""
         from collections import defaultdict
 
         # Group strips by doc_id
-        doc_strips: Dict[str, List[KnowledgeStrip]] = defaultdict(list)
+        doc_strips: dict[str, list[KnowledgeStrip]] = defaultdict(list)
         for strip in strips:
             doc_strips[strip.doc_id].append(strip)
 
@@ -436,12 +440,12 @@ JSON:"""
 # Convenience function for pipeline integration
 async def process_knowledge_strips(
     query: str,
-    documents: List[Document],
+    documents: list[Document],
     strip_size_tokens: int = 100,
     min_relevance: float = 0.3,
     max_strips: int = 20,
     use_llm_grading: bool = False,
-) -> tuple[List[Document], Dict[str, Any]]:
+) -> tuple[list[Document], dict[str, Any]]:
     """
     Convenience function to process documents into knowledge strips.
 

@@ -10,10 +10,9 @@ from __future__ import annotations
 import base64
 import json
 import os
-from typing import Optional, Dict, Any, Tuple
+from typing import Any
 
 from loguru import logger
-
 
 _SCRYPT_PARAMS = {
     "n": 2**14,
@@ -28,7 +27,7 @@ def _derive_key_from_passphrase_legacy(passphrase: str) -> bytes:
     return hashlib.sha256(passphrase.encode("utf-8")).digest()
 
 
-def _derive_key_from_passphrase(passphrase: str, salt: bytes) -> Tuple[bytes, str]:
+def _derive_key_from_passphrase(passphrase: str, salt: bytes) -> tuple[bytes, str]:
     import hashlib
     try:
         key = hashlib.scrypt(
@@ -52,7 +51,7 @@ def _derive_key_from_passphrase(passphrase: str, salt: bytes) -> Tuple[bytes, st
         return _derive_key_from_passphrase_legacy(passphrase), "sha256"
 
 
-def _aesgcm_encrypt(plaintext: bytes, key: bytes) -> Dict[str, str]:
+def _aesgcm_encrypt(plaintext: bytes, key: bytes) -> dict[str, str]:
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # type: ignore
     except Exception:
@@ -68,7 +67,7 @@ def _aesgcm_encrypt(plaintext: bytes, key: bytes) -> Dict[str, str]:
     }
 
 
-def _aesgcm_decrypt(obj: Dict[str, str], key: bytes) -> Optional[bytes]:
+def _aesgcm_decrypt(obj: dict[str, str], key: bytes) -> bytes | None:
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # type: ignore
     except Exception:
@@ -92,7 +91,7 @@ def _aesgcm_decrypt(obj: Dict[str, str], key: bytes) -> Optional[bytes]:
         return None
 
 
-def encrypt_payload_if_configured(payload_obj: Dict[str, Any]) -> Optional[str]:
+def encrypt_payload_if_configured(payload_obj: dict[str, Any]) -> str | None:
     """Return JSON string of encrypted blob when configured; else None.
 
     When EMBEDDINGS_DLQ_ENCRYPTION_KEY is set, encrypts with AES-GCM (or base64 fallback).
@@ -115,7 +114,7 @@ def encrypt_payload_if_configured(payload_obj: Dict[str, Any]) -> Optional[str]:
         return None
 
 
-def decrypt_payload_if_present(enc_json: Optional[str]) -> Optional[Dict[str, Any]]:
+def decrypt_payload_if_present(enc_json: str | None) -> dict[str, Any] | None:
     """Attempt to decrypt an encrypted payload blob; returns dict or None."""
     if not enc_json:
         return None

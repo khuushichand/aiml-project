@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Callable
+from typing import Any, Callable
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
@@ -30,7 +31,6 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
     split_system_message,
 )
-
 
 LIVE_SYSTEM_PROMPT = (
     "You are a meticulous meeting notes assistant. "
@@ -84,8 +84,8 @@ class LiveInsightSettings:
     """Configuration for live insight generation."""
 
     enabled: bool = False
-    provider: Optional[str] = None
-    model: Optional[str] = None
+    provider: str | None = None
+    model: str | None = None
     summary_interval_seconds: float = 90.0
     context_window_segments: int = 6
     max_context_chars: int = 6000
@@ -99,7 +99,7 @@ class LiveInsightSettings:
     temperature: float = 0.2
 
     @classmethod
-    def from_client_payload(cls, payload: Dict[str, Any]) -> "LiveInsightSettings":
+    def from_client_payload(cls, payload: dict[str, Any]) -> "LiveInsightSettings":
         """Build settings from a client-supplied configuration dictionary."""
         settings = cls()
         if not isinstance(payload, dict):
@@ -162,16 +162,16 @@ class LiveMeetingInsights:
         websocket,
         settings: LiveInsightSettings,
         *,
-        chat_call: Optional[Callable[..., Any]] = None,
+        chat_call: Callable[..., Any] | None = None,
     ):
         self.websocket = websocket
         self.settings = settings
         self._chat_call = chat_call or self._adapter_chat_call
         self._app_config = ensure_app_config()
-        self._segments: List[Dict[str, Any]] = []
+        self._segments: list[dict[str, Any]] = []
         self._loop = asyncio.get_running_loop()
         self._lock = asyncio.Lock()
-        self._pending: Set[asyncio.Task] = set()
+        self._pending: set[asyncio.Task] = set()
         self._closed = False
         self._last_summary_segment_id = 0
         self._last_summary_end = 0.0
@@ -186,12 +186,12 @@ class LiveMeetingInsights:
     def _adapter_chat_call(
         *,
         api_endpoint: str,
-        messages_payload: List[Dict[str, Any]],
-        model: Optional[str],
+        messages_payload: list[dict[str, Any]],
+        model: str | None,
         temp: float,
         max_tokens: int,
-        response_format: Optional[Dict[str, Any]] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        response_format: dict[str, Any] | None = None,
+        app_config: dict[str, Any] | None = None,
         **extra_kwargs: Any,
     ) -> Any:
         provider_name = normalize_provider(api_endpoint)
@@ -202,7 +202,7 @@ class LiveMeetingInsights:
         if not resolved_model:
             raise ChatConfigurationError(provider=provider_name, message="Model is required for provider.")
         system_message, cleaned_messages = split_system_message(messages_payload or [])
-        request: Dict[str, Any] = {
+        request: dict[str, Any] = {
             "messages": cleaned_messages,
             "system_message": system_message,
             "model": resolved_model,
@@ -219,7 +219,7 @@ class LiveMeetingInsights:
     # Public API
     # --------------------------------------------------------------------- #
 
-    def describe(self) -> Dict[str, Any]:
+    def describe(self) -> dict[str, Any]:
         """Return a snapshot of the active insight configuration."""
         return {
             "enabled": self.settings.enabled,
@@ -233,7 +233,7 @@ class LiveMeetingInsights:
             "final_summary": self.settings.final_summary,
         }
 
-    async def on_transcript(self, segment: Dict[str, Any]) -> None:
+    async def on_transcript(self, segment: dict[str, Any]) -> None:
         """Ingest a finalized transcript segment."""
         if not self.settings.enabled or not segment or not segment.get("is_final", False):
             return
@@ -246,7 +246,7 @@ class LiveMeetingInsights:
         if self._should_emit_live(segment):
             self._schedule_task(self._emit_live_update)
 
-    async def on_commit(self, full_transcript: Optional[str]) -> None:
+    async def on_commit(self, full_transcript: str | None) -> None:
         """Generate the final meeting summary when the stream is committed."""
         if not self.settings.enabled or not self.settings.final_summary or self._closed:
             return
@@ -283,7 +283,7 @@ class LiveMeetingInsights:
     # Internal helpers
     # --------------------------------------------------------------------- #
 
-    def _resolve_provider_and_model(self) -> Tuple[str, str]:
+    def _resolve_provider_and_model(self) -> tuple[str, str]:
         """Resolve provider/model defaults from config when not supplied by client."""
         provider = (self.settings.provider or "").strip().lower()
         model = (self.settings.model or "").strip()
@@ -359,7 +359,7 @@ class LiveMeetingInsights:
                 return
             await self._generate_and_send(segments, stage="live")
 
-    def _select_segments(self, stage: str) -> List[Dict[str, Any]]:
+    def _select_segments(self, stage: str) -> list[dict[str, Any]]:
         if not self._segments:
             return []
 
@@ -380,14 +380,14 @@ class LiveMeetingInsights:
 
     def _truncate_segments_by_chars(
         self,
-        segments: Sequence[Dict[str, Any]],
+        segments: Sequence[dict[str, Any]],
         limit_chars: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         if limit_chars <= 0:
             return list(segments)
 
         total = 0
-        selected: List[Dict[str, Any]] = []
+        selected: list[dict[str, Any]] = []
         for segment in reversed(segments):
             text = str(segment.get("text") or "")
             total += len(text)
@@ -398,10 +398,10 @@ class LiveMeetingInsights:
 
     async def _generate_and_send(
         self,
-        segments: List[Dict[str, Any]],
+        segments: list[dict[str, Any]],
         *,
         stage: str,
-        transcript_override: Optional[str] = None,
+        transcript_override: str | None = None,
     ) -> None:
         transcript = transcript_override or self._build_transcript_text(segments)
         transcript = self._truncate_text(
@@ -434,7 +434,7 @@ class LiveMeetingInsights:
                     last_seg.get("segment_id") or self._last_summary_segment_id
                 )
 
-    async def _call_llm(self, transcript_text: str, *, stage: str) -> Dict[str, Any]:
+    async def _call_llm(self, transcript_text: str, *, stage: str) -> dict[str, Any]:
         messages = [
             {"role": "system", "content": LIVE_SYSTEM_PROMPT},
             {
@@ -491,8 +491,8 @@ class LiveMeetingInsights:
             transcript=transcript_text,
         )
 
-    def _build_transcript_text(self, segments: Sequence[Dict[str, Any]]) -> str:
-        parts: List[str] = []
+    def _build_transcript_text(self, segments: Sequence[dict[str, Any]]) -> str:
+        parts: list[str] = []
         for seg in segments:
             text = str(seg.get("text") or "").strip()
             if not text:
@@ -514,10 +514,10 @@ class LiveMeetingInsights:
 
     def _build_insight_message(
         self,
-        response_payload: Dict[str, Any],
-        segments: Sequence[Dict[str, Any]],
+        response_payload: dict[str, Any],
+        segments: Sequence[dict[str, Any]],
         stage: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         raw_text = response_payload.get("content") or ""
         parsed = self._parse_json_response(raw_text)
         if parsed is None:
@@ -543,7 +543,7 @@ class LiveMeetingInsights:
         }
         return message
 
-    def _parse_json_response(self, text: str) -> Optional[Dict[str, Any]]:
+    def _parse_json_response(self, text: str) -> dict[str, Any] | None:
         if not text:
             return None
         text = text.strip()
@@ -561,7 +561,7 @@ class LiveMeetingInsights:
             return None
         return None
 
-    def _coerce_string_list(self, value: Any) -> List[str]:
+    def _coerce_string_list(self, value: Any) -> list[str]:
         if value is None:
             return []
         if isinstance(value, str):
@@ -578,10 +578,10 @@ class LiveMeetingInsights:
             return result
         return [str(value)]
 
-    def _coerce_action_items(self, value: Any) -> List[Dict[str, Any]]:
+    def _coerce_action_items(self, value: Any) -> list[dict[str, Any]]:
         if not value:
             return []
-        items: List[Dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         if isinstance(value, dict):
             value = [value]
         if isinstance(value, list):
@@ -597,7 +597,7 @@ class LiveMeetingInsights:
                     items.append({"description": description, "owner": owner})
         return items
 
-    def _source_metadata(self, segments: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    def _source_metadata(self, segments: Sequence[dict[str, Any]]) -> dict[str, Any]:
         if not segments:
             return {}
         first = segments[0]
@@ -612,7 +612,7 @@ class LiveMeetingInsights:
             "total_segments": len(self._segments),
         }
 
-    async def _safe_send(self, payload: Dict[str, Any]) -> None:
+    async def _safe_send(self, payload: dict[str, Any]) -> None:
         try:
             await self.websocket.send_json(payload)
         except Exception as exc:
@@ -630,7 +630,7 @@ class LiveMeetingInsights:
             if isinstance(res, Exception) and not isinstance(res, asyncio.CancelledError):
                 logger.debug(f"LiveMeetingInsights: background task finished with {res}")
 
-    def _should_emit_live(self, latest_segment: Dict[str, Any]) -> bool:
+    def _should_emit_live(self, latest_segment: dict[str, Any]) -> bool:
         if self.settings.summary_interval_seconds <= 0:
             return True
         end_time = float(latest_segment.get("segment_end") or latest_segment.get("chunk_end") or 0.0)

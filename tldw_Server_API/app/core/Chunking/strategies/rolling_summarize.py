@@ -6,10 +6,13 @@ This strategy creates chunks by progressively summarizing content using an LLM,
 building a rolling context that maintains continuity across chunk boundaries.
 """
 
-from typing import List, Dict, Any, Optional, Callable, Tuple
+from typing import Any, Callable, Optional
+
 from loguru import logger
-from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
+
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+
+from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
 
 
 class RollingSummarizeStrategy(BaseChunkingStrategy):
@@ -25,7 +28,7 @@ class RollingSummarizeStrategy(BaseChunkingStrategy):
     def __init__(self,
                  language: str = 'en',
                  llm_call_func: Optional[Callable] = None,
-                 llm_config: Optional[Dict[str, Any]] = None):
+                 llm_config: Optional[dict[str, Any]] = None):
         """
         Initialize rolling summarize strategy.
 
@@ -42,7 +45,7 @@ class RollingSummarizeStrategy(BaseChunkingStrategy):
               text: str,
               max_size: int,
               overlap: int = 0,
-              **options) -> List[str]:
+              **options) -> list[str]:
         """
         Chunk text using rolling summarization.
 
@@ -120,7 +123,7 @@ class RollingSummarizeStrategy(BaseChunkingStrategy):
 
         return summarized_chunks
 
-    def _split_into_sentences(self, text: str) -> List[str]:
+    def _split_into_sentences(self, text: str) -> list[str]:
         """Split text into sentences."""
         # Simple sentence splitting - can be enhanced with pysbd
         import re
@@ -141,12 +144,12 @@ class RollingSummarizeStrategy(BaseChunkingStrategy):
 
         return sentences
 
-    def _split_into_sentences_with_spans(self, text: str) -> List[Tuple[str, int, int]]:
+    def _split_into_sentences_with_spans(self, text: str) -> list[tuple[str, int, int]]:
         """Split sentences and return spans via rolling forward search."""
         sentences = self._split_into_sentences(text)
         if not sentences:
             return []
-        spans: List[Tuple[str, int, int]] = []
+        spans: list[tuple[str, int, int]] = []
         pos = 0
         n = len(text)
         for s in sentences:
@@ -163,13 +166,13 @@ class RollingSummarizeStrategy(BaseChunkingStrategy):
         text: str,
         max_size: int,
         overlap: int,
-    ) -> List[Tuple[str, int, int, int]]:
+    ) -> list[tuple[str, int, int, int]]:
         """Group sentence spans into segments and carry their source spans."""
         sentences_with_spans = self._split_into_sentences_with_spans(text)
         if not sentences_with_spans:
             return []
-        segments: List[Tuple[str, int, int, int]] = []
-        current: List[Tuple[str, int, int]] = []
+        segments: list[tuple[str, int, int, int]] = []
+        current: list[tuple[str, int, int]] = []
         for sent, start, end in sentences_with_spans:
             current.append((sent, start, end))
             if len(current) >= max_size:
@@ -281,7 +284,7 @@ Maintain continuity with the previous context."""
                             text: str,
                             max_size: int,
                             overlap: int = 0,
-                            **options) -> List[ChunkResult]:
+                            **options) -> list[ChunkResult]:
         """Chunk text and return metadata mapping summaries to source spans."""
         if not self.validate_parameters(text, max_size, overlap):
             return []
@@ -294,8 +297,8 @@ Maintain continuity with the previous context."""
         if not segments_with_spans:
             return []
 
-        results: List[ChunkResult] = []
-        rolling_context: List[str] = []
+        results: list[ChunkResult] = []
+        rolling_context: list[str] = []
         total = len(segments_with_spans)
 
         for i, (segment, seg_start, seg_end, sentence_count) in enumerate(segments_with_spans):

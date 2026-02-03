@@ -3,30 +3,32 @@ Datasets endpoints extracted from evaluations_unified.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
-from fastapi import APIRouter, Depends, HTTPException, Header, Query, Response, status
+from typing import Any, Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
-    verify_api_key,
     create_error_response,
-    sanitize_error_message,
     get_eval_request_user,
+    sanitize_error_message,
+    verify_api_key,
+)
+from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
+    CreateDatasetRequest,
+    DatasetListResponse,
+    DatasetResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
-from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
-    CreateDatasetRequest, DatasetResponse, DatasetListResponse,
-)
-
 
 datasets_router = APIRouter()
 
 
-def _normalize_dataset_payload(dataset: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_dataset_payload(dataset: dict[str, Any]) -> dict[str, Any]:
     """Ensure required dataset response fields are populated."""
     # Work on a shallow copy to avoid mutating upstream caches
     normalized = dict(dataset)

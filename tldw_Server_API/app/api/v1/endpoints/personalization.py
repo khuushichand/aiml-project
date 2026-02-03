@@ -4,14 +4,17 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    UsageEventLogger,
+    get_personalization_db_for_user,
+    get_usage_event_logger,
+)
 from tldw_Server_API.app.api.v1.schemas.personalization import (
     DetailResponse,
-    ExplanationEntry,
     ExplanationListResponse,
     MemoryItem,
     MemoryListResponse,
@@ -19,14 +22,8 @@ from tldw_Server_API.app.api.v1.schemas.personalization import (
     PersonalizationProfile,
     PreferencesUpdate,
 )
-from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
-    get_personalization_db_for_user,
-    get_usage_event_logger,
-    UsageEventLogger,
-)
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB, SemanticMemory
 from tldw_Server_API.app.core.feature_flags import is_personalization_enabled
-
 
 router = APIRouter()
 
@@ -138,8 +135,8 @@ async def personalization_preferences(
 
 @router.get("/memories", response_model=MemoryListResponse, tags=["personalization"], status_code=status.HTTP_200_OK)
 async def list_memories(
-    type: Optional[str] = Query(None, description="semantic|episodic"),
-    q: Optional[str] = Query(None),
+    type: str | None = Query(None, description="semantic|episodic"),
+    q: str | None = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     db: PersonalizationDB = Depends(get_personalization_db_for_user),

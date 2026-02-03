@@ -15,23 +15,24 @@ Returned item structure (normalized):
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
-import regex
-import asyncio
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence, Tuple
-from urllib.parse import urljoin
-
 import xml.etree.ElementTree as ET
 from collections import OrderedDict
+from collections.abc import Sequence
+from datetime import datetime, timezone
+from threading import Lock
+from typing import Any
+from urllib.parse import urljoin
+
+import regex
 from loguru import logger
 from lxml import html
 from lxml.etree import XPath, XPathError
 from lxml.html import HtmlElement
-from threading import Lock
 
-from tldw_Server_API.app.core.Security.egress import is_url_allowed_for_tenant, is_url_allowed
+from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
 
 _TEST_MODE_VALUES = {"1", "true", "yes"}
 _SELECTOR_CACHE_MAX = 512
@@ -44,7 +45,7 @@ def _in_test_mode() -> bool:
     return os.getenv("TEST_MODE", "").lower() in _TEST_MODE_VALUES
 
 
-def get_selector_cache_stats() -> Dict[str, int]:
+def get_selector_cache_stats() -> dict[str, int]:
     with _SELECTOR_CACHE_LOCK:
         return {
             "selector_xpath_cache_size": len(_XPATH_SELECTOR_CACHE),
@@ -58,7 +59,7 @@ def clear_selector_caches() -> None:
         _CSS_SELECTOR_CACHE.clear()
 
 
-def _selector_cache_get(cache: "OrderedDict[str, Any]", key: str) -> Optional[Any]:
+def _selector_cache_get(cache: "OrderedDict[str, Any]", key: str) -> Any | None:
     with _SELECTOR_CACHE_LOCK:
         value = cache.get(key)
         if value is None:
@@ -87,7 +88,7 @@ async def _close_response(resp: Any) -> None:
         close()
 
 
-def _ensure_sequence(value: Sequence[str] | str | None) -> List[str]:
+def _ensure_sequence(value: Sequence[str] | str | None) -> list[str]:
     if value is None:
         return []
     if isinstance(value, str):
@@ -125,7 +126,7 @@ def _contextualize_xpath(expr: str, node: Any) -> str:
     return expr
 
 
-def _parse_nth_token(token: str, allowed: set[str]) -> Tuple[Optional[str], Optional[int]]:
+def _parse_nth_token(token: str, allowed: set[str]) -> tuple[str | None, int | None]:
     match = re.fullmatch(r"(?P<tag>[a-zA-Z0-9_-]+)(?::nth-child\((?P<index>\d+)\))?", token)
     if not match:
         return None, None
@@ -136,7 +137,7 @@ def _parse_nth_token(token: str, allowed: set[str]) -> Tuple[Optional[str], Opti
     return tag, int(idx) if idx else None
 
 
-def _css_table_nth_xpath(css_expr: str) -> Optional[str]:
+def _css_table_nth_xpath(css_expr: str) -> str | None:
     expr = re.sub(r"\s+", " ", css_expr.strip())
     if not expr.startswith("table "):
         return None
@@ -178,7 +179,7 @@ def _css_table_nth_xpath(css_expr: str) -> Optional[str]:
     return "".join(parts)
 
 
-def _select_nodes(node: HtmlElement, selector: str, *, context_sensitive: bool = False) -> List[Any]:
+def _select_nodes(node: HtmlElement, selector: str, *, context_sensitive: bool = False) -> list[Any]:
     expr = selector.strip()
     if not expr:
         return []
@@ -224,7 +225,7 @@ def _select_nodes(node: HtmlElement, selector: str, *, context_sensitive: bool =
     return [result]
 
 
-def _coerce_value(value: Any) -> Optional[str]:
+def _coerce_value(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, str):
@@ -251,8 +252,8 @@ def _coerce_value(value: Any) -> Optional[str]:
         return None
 
 
-def _reduce_matches(matches: Sequence[Any], join_with: str) -> Optional[str]:
-    parts: List[str] = []
+def _reduce_matches(matches: Sequence[Any], join_with: str) -> str | None:
+    parts: list[str] = []
     for match in matches:
         val = _coerce_value(match)
         if val:
@@ -268,7 +269,7 @@ def _extract_value(
     *,
     join: bool = False,
     join_with: str = " ",
-) -> Optional[str]:
+) -> str | None:
     for expr in _ensure_sequence(selectors):
         matches = _select_nodes(node, expr, context_sensitive=True)
         if not matches:
@@ -282,7 +283,7 @@ def _extract_value(
     return None
 
 
-def _normalize_selector_expr(selector: Optional[str], *, css: Optional[str] = None, xpath: Optional[str] = None) -> Optional[str]:
+def _normalize_selector_expr(selector: str | None, *, css: str | None = None, xpath: str | None = None) -> str | None:
     """Normalize selector inputs into a single expression string."""
     if selector and str(selector).strip():
         return str(selector).strip()
@@ -293,7 +294,7 @@ def _normalize_selector_expr(selector: Optional[str], *, css: Optional[str] = No
     return None
 
 
-def _field_selector(field: Dict[str, Any]) -> Optional[str]:
+def _field_selector(field: dict[str, Any]) -> str | None:
     return _normalize_selector_expr(
         field.get("selector"),
         css=field.get("css"),
@@ -301,7 +302,7 @@ def _field_selector(field: Dict[str, Any]) -> Optional[str]:
     )
 
 
-def _base_selector(rules: Dict[str, Any]) -> Optional[str]:
+def _base_selector(rules: dict[str, Any]) -> str | None:
     return _normalize_selector_expr(
         rules.get("baseSelector") or rules.get("base_selector"),
         css=rules.get("baseCss") or rules.get("base_css"),
@@ -309,11 +310,11 @@ def _base_selector(rules: Dict[str, Any]) -> Optional[str]:
     )
 
 
-def _normalize_field_definitions(fields: Any) -> List[Dict[str, Any]]:
+def _normalize_field_definitions(fields: Any) -> list[dict[str, Any]]:
     if isinstance(fields, list):
         return [f for f in fields if isinstance(f, dict)]
     if isinstance(fields, dict):
-        normalized: List[Dict[str, Any]] = []
+        normalized: list[dict[str, Any]] = []
         for name, spec in fields.items():
             if isinstance(spec, dict):
                 entry = dict(spec)
@@ -325,7 +326,7 @@ def _normalize_field_definitions(fields: Any) -> List[Dict[str, Any]]:
     return []
 
 
-def _number_normalize(value: str) -> Optional[str]:
+def _number_normalize(value: str) -> str | None:
     text = (value or "").strip()
     if not text:
         return None
@@ -335,12 +336,12 @@ def _number_normalize(value: str) -> Optional[str]:
     return match.group(0) if match else None
 
 
-def _apply_single_transform(value: str, transform: Any, base_url: str) -> Optional[str]:
+def _apply_single_transform(value: str, transform: Any, base_url: str) -> str | None:
     if value is None:
         return None
     if isinstance(transform, str):
         name = transform.strip().lower()
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
     elif isinstance(transform, dict):
         name = str(transform.get("name") or transform.get("type") or "").strip().lower()
         params = transform
@@ -383,7 +384,7 @@ def _apply_transforms(value: Any, transforms: Any, base_url: str) -> Any:
         return [v for v in (_apply_transforms(v, transform_list, base_url) for v in value) if v is not None]
     if isinstance(value, dict):
         return value
-    result: Optional[str] = str(value)
+    result: str | None = str(value)
     for transform in transform_list:
         result = _apply_single_transform(result, transform, base_url)
         if result is None:
@@ -391,7 +392,7 @@ def _apply_transforms(value: Any, transforms: Any, base_url: str) -> Any:
     return result
 
 
-def _safe_template_format(template: str, context: Dict[str, Any]) -> str:
+def _safe_template_format(template: str, context: dict[str, Any]) -> str:
     class _SafeDict(dict):
         def __missing__(self, key: str) -> str:
             return ""
@@ -399,11 +400,11 @@ def _safe_template_format(template: str, context: Dict[str, Any]) -> str:
     return template.format_map(_SafeDict(context))
 
 
-def _extract_text_from_node(node: Any) -> Optional[str]:
+def _extract_text_from_node(node: Any) -> str | None:
     return _coerce_value(node)
 
 
-def _extract_html_from_node(node: Any) -> Optional[str]:
+def _extract_html_from_node(node: Any) -> str | None:
     if isinstance(node, HtmlElement):
         try:
             return html.tostring(node, encoding="unicode")
@@ -412,7 +413,7 @@ def _extract_html_from_node(node: Any) -> Optional[str]:
     return _coerce_value(node)
 
 
-def _extract_attribute_from_node(node: Any, attr: Optional[str]) -> Optional[str]:
+def _extract_attribute_from_node(node: Any, attr: str | None) -> str | None:
     if not attr:
         return None
     if isinstance(node, HtmlElement):
@@ -421,7 +422,7 @@ def _extract_attribute_from_node(node: Any, attr: Optional[str]) -> Optional[str
     return None
 
 
-def _extract_regex_from_text(text: str, field: Dict[str, Any]) -> Optional[str]:
+def _extract_regex_from_text(text: str, field: dict[str, Any]) -> str | None:
     pattern = field.get("pattern") or field.get("regex")
     if not isinstance(pattern, str) or not text:
         return None
@@ -448,11 +449,11 @@ def _extract_regex_from_text(text: str, field: Dict[str, Any]) -> Optional[str]:
 
 def _extract_list_items(
     node: HtmlElement,
-    field: Dict[str, Any],
+    field: dict[str, Any],
     *,
     base_url: str,
-    context: Dict[str, Any],
-) -> Optional[List[Any]]:
+    context: dict[str, Any],
+) -> list[Any] | None:
     selector = _field_selector(field)
     nodes = _select_nodes(node, selector, context_sensitive=True) if selector else []
     if not nodes:
@@ -465,7 +466,7 @@ def _extract_list_items(
     item_type = str(field.get("itemType") or field.get("item_type") or "text").strip().lower()
     attr = field.get("attribute") or field.get("attr")
     join_with = str(field.get("join_with") or " ")
-    values: List[Any] = []
+    values: list[Any] = []
     for match in nodes:
         target_nodes = [match]
         if item_selector and isinstance(match, HtmlElement):
@@ -494,13 +495,13 @@ def _extract_list_items(
 
 def _extract_fields_from_node(
     node: HtmlElement,
-    fields: Sequence[Dict[str, Any]],
+    fields: Sequence[dict[str, Any]],
     *,
     base_url: str,
-    context: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    extracted: Dict[str, Any] = {}
-    computed_fields: List[Dict[str, Any]] = []
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    extracted: dict[str, Any] = {}
+    computed_fields: list[dict[str, Any]] = []
     ctx = dict(context or {})
 
     for field in fields:
@@ -525,7 +526,7 @@ def _extract_fields_from_node(
             nested_fields = _normalize_field_definitions(field.get("fields") or {})
             value = None
             if matches and nested_fields:
-                items: List[Dict[str, Any]] = []
+                items: list[dict[str, Any]] = []
                 for match in matches:
                     if not isinstance(match, HtmlElement):
                         continue
@@ -586,7 +587,7 @@ def _extract_fields_from_node(
     return extracted
 
 
-def _is_schema_dsl(rules: Dict[str, Any]) -> bool:
+def _is_schema_dsl(rules: dict[str, Any]) -> bool:
     return isinstance(rules.get("fields"), list) or isinstance(rules.get("baseFields"), (list, dict))
 
 
@@ -614,7 +615,7 @@ def _is_fragile_class_name(value: str) -> bool:
     return False
 
 
-def _fragile_css_classes(selector: str) -> List[str]:
+def _fragile_css_classes(selector: str) -> list[str]:
     if not selector.strip().startswith("css:"):
         return []
     expr = selector.strip()[4:]
@@ -667,8 +668,8 @@ _WATCHLIST_MULTI_KEYS = {
 }
 
 
-def _iter_rule_selectors(rules: Dict[str, Any]) -> List[tuple[str, str]]:
-    selectors: List[tuple[str, str]] = []
+def _iter_rule_selectors(rules: dict[str, Any]) -> list[tuple[str, str]]:
+    selectors: list[tuple[str, str]] = []
     for key in _SCHEMA_SELECTOR_KEYS:
         value = rules.get(key)
         for expr in _ensure_sequence(value):
@@ -689,8 +690,8 @@ def _iter_rule_selectors(rules: Dict[str, Any]) -> List[tuple[str, str]]:
     return selectors
 
 
-def _iter_watchlist_selector_specs(rules: Dict[str, Any]) -> List[Dict[str, Any]]:
-    specs: List[Dict[str, Any]] = []
+def _iter_watchlist_selector_specs(rules: dict[str, Any]) -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
     for key in _SCHEMA_SELECTOR_KEYS:
         value = rules.get(key)
         for expr in _ensure_sequence(value):
@@ -729,8 +730,8 @@ def _iter_watchlist_selector_specs(rules: Dict[str, Any]) -> List[Dict[str, Any]
     return specs
 
 
-def _iter_schema_dsl_selector_specs(rules: Dict[str, Any]) -> List[Dict[str, Any]]:
-    specs: List[Dict[str, Any]] = []
+def _iter_schema_dsl_selector_specs(rules: dict[str, Any]) -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
     base_selector = _base_selector(rules)
     if base_selector:
         specs.append(
@@ -743,7 +744,7 @@ def _iter_schema_dsl_selector_specs(rules: Dict[str, Any]) -> List[Dict[str, Any
             }
         )
 
-    def _walk_fields(fields: Sequence[Dict[str, Any]], prefix: str) -> None:
+    def _walk_fields(fields: Sequence[dict[str, Any]], prefix: str) -> None:
         for field in fields:
             name = str(field.get("name") or "").strip()
             if not name:
@@ -788,15 +789,15 @@ def _iter_schema_dsl_selector_specs(rules: Dict[str, Any]) -> List[Dict[str, Any
 
 
 def validate_selector_rules(
-    rules: Dict[str, Any],
+    rules: dict[str, Any],
     *,
-    html_text: Optional[str] = None,
+    html_text: str | None = None,
     include_counts: bool = False,
-) -> Dict[str, Any]:
-    errors: List[Dict[str, Any]] = []
-    warnings: List[Dict[str, Any]] = []
-    selector_counts: Dict[str, int] = {}
-    compile_specs: List[Dict[str, Any]] = [
+) -> dict[str, Any]:
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    selector_counts: dict[str, int] = {}
+    compile_specs: list[dict[str, Any]] = [
         {"key": key, "selector": expr} for key, expr in _iter_rule_selectors(rules or {})
     ]
     dsl_specs = _iter_schema_dsl_selector_specs(rules or {}) if _is_schema_dsl(rules or {}) else []
@@ -866,8 +867,8 @@ def validate_selector_rules(
     return result
 
 
-def extract_schema_fields(html_text: str, base_url: str, rules: Dict[str, Any]) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
+def extract_schema_fields(html_text: str, base_url: str, rules: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "url": base_url,
         "extraction_successful": False,
     }
@@ -889,12 +890,12 @@ def extract_schema_fields(html_text: str, base_url: str, rules: Dict[str, Any]) 
     if _is_schema_dsl(rules):
         schema_name = rules.get("name")
         base_selector = _base_selector(rules)
-        nodes: List[HtmlElement] = []
+        nodes: list[HtmlElement] = []
         if base_selector:
             nodes.extend([n for n in _select_nodes(document, base_selector) if isinstance(n, HtmlElement)])
         base_node = nodes[0] if nodes else document
 
-        schema_fields: Dict[str, Any] = {}
+        schema_fields: dict[str, Any] = {}
         base_fields = _normalize_field_definitions(rules.get("baseFields") or [])
         fields = _normalize_field_definitions(rules.get("fields") or [])
         if base_fields:
@@ -927,7 +928,7 @@ def extract_schema_fields(html_text: str, base_url: str, rules: Dict[str, Any]) 
         or rules.get("item_xpath")
         or rules.get("items_xpath")
     )
-    nodes: List[HtmlElement] = []
+    nodes: list[HtmlElement] = []
     for selector in _ensure_sequence(base_selectors):
         nodes.extend([n for n in _select_nodes(document, selector) if isinstance(n, HtmlElement)])
     base_node = nodes[0] if nodes else document
@@ -986,7 +987,7 @@ def extract_schema_fields(html_text: str, base_url: str, rules: Dict[str, Any]) 
     return result
 
 
-def _coerce_int(value: Any, default: Optional[int] = None) -> Optional[int]:
+def _coerce_int(value: Any, default: int | None = None) -> int | None:
     if value is None:
         return default
     try:
@@ -995,7 +996,7 @@ def _coerce_int(value: Any, default: Optional[int] = None) -> Optional[int]:
         return default
 
 
-def _normalize_datetime(raw: str, fmt: Optional[str] = None) -> Optional[str]:
+def _normalize_datetime(raw: str, fmt: str | None = None) -> str | None:
     text = (raw or "").strip()
     if not text:
         return None
@@ -1031,12 +1032,12 @@ def _normalize_datetime(raw: str, fmt: Optional[str] = None) -> Optional[str]:
     return text
 
 
-def parse_scraped_items(html_text: str, base_url: str, rules: Dict[str, Any]) -> Dict[str, Any]:
+def parse_scraped_items(html_text: str, base_url: str, rules: dict[str, Any]) -> dict[str, Any]:
     """Parse HTML into structured items using XPath/CSS rules.
 
     Returns dict: { "items": [...], "next_pages": [...] } to support pagination-aware callers.
     """
-    result: Dict[str, Any] = {"items": [], "next_pages": []}
+    result: dict[str, Any] = {"items": [], "next_pages": []}
     if not html_text:
         return result
     try:
@@ -1050,7 +1051,7 @@ def parse_scraped_items(html_text: str, base_url: str, rules: Dict[str, Any]) ->
     except Exception:
         pass
 
-    def _gather_items(rule_set: Dict[str, Any], *, seen: set[str], items: List[Dict[str, Any]], limit: Optional[int]) -> None:
+    def _gather_items(rule_set: dict[str, Any], *, seen: set[str], items: list[dict[str, Any]], limit: int | None) -> None:
         entry_selectors = (
             rule_set.get("entry_xpath")
             or rule_set.get("item_xpath")
@@ -1063,7 +1064,7 @@ def parse_scraped_items(html_text: str, base_url: str, rules: Dict[str, Any]) ->
             or rules.get("entry_selector")
             or rules.get("item_selector")
         )
-        nodes: List[HtmlElement] = []
+        nodes: list[HtmlElement] = []
         for selector in _ensure_sequence(entry_selectors) or ["//article", "//item"]:
             nodes.extend([n for n in _select_nodes(document, selector) if isinstance(n, HtmlElement)])
         if not nodes:
@@ -1088,7 +1089,7 @@ def parse_scraped_items(html_text: str, base_url: str, rules: Dict[str, Any]) ->
                 continue
             seen.add(link)
 
-            item: Dict[str, Any] = {"url": link}
+            item: dict[str, Any] = {"url": link}
             title = _extract_value(
                 node,
                 rule_set.get("title_xpath") or rule_set.get("title_selector") or rules.get("title_xpath") or rules.get("title_selector"),
@@ -1157,7 +1158,7 @@ def parse_scraped_items(html_text: str, base_url: str, rules: Dict[str, Any]) ->
         return
 
     limit = _coerce_int(rules.get("limit") or rules.get("max_items"))
-    items: List[Dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     _gather_items(rules, seen=seen_urls, items=items, limit=limit)
 
@@ -1174,7 +1175,7 @@ def parse_scraped_items(html_text: str, base_url: str, rules: Dict[str, Any]) ->
                 break
 
     pagination_cfg = rules.get("pagination") if isinstance(rules.get("pagination"), dict) else None
-    next_pages: List[str] = []
+    next_pages: list[str] = []
     if pagination_cfg:
         candidate_selectors = _ensure_sequence(
             pagination_cfg.get("next_xpath")
@@ -1203,7 +1204,7 @@ def parse_scraped_items(html_text: str, base_url: str, rules: Dict[str, Any]) ->
     return result
 
 
-async def fetch_rss_items(urls: List[str], *, limit: int = 10, tenant_id: str = "default") -> List[Dict[str, Any]]:
+async def fetch_rss_items(urls: list[str], *, limit: int = 10, tenant_id: str = "default") -> list[dict[str, Any]]:
     """Fetch RSS/Atom feed items for the given URLs.
 
     Uses the workflows adapter implementation for consistency with URL
@@ -1238,7 +1239,7 @@ async def fetch_rss_items(urls: List[str], *, limit: int = 10, tenant_id: str = 
         return []
 
 
-def fetch_site_article(url: str) -> Optional[Dict[str, Any]]:
+def fetch_site_article(url: str) -> dict[str, Any] | None:
     """Fetch and extract a single site article.
 
     Uses the blocking path from Article_Extractor, which works without a
@@ -1246,8 +1247,8 @@ def fetch_site_article(url: str) -> Optional[Dict[str, Any]]:
     """
     try:
         from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
-            scrape_article_blocking,
             ContentMetadataHandler,  # type: ignore
+            scrape_article_blocking,
         )
     except Exception as e:
         logger.error(f"Article extractor import failed: {e}")
@@ -1271,7 +1272,7 @@ def fetch_site_article(url: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def fetch_site_article_async(url: str) -> Optional[Dict[str, Any]]:
+async def fetch_site_article_async(url: str) -> dict[str, Any] | None:
     """Async wrapper for blocking article extraction."""
     try:
         return await asyncio.to_thread(fetch_site_article, url)
@@ -1280,7 +1281,7 @@ async def fetch_site_article_async(url: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = "frontpage") -> List[str]:
+async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = "frontpage") -> list[str]:
     """Discover top-N content links from a site.
 
     - method="frontpage": fetch homepage and extract likely-article links
@@ -1298,11 +1299,13 @@ async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = 
 
     # Try using EnhancedWebScraper when available
     try:
-        from urllib.parse import urlparse, urljoin
+        from urllib.parse import urljoin, urlparse
+
         from bs4 import BeautifulSoup
-        from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import EnhancedWebScraper
-        from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import is_content_page
+
         from tldw_Server_API.app.core.http_client import afetch
+        from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import is_content_page
+        from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import EnhancedWebScraper
 
         parsed = urlparse(base_url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
@@ -1321,9 +1324,8 @@ async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = 
                 await _close_response(resp)
 
         # Auto-detect sitemap via robots.txt or common path when method='auto'
-        async def _detect_sitemap(u: str) -> Optional[str]:
+        async def _detect_sitemap(u: str) -> str | None:
             try:
-                import re
                 robots_url = urljoin(origin, "/robots.txt")
                 status, txt = await _fetch_text(robots_url, timeout=6)
                 if status // 100 == 2:
@@ -1342,7 +1344,7 @@ async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = 
             return None
 
         effective_method = method or "auto"
-        sitemap_url_for_auto: Optional[str] = None
+        sitemap_url_for_auto: str | None = None
         if effective_method == "auto":
             sitemap_url_for_auto = await _detect_sitemap(base_url)
             if sitemap_url_for_auto:
@@ -1377,7 +1379,7 @@ async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = 
         if status // 100 != 2:
             return [base_url]
         soup = BeautifulSoup(html, "html.parser")
-        links: List[str] = []
+        links: list[str] = []
         for a in soup.find_all("a"):
             href = a.get("href")
             if not href:
@@ -1407,11 +1409,11 @@ async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = 
 
 async def fetch_site_items_with_rules(
     base_url: str,
-    rules: Dict[str, Any],
+    rules: dict[str, Any],
     *,
     tenant_id: str = "default",
     timeout: float = 10.0,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Fetch a list page and extract items using scrape rules."""
     list_url = str(rules.get("list_url") or base_url or "").strip()
     if not list_url:
@@ -1431,7 +1433,7 @@ async def fetch_site_items_with_rules(
     if _in_test_mode():
         max_items = limit if limit is not None else 3
         max_items = min(max_items, 5)
-        samples: List[Dict[str, Any]] = []
+        samples: list[dict[str, Any]] = []
         for idx in range(max_items):
             url = f"{list_url.rstrip('/')}/test-scrape-{idx + 1}"
             samples.append(
@@ -1450,10 +1452,10 @@ async def fetch_site_items_with_rules(
         "Accept-Encoding": "gzip, deflate, br",
     }
 
-    queue: List[str] = [list_url]
+    queue: list[str] = [list_url]
     visited: set[str] = set()
     seen_items: set[str] = set()
-    collected: List[Dict[str, Any]] = []
+    collected: list[dict[str, Any]] = []
 
     try:
         from tldw_Server_API.app.core.http_client import afetch
@@ -1514,11 +1516,11 @@ async def fetch_site_items_with_rules(
 async def fetch_rss_feed(
     url: str,
     *,
-    etag: Optional[str] = None,
-    last_modified: Optional[str] = None,
+    etag: str | None = None,
+    last_modified: str | None = None,
     timeout: float = 8.0,
     tenant_id: str = "default",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Fetch a single RSS/Atom feed with conditional headers.
 
     Returns dict:
@@ -1552,7 +1554,7 @@ async def fetch_rss_feed(
         from tldw_Server_API.app.core.http_client import afetch
         resp = None
         status = 0
-        resp_headers: Dict[str, Any] = {}
+        resp_headers: dict[str, Any] = {}
         text = ""
         try:
             resp = await afetch(method="GET", url=url, headers=headers, timeout=timeout)
@@ -1617,7 +1619,7 @@ async def fetch_rss_feed(
         items_nodes = root.findall('.//item')
         if not items_nodes:
             items_nodes = root.findall('.//{http://www.w3.org/2005/Atom}entry')
-        items: List[Dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         atom_link_tag = "{http://www.w3.org/2005/Atom}link"
         atom_title_tag = "{http://www.w3.org/2005/Atom}title"
         atom_summary_tag = "{http://www.w3.org/2005/Atom}summary"
@@ -1653,7 +1655,7 @@ async def fetch_rss_feed(
                 rec["guid"] = guid
             items.append(rec)
         # Atom RFC5005: collect top-level archive paging links when present
-        atom_links: List[Dict[str, str]] = []
+        atom_links: list[dict[str, str]] = []
         try:
             # Look for link rel="prev-archive"/"next-archive" on the root <feed>
             for ln in list(root.findall(atom_link_tag)) + list(root.findall("link")):
@@ -1686,17 +1688,17 @@ async def fetch_rss_feed(
 async def fetch_rss_feed_history(
     url: str,
     *,
-    etag: Optional[str] = None,
-    last_modified: Optional[str] = None,
+    etag: str | None = None,
+    last_modified: str | None = None,
     timeout: float = 8.0,
     tenant_id: str = "default",
     strategy: str = "auto",
     max_pages: int = 1,
-    per_page_limit: Optional[int] = None,
+    per_page_limit: int | None = None,
     on_304: bool = False,
     stop_on_seen: bool = False,
-    seen_keys: Optional[Sequence[str]] = None,
-) -> Dict[str, Any]:
+    seen_keys: Sequence[str] | None = None,
+) -> dict[str, Any]:
     """Fetch a feed and optionally traverse history pages.
 
     - strategy: "auto" | "atom" | "wordpress" | "none"
@@ -1720,12 +1722,12 @@ async def fetch_rss_feed_history(
         tenant_id=tenant_id,
     )
     status = int(first.get("status", 0) or 0)
-    agg_items: List[Dict[str, Any]] = []
+    agg_items: list[dict[str, Any]] = []
     etag_out = first.get("etag")
     last_mod_out = first.get("last_modified")
     pages_fetched = 0
 
-    def _trim(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _trim(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if per_page_limit is None or per_page_limit <= 0:
             return items
         return items[: per_page_limit]
@@ -1780,7 +1782,7 @@ async def fetch_rss_feed_history(
                 break
             items = list(res.get("items") or [])
             # Dedup across pages and check DB-seen condition
-            new: List[Dict[str, Any]] = []
+            new: list[dict[str, Any]] = []
             for it in items:
                 key = (it.get("guid") or it.get("url") or it.get("link") or "").strip()
                 if not key or key in agg_seen:
@@ -1811,10 +1813,10 @@ async def fetch_rss_feed_history(
         return fetched_here
 
     # Helper: try common WordPress paged feed patterns
-    from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+    from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-    def _wp_paged_urls(base: str, pages: int) -> List[str]:
-        out: List[str] = []
+    def _wp_paged_urls(base: str, pages: int) -> list[str]:
+        out: list[str] = []
         try:
             parsed = urlparse(base)
             qs = parse_qs(parsed.query)
@@ -1840,7 +1842,7 @@ async def fetch_rss_feed_history(
         except Exception:
             pass
         # Dedup preserve order
-        dedup: List[str] = []
+        dedup: list[str] = []
         seen: set[str] = set()
         for u in out:
             if u not in seen:
@@ -1879,7 +1881,7 @@ async def fetch_rss_feed_history(
             if not items:
                 continue
             # Dedup vs aggregate and check DB-seen boundary condition
-            new: List[Dict[str, Any]] = []
+            new: list[dict[str, Any]] = []
             for it in items:
                 key = (it.get("guid") or it.get("url") or it.get("link") or "").strip()
                 if not key or key in prior_keys:

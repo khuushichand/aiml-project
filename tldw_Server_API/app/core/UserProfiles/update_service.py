@@ -4,8 +4,9 @@ User profile update helpers and validation.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any
 
 from loguru import logger
 from pydantic import EmailStr, ValidationError
@@ -29,26 +30,26 @@ from tldw_Server_API.app.core.UserProfiles.user_profile_catalog import (
 
 @dataclass
 class UpdateResult:
-    applied: List[str] = field(default_factory=list)
-    skipped: List[Dict[str, str]] = field(default_factory=list)
+    applied: list[str] = field(default_factory=list)
+    skipped: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
 class ProfileUpdateScope:
     """Scope context for admin profile updates."""
 
-    actor_user_id: Optional[int] = None
-    active_org_id: Optional[int] = None
-    active_team_id: Optional[int] = None
+    actor_user_id: int | None = None
+    active_org_id: int | None = None
+    active_team_id: int | None = None
 
 
 @dataclass
 class _MembershipContext:
-    target_org_roles: Dict[int, str] = field(default_factory=dict)
-    target_team_roles: Dict[int, str] = field(default_factory=dict)
-    target_team_orgs: Dict[int, int] = field(default_factory=dict)
-    actor_org_roles: Dict[int, str] = field(default_factory=dict)
-    actor_team_roles: Dict[int, str] = field(default_factory=dict)
+    target_org_roles: dict[int, str] = field(default_factory=dict)
+    target_team_roles: dict[int, str] = field(default_factory=dict)
+    target_team_orgs: dict[int, int] = field(default_factory=dict)
+    actor_org_roles: dict[int, str] = field(default_factory=dict)
+    actor_team_roles: dict[int, str] = field(default_factory=dict)
 
 
 class UserProfileUpdateService:
@@ -61,23 +62,23 @@ class UserProfileUpdateService:
         self,
         *,
         user_id: int,
-        updates: Iterable[Tuple[str, Any]],
-        roles: Set[str],
+        updates: Iterable[tuple[str, Any]],
+        roles: set[str],
         dry_run: bool,
         db_conn: Any,
-        updated_by: Optional[int],
-        scope: Optional[ProfileUpdateScope] = None,
+        updated_by: int | None,
+        scope: ProfileUpdateScope | None = None,
     ) -> UpdateResult:
         catalog = load_user_profile_catalog()
         catalog_map = {entry.key: entry for entry in catalog.entries}
         result = UpdateResult()
-        repo_holder: Dict[str, Optional[UserProfileOverridesRepo]] = {"repo": None}
+        repo_holder: dict[str, UserProfileOverridesRepo | None] = {"repo": None}
         normalized_roles = {str(role).strip().lower() for role in roles if role}
         if "admin" in normalized_roles:
             normalized_roles.update({"org_admin", "team_admin", "platform_admin"})
         is_platform_admin = "platform_admin" in normalized_roles
         updates_list = list(updates)
-        membership_context: Optional[_MembershipContext] = None
+        membership_context: _MembershipContext | None = None
         if any(str(key).startswith("memberships.") for key, _ in updates_list):
             membership_context = await self._build_membership_context(
                 user_id=user_id,
@@ -149,11 +150,11 @@ class UserProfileUpdateService:
         value: Any,
         dry_run: bool,
         db_conn: Any,
-        repo_holder: Dict[str, Optional[UserProfileOverridesRepo]],
-        updated_by: Optional[int],
-        scope: Optional[ProfileUpdateScope],
+        repo_holder: dict[str, UserProfileOverridesRepo | None],
+        updated_by: int | None,
+        scope: ProfileUpdateScope | None,
         is_platform_admin: bool,
-        membership_context: Optional[_MembershipContext],
+        membership_context: _MembershipContext | None,
     ) -> bool:
         if key == "identity.email":
             try:
@@ -391,7 +392,7 @@ class UserProfileUpdateService:
         self,
         *,
         user_id: int,
-        scope: Optional[ProfileUpdateScope],
+        scope: ProfileUpdateScope | None,
         is_platform_admin: bool,
     ) -> _MembershipContext:
         target_org_rows = await list_org_memberships_for_user(user_id)
@@ -411,8 +412,8 @@ class UserProfileUpdateService:
             for row in target_team_rows
             if row.get("team_id") is not None and row.get("org_id") is not None
         }
-        actor_org_roles: Dict[int, str] = {}
-        actor_team_roles: Dict[int, str] = {}
+        actor_org_roles: dict[int, str] = {}
+        actor_team_roles: dict[int, str] = {}
         actor_user_id = scope.actor_user_id if scope else None
         if actor_user_id is not None and not is_platform_admin:
             actor_org_rows = await list_org_memberships_for_user(int(actor_user_id))
@@ -439,7 +440,7 @@ class UserProfileUpdateService:
     def _resolve_org_id(
         context: _MembershipContext,
         *,
-        scope: Optional[ProfileUpdateScope],
+        scope: ProfileUpdateScope | None,
         is_platform_admin: bool,
     ) -> int:
         target_org_ids = set(context.target_org_roles)
@@ -466,7 +467,7 @@ class UserProfileUpdateService:
         self,
         context: _MembershipContext,
         *,
-        scope: Optional[ProfileUpdateScope],
+        scope: ProfileUpdateScope | None,
         is_platform_admin: bool,
     ) -> int:
         target_team_ids = set(context.target_team_roles)
@@ -497,7 +498,7 @@ class UserProfileUpdateService:
         context: _MembershipContext,
         *,
         team_id: int,
-        team_org_id: Optional[int] = None,
+        team_org_id: int | None = None,
     ) -> bool:
         if team_id in context.actor_team_roles:
             return True
@@ -507,12 +508,12 @@ class UserProfileUpdateService:
         return org_id in context.actor_org_roles
 
 
-def _can_edit(entry: UserProfileCatalogEntry, roles: Set[str]) -> bool:
+def _can_edit(entry: UserProfileCatalogEntry, roles: set[str]) -> bool:
     entry_roles = {str(role).strip() for role in (entry.editable_by or []) if role}
     return bool(entry_roles & roles)
 
 
-def _validate_value(entry: UserProfileCatalogEntry, value: Any) -> Tuple[bool, Any, Optional[str]]:
+def _validate_value(entry: UserProfileCatalogEntry, value: Any) -> tuple[bool, Any, str | None]:
     if entry.enum and value not in entry.enum:
         return False, None, "enum_violation"
 
@@ -539,7 +540,7 @@ def _validate_value(entry: UserProfileCatalogEntry, value: Any) -> Tuple[bool, A
     return False, None, "unsupported_type"
 
 
-def _validate_numeric(entry: UserProfileCatalogEntry, value: float) -> Tuple[bool, Any, Optional[str]]:
+def _validate_numeric(entry: UserProfileCatalogEntry, value: float) -> tuple[bool, Any, str | None]:
     if entry.minimum is not None and value < entry.minimum:
         return False, None, "min_violation"
     if entry.maximum is not None and value > entry.maximum:
@@ -572,7 +573,7 @@ async def _touch_user_updated_at(db_conn: Any, user_id: int) -> None:
         raise
 
 
-async def _fetch_username(db_conn: Any, user_id: int) -> Optional[str]:
+async def _fetch_username(db_conn: Any, user_id: int) -> str | None:
     try:
         if hasattr(db_conn, "fetchval"):
             value = await db_conn.fetchval(
@@ -597,7 +598,7 @@ async def _fetch_username(db_conn: Any, user_id: int) -> Optional[str]:
         raise
 
 
-def _parse_team_membership_payload(value: Any) -> Tuple[int, str, Optional[str]]:
+def _parse_team_membership_payload(value: Any) -> tuple[int, str, str | None]:
     if not isinstance(value, dict):
         raise ValueError("invalid_team_membership")
     raw_team_id = value.get("team_id")

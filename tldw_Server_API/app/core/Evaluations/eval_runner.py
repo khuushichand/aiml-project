@@ -11,24 +11,27 @@ Handles:
 
 import asyncio
 import os
-import time
 import statistics
+import time
 from contextlib import suppress
-from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
-from typing import Dict, List, Any, Optional, Callable
 from datetime import datetime
+from typing import Any, Callable, Optional
+
 from loguru import logger
+
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.Chunking import chunk_for_embedding
+from tldw_Server_API.app.core.Chunking.utils.proposition_eval import evaluate_propositions as eval_propositions
+from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+    create_evaluations_database as _create_evals_db,
+)
 
 # Import existing evaluation modules
 from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
 from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
 from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import ResponseQualityEvaluator
-from tldw_Server_API.app.core.Chunking.utils.proposition_eval import evaluate_propositions as eval_propositions
-from tldw_Server_API.app.core.DB_Management.DB_Manager import (
-    create_evaluations_database as _create_evals_db,
-)
-from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
-from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
     get_adapter_or_raise,
@@ -37,13 +40,12 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
     split_system_message,
 )
-from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.RAG.rag_custom_metrics import get_custom_metrics
+from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores import (
-    VectorStoreFactory,
     create_from_settings_for_user,
 )
-from tldw_Server_API.app.core.Chunking import chunk_for_embedding
+
 # Safe import of embeddings backend to avoid heavy deps at app import time
 try:
     from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
@@ -62,15 +64,15 @@ except Exception:
 def _call_adapter_text(
     *,
     api_endpoint: str,
-    messages_payload: List[Dict[str, Any]],
+    messages_payload: list[dict[str, Any]],
     temperature: Optional[float] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     system_message: Optional[str] = None,
-    response_format: Optional[Dict[str, Any]] = None,
+    response_format: Optional[dict[str, Any]] = None,
     max_tokens: Optional[int] = None,
     user: Optional[str] = None,
-    app_config: Optional[Dict[str, Any]] = None,
+    app_config: Optional[dict[str, Any]] = None,
     timeout: Optional[float] = None,
     **extra_kwargs: Any,
 ) -> str:
@@ -85,7 +87,7 @@ def _call_adapter_text(
     cleaned_messages = messages_payload or []
     if not system_msg:
         system_msg, cleaned_messages = split_system_message(cleaned_messages)
-    request: Dict[str, Any] = {
+    request: dict[str, Any] = {
         "messages": cleaned_messages,
         "system_message": system_msg,
         "model": resolved_model,
@@ -127,8 +129,8 @@ class EvaluationRunner:
 
     def _resolve_eval_provider_model_api_key(
         self,
-        eval_spec: Dict[str, Any],
-        eval_config: Dict[str, Any],
+        eval_spec: dict[str, Any],
+        eval_config: dict[str, Any],
     ) -> tuple[str, Optional[str], Optional[str]]:
         """Resolve provider, model override, and api_key for evaluator calls."""
         run_config = eval_config.get("config") if isinstance(eval_config, dict) else None
@@ -194,7 +196,7 @@ class EvaluationRunner:
         self,
         run_id: str,
         eval_id: str,
-        eval_config: Dict[str, Any],
+        eval_config: dict[str, Any],
         background: bool = True
     ):
         """
@@ -219,7 +221,7 @@ class EvaluationRunner:
         self,
         run_id: str,
         eval_id: str,
-        eval_config: Dict[str, Any]
+        eval_config: dict[str, Any]
     ):
         """Execute the evaluation"""
         try:
@@ -396,7 +398,7 @@ class EvaluationRunner:
             return value
         return [value]
 
-    def _cartesian_product(self, dicts_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _cartesian_product(self, dicts_list: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Cartesian product of parameter dictionaries.
 
         Each dict may contain fields that are single values or lists.
@@ -406,7 +408,7 @@ class EvaluationRunner:
             return [{}]
         from itertools import product
         # Merge multiple dicts into a single dict of key->list-of-values
-        merged: Dict[str, List[Any]] = {}
+        merged: dict[str, list[Any]] = {}
         for d in dicts_list:
             for k, v in (d or {}).items():
                 vals = self._expand_values(v)
@@ -431,7 +433,7 @@ class EvaluationRunner:
             combos.append({k: v for k, v in zip(keys, combo)})
         return combos
 
-    def _build_config_grid(self, eval_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _build_config_grid(self, eval_spec: dict[str, Any]) -> list[dict[str, Any]]:
         """Build configuration combinations from rag_pipeline spec."""
         rp = (eval_spec or {}).get("rag_pipeline", {}) or {}
         chunking = rp.get("chunking") or {}
@@ -482,10 +484,10 @@ class EvaluationRunner:
     async def _execute_rag_pipeline_run(
         self,
         run_id: str,
-        samples: List[Dict[str, Any]],
-        eval_spec: Dict[str, Any],
-        eval_config: Dict[str, Any]
-    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        samples: list[dict[str, Any]],
+        eval_spec: dict[str, Any],
+        eval_config: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Run rag_pipeline across a config grid and dataset, aggregating a leaderboard.
 
         Returns (results_dict, usage_dict)
@@ -503,7 +505,7 @@ class EvaluationRunner:
         per_config_results = []
         best = None
         leaderboard = []
-        built_collections: List[str] = []
+        built_collections: list[str] = []
 
         # Metrics helpers (lazy-load only if enabled)
         enable_custom_metrics = True
@@ -697,7 +699,7 @@ class EvaluationRunner:
                     pass
 
                 # Convert documents to string contexts
-                ctx_texts: List[str] = []
+                ctx_texts: list[str] = []
                 try:
                     for d in (documents or [])[: upr_args_common.get("top_k", 10)]:
                         # Document may be dataclass with .content or dict
@@ -939,7 +941,7 @@ class EvaluationRunner:
 
         return results, usage
 
-    def _compute_mrr_ndcg(self, retrieved_ids: List[str], relevant_ids: List[str]) -> tuple[float, float]:
+    def _compute_mrr_ndcg(self, retrieved_ids: list[str], relevant_ids: list[str]) -> tuple[float, float]:
         """Compute MRR and nDCG@K for binary relevance.
 
         Args:
@@ -971,16 +973,16 @@ class EvaluationRunner:
     async def _build_ephemeral_index(
         self,
         collection_name: str,
-        samples: List[Dict[str, Any]],
-        chunking_cfg: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        samples: list[dict[str, Any]],
+        chunking_cfg: dict[str, Any]
+    ) -> dict[str, Any]:
         """Build an ephemeral index (collection) for a run-config if dataset provides a corpus.
 
         Supports dataset samples with input.corpus or input.documents as a list of strings or
         list of objects {id, text}.
         """
         # Gather corpus texts
-        corpus: List[Dict[str, str]] = []
+        corpus: list[dict[str, str]] = []
         for s in samples:
             inp = s.get("input") or {}
             docs = inp.get("corpus") or inp.get("documents") or []
@@ -1123,9 +1125,9 @@ class EvaluationRunner:
 
     async def _get_samples(
         self,
-        evaluation: Dict[str, Any],
-        eval_config: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+        evaluation: dict[str, Any],
+        eval_config: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         """Get samples for evaluation"""
         # Check for dataset override
         override = eval_config.get("dataset_override")
@@ -1160,7 +1162,7 @@ class EvaluationRunner:
     def _get_evaluation_function(
         self,
         eval_type: str,
-        eval_spec: Dict[str, Any]
+        eval_spec: dict[str, Any]
     ) -> Callable:
         """Get the appropriate evaluation function"""
         if eval_type == "model_graded":
@@ -1201,14 +1203,14 @@ class EvaluationRunner:
 
     async def _process_batch(
         self,
-        batch: List[Dict[str, Any]],
+        batch: list[dict[str, Any]],
         eval_fn: Callable,
-        eval_spec: Dict[str, Any],
-        eval_config: Dict[str, Any],
+        eval_spec: dict[str, Any],
+        eval_config: dict[str, Any],
         max_workers: int,
         start_index: int = 0,
         timeout_seconds: Optional[float] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Process a batch of samples with proper concurrency control"""
         run_timeout = timeout_seconds if timeout_seconds is not None else self.eval_timeout
         try:
@@ -1252,7 +1254,7 @@ class EvaluationRunner:
 
         # Create tasks with proper error handling
         tasks = []
-        sample_ids: List[str] = []
+        sample_ids: list[str] = []
         for i, sample in enumerate(batch):
             global_index = start_index + i
             dataset_sample_id = sample.get("id") or sample.get("sample_id")
@@ -1288,11 +1290,11 @@ class EvaluationRunner:
 
     async def _eval_summarization(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate summarization using G-Eval"""
         try:
             # Extract required fields
@@ -1317,7 +1319,7 @@ class EvaluationRunner:
             result = await loop.run_in_executor(None, call_geval)
 
             # Parse results
-            scores: Dict[str, float] = {}
+            scores: dict[str, float] = {}
             metrics_list = eval_spec.get("metrics", ["fluency", "consistency", "relevance", "coherence"])
 
             if isinstance(result, dict):
@@ -1361,11 +1363,11 @@ class EvaluationRunner:
 
     async def _eval_rag(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate RAG system"""
         try:
             # Extract fields
@@ -1422,11 +1424,11 @@ class EvaluationRunner:
 
     async def _eval_response_quality(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate response quality"""
         try:
             # Extract fields
@@ -1479,11 +1481,11 @@ class EvaluationRunner:
 
     async def _eval_exact_match(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate exact match"""
         try:
             output = sample["input"].get("output", "")
@@ -1518,11 +1520,11 @@ class EvaluationRunner:
 
     async def _eval_includes(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate if output includes expected content"""
         try:
             output = str(sample["input"].get("output", ""))
@@ -1564,11 +1566,11 @@ class EvaluationRunner:
 
     async def _eval_fuzzy_match(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate fuzzy string matching"""
         try:
             from difflib import SequenceMatcher
@@ -1603,11 +1605,11 @@ class EvaluationRunner:
 
     async def _eval_propositions(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate proposition extraction using precision/recall/F1 per sample."""
         try:
             extracted = sample.get("input", {}).get("extracted", []) or []
@@ -1647,11 +1649,11 @@ class EvaluationRunner:
 
     async def _eval_label_choice(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate single-label classification over a fixed set of allowed labels.
 
         Expected sample structure:
@@ -1843,11 +1845,11 @@ class EvaluationRunner:
 
     async def _eval_nli_factcheck(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate factual claims by NLI-style labeling (SUPPORTED/REFUTED/NEI or ENTAILMENT/CONTRADICTION/NEUTRAL).
 
         Expected sample structure:
@@ -2050,14 +2052,14 @@ class EvaluationRunner:
 
     def _extract_threshold_config(
         self,
-        eval_spec: Dict[str, Any]
-    ) -> tuple[Optional[float], Dict[str, float]]:
+        eval_spec: dict[str, Any]
+    ) -> tuple[Optional[float], dict[str, float]]:
         """Extract global and per-metric thresholds from eval_spec.
 
         Supports legacy `threshold` and new `thresholds` mappings.
         """
         global_threshold = self._coerce_threshold_value(eval_spec.get("threshold"))
-        per_metric: Dict[str, float] = {}
+        per_metric: dict[str, float] = {}
 
         thresholds = eval_spec.get("thresholds")
         if isinstance(thresholds, dict):
@@ -2078,7 +2080,7 @@ class EvaluationRunner:
 
     def _resolve_metric_threshold(
         self,
-        eval_spec: Dict[str, Any],
+        eval_spec: dict[str, Any],
         metric_name: Optional[str],
         *,
         default: float = 0.7
@@ -2093,16 +2095,28 @@ class EvaluationRunner:
 
     def _evaluate_passed(
         self,
-        scores: Dict[str, float],
+        scores: dict[str, float],
         avg_score: float,
-        eval_spec: Dict[str, Any],
+        eval_spec: dict[str, Any],
         *,
         default_threshold: float = 0.7
     ) -> bool:
-        """Determine pass/fail from scores and eval_spec thresholds."""
+        """Determine pass/fail from scores and eval_spec thresholds.
+
+        If per-metric thresholds reference metrics missing from scores, log a warning
+        and treat the per-metric check as failed.
+        """
         global_threshold, per_metric = self._extract_threshold_config(eval_spec)
         if per_metric:
-            per_metric_passed = all(scores.get(metric, 0.0) >= threshold for metric, threshold in per_metric.items())
+            missing_metrics = [metric for metric in per_metric if metric not in scores]
+            if missing_metrics:
+                logger.warning(
+                    "Per-metric thresholds reference missing scores; failing per-metric check. "
+                    f"missing={sorted(missing_metrics)} available={sorted(scores.keys())}"
+                )
+                per_metric_passed = False
+            else:
+                per_metric_passed = all(scores[metric] >= threshold for metric, threshold in per_metric.items())
             if global_threshold is not None:
                 return per_metric_passed and avg_score >= global_threshold
             return per_metric_passed
@@ -2112,10 +2126,10 @@ class EvaluationRunner:
 
     def _calculate_aggregate_results(
         self,
-        results: List[Dict[str, Any]],
-        metrics: List[str],
+        results: list[dict[str, Any]],
+        metrics: list[str],
         threshold: float
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Calculate aggregate statistics"""
         if not results:
             return {
@@ -2170,9 +2184,9 @@ class EvaluationRunner:
 
     def _calculate_metric_stats(
         self,
-        results: List[Dict[str, Any]],
-        metrics: List[str]
-    ) -> Dict[str, Dict[str, float]]:
+        results: list[dict[str, Any]],
+        metrics: list[str]
+    ) -> dict[str, dict[str, float]]:
         """Calculate per-metric statistics"""
         metric_scores = {metric: [] for metric in metrics}
 
@@ -2196,7 +2210,7 @@ class EvaluationRunner:
 
         return metric_stats
 
-    def _calculate_usage(self, results: List[Dict[str, Any]]) -> Dict[str, int]:
+    def _calculate_usage(self, results: list[dict[str, Any]]) -> dict[str, int]:
         """Calculate token usage"""
         total_tokens = 0
         prompt_tokens = 0
@@ -2220,7 +2234,7 @@ class EvaluationRunner:
         run_id: str,
         eval_id: str,
         status: str,
-        summary: Dict[str, Any]
+        summary: dict[str, Any]
     ):
         """Send webhook notification"""
         try:
@@ -2272,7 +2286,7 @@ class EvaluationRunner:
         self.running_tasks.clear()
 
     # Alias for compatibility with tests
-    async def run_evaluation_async(self, run_id: str, eval_config: Dict[str, Any]):
+    async def run_evaluation_async(self, run_id: str, eval_config: dict[str, Any]):
         """Alias for run_evaluation to match test expectations"""
         eval_id = eval_config.get("eval_id")
         if not eval_id:

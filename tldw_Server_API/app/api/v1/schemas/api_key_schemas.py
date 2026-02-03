@@ -1,9 +1,9 @@
 """Pydantic schemas for API key management endpoints."""
 
 from datetime import datetime
-from typing import Optional, List, Any, Dict, Union
-from pydantic import BaseModel, Field, field_validator
+from typing import Any, Optional, Union
 
+from pydantic import BaseModel, Field, field_validator
 
 VALID_SCOPES = {"read", "write", "admin", "service"}
 
@@ -11,7 +11,7 @@ VALID_SCOPES = {"read", "write", "admin", "service"}
 class APIKeyCreateRequest(BaseModel):
     name: Optional[str] = Field(None, description="Optional display name for the key")
     description: Optional[str] = Field(None, description="Optional description")
-    scope: Union[str, List[str]] = Field(
+    scope: Union[str, list[str]] = Field(
         "read",
         description="Permission scope(s): 'read', 'write', 'admin', 'service' or a list of these"
     )
@@ -19,7 +19,7 @@ class APIKeyCreateRequest(BaseModel):
 
     @field_validator("scope")
     @classmethod
-    def validate_scope(cls, v: Union[str, List[str]]) -> Union[str, List[str]]:
+    def validate_scope(cls, v: Union[str, list[str]]) -> Union[str, list[str]]:
         scopes = [v] if isinstance(v, str) else v
         if not isinstance(scopes, list):
             raise TypeError("scope must be a string or list of strings")
@@ -42,7 +42,7 @@ class APIKeyMetadata(BaseModel):
     key_prefix: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
-    scope: Union[str, List[str]]
+    scope: Union[str, list[str]]
     status: Optional[str] = None
     created_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
@@ -58,7 +58,7 @@ class APIKeyCreateResponse(APIKeyMetadata):
 
 class APIKeyUpdateRequest(BaseModel):
     rate_limit: Optional[int] = Field(None, description="Requests per minute for this key")
-    allowed_ips: Optional[List[str]] = Field(None, description="Restrict usage to these IPs")
+    allowed_ips: Optional[list[str]] = Field(None, description="Restrict usage to these IPs")
 
 
 class APIKeyAuditEntry(BaseModel):
@@ -74,5 +74,5 @@ class APIKeyAuditEntry(BaseModel):
 
 class APIKeyAuditListResponse(BaseModel):
     key_id: int
-    items: List[APIKeyAuditEntry]
+    items: list[APIKeyAuditEntry]
     total: Optional[int] = None

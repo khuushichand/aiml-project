@@ -11,38 +11,32 @@
 
 import argparse
 import asyncio
-import sys
 import os
 import secrets
-from pathlib import Path
-from typing import Optional, Iterable
+import sys
+from collections.abc import Iterable
 from getpass import getpass
+from pathlib import Path
+from typing import Optional
 from urllib.parse import urlsplit
+
+from dotenv import dotenv_values, load_dotenv
 from loguru import logger
-from dotenv import load_dotenv, dotenv_values
 
 TEST_SETUP_API_KEY = "THIS-IS-NOT-A-SECURE-KEY-123-CHANGE-ME"
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
-from tldw_Server_API.app.core.AuthNZ.migrations import (
-    ensure_authnz_tables,
-    check_migration_status
-)
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
-from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
-from tldw_Server_API.app.core.DB_Management.Users_DB import (
-    get_users_db,
-    ensure_user_directories
-)
-from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
-from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
-from tldw_Server_API.app.core.AuthNZ.scheduler import start_authnz_scheduler
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager, get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
+from tldw_Server_API.app.core.AuthNZ.migrations import check_migration_status, ensure_authnz_tables
 from tldw_Server_API.app.core.AuthNZ.monitoring import get_authnz_monitor
+from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
+from tldw_Server_API.app.core.AuthNZ.scheduler import start_authnz_scheduler
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
 from tldw_Server_API.app.core.AuthNZ.username_utils import normalize_admin_username
+from tldw_Server_API.app.core.DB_Management.Users_DB import ensure_user_directories, get_users_db
 
 #######################################################################################################################
 #
@@ -460,11 +454,11 @@ async def setup_database():
 
             from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
             from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
-                ensure_authnz_core_tables_pg,
                 ensure_api_keys_tables_pg,
-                ensure_user_provider_secrets_pg,
+                ensure_authnz_core_tables_pg,
                 ensure_org_provider_secrets_pg,
                 ensure_usage_tables_pg,
+                ensure_user_provider_secrets_pg,
                 ensure_virtual_key_counters_pg,
             )
 

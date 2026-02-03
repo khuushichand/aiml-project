@@ -2,25 +2,25 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import datetime, timezone
-from queue import Queue, Empty
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from datetime import datetime, timezone
+from queue import Empty, Queue
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chunking import chunk_for_embedding
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
-from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
+from tldw_Server_API.app.core.Claims_Extraction.budget_guard import resolve_claims_job_budget
 from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import (
     extract_claims_for_chunks,
     store_claims,
 )
-from tldw_Server_API.app.core.Claims_Extraction.budget_guard import resolve_claims_job_budget
 from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     record_claims_rebuild_metrics,
 )
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 
 
 @dataclass
@@ -36,7 +36,7 @@ def _claims_monitoring_system_user_id() -> int:
         return 0
 
 
-def _format_timestamp(ts: Optional[float]) -> Optional[str]:
+def _format_timestamp(ts: float | None) -> str | None:
     if not ts:
         return None
     try:
@@ -58,9 +58,9 @@ class ClaimsRebuildService:
         self._stats = {"enqueued": 0, "processed": 0, "failed": 0}
         self._last_heartbeat_ts = 0.0
         self._last_processed_ts = 0.0
-        self._last_failure: Optional[Dict[str, Any]] = None
+        self._last_failure: dict[str, Any] | None = None
         self._last_health_persist_ts = 0.0
-        self._last_health_persist_queue: Optional[int] = None
+        self._last_health_persist_queue: int | None = None
         self._health_db_initialized = False
 
     def start(self) -> None:
@@ -226,7 +226,7 @@ class ClaimsRebuildService:
                 logger.info(f"Claims rebuild: no claims extracted for media_id={task.media_id}")
                 return
             # Build map
-            chunk_text_map: Dict[int, str] = {}
+            chunk_text_map: dict[int, str] = {}
             for ch in chunks:
                 meta = (ch or {}).get("metadata", {}) or {}
                 idx = int(meta.get("chunk_index") or meta.get("index") or 0)
@@ -241,7 +241,7 @@ class ClaimsRebuildService:
             except Exception:
                 pass
 
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> dict[str, int]:
         with self._stats_lock:
             return dict(self._stats)
 
@@ -251,7 +251,7 @@ class ClaimsRebuildService:
     def get_worker_count(self) -> int:
         return len(self._threads)
 
-    def get_health(self) -> Dict[str, Any]:
+    def get_health(self) -> dict[str, Any]:
         return {
             "queue_length": self.get_queue_length(),
             "workers": self.get_worker_count(),
@@ -267,7 +267,7 @@ class ClaimsRebuildService:
 
 
 # Module-level singleton for convenience
-_service_singleton: Optional[ClaimsRebuildService] = None
+_service_singleton: ClaimsRebuildService | None = None
 
 
 def get_claims_rebuild_service() -> ClaimsRebuildService:

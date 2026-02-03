@@ -18,27 +18,40 @@ Security
 """
 
 import os
-from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body, UploadFile, File, Form
+from typing import Any, Optional
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, UploadFile, status
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import Response
 from loguru import logger
 
-# Local imports
-from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import StandardResponse, ListResponse
-from tldw_Server_API.app.api.v1.schemas.prompt_studio_test import (
-    TestCaseCreate, TestCaseUpdate, TestCaseResponse, TestCaseBulkCreate,
-    TestCaseImportRequest, TestCaseExportRequest, TestCaseGenerateRequest,
-    RunTestCasesSimpleRequest,
-)
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
-    get_prompt_studio_db, get_prompt_studio_user, require_project_access, require_project_write_access,
-    check_rate_limit, get_security_config, PromptStudioDatabase, SecurityConfig
+    PromptStudioDatabase,
+    SecurityConfig,
+    check_rate_limit,
+    get_prompt_studio_db,
+    get_prompt_studio_user,
+    get_security_config,
+    require_project_access,
+    require_project_write_access,
 )
-from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_manager import TestCaseManager
-from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_io import TestCaseIO
+
+# Local imports
+from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import ListResponse, StandardResponse
+from tldw_Server_API.app.api.v1.schemas.prompt_studio_test import (
+    RunTestCasesSimpleRequest,
+    TestCaseBulkCreate,
+    TestCaseCreate,
+    TestCaseExportRequest,
+    TestCaseGenerateRequest,
+    TestCaseImportRequest,
+    TestCaseResponse,
+    TestCaseUpdate,
+)
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import ConflictError, DatabaseError, InputError
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_generator import TestCaseGenerator
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError, InputError, ConflictError
-from fastapi.responses import Response
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_io import TestCaseIO
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_manager import TestCaseManager
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 ########################################################################################################################
@@ -64,8 +77,8 @@ async def create_test_case_simple(
     test_case_data: TestCaseCreate,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
-    user_context: Dict = Depends(get_prompt_studio_user)
-) -> Dict[str, Any]:
+    user_context: dict = Depends(get_prompt_studio_user)
+) -> dict[str, Any]:
     resp = await create_test_case(test_case_data, db, security_config, user_context)  # type: ignore[arg-type]
     # Unwrap StandardResponse regardless of Pydantic/dict
     if hasattr(resp, "model_dump"):
@@ -131,7 +144,7 @@ async def create_test_case(
     test_case_data: TestCaseCreate,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Create a new test case.
@@ -235,7 +248,7 @@ async def create_bulk_test_cases(
     bulk_data: TestCaseBulkCreate,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Create multiple test cases at once.
@@ -266,7 +279,7 @@ async def create_bulk_test_cases(
             )
 
         # Create test cases
-        serialized_cases: List[Dict[str, Any]] = []
+        serialized_cases: list[dict[str, Any]] = []
         for tc in bulk_data.test_cases:
             try:
                 serialized_cases.append(model_dump_compat(tc))
@@ -409,7 +422,7 @@ async def list_test_cases(
 async def get_test_case(
     test_case_id: int = Path(..., description="Test case ID"),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Get a specific test case by ID.
@@ -456,7 +469,7 @@ async def update_test_case(
     test_case_id: int = Path(..., description="Test case ID"),
     updates: TestCaseUpdate = ...,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Update a test case.
@@ -526,7 +539,7 @@ async def delete_test_case(
     test_case_id: int = Path(..., description="Test case ID"),
     permanent: bool = Query(False, description="Permanently delete"),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Delete a test case.
@@ -633,7 +646,7 @@ async def import_test_cases(
     import_data: TestCaseImportRequest,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Import test cases from CSV or JSON.
@@ -741,7 +754,7 @@ async def import_test_cases_csv_upload(
     auto_generate_names: bool = Form(True),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """Import test cases from a CSV file upload (multipart/form-data)."""
     try:
@@ -804,7 +817,7 @@ async def import_test_cases_csv_upload(
 async def get_csv_import_template(
     signature_id: Optional[int] = Query(None, description="Optional signature id to derive input/output columns") ,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> Response:
     """Download a CSV template for test case import.
 
@@ -829,8 +842,8 @@ async def get_csv_import_template(
 async def run_test_cases_simple(
     payload: RunTestCasesSimpleRequest,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
-) -> Dict[str, Any]:
+    user_context: dict = Depends(get_prompt_studio_user)
+) -> dict[str, Any]:
     manager = TestCaseManager(db)
     prompt_id = int(payload.prompt_id)
     test_case_ids = payload.test_case_ids or []
@@ -897,7 +910,7 @@ async def export_test_cases(
     project_id: int = Path(..., description="Project ID"),
     export_request: TestCaseExportRequest = ...,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Export test cases to CSV or JSON.
@@ -989,7 +1002,7 @@ async def export_test_cases(
     }
 )
 async def _rl_generate(
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
     security_config: SecurityConfig = Depends(get_security_config),
 ) -> bool:
     return await check_rate_limit("generate", user_context=user_context, security_config=security_config)
@@ -999,7 +1012,7 @@ async def generate_test_cases(
     _rate: bool = Depends(_rl_generate),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Auto-generate test cases.

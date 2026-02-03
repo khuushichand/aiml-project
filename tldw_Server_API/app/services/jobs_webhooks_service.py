@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import hashlib
+import hmac
 import json
 import os
-from typing import Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.http_client import afetch
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
-from tldw_Server_API.app.core.http_client import afetch
 
 
-def _truthy(v: Optional[str]) -> bool:
+def _truthy(v: str | None) -> bool:
     return str(v or "").lower() in {"1","true","yes","y","on"}
 
 
@@ -31,7 +30,7 @@ async def _close_response(resp: object) -> None:
         close()
 
 
-async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_jobs_webhooks_worker(stop_event: asyncio.Event | None = None) -> None:
     """Emit signed webhooks on job.completed/job.failed from job_events outbox.
 
     Env:
@@ -79,6 +78,7 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
         else:
             try:
                 from pathlib import Path as _Path
+
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
                 cursor_path = str(_Path(_gpr()) / "Databases" / "jobs_webhooks_cursor.txt")
             except Exception:

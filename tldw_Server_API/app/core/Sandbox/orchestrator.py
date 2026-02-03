@@ -1,27 +1,28 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import threading
 import time
 import uuid
-import shutil
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional, Tuple
+from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.config import settings as app_settings
+
 from .models import RunPhase, RunSpec, RunStatus, Session, SessionSpec
 from .policy import SandboxPolicy, SandboxPolicyConfig
-from .store import get_store, IdempotencyConflict as StoreIdemConflict
-from tldw_Server_API.app.core.config import settings as app_settings
-from pathlib import Path
-import os
-from typing import List
+from .store import IdempotencyConflict as StoreIdemConflict
+from .store import get_store
 
 
 class IdempotencyConflict(Exception):
-    def __init__(self, original_id: str, key: Optional[str] = None, prior_created_at: Optional[str] = None, message: str = "Idempotency conflict") -> None:
+    def __init__(self, original_id: str, key: str | None = None, prior_created_at: str | None = None, message: str = "Idempotency conflict") -> None:
         super().__init__(message)
         self.original_id = original_id
         self.key = key
@@ -29,7 +30,7 @@ class IdempotencyConflict(Exception):
         self.prior_created_at = prior_created_at
 
 
-def _fingerprint_body(body: Dict[str, Any]) -> str:
+def _fingerprint_body(body: dict[str, Any]) -> str:
     try:
         canon = json.dumps(body, sort_keys=True, separators=(",", ":"))
     except Exception:
@@ -47,7 +48,7 @@ class _IdemRecord:
     user_key: str
     fingerprint: str
     object_id: str
-    response_body: Dict[str, Any]
+    response_body: dict[str, Any]
     created_at: float
 
 
@@ -57,17 +58,17 @@ class SandboxOrchestrator:
     Not production-grade; intended to be replaced by a pluggable backend.
     """
 
-    def __init__(self, policy: Optional[SandboxPolicy] = None) -> None:
+    def __init__(self, policy: SandboxPolicy | None = None) -> None:
         cfg = SandboxPolicyConfig.from_settings()
         self.policy = policy or SandboxPolicy(cfg)
         self._lock = threading.RLock()
-        self._sessions: Dict[str, Session] = {}
-        self._session_owners: Dict[str, str] = {}
+        self._sessions: dict[str, Session] = {}
+        self._session_owners: dict[str, str] = {}
         # Store backend for runs/idempotency/usage
         self._store = get_store()
         # in-memory run queue of (run_id, enqueue_timestamp)
         self._queue: list[tuple[str, float]] = []
-        self._enqueue_index: Dict[str, float] = {}
+        self._enqueue_index: dict[str, float] = {}
         try:
             self._idem_ttl_sec = int(getattr(app_settings, "SANDBOX_IDEMPOTENCY_TTL_SEC", 600))
         except Exception:
@@ -83,8 +84,8 @@ class SandboxOrchestrator:
             self._queue_ttl = int(_os.getenv("SANDBOX_QUEUE_TTL_SEC") or getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))
         except Exception:
             self._queue_ttl = 120
-        self._session_roots: Dict[str, str] = {}
-        self._artifacts: Dict[str, Dict[str, bytes]] = {}
+        self._session_roots: dict[str, str] = {}
+        self._artifacts: dict[str, dict[str, bytes]] = {}
 
     # -----------------
     # Idempotency Core
@@ -97,12 +98,12 @@ class SandboxOrchestrator:
 
 
 
-    def _check_idem(self, endpoint: str, user_id: Any, idem_key: Optional[str], body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _check_idem(self, endpoint: str, user_id: Any, idem_key: str | None, body: dict[str, Any]) -> dict[str, Any] | None:
         try:
             return self._store.check_idempotency(endpoint, user_id, idem_key, body)
         except StoreIdemConflict as e:
             # Convert store-level epoch seconds into ISO 8601 for API surfaces
-            iso_ct: Optional[str] = None
+            iso_ct: str | None = None
             try:
                 if getattr(e, "created_at", None) is not None:
                     from datetime import datetime, timezone
@@ -111,13 +112,13 @@ class SandboxOrchestrator:
                 iso_ct = None
             raise IdempotencyConflict(e.original_id, key=getattr(e, "key", None), prior_created_at=iso_ct)
 
-    def _store_idem(self, endpoint: str, user_id: Any, idem_key: Optional[str], body: Dict[str, Any], object_id: str, response: Dict[str, Any]) -> None:
+    def _store_idem(self, endpoint: str, user_id: Any, idem_key: str | None, body: dict[str, Any], object_id: str, response: dict[str, Any]) -> None:
         self._store.store_idempotency(endpoint, user_id, idem_key, body, object_id, response)
 
     # -----------------
     # Sessions
     # -----------------
-    def create_session(self, user_id: Any, spec: SessionSpec, spec_version: str, idem_key: Optional[str], body: Dict[str, Any]) -> Session:
+    def create_session(self, user_id: Any, spec: SessionSpec, spec_version: str, idem_key: str | None, body: dict[str, Any]) -> Session:
         # Check idempotency storage first
         stored = self._check_idem("sessions", user_id, idem_key, body)
         if stored is not None:
@@ -140,7 +141,7 @@ class SandboxOrchestrator:
 
         # Create a new session (workspace optional in scaffold)
         sid = str(uuid.uuid4())
-        expires_at: Optional[datetime] = None
+        expires_at: datetime | None = None
         try:
             ttl_sec = int(getattr(app_settings, "SANDBOX_SESSION_TTL_SEC", 0))
         except Exception:
@@ -166,7 +167,7 @@ class SandboxOrchestrator:
     # -----------------
     # Runs
     # -----------------
-    def enqueue_run(self, user_id: Any, spec: RunSpec, spec_version: str, idem_key: Optional[str], body: Dict[str, Any]) -> RunStatus:
+    def enqueue_run(self, user_id: Any, spec: RunSpec, spec_version: str, idem_key: str | None, body: dict[str, Any]) -> RunStatus:
         # Check idempotency
         stored = self._check_idem("runs", user_id, idem_key, body)
         if stored is not None:
@@ -280,14 +281,14 @@ class SandboxOrchestrator:
             except Exception:
                 continue
 
-    def get_enqueue_time(self, run_id: str) -> Optional[float]:
+    def get_enqueue_time(self, run_id: str) -> float | None:
         with self._lock:
             return self._enqueue_index.get(run_id)
 
     # -----------------
     # Lookups (stubs)
     # -----------------
-    def get_run(self, run_id: str) -> Optional[RunStatus]:
+    def get_run(self, run_id: str) -> RunStatus | None:
         try:
             return self._store.get_run(run_id)
         except Exception as e:
@@ -309,14 +310,14 @@ class SandboxOrchestrator:
         except Exception:
             pass
 
-    def get_run_owner(self, run_id: str) -> Optional[str]:
+    def get_run_owner(self, run_id: str) -> str | None:
         try:
             return self._store.get_run_owner(run_id)
         except Exception as e:
             logger.debug(f"store.get_run_owner failed: {e}")
             return None
 
-    def get_session_owner(self, session_id: str) -> Optional[str]:
+    def get_session_owner(self, session_id: str) -> str | None:
         with self._lock:
             return self._session_owners.get(session_id)
 
@@ -371,7 +372,7 @@ class SandboxOrchestrator:
     def _safe_rel(self, p: str) -> str:
         p = p.replace("\\", "/").lstrip("/")
         # prevent path traversal
-        parts: List[str] = []
+        parts: list[str] = []
         for comp in p.split('/'):
             if comp in ("", "."):
                 continue
@@ -381,7 +382,7 @@ class SandboxOrchestrator:
                 parts.append(comp)
         return "/".join(parts)
 
-    def store_artifacts(self, run_id: str, items: Dict[str, bytes]) -> None:
+    def store_artifacts(self, run_id: str, items: dict[str, bytes]) -> None:
         # Enforce caps and persist to filesystem under run's artifacts directory
         owner = None
         try:
@@ -405,7 +406,7 @@ class SandboxOrchestrator:
         except Exception:
             current_user_bytes = 0
 
-        selected: Dict[str, bytes] = {}
+        selected: dict[str, bytes] = {}
         total_run = 0
         # Deterministic order
         for path in sorted(items.keys()):
@@ -442,7 +443,7 @@ class SandboxOrchestrator:
         except Exception:
             pass
 
-    def list_artifacts(self, run_id: str) -> Dict[str, int]:
+    def list_artifacts(self, run_id: str) -> dict[str, int]:
         # Try filesystem, fallback to memory
         owner = None
         try:
@@ -450,7 +451,7 @@ class SandboxOrchestrator:
         except Exception:
             owner = None
         art_dir = self._artifact_dir((owner or "unknown"), run_id)
-        result: Dict[str, int] = {}
+        result: dict[str, int] = {}
         if art_dir.exists():
             for root, _dirs, files in os.walk(art_dir):
                 for fn in files:
@@ -466,7 +467,7 @@ class SandboxOrchestrator:
             mapping = self._artifacts.get(run_id) or {}
             return {k: len(v) for k, v in mapping.items()}
 
-    def get_artifact(self, run_id: str, path: str) -> Optional[bytes]:
+    def get_artifact(self, run_id: str, path: str) -> bytes | None:
         owner = None
         try:
             owner = self._store.get_run_owner(run_id)
@@ -506,7 +507,7 @@ class SandboxOrchestrator:
             self._session_roots[session_id] = str(ws)
         return str(ws)
 
-    def get_session_workspace_path(self, session_id: str) -> Optional[str]:
+    def get_session_workspace_path(self, session_id: str) -> str | None:
         try:
             self._prune_expired_sessions()
         except Exception:
@@ -520,11 +521,11 @@ class SandboxOrchestrator:
     def list_runs(
         self,
         *,
-        image_digest: Optional[str] = None,
-        user_id: Optional[str] = None,
-        phase: Optional[str] = None,
-        started_at_from: Optional[str] = None,
-        started_at_to: Optional[str] = None,
+        image_digest: str | None = None,
+        user_id: str | None = None,
+        phase: str | None = None,
+        started_at_from: str | None = None,
+        started_at_to: str | None = None,
         limit: int = 50,
         offset: int = 0,
         sort_desc: bool = True,
@@ -547,11 +548,11 @@ class SandboxOrchestrator:
     def count_runs(
         self,
         *,
-        image_digest: Optional[str] = None,
-        user_id: Optional[str] = None,
-        phase: Optional[str] = None,
-        started_at_from: Optional[str] = None,
-        started_at_to: Optional[str] = None,
+        image_digest: str | None = None,
+        user_id: str | None = None,
+        phase: str | None = None,
+        started_at_from: str | None = None,
+        started_at_to: str | None = None,
     ) -> int:
         try:
             return int(self._store.count_runs(

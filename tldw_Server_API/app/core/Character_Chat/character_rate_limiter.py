@@ -11,23 +11,34 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from fastapi import HTTPException, status
 from loguru import logger
 
 from tldw_Server_API.app.core.Character_Chat.character_limits import (
     CharacterLimits,
-    check_character_limit as _check_character_limit,
-    check_chat_limit as _check_chat_limit,
-    check_import_size as _check_import_size,
-    check_message_limit as _check_message_limit,
-    check_soft_message_limit as _check_soft_message_limit,
     get_character_limits,
+)
+from tldw_Server_API.app.core.Character_Chat.character_limits import (
+    check_character_limit as _check_character_limit,
+)
+from tldw_Server_API.app.core.Character_Chat.character_limits import (
+    check_chat_limit as _check_chat_limit,
+)
+from tldw_Server_API.app.core.Character_Chat.character_limits import (
+    check_import_size as _check_import_size,
+)
+from tldw_Server_API.app.core.Character_Chat.character_limits import (
+    check_message_limit as _check_message_limit,
+)
+from tldw_Server_API.app.core.Character_Chat.character_limits import (
+    check_soft_message_limit as _check_soft_message_limit,
 )
 
 # Optional Resource Governor integration (gated by global RG_ENABLED/config)
 try:  # pragma: no cover - RG is optional
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
     from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
         MemoryResourceGovernor,
         RedisResourceGovernor,
@@ -38,7 +49,6 @@ try:  # pragma: no cover - RG is optional
         PolicyReloadConfig,
         default_policy_loader,
     )
-    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
 except Exception:  # pragma: no cover - safe fallback when RG not installed
     MemoryResourceGovernor = None  # type: ignore
     RedisResourceGovernor = None  # type: ignore
@@ -58,14 +68,14 @@ class CharacterRateLimiter:
 
     def __init__(
         self,
-        redis_client: Optional[object] = None,
+        redis_client: object | None = None,
         max_operations: int = 100,
         window_seconds: int = 3600,
         max_characters: int = 1000,
         max_import_size_mb: int = 10,
         max_chats_per_user: int = 100,
         max_messages_per_chat: int = 1000,
-        max_messages_per_chat_soft: Optional[int] = None,
+        max_messages_per_chat_soft: int | None = None,
         max_chat_completions_per_minute: int = 20,
         max_message_sends_per_minute: int = 60,
         enabled: bool = True,
@@ -94,7 +104,7 @@ class CharacterRateLimiter:
             self.policy_id,
         )
 
-    async def check_rate_limit(self, user_id: int, operation: str = "character_op") -> Tuple[bool, int]:
+    async def check_rate_limit(self, user_id: int, operation: str = "character_op") -> tuple[bool, int]:
         """
         Check if user has exceeded rate limit using ResourceGovernor.
 
@@ -137,18 +147,18 @@ class CharacterRateLimiter:
 
         return True, 0
 
-    async def check_chat_completion_rate(self, user_id: int) -> Tuple[bool, int]:
+    async def check_chat_completion_rate(self, user_id: int) -> tuple[bool, int]:
         return await self.check_rate_limit(user_id=user_id, operation="chat_completion")
 
-    async def check_message_send_rate(self, user_id: int) -> Tuple[bool, int]:
+    async def check_message_send_rate(self, user_id: int) -> tuple[bool, int]:
         return await self.check_rate_limit(user_id=user_id, operation="message_send")
 
-    async def check_rate_limit_by_type(self, user_id: int, operation_type: str) -> Tuple[bool, int]:
+    async def check_rate_limit_by_type(self, user_id: int, operation_type: str) -> tuple[bool, int]:
         return await self.check_rate_limit(user_id=user_id, operation=operation_type)
 
-    async def get_usage_stats(self, user_id: int) -> Dict[str, Any]:
+    async def get_usage_stats(self, user_id: int) -> dict[str, Any]:
         """Return best-effort RG usage info for character requests."""
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "enabled": self.enabled,
             "policy_id": self.policy_id,
             "rate_limit_source": "resource_governor" if _rg_character_enabled() else "disabled",
@@ -190,12 +200,12 @@ class CharacterRateLimiter:
 _rg_char_governor = None
 _rg_char_loader = None
 _rg_char_lock = asyncio.Lock()
-_rg_char_init_error: Optional[str] = None
+_rg_char_init_error: str | None = None
 _rg_char_init_error_logged = False
 _rg_char_fallback_logged = False
 
 
-def _rg_char_context() -> Dict[str, str]:
+def _rg_char_context() -> dict[str, str]:
     policy_path = os.getenv(
         "RG_POLICY_PATH",
         "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
@@ -314,7 +324,7 @@ async def _maybe_enforce_with_rg_character(
     user_id: int,
     operation: str,
     policy_id: str,
-) -> Optional[Dict[str, object]]:
+) -> dict[str, object] | None:
     """
     Optionally enforce Character Chat operations via ResourceGovernor.
 
@@ -356,7 +366,7 @@ async def _maybe_enforce_with_rg_character(
 
 
 # Global instance (initialized in dependencies)
-_rate_limiter: Optional[CharacterRateLimiter] = None
+_rate_limiter: CharacterRateLimiter | None = None
 
 
 def get_character_rate_limiter() -> CharacterRateLimiter:

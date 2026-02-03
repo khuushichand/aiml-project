@@ -30,29 +30,29 @@ Notes:
 from __future__ import annotations
 
 import asyncio
-import os
-import json
 import inspect
-from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+import json
+import os
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase, SourceRow
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
-from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
-from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncate_text, word_count
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.Collections.embedding_queue import enqueue_embeddings_job_for_item
+from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncate_text, word_count
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
+from tldw_Server_API.app.core.DB_Management.Watchlists_DB import SourceRow, WatchlistsDatabase
 from tldw_Server_API.app.core.Watchlists.fetchers import (
     fetch_rss_feed,
     fetch_rss_feed_history,
     fetch_site_article_async,
     fetch_site_items_with_rules,
 )
-from tldw_Server_API.app.core.Watchlists.filters import normalize_filters, evaluate_filters
-from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.Watchlists.filters import evaluate_filters, normalize_filters
 
 
 def _utcnow_iso() -> str:
@@ -73,7 +73,7 @@ def _forum_delay_seconds() -> float:
     return delay_ms / 1000.0
 
 
-def _normalize_tz(tz: Optional[str]) -> str:
+def _normalize_tz(tz: str | None) -> str:
     if not tz or tz.upper() == "UTC":
         return "UTC"
     t = tz.strip().upper()
@@ -99,7 +99,7 @@ async def _maybe_await(value):
     return value
 
 
-def _compute_next_run(cron: Optional[str], timezone_str: Optional[str]) -> Optional[str]:
+def _compute_next_run(cron: str | None, timezone_str: str | None) -> str | None:
     if not cron:
         return None
     try:
@@ -119,8 +119,8 @@ _word_count = word_count
 
 
 def _resolve_collections_origin(
-    source_settings: Optional[Dict[str, Any]],
-    job_output_prefs: Optional[Dict[str, Any]],
+    source_settings: dict[str, Any] | None,
+    job_output_prefs: dict[str, Any] | None,
     *,
     default: str = "watchlist",
 ) -> str:
@@ -142,7 +142,7 @@ def _maybe_promote_feed_schedule(
     *,
     db: WatchlistsDatabase,
     job,
-    job_output_prefs: Dict[str, Any],
+    job_output_prefs: dict[str, Any],
 ) -> None:
     schedule_cfg = job_output_prefs.get("collections_schedule")
     if not isinstance(schedule_cfg, dict):
@@ -205,7 +205,7 @@ def _maybe_promote_feed_schedule(
         logger.debug(f"collections schedule promote sync failed for job {getattr(job, 'id', '?')}: {exc}")
 
 
-def _select_sources_for_scope(db: WatchlistsDatabase, scope: Dict[str, Any]) -> List[SourceRow]:
+def _select_sources_for_scope(db: WatchlistsDatabase, scope: dict[str, Any]) -> list[SourceRow]:
     """Resolve sources given a job scope.
 
     Scope semantics (minimal):
@@ -213,7 +213,7 @@ def _select_sources_for_scope(db: WatchlistsDatabase, scope: Dict[str, Any]) -> 
     - tags: list of tag names (AND semantics)
     - groups: list of group IDs (OR semantics across groups)
     """
-    selected: Dict[int, SourceRow] = {}
+    selected: dict[int, SourceRow] = {}
     # Explicit IDs
     for sid in map(int, scope.get("sources", []) or []):
         try:
@@ -242,7 +242,7 @@ def _select_sources_for_scope(db: WatchlistsDatabase, scope: Dict[str, Any]) -> 
     return list(selected.values())
 
 
-async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
+async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
     """Run the watchlist fetch→ingest pipeline for this user/job.
 
     Returns minimal stats: { run_id, items_found, items_ingested }.
@@ -253,7 +253,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
     is_first_run = True if not getattr(job, "last_run_at", None) else False
     run = db.create_run(job_id=job_id, status="running")
 
-    job_output_prefs: Dict[str, Any] = {}
+    job_output_prefs: dict[str, Any] = {}
     try:
         if getattr(job, "output_prefs_json", None):
             job_output_prefs = json.loads(job.output_prefs_json or "{}")
@@ -294,7 +294,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
     items_found = 0
     items_ingested = 0
     # Allow tags on source to flow into ingestion keywords
-    def _keywords_for_source(sr: SourceRow) -> List[str]:
+    def _keywords_for_source(sr: SourceRow) -> list[str]:
         try:
             return [t for t in (sr.tags or []) if t]
         except Exception:
@@ -304,8 +304,8 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
     test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
 
     # Load job-level filters + gating toggle (bridge from SUBS Import Rules)
-    job_filters: List[Dict[str, Any]] = []
-    job_require_include: Optional[bool] = None
+    job_filters: list[dict[str, Any]] = []
+    job_require_include: bool | None = None
     try:
         if getattr(job, "job_filters_json", None):
             raw = json.loads(job.job_filters_json or "{}")
@@ -361,7 +361,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
     include_gating_active = bool(effective_require_include and include_rules_exist)
 
     # Filter evaluation statistics
-    filter_stats: Dict[str, Any] = {
+    filter_stats: dict[str, Any] = {
         "filters_matched": 0,
         "filters_actions": {"include": 0, "exclude": 0, "flag": 0},
         "filter_tallies": {},
@@ -412,12 +412,12 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                 def _record_scraped(
                     *,
                     status: str,
-                    url: Optional[str],
-                    title: Optional[str],
-                    summary: Optional[str],
-                    media_id: Optional[int],
-                    media_uuid: Optional[str],
-                    published_at: Optional[str] = None,
+                    url: str | None,
+                    title: str | None,
+                    summary: str | None,
+                    media_id: int | None,
+                    media_uuid: str | None,
+                    published_at: str | None = None,
                 ) -> None:
                     try:
                         db.record_scraped_item(
@@ -438,7 +438,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
 
                 if src_type == "rss":
                     urls = [src.url]
-                    rss_items: List[Dict[str, Any]]
+                    rss_items: list[dict[str, Any]]
                     # Per-source settings
                     settings = {}
                     try:
@@ -473,7 +473,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         hist_per_page = None
                     hist_stop_on_seen = bool(history_cfg.get("stop_on_seen", False)) if isinstance(history_cfg, dict) else False
                     # Load DB seen keys for boundary stop mode
-                    seen_keys: List[str] = []
+                    seen_keys: list[str] = []
                     if hist_stop_on_seen:
                         try:
                             limit_base = rss_limit if rss_limit > 0 else 50
@@ -704,8 +704,8 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             }
                         if not article:
                             continue
-                        ingested_media_id: Optional[int] = None
-                        ingested_media_uuid: Optional[str] = None
+                        ingested_media_id: int | None = None
+                        ingested_media_uuid: str | None = None
                         summary_text = article.get("content") or it.get("summary") or ""
                         if persist_to_media_db and mdb is not None:
                             try:
@@ -829,8 +829,8 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                     collections_origin = _resolve_collections_origin(settings, job_output_prefs)
 
                     scrape_rules = settings.get("scrape_rules") if isinstance(settings.get("scrape_rules"), dict) else None
-                    prefetched_by_url: Dict[str, Dict[str, Any]] = {}
-                    urls_to_fetch: List[str] = []
+                    prefetched_by_url: dict[str, dict[str, Any]] = {}
+                    urls_to_fetch: list[str] = []
 
                     if scrape_rules:
                         try:
@@ -907,7 +907,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             except Exception:
                                 pass
 
-                        article: Optional[Dict[str, Any]] = None
+                        article: dict[str, Any] | None = None
                         if skip_article_fetch and prefetch:
                             article = {
                                 "title": prefetch.get("title") or src.name or "Untitled",
@@ -943,8 +943,8 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         if not article.get("title"):
                             article["title"] = prefetch.get("title") if prefetch and prefetch.get("title") else src.name
 
-                        ingested_media_id: Optional[int] = None
-                        ingested_media_uuid: Optional[str] = None
+                        ingested_media_id: int | None = None
+                        ingested_media_uuid: str | None = None
                         summary_text = article.get("content") or ""
                         if not summary_text and prefetch:
                             summary_text = prefetch.get("content") or prefetch.get("summary") or ""

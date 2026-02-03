@@ -21,3 +21,4 @@
 **Success Criteria**: Relevant tests pass locally.
 **Tests**: Run targeted frontend tests or the smoke suite if feasible. (`npm run lint` attempted but `npm` is unavailable in this environment.)
 **Status**: In Progress
+**Notes**: `npm`/Node tooling is not available in this environment, so frontend tests and linting could not be executed here.

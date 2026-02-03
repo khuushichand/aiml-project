@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import time
 import asyncio
+import time
 from dataclasses import dataclass
-from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
@@ -33,17 +32,17 @@ _idempotency_last_cleanup = 0.0
 
 @dataclass
 class _IdempotencyRecord:
-    feedback_id: Optional[str]
+    feedback_id: str | None
     created_at: float
-    issues: List[str]
-    user_notes: Optional[str]
+    issues: list[str]
+    user_notes: str | None
     pending: bool = False
 
 
-def _normalize_text_list(values: Optional[List[str]]) -> List[str]:
+def _normalize_text_list(values: list[str] | None) -> list[str]:
     if not values:
         return []
-    normalized: List[str] = []
+    normalized: list[str] = []
     seen = set()
     for item in values:
         text = str(item).strip()
@@ -54,8 +53,8 @@ def _normalize_text_list(values: Optional[List[str]]) -> List[str]:
     return normalized
 
 
-def _merge_issues(existing: List[str], incoming: List[str]) -> List[str]:
-    merged: List[str] = []
+def _merge_issues(existing: list[str], incoming: list[str]) -> list[str]:
+    merged: list[str] = []
     seen = set()
     for item in existing + incoming:
         if item in seen:
@@ -78,7 +77,7 @@ def _cleanup_idempotency_store(now: float) -> None:
     _idempotency_last_cleanup = now
 
 
-async def _get_idempotency_record(key: str) -> Optional[_IdempotencyRecord]:
+async def _get_idempotency_record(key: str) -> _IdempotencyRecord | None:
     now = time.monotonic()
     async with _idempotency_lock:
         _cleanup_idempotency_store(now)
@@ -93,8 +92,8 @@ async def _get_idempotency_record(key: str) -> Optional[_IdempotencyRecord]:
 
 async def _reserve_idempotency_record(
     key: str,
-    issues: List[str],
-    user_notes: Optional[str],
+    issues: list[str],
+    user_notes: str | None,
 ) -> tuple[bool, _IdempotencyRecord]:
     now = time.monotonic()
     async with _idempotency_lock:
@@ -118,9 +117,9 @@ async def _reserve_idempotency_record(
 
 async def _finalize_idempotency_record(
     key: str,
-    feedback_id: Optional[str],
-    issues: List[str],
-    user_notes: Optional[str],
+    feedback_id: str | None,
+    issues: list[str],
+    user_notes: str | None,
 ) -> None:
     async with _idempotency_lock:
         record = _idempotency_store.get(key)
@@ -137,7 +136,7 @@ async def _clear_idempotency_record(key: str) -> None:
         _idempotency_store.pop(key, None)
 
 
-async def _update_idempotency_record(key: str, issues: List[str], user_notes: Optional[str]) -> None:
+async def _update_idempotency_record(key: str, issues: list[str], user_notes: str | None) -> None:
     async with _idempotency_lock:
         record = _idempotency_store.get(key)
         if not record:
@@ -150,10 +149,10 @@ def _build_dedupe_key(
     *,
     user_key: str,
     request: ExplicitFeedbackRequest,
-    conversation_id: Optional[str],
+    conversation_id: str | None,
     query: str,
-    document_ids: List[str],
-    chunk_ids: List[str],
+    document_ids: list[str],
+    chunk_ids: list[str],
 ) -> str:
     if request.idempotency_key:
         return f"idem:{user_key}:{request.idempotency_key}"

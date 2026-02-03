@@ -13,7 +13,7 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Optional
 
 from loguru import logger
 
@@ -27,7 +27,7 @@ class FastGroundednessResult:
     rationale: str
     latency_ms: int
     method: str  # "llm", "heuristic", "error_fallback"
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -38,7 +38,7 @@ class UtilityResult:
     explanation: str
     latency_ms: int
     method: str  # "llm", "heuristic", "error_fallback"
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 # Prompt for fast groundedness check
@@ -85,7 +85,7 @@ Respond with a JSON object containing:
 JSON Response:"""
 
 
-def _resolve_quality_config(config_prefix: str = "RAG_QUALITY") -> Tuple[str, Optional[str], float]:
+def _resolve_quality_config(config_prefix: str = "RAG_QUALITY") -> tuple[str, Optional[str], float]:
     """
     Resolve LLM provider, model, and temperature from config with fallbacks.
 
@@ -183,7 +183,7 @@ class FastGroundednessGrader:
         self,
         query: str,
         answer: str,
-        documents: List[Any],
+        documents: list[Any],
     ) -> FastGroundednessResult:
         """
         Perform fast groundedness check on an answer.
@@ -228,6 +228,7 @@ class FastGroundednessGrader:
                     None,  # api_key
                     "You are a groundedness checker. Output valid JSON only.",
                     cfg_temp,
+                    model_override=use_model,
                 ),
                 timeout=self.timeout_sec,
             )
@@ -252,7 +253,7 @@ class FastGroundednessGrader:
             logger.warning(f"Fast groundedness check failed: {e}")
             return self._heuristic_groundedness(query, answer, documents, start_time)
 
-    def _build_sources_text(self, documents: List[Any], max_chars: int = 3000) -> str:
+    def _build_sources_text(self, documents: list[Any], max_chars: int = 3000) -> str:
         """Build a text representation of source documents."""
         sources = []
         total_chars = 0
@@ -313,7 +314,7 @@ class FastGroundednessGrader:
         self,
         query: str,
         answer: str,
-        documents: List[Any],
+        documents: list[Any],
         start_time: float,
     ) -> FastGroundednessResult:
         """
@@ -327,7 +328,7 @@ class FastGroundednessGrader:
         )
 
         # Extract words from all documents
-        source_words = set()
+        source_words: set[str] = set()
         for doc in documents:
             content = getattr(doc, "content", str(doc))
             source_words.update(
@@ -454,6 +455,7 @@ class UtilityGrader:
                     None,  # api_key
                     "You are a response quality evaluator. Output valid JSON only.",
                     cfg_temp,
+                    model_override=use_model,
                 ),
                 timeout=self.timeout_sec,
             )
@@ -556,12 +558,12 @@ class UtilityGrader:
 async def check_fast_groundedness(
     query: str,
     answer: str,
-    documents: List[Any],
+    documents: list[Any],
     provider: Optional[str] = None,
     model: Optional[str] = None,
     timeout_sec: float = 5.0,
     analyze_fn: Optional[Callable] = None,
-) -> Tuple[FastGroundednessResult, Dict[str, Any]]:
+) -> tuple[FastGroundednessResult, dict[str, Any]]:
     """
     Convenience function to check answer groundedness.
 
@@ -605,7 +607,7 @@ async def grade_utility(
     model: Optional[str] = None,
     timeout_sec: float = 5.0,
     analyze_fn: Optional[Callable] = None,
-) -> Tuple[UtilityResult, Dict[str, Any]]:
+) -> tuple[UtilityResult, dict[str, Any]]:
     """
     Convenience function to grade answer utility.
 

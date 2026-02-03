@@ -3,25 +3,23 @@
 #
 # Imports
 import asyncio
-import time
 import random
-from typing import Dict, Optional, Any, Callable, List, Tuple
+import time
+from dataclasses import dataclass
 from enum import Enum
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from typing import Any, Callable, Optional
+
 #
 # Third-party Imports
 from loguru import logger
+
 #
 # Local Imports
 from .tts_exceptions import (
     TTSCircuitOpenError,
-    TTSProviderError,
-    TTSProviderUnavailableError,
-    TTSNetworkError,
-    TTSTimeoutError,
-    categorize_error
+    categorize_error,
 )
+
 #
 #######################################################################################################################
 #
@@ -135,7 +133,7 @@ class CircuitBreaker:
         self._lock = asyncio.Lock()
         self._last_health_check = time.time()
         self._health_check_task: Optional[asyncio.Task] = None
-        self._error_categories: Dict[str, int] = {}  # Track error types
+        self._error_categories: dict[str, int] = {}  # Track error types
 
     @property
     def state(self) -> CircuitState:
@@ -273,7 +271,7 @@ class CircuitBreaker:
         self._stats.consecutive_successes = 0
         logger.info(f"Circuit breaker for {self.provider_name}: OPEN -> HALF_OPEN")
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Get basic circuit breaker status"""
         return {
             "provider": self.provider_name,
@@ -393,7 +391,7 @@ class CircuitBreaker:
         # Conservative recovery for other types of errors
         return time.time() - self._state_changed_at >= self.recovery_timeout * 2
 
-    def get_detailed_status(self) -> Dict[str, Any]:
+    def get_detailed_status(self) -> dict[str, Any]:
         """Get detailed circuit breaker status including error analysis"""
         return {
             "provider": self.provider_name,
@@ -445,7 +443,7 @@ class CircuitBreakerManager:
     Manages circuit breakers for all TTS providers.
     """
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         """
         Initialize circuit breaker manager.
 
@@ -453,7 +451,7 @@ class CircuitBreakerManager:
             config: Configuration for circuit breakers
         """
         self.config = config or {}
-        self._breakers: Dict[str, CircuitBreaker] = {}
+        self._breakers: dict[str, CircuitBreaker] = {}
         self._lock = asyncio.Lock()
 
         # Extract circuit breaker config safely
@@ -523,7 +521,7 @@ class CircuitBreakerManager:
 
             return self._breakers[provider_name]
 
-    def get_all_status(self, detailed: bool = False) -> Dict[str, Any]:
+    def get_all_status(self, detailed: bool = False) -> dict[str, Any]:
         """Get status of all circuit breakers"""
         if detailed:
             return {
@@ -536,7 +534,7 @@ class CircuitBreakerManager:
                 for name, breaker in self._breakers.items()
             }
 
-    async def enable_health_monitoring(self, provider_name: Optional[str] = None, health_check_functions: Optional[Dict[str, Callable]] = None):
+    async def enable_health_monitoring(self, provider_name: Optional[str] = None, health_check_functions: Optional[dict[str, Callable]] = None):
         """Enable health monitoring for providers"""
         health_check_functions = health_check_functions or {}
 
@@ -562,7 +560,7 @@ class CircuitBreakerManager:
             for breaker in self._breakers.values():
                 await breaker.stop_health_monitoring()
 
-    def get_error_analysis(self) -> Dict[str, Any]:
+    def get_error_analysis(self) -> dict[str, Any]:
         """Get error analysis across all circuit breakers"""
         analysis = {
             "total_providers": len(self._breakers),
@@ -643,7 +641,7 @@ _circuit_manager: Optional[CircuitBreakerManager] = None
 _manager_lock = asyncio.Lock()
 
 
-async def get_circuit_manager(config: Optional[Dict[str, Any]] = None) -> CircuitBreakerManager:
+async def get_circuit_manager(config: Optional[dict[str, Any]] = None) -> CircuitBreakerManager:
     """
     Get or create circuit breaker manager singleton.
 

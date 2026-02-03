@@ -7,6 +7,7 @@ import type { ActorSettings } from "@/types/actor"
 import type { ChatDocuments } from "@/models/ChatTypes"
 import type { SaveMessageData, SaveMessageErrorData } from "@/types/chat-modes"
 import { buildAssistantErrorContent } from "@/utils/chat-error-message"
+import { applyMcpModuleDisclosureFromToolCalls } from "@/utils/mcp-disclosure"
 import {
   buildMessageVariant,
   getLastUserMessageId,
@@ -287,6 +288,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
       const sources = preflight.sources ?? []
       const images = preflight.images ?? []
       const toolCalls = extractToolCalls(preflight.generationInfo)
+      applyMcpModuleDisclosureFromToolCalls(toolCalls)
       const nextHistory = mode.updateHistory
         ? mode.updateHistory(context, fullText)
         : ([
@@ -414,6 +416,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
 
     cancelStreamingUpdate()
     const toolCalls = extractToolCalls(generationInfo)
+    applyMcpModuleDisclosureFromToolCalls(toolCalls)
     setMessages((prev) =>
       prev.map((msg) =>
         msg.id === generateMessageId

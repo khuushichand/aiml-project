@@ -1,18 +1,18 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter
-from typing import Dict, Any
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import (
     list_backends as _list_backends,
 )
 
-
 router = APIRouter(prefix="/ocr", tags=["ocr"])
 
 
 @router.get("/backends")
-def list_ocr_backends() -> Dict[str, Any]:
+def list_ocr_backends() -> dict[str, Any]:
     """List available OCR backends with lightweight health information."""
     out = _list_backends()
 
@@ -142,7 +142,7 @@ def list_ocr_backends() -> Dict[str, Any]:
 
 
 @router.post("/points/preload")
-def preload_points_transformers() -> Dict[str, Any]:
+def preload_points_transformers() -> dict[str, Any]:
     """Preload POINTS transformers model to surface errors early."""
     try:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.points_reader import (

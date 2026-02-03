@@ -4,7 +4,7 @@
 #######################################################################################################################
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -156,7 +156,7 @@ class WSIntentMessage(BaseModel):
     type: Literal[WSMessageType.INTENT] = WSMessageType.INTENT
     action_type: VoiceActionType = Field(..., description="Detected action type")
     command_name: Optional[str] = Field(default=None, description="Matched command name")
-    entities: Dict[str, Any] = Field(default_factory=dict, description="Extracted entities")
+    entities: dict[str, Any] = Field(default_factory=dict, description="Extracted entities")
     confidence: float = Field(..., description="Intent confidence score")
     requires_confirmation: bool = Field(default=False, description="Whether confirmation is needed")
 
@@ -173,7 +173,7 @@ class WSActionResultMessage(BaseModel):
     type: Literal[WSMessageType.ACTION_RESULT] = WSMessageType.ACTION_RESULT
     success: bool = Field(..., description="Whether action succeeded")
     action_type: VoiceActionType = Field(..., description="Action type")
-    result_data: Optional[Dict[str, Any]] = Field(default=None, description="Action result data")
+    result_data: Optional[dict[str, Any]] = Field(default=None, description="Action result data")
     response_text: str = Field(..., description="Response text for TTS")
     execution_time_ms: float = Field(default=0.0, description="Execution time in milliseconds")
 
@@ -229,7 +229,7 @@ class WSWorkflowProgressMessage(BaseModel):
     run_id: str = Field(..., description="Workflow run ID")
     event_type: str = Field(..., description="Type of progress event")
     message: Optional[str] = Field(default=None, description="Human-readable progress message")
-    data: Dict[str, Any] = Field(default_factory=dict, description="Event data")
+    data: dict[str, Any] = Field(default_factory=dict, description="Event data")
     timestamp: float = Field(..., description="Event timestamp")
 
 
@@ -238,7 +238,7 @@ class WSWorkflowCompleteMessage(BaseModel):
     type: Literal[WSMessageType.WORKFLOW_COMPLETE] = WSMessageType.WORKFLOW_COMPLETE
     run_id: str = Field(..., description="Workflow run ID")
     status: str = Field(..., description="Final status (succeeded, failed, cancelled)")
-    outputs: Optional[Dict[str, Any]] = Field(default=None, description="Workflow outputs")
+    outputs: Optional[dict[str, Any]] = Field(default=None, description="Workflow outputs")
     error: Optional[str] = Field(default=None, description="Error message if failed")
     duration_ms: Optional[int] = Field(default=None, description="Total execution time")
     response_text: str = Field(..., description="TTS-friendly response text")
@@ -271,9 +271,9 @@ class VoiceCommandResponse(BaseModel):
 class VoiceCommandDefinition(BaseModel):
     """Definition for creating/updating a voice command."""
     name: str = Field(..., description="Human-readable command name")
-    phrases: List[str] = Field(..., min_length=1, description="Trigger phrases")
+    phrases: list[str] = Field(..., min_length=1, description="Trigger phrases")
     action_type: VoiceActionType = Field(..., description="Action type")
-    action_config: Dict[str, Any] = Field(
+    action_config: dict[str, Any] = Field(
         default_factory=dict,
         description="Action configuration (tool name, workflow ID, etc.)"
     )
@@ -288,9 +288,9 @@ class VoiceCommandInfo(BaseModel):
     id: str = Field(..., description="Command ID")
     user_id: int = Field(..., description="Owner user ID (0 for system)")
     name: str = Field(..., description="Command name")
-    phrases: List[str] = Field(..., description="Trigger phrases")
+    phrases: list[str] = Field(..., description="Trigger phrases")
     action_type: VoiceActionType = Field(..., description="Action type")
-    action_config: Dict[str, Any] = Field(..., description="Action configuration")
+    action_config: dict[str, Any] = Field(..., description="Action configuration")
     priority: int = Field(..., description="Priority")
     enabled: bool = Field(..., description="Whether enabled")
     requires_confirmation: bool = Field(..., description="Requires confirmation")
@@ -300,7 +300,7 @@ class VoiceCommandInfo(BaseModel):
 
 class VoiceCommandListResponse(BaseModel):
     """Response listing voice commands."""
-    commands: List[VoiceCommandInfo] = Field(..., description="List of commands")
+    commands: list[VoiceCommandInfo] = Field(..., description="List of commands")
     total: int = Field(..., description="Total count")
 
 
@@ -316,7 +316,7 @@ class VoiceSessionInfo(BaseModel):
 
 class VoiceSessionListResponse(BaseModel):
     """Response listing voice sessions."""
-    sessions: List[VoiceSessionInfo] = Field(..., description="Active sessions")
+    sessions: list[VoiceSessionInfo] = Field(..., description="Active sessions")
     total: int = Field(..., description="Total count")
 
 
@@ -352,7 +352,7 @@ class VoiceAnalytics(BaseModel):
     unique_users: int = Field(..., description="Unique users")
     success_rate: float = Field(..., description="Success rate for the day")
     avg_response_time_ms: float = Field(..., description="Average response time (ms)")
-    top_commands: List[VoiceAnalyticsTopCommand] = Field(
+    top_commands: list[VoiceAnalyticsTopCommand] = Field(
         default_factory=list,
         description="Top commands for the day",
     )
@@ -366,8 +366,8 @@ class VoiceAnalyticsSummary(BaseModel):
     enabled_commands: int = Field(..., description="Enabled voice commands")
     success_rate: float = Field(..., description="Overall success rate")
     avg_response_time_ms: float = Field(..., description="Average response time (ms)")
-    top_commands: List[VoiceCommandUsage] = Field(..., description="Top commands")
-    usage_by_day: List[VoiceAnalytics] = Field(..., description="Usage metrics by day")
+    top_commands: list[VoiceCommandUsage] = Field(..., description="Top commands")
+    usage_by_day: list[VoiceAnalytics] = Field(..., description="Usage metrics by day")
 
 
 # Workflow REST Schemas
@@ -380,7 +380,7 @@ class WorkflowStatusResponse(BaseModel):
     started_at: Optional[datetime] = Field(default=None, description="Start time")
     ended_at: Optional[datetime] = Field(default=None, description="End time")
     duration_ms: Optional[int] = Field(default=None, description="Execution time")
-    outputs: Optional[Dict[str, Any]] = Field(default=None, description="Workflow outputs")
+    outputs: Optional[dict[str, Any]] = Field(default=None, description="Workflow outputs")
     error: Optional[str] = Field(default=None, description="Error message if failed")
 
 
@@ -402,7 +402,7 @@ class VoiceWorkflowTemplateInfo(BaseModel):
 
 class VoiceWorkflowTemplateListResponse(BaseModel):
     """Response listing available voice workflow templates."""
-    templates: List[VoiceWorkflowTemplateInfo] = Field(..., description="Available templates")
+    templates: list[VoiceWorkflowTemplateInfo] = Field(..., description="Available templates")
     total: int = Field(..., description="Total count")
 
 

@@ -18,7 +18,7 @@ Exception Categories:
 - RAGGenerationError: LLM response generation failures
 """
 
-from typing import Optional, Any, Dict, List
+from typing import Any, Callable, Optional
 
 
 class RAGError(Exception):
@@ -38,7 +38,7 @@ class RAGError(Exception):
         self,
         message: str,
         operation: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None,
+        context: Optional[dict[str, Any]] = None,
         original_error: Optional[Exception] = None
     ):
         super().__init__(message)
@@ -62,7 +62,7 @@ class RAGError(Exception):
 
         return " | ".join(parts)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert exception to dictionary for logging/serialization."""
         return {
             "error_type": type(self).__name__,
@@ -337,7 +337,7 @@ def handle_rag_error(
     error: Exception,
     operation: str,
     fallback_result: Any = None,
-    log_function: Optional[callable] = None
+    log_function: Optional[Callable[[str], Any]] = None
 ) -> Any:
     """
     Standard error handling pattern for RAG operations.

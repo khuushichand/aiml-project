@@ -10,37 +10,63 @@ Implements minimal CRUD and semantics per PRD:
 Scraping and scheduling are stubbed; runs are created on trigger.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
 import asyncio
 import csv
 import io
 import json
 import os
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect, status
-from fastapi.responses import PlainTextResponse, HTMLResponse, Response
-from starlette.responses import FileResponse
-from loguru import logger
+from typing import Any
 
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
-    get_request_user,
-    User,
-    resolve_user_id_for_request,
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
 )
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+from loguru import logger
+from starlette.responses import FileResponse
+
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.Watchlists_DB_Deps import get_watchlists_db_for_user
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_db_pool
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
     is_single_user_ip_allowed,
     resolve_client_ip,
 )
-from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
-from tldw_Server_API.app.api.v1.API_Deps.Watchlists_DB_Deps import get_watchlists_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    User,
+    get_request_user,
+    resolve_user_id_for_request,
+)
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.core.DB_Management.scope_context import get_scope as _get_scope
+from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
+from tldw_Server_API.app.core.exceptions import TemplateValidationError
+from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.Watchlists import template_store
+from tldw_Server_API.app.core.Watchlists.fetchers import fetch_rss_feed, fetch_site_items_with_rules
+from tldw_Server_API.app.core.Watchlists.filters import evaluate_filters as _evaluate_filters
+from tldw_Server_API.app.core.Watchlists.filters import normalize_filters as _normalize_job_filters
+from tldw_Server_API.app.core.Watchlists.opml import generate_opml, parse_opml
+from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
 from tldw_Server_API.app.services.outputs_service import (
     _build_output_filename,
     _ingest_output_to_media_db,
@@ -50,22 +76,13 @@ from tldw_Server_API.app.services.outputs_service import (
     _write_tts_audio_file,
     render_output_template,
 )
-from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
-from tldw_Server_API.app.core.Watchlists import template_store
-from tldw_Server_API.app.core.Watchlists.opml import parse_opml, generate_opml
-from tldw_Server_API.app.core.Watchlists.fetchers import fetch_rss_feed, fetch_site_items_with_rules
-from tldw_Server_API.app.core.Watchlists.filters import normalize_filters as _normalize_job_filters, evaluate_filters as _evaluate_filters
-from tldw_Server_API.app.core.DB_Management.scope_context import get_scope as _get_scope
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_db_pool
-from tldw_Server_API.app.core.exceptions import TemplateValidationError
-from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
-from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
+
 # Lazy/optional notifications import: avoid blocking router load if optional deps fail
 try:
     from tldw_Server_API.app.core.Notifications import NotificationsService  # type: ignore
 except Exception:
     class NotificationsService:  # type: ignore
-        def __init__(self, *, user_id: int, user_email: Optional[str] = None) -> None:
+        def __init__(self, *, user_id: int, user_email: str | None = None) -> None:
             self.user_id = user_id
             self.user_email = user_email
 
@@ -74,9 +91,9 @@ except Exception:
             *,
             subject: str,
             html_body: str,
-            text_body: Optional[str],
-            recipients: Optional[List[str]],
-            attachments: Optional[List[Dict[str, Any]]] = None,
+            text_body: str | None,
+            recipients: list[str] | None,
+            attachments: list[dict[str, Any]] | None = None,
             fallback_to_user_email: bool = True,
         ) -> Any:
             # Minimal shim for tests; report skipped
@@ -87,29 +104,53 @@ except Exception:
             *,
             title: str,
             content: str,
-            description: Optional[str] = None,
-            metadata: Optional[Dict[str, Any]] = None,
+            description: str | None = None,
+            metadata: dict[str, Any] | None = None,
             document_type: Any = None,
             provider: str = "watchlists",
             model: str = "watchlists",
-            conversation_id: Optional[int] = None,
+            conversation_id: int | None = None,
         ) -> Any:
             return type("_Result", (), {"channel": "chatbook", "status": "skipped", "details": {"reason": "notifications_unavailable"}})()
 from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
-    Source, SourceCreateRequest, SourceUpdateRequest, SourcesListResponse, SourcesBulkCreateRequest,
-    SourcesBulkCreateResponse, SourcesBulkCreateItem,
-    Group, GroupCreateRequest, GroupUpdateRequest, GroupsListResponse,
-    Tag, TagsListResponse,
-    Job, JobCreateRequest, JobUpdateRequest, JobsListResponse,
-    Run, RunsListResponse, RunDetail,
-    PreviewItem, PreviewResponse,
-    ScrapedItem, ScrapedItemsListResponse, ScrapedItemUpdateRequest,
-    WatchlistOutput, WatchlistOutputCreateRequest, WatchlistOutputsListResponse,
-    WatchlistTemplateCreateRequest, WatchlistTemplateDetail, WatchlistTemplateListResponse, WatchlistTemplateSummary,
+    Group,
+    GroupCreateRequest,
+    GroupsListResponse,
+    GroupUpdateRequest,
+    Job,
+    JobCreateRequest,
+    JobsListResponse,
+    JobUpdateRequest,
+    PreviewItem,
+    PreviewResponse,
+    Run,
+    RunDetail,
+    RunsListResponse,
+    ScrapedItem,
+    ScrapedItemsListResponse,
+    ScrapedItemUpdateRequest,
+    Source,
+    SourceCreateRequest,
+    SourcesBulkCreateItem,
+    SourcesBulkCreateRequest,
+    SourcesBulkCreateResponse,
+    SourcesImportItem,
+    SourcesImportResponse,
+    SourcesListResponse,
+    SourceUpdateRequest,
+    Tag,
+    TagsListResponse,
+    WatchlistFilter,
+    WatchlistFiltersPayload,
+    WatchlistOutput,
+    WatchlistOutputCreateRequest,
+    WatchlistOutputsListResponse,
+    WatchlistTemplateCreateRequest,
+    WatchlistTemplateDetail,
+    WatchlistTemplateListResponse,
+    WatchlistTemplateSummary,
     WatchlistTemplateValidationErrorResponse,
-    WatchlistFiltersPayload, WatchlistFilter, SourcesImportResponse, SourcesImportItem,
 )
-
 
 router = APIRouter(prefix="/watchlists", tags=["watchlists"])
 
@@ -123,7 +164,7 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _is_expired(expires_at: Optional[str]) -> bool:
+def _is_expired(expires_at: str | None) -> bool:
     if not expires_at:
         return False
     try:
@@ -132,7 +173,7 @@ def _is_expired(expires_at: Optional[str]) -> bool:
         return False
 
 
-def _normalize_filters_payload(raw_json: Optional[str]) -> Optional[Dict[str, Any]]:
+def _normalize_filters_payload(raw_json: str | None) -> dict[str, Any] | None:
     if not raw_json:
         return None
     try:
@@ -149,7 +190,7 @@ def _normalize_filters_payload(raw_json: Optional[str]) -> Optional[Dict[str, An
     return None
 
 
-def _normalize_output_prefs(raw_json: Optional[str]) -> Dict[str, Any]:
+def _normalize_output_prefs(raw_json: str | None) -> dict[str, Any]:
     if not raw_json:
         return {}
     try:
@@ -160,10 +201,10 @@ def _normalize_output_prefs(raw_json: Optional[str]) -> Dict[str, Any]:
 
 
 def _merge_output_prefs(
-    base: Optional[Dict[str, Any]],
-    ingest_prefs: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
-    merged: Dict[str, Any] = dict(base or {})
+    base: dict[str, Any] | None,
+    ingest_prefs: dict[str, Any] | None,
+) -> dict[str, Any]:
+    merged: dict[str, Any] = dict(base or {})
     if ingest_prefs is not None:
         merged["ingest"] = ingest_prefs
     return merged
@@ -182,8 +223,8 @@ def _safe_int(value: Any, fallback: int) -> int:
         return fallback
 
 
-def _deep_merge_dict(base: Optional[Dict[str, Any]], override: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    result: Dict[str, Any] = dict(base or {})
+def _deep_merge_dict(base: dict[str, Any] | None, override: dict[str, Any] | None) -> dict[str, Any]:
+    result: dict[str, Any] = dict(base or {})
     for key, value in (override or {}).items():
         if isinstance(value, dict) and isinstance(result.get(key), dict):
             result[key] = _deep_merge_dict(result[key], value)
@@ -192,7 +233,7 @@ def _deep_merge_dict(base: Optional[Dict[str, Any]], override: Optional[Dict[str
     return result
 
 
-def _build_email_bodies(content: Optional[str], fmt: str, title: str, preferred: str = "auto") -> Tuple[str, str]:
+def _build_email_bodies(content: str | None, fmt: str, title: str, preferred: str = "auto") -> tuple[str, str]:
     raw = content or ""
     mode = preferred.lower()
     if mode == "auto":
@@ -207,7 +248,7 @@ def _build_email_bodies(content: Optional[str], fmt: str, title: str, preferred:
     return html_body, text_body
 
 
-def _normalize_tz(tz: Optional[str]) -> str:
+def _normalize_tz(tz: str | None) -> str:
     # Accept PRD-style 'UTC+8' and 'UTC-5' and map to IANA Etc/GMT offsets
     if not tz or tz.upper() == "UTC":
         return "UTC"
@@ -224,7 +265,7 @@ def _normalize_tz(tz: Optional[str]) -> str:
     return tz
 
 
-def _compute_next_run(cron: Optional[str], timezone: Optional[str]) -> Optional[str]:
+def _compute_next_run(cron: str | None, timezone: str | None) -> str | None:
     if not cron:
         return None
     try:
@@ -240,7 +281,7 @@ def _compute_next_run(cron: Optional[str], timezone: Optional[str]) -> Optional[
 
 
 def _row_to_scraped_item(row) -> ScrapedItem:
-    tags: List[str] = []
+    tags: list[str] = []
     try:
         tags = row.tags()
     except Exception:
@@ -271,8 +312,8 @@ def _row_to_scraped_item(row) -> ScrapedItem:
     )
 
 
-def _parse_output_metadata(row) -> Dict[str, Any]:
-    metadata: Dict[str, Any] = {}
+def _parse_output_metadata(row) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
     if hasattr(row, "metadata"):
         try:
             metadata = row.metadata()
@@ -290,7 +331,7 @@ def _parse_output_metadata(row) -> Dict[str, Any]:
     return metadata if isinstance(metadata, dict) else {}
 
 
-def _load_output_content(user_id: int, row) -> Optional[str]:
+def _load_output_content(user_id: int, row) -> str | None:
     storage_path = getattr(row, "storage_path", None)
     if not storage_path:
         return None
@@ -306,7 +347,7 @@ def _load_output_content(user_id: int, row) -> Optional[str]:
         return None
 
 
-def _row_to_output(row, *, user_id: Optional[int] = None, content_override: Optional[str] = None) -> WatchlistOutput:
+def _row_to_output(row, *, user_id: int | None = None, content_override: str | None = None) -> WatchlistOutput:
     metadata = _parse_output_metadata(row)
     version = metadata.get("version")
     try:
@@ -336,8 +377,8 @@ def _row_to_output(row, *, user_id: Optional[int] = None, content_override: Opti
     )
 
 
-def _items_to_markdown_lines(items: List[ScrapedItem]) -> List[str]:
-    lines: List[str] = []
+def _items_to_markdown_lines(items: list[ScrapedItem]) -> list[str]:
+    lines: list[str] = []
     for idx, itm in enumerate(items, 1):
         entry_title = itm.title or f"Item {idx}"
         if itm.url:
@@ -350,8 +391,8 @@ def _items_to_markdown_lines(items: List[ScrapedItem]) -> List[str]:
     return lines
 
 
-def _items_to_html_entries(items: List[ScrapedItem]) -> List[str]:
-    entries: List[str] = []
+def _items_to_html_entries(items: list[ScrapedItem]) -> list[str]:
+    entries: list[str] = []
     for idx, itm in enumerate(items, 1):
         title_text = escape(itm.title or f"Item {idx}")
         summary_text = escape(itm.summary or "")
@@ -367,20 +408,20 @@ def _items_to_html_entries(items: List[ScrapedItem]) -> List[str]:
     return entries
 
 
-def _render_default_markdown(title: str, items: List[ScrapedItem]) -> str:
+def _render_default_markdown(title: str, items: list[ScrapedItem]) -> str:
     lines = [f"# {title}", ""]
     lines.extend(_items_to_markdown_lines(items))
     return "\n".join(lines)
 
 
-def _render_default_html(title: str, items: List[ScrapedItem]) -> str:
+def _render_default_html(title: str, items: list[ScrapedItem]) -> str:
     body_parts = [f"<h1>{escape(title)}</h1>", "<ol>"]
     body_parts.extend(_items_to_html_entries(items))
     body_parts.append("</ol>")
     return "\n".join(body_parts)
 
 
-def _job_payload(job_row: Any) -> Dict[str, Any]:
+def _job_payload(job_row: Any) -> dict[str, Any]:
     scope = {}
     try:
         scope = json.loads(job_row.scope_json or "{}") if getattr(job_row, "scope_json", None) else {}
@@ -428,7 +469,7 @@ def _job_payload(job_row: Any) -> Dict[str, Any]:
     }
 
 
-def _run_payload(run_row: Any) -> Dict[str, Any]:
+def _run_payload(run_row: Any) -> dict[str, Any]:
     stats = {}
     try:
         stats = json.loads(run_row.stats_json or "{}") if getattr(run_row, "stats_json", None) else {}
@@ -449,11 +490,11 @@ def _build_output_context(
     title: str,
     job_row: Any,
     run_row: Any,
-    items: List[ScrapedItem],
-) -> Dict[str, Any]:
+    items: list[ScrapedItem],
+) -> dict[str, Any]:
     markdown_lines = _items_to_markdown_lines(items)
     html_entries = _items_to_html_entries(items)
-    items_payload: List[Dict[str, Any]] = []
+    items_payload: list[dict[str, Any]] = []
     for idx, itm in enumerate(items, 1):
         if hasattr(itm, "model_dump"):
             payload = itm.model_dump()
@@ -492,7 +533,7 @@ def _build_output_context(
     return context
 
 
-def _render_template_with_context(template_str: str, context: Dict[str, Any]) -> str:
+def _render_template_with_context(template_str: str, context: dict[str, Any]) -> str:
     return render_output_template(template_str, context)
 
 
@@ -549,7 +590,7 @@ def _is_youtube_feed_url(url: str) -> bool:
       - https://www.youtube.com/feeds/videos.xml?user=...
     """
     try:
-        from urllib.parse import urlparse, parse_qs
+        from urllib.parse import parse_qs, urlparse
         u = urlparse(url)
         path_ok = u.path.lower().startswith("/feeds/videos.xml")
         if not path_ok:
@@ -562,13 +603,13 @@ def _is_youtube_feed_url(url: str) -> bool:
         return False
 
 
-def _normalize_youtube_feed_url(url: str) -> Optional[str]:
+def _normalize_youtube_feed_url(url: str) -> str | None:
     """Attempt to normalize some YouTube URLs to canonical feed URLs.
 
     Supports channel, playlist, and user URL forms. Other forms are not normalized.
     """
     try:
-        from urllib.parse import urlparse, parse_qs
+        from urllib.parse import parse_qs, urlparse
         u = urlparse(url)
         raw_qs = parse_qs(u.query or "")
         # Normalize query keys to lowercase for case-insensitive lookup
@@ -612,11 +653,11 @@ def _raise_if_forum_disabled(source_type: str) -> None:
         raise HTTPException(status_code=400, detail="forum_sources_disabled")
 
 
-def _validate_group_ids(db: WatchlistsDatabase, group_ids: Optional[List[int]]) -> List[int]:
+def _validate_group_ids(db: WatchlistsDatabase, group_ids: list[int] | None) -> list[int]:
     if not group_ids:
         return []
-    clean: List[int] = []
-    missing: List[int] = []
+    clean: list[int] = []
+    missing: list[int] = []
     for gid in group_ids:
         try:
             gid_int = int(gid)
@@ -634,15 +675,15 @@ def _validate_group_ids(db: WatchlistsDatabase, group_ids: Optional[List[int]]) 
     return clean
 
 
-def _looks_like_jwt(token: Optional[str]) -> bool:
+def _looks_like_jwt(token: str | None) -> bool:
     return isinstance(token, str) and token.count(".") == 2
 
 
 async def _resolve_watchlists_ws_user_id(
     websocket: WebSocket,
     *,
-    token: Optional[str],
-    api_key: Optional[str],
+    token: str | None,
+    api_key: str | None,
 ) -> int:
     if not token:
         auth_hdr = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
@@ -657,9 +698,9 @@ async def _resolve_watchlists_ws_user_id(
 
     if token:
         try:
+            from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
             from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
             from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
-            from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 
             jwt_service = get_jwt_service()
             payload = await jwt_service.verify_token_async(token, token_type="access")
@@ -708,7 +749,7 @@ async def _resolve_watchlists_ws_user_id(
     raise HTTPException(status_code=401, detail="auth_required")
 
 
-def _resolve_watchlist_log_path(*, user_id: int, log_path: Optional[str]) -> Optional[Path]:
+def _resolve_watchlist_log_path(*, user_id: int, log_path: str | None) -> Path | None:
     if not log_path:
         return None
     try:
@@ -737,12 +778,12 @@ def _resolve_watchlist_log_path(*, user_id: int, log_path: Optional[str]) -> Opt
 
 def _read_log_chunk(
     *,
-    log_path: Optional[str],
+    log_path: str | None,
     user_id: int,
     offset: int,
     max_bytes: int,
-    inode: Optional[int],
-) -> tuple[Optional[str], int, Optional[int]]:
+    inode: int | None,
+) -> tuple[str | None, int, int | None]:
     if not log_path:
         return None, offset, inode
     try:
@@ -770,10 +811,10 @@ def _read_log_chunk(
 
 def _read_log_tail(
     *,
-    log_path: Optional[str],
+    log_path: str | None,
     user_id: int,
     max_bytes: int,
-) -> tuple[Optional[str], int, Optional[int], bool]:
+) -> tuple[str | None, int, int | None, bool]:
     if not log_path:
         return None, 0, None, False
     try:
@@ -808,7 +849,7 @@ async def create_source(
 ):
     try:
         _raise_if_forum_disabled(str(payload.source_type))
-        group_ids: Optional[List[int]] = payload.group_ids
+        group_ids: list[int] | None = payload.group_ids
         if group_ids is not None:
             group_ids = _validate_group_ids(db, group_ids)
         # Backend normalization/validation for YouTube-as-RSS
@@ -874,8 +915,8 @@ async def create_source(
 
 @router.get("/sources", response_model=SourcesListResponse, summary="List sources")
 async def list_sources(
-    q: Optional[str] = Query(None),
-    tags: Optional[List[str]] = Query(None, description="Filter by tag names (AND semantics)"),
+    q: str | None = Query(None),
+    tags: list[str] | None = Query(None, description="Filter by tag names (AND semantics)"),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_request_user),
@@ -884,7 +925,7 @@ async def list_sources(
     limit = size
     offset = (page - 1) * limit
     rows, total = db.list_sources(q=q, tag_names=tags, limit=limit, offset=offset)
-    items: List[Source] = []
+    items: list[Source] = []
     for r in rows:
         items.append(
             Source(
@@ -907,9 +948,9 @@ async def list_sources(
 # OPML import/export placed before /sources/{source_id} to avoid route conflicts
 @router.get("/sources/export", summary="Export sources to OPML")
 async def export_sources_opml(
-    tag: Optional[List[str]] = Query(None, description="Filter by tag(s)"),
-    group: Optional[List[int]] = Query(None, description="Filter by group id(s) (OR semantics)"),
-    type: Optional[str] = Query(None, description="Filter by source_type (rss/site/forum)"),
+    tag: list[str] | None = Query(None, description="Filter by tag(s)"),
+    group: list[int] | None = Query(None, description="Filter by group id(s) (OR semantics)"),
+    type: str | None = Query(None, description="Filter by source_type (rss/site/forum)"),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
@@ -929,7 +970,7 @@ async def export_sources_opml(
     else:
         rows, _ = db.list_sources(q=None, tag_names=tag, limit=10000, offset=0)
     # Build OPML items (rss sources only)
-    items: List[Dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
     for r in rows:
         if type and str(r.source_type).lower() != type.lower():
             continue
@@ -945,8 +986,8 @@ async def import_sources_opml(
     request: Request,
     file: UploadFile = File(...),
     active: bool = Form(True),
-    tags: Optional[List[str]] = Form(None),
-    group_id: Optional[int] = Form(None),
+    tags: list[str] | None = Form(None),
+    group_id: int | None = Form(None),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
     response: Response = None,  # type: ignore[assignment]
@@ -955,7 +996,7 @@ async def import_sources_opml(
     entries = parse_opml(content)
     if group_id is not None:
         _validate_group_ids(db, [group_id])
-    items: List[SourcesImportItem] = []
+    items: list[SourcesImportItem] = []
     created = skipped = errors = 0
     default_tags = tags or []
     for e in entries:
@@ -1031,13 +1072,13 @@ async def test_source(
 
     source_type = str(getattr(src, "source_type", ""))
     _raise_if_forum_disabled(source_type)
-    settings: Dict[str, Any] = {}
+    settings: dict[str, Any] = {}
     try:
         settings = json.loads(src.settings_json or "{}") if getattr(src, "settings_json", None) else {}
     except Exception:
         settings = {}
 
-    items: List[Dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
     test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
 
     if source_type.lower() == "rss":
@@ -1086,7 +1127,7 @@ async def test_source(
     if limit and limit > 0:
         items = items[:limit]
 
-    preview_items: List[PreviewItem] = []
+    preview_items: list[PreviewItem] = []
     for entry in items:
         preview_items.append(
             PreviewItem(
@@ -1239,7 +1280,7 @@ async def bulk_create_sources(
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
-    items: List[SourcesBulkCreateItem] = []
+    items: list[SourcesBulkCreateItem] = []
     created_count = 0
     errors_count = 0
     for s in payload.sources:
@@ -1390,7 +1431,7 @@ async def bulk_create_sources(
 # --------------------
 @router.get("/tags", response_model=TagsListResponse, summary="List tags")
 async def list_tags(
-    q: Optional[str] = Query(None),
+    q: str | None = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_request_user),
@@ -1420,7 +1461,7 @@ async def create_group(
 
 @router.get("/groups", response_model=GroupsListResponse, summary="List groups")
 async def list_groups(
-    q: Optional[str] = Query(None),
+    q: str | None = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_request_user),
@@ -1606,7 +1647,7 @@ async def preview_job(
     except Exception:
         scope = {}
 
-    selected: Dict[int, Any] = {}
+    selected: dict[int, Any] = {}
     for sid in map(int, scope.get("sources", []) or []):
         try:
             r = db.get_source(sid)
@@ -1676,7 +1717,7 @@ async def preview_job(
     include_gating_active = bool(effective_require_include and include_rules_exist)
 
     # Collect candidates
-    items: List[PreviewItem] = []
+    items: list[PreviewItem] = []
     total_ingestable = 0
     total_filtered = 0
     test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
@@ -1684,7 +1725,7 @@ async def preview_job(
     for src in sources:
         if len(items) >= limit:
             break
-        per_items: List[Dict[str, Any]] = []
+        per_items: list[dict[str, Any]] = []
         try:
             if str(src.source_type).lower() == "rss":
                 if test_mode:
@@ -1771,7 +1812,7 @@ async def preview_job(
 
 @router.get("/jobs", response_model=JobsListResponse, summary="List jobs")
 async def list_jobs(
-    q: Optional[str] = Query(None),
+    q: str | None = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_request_user),
@@ -1780,7 +1821,7 @@ async def list_jobs(
     limit = size
     offset = (page - 1) * limit
     rows, total = db.list_jobs(q=q, limit=limit, offset=offset)
-    items: List[Job] = []
+    items: list[Job] = []
     for r in rows:
         output_prefs = _normalize_output_prefs(getattr(r, "output_prefs_json", None))
         ingest_prefs = output_prefs.get("ingest") if isinstance(output_prefs, dict) else None
@@ -1888,7 +1929,7 @@ async def update_job(
         from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler
         svc = get_workflows_scheduler()
         if r.wf_schedule_id:
-            upd: Dict[str, Any] = {}
+            upd: dict[str, Any] = {}
             if "schedule_expr" in patch:
                 upd["cron"] = r.schedule_expr or "* * * * *"
             if "schedule_timezone" in patch:
@@ -2103,7 +2144,7 @@ async def trigger_run(
     except Exception as e:
         logger.error(f"trigger_run failed: {e}")
         raise HTTPException(status_code=500, detail="run_trigger_failed")
-    stats_dict: Optional[Dict[str, Any]] = None
+    stats_dict: dict[str, Any] | None = None
     try:
         stats_dict = json.loads(run.stats_json or "{}") if run.stats_json else None
     except Exception:
@@ -2137,7 +2178,7 @@ async def list_runs_for_job(
 
 @router.get("/runs", response_model=RunsListResponse, summary="List runs across all jobs")
 async def list_runs_global(
-    q: Optional[str] = Query(None, description="Filter by job name/description, run status, or run id (text)"),
+    q: str | None = Query(None, description="Filter by job name/description, run status, or run id (text)"),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_request_user),
@@ -2165,8 +2206,8 @@ async def list_runs_global(
 @router.get("/runs/export.csv", response_class=PlainTextResponse, summary="Export runs as CSV (global or by job)")
 async def export_runs_csv(
     scope: str = Query("global", pattern="^(global|job)$"),
-    job_id: Optional[int] = Query(None, ge=1),
-    q: Optional[str] = Query(None),
+    job_id: int | None = Query(None, ge=1),
+    q: str | None = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(200, ge=1, le=1000),
     include_tallies: bool = Query(False, description="When true, include a filter_tallies_json column per row"),
@@ -2303,7 +2344,7 @@ async def get_run_details(
             log_text = None
             truncated = False
     # Build stats for detail view, including filter totals when present
-    detail_stats: Dict[str, int] = {
+    detail_stats: dict[str, int] = {
         "items_found": items_found,
         "items_ingested": items_ingested,
         "filters_include": 0,
@@ -2382,8 +2423,8 @@ async def get_run_details(
 async def stream_run(
     websocket: WebSocket,
     run_id: int,
-    token: Optional[str] = Query(None),
-    api_key: Optional[str] = Query(None),
+    token: str | None = Query(None),
+    api_key: str | None = Query(None),
 ):
     try:
         user_id = await _resolve_watchlists_ws_user_id(websocket, token=token, api_key=api_key)
@@ -2417,7 +2458,7 @@ async def stream_run(
     if poll_interval < 0.2:
         poll_interval = 0.2
 
-    def _parse_stats(raw: Optional[str]) -> Dict[str, Any]:
+    def _parse_stats(raw: str | None) -> dict[str, Any]:
         if not raw:
             return {}
         try:
@@ -2539,14 +2580,14 @@ async def export_run_tallies_csv(
 # --------------------
 @router.get("/items", response_model=ScrapedItemsListResponse, summary="List scraped items across runs")
 async def list_scraped_items(
-    run_id: Optional[int] = Query(None),
-    job_id: Optional[int] = Query(None),
-    source_id: Optional[int] = Query(None),
-    status: Optional[str] = Query(None),
-    reviewed: Optional[bool] = Query(None),
-    q: Optional[str] = Query(None, description="Search by title/summary substring"),
-    since: Optional[str] = Query(None, description="ISO date filter (created_at >= since)"),
-    until: Optional[str] = Query(None, description="ISO date filter (created_at <= until)"),
+    run_id: int | None = Query(None),
+    job_id: int | None = Query(None),
+    source_id: int | None = Query(None),
+    status: str | None = Query(None),
+    reviewed: bool | None = Query(None),
+    q: str | None = Query(None, description="Search by title/summary substring"),
+    since: str | None = Query(None, description="ISO date filter (created_at >= since)"),
+    until: str | None = Query(None, description="ISO date filter (created_at <= until)"),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_request_user),
@@ -2621,7 +2662,7 @@ async def create_output(
     except KeyError:
         raise HTTPException(status_code=404, detail="job_not_found")
 
-    job_prefs: Dict[str, Any] = {}
+    job_prefs: dict[str, Any] = {}
     try:
         job_prefs = (
             json.loads(job.output_prefs_json or "{}") if getattr(job, "output_prefs_json", None) else {}
@@ -2635,7 +2676,7 @@ async def create_output(
     delivery_defaults = job_prefs.get("deliveries") or {}
 
     job_id = run.job_id
-    items: List[Any]
+    items: list[Any]
     if payload.item_ids:
         items = db.get_items_by_ids(payload.item_ids)
         if not items:
@@ -2715,7 +2756,7 @@ async def create_output(
         else:
             content = _render_default_markdown(title, item_models)
 
-    metadata: Dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
     if payload.metadata:
         try:
             metadata.update(payload.metadata)
@@ -2781,7 +2822,7 @@ async def create_output(
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     base_metadata = dict(metadata)
     tags = sorted({t for itm in item_models for t in (itm.tags or []) if isinstance(t, str)})
-    created_outputs: List[Tuple[int, Any]] = []
+    created_outputs: list[tuple[int, Any]] = []
     template_id = output_template.id if output_template else None
 
     def _variant_metadata(
@@ -2790,7 +2831,7 @@ async def create_output(
         output_format: str,
         variant_kind: str,
         variant_of: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         meta = dict(base_metadata)
         meta["type"] = output_type
         meta["format"] = output_format
@@ -2798,7 +2839,7 @@ async def create_output(
         meta["variant_kind"] = variant_kind
         return meta
 
-    def _apply_template_meta(meta: Dict[str, Any], tpl) -> None:
+    def _apply_template_meta(meta: dict[str, Any], tpl) -> None:
         if tpl is None:
             return
         meta["template_id"] = tpl.id
@@ -2812,12 +2853,12 @@ async def create_output(
         output_type: str,
         output_format: str,
         output_title: str,
-        output_content: Optional[str],
-        filename_suffix: Optional[str],
-        meta: Dict[str, Any],
+        output_content: str | None,
+        filename_suffix: str | None,
+        meta: dict[str, Any],
         tpl,
-        variant_of: Optional[int],
-        template_id_override: Optional[int] = None,
+        variant_of: int | None,
+        template_id_override: int | None = None,
     ) -> Any:
         meta = dict(meta)
         if tpl is not None:
@@ -2996,8 +3037,8 @@ async def create_output(
         ),
         user_email=getattr(current_user, "email", None),
     )
-    delivery_results: List[Dict[str, Any]] = []
-    chatbook_path_update: Optional[str] = None
+    delivery_results: list[dict[str, Any]] = []
+    chatbook_path_update: str | None = None
     metadata_update_needed = False
 
     if isinstance(delivery_plan, dict):
@@ -3076,7 +3117,7 @@ async def create_output(
         metadata.pop("delivery_plan", None)
         metadata_update_needed = True
 
-    metadata_for_update: Optional[Dict[str, Any]] = None
+    metadata_for_update: dict[str, Any] | None = None
     if metadata_update_needed:
         metadata_for_update = {k: v for k, v in metadata.items() if v is not None}
 
@@ -3093,8 +3134,8 @@ async def create_output(
 
 @router.get("/outputs", response_model=WatchlistOutputsListResponse, summary="List generated outputs")
 async def list_outputs(
-    run_id: Optional[int] = Query(None),
-    job_id: Optional[int] = Query(None),
+    run_id: int | None = Query(None),
+    job_id: int | None = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_request_user),
@@ -3110,7 +3151,7 @@ async def list_outputs(
         error_status=500,
         invalid_detail="invalid user_id",
     )
-    items: List[WatchlistOutput] = []
+    items: list[WatchlistOutput] = []
     for row in rows:
         metadata = _parse_output_metadata(row)
         if metadata.get("origin") != "watchlists":

@@ -4,11 +4,10 @@
 import asyncio
 import configparser
 import os
-import time
 import threading
+import time
 from collections import defaultdict, deque
-from datetime import datetime, timedelta
-from typing import Dict, Optional
+from typing import Optional
 
 from loguru import logger
 
@@ -16,6 +15,7 @@ from tldw_Server_API.app.core.Embeddings.audit_adapter import log_security_viola
 
 try:
     # Resource Governor (optional; enabled via RG flags)
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
     from tldw_Server_API.app.core.Resource_Governance import (
         MemoryResourceGovernor,
         RedisResourceGovernor,
@@ -29,7 +29,6 @@ try:
         PolicyReloadConfig,
         default_policy_loader,
     )
-    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
 except Exception:  # pragma: no cover - RG is optional for embeddings
     MemoryResourceGovernor = None  # type: ignore
     RedisResourceGovernor = None  # type: ignore
@@ -69,15 +68,15 @@ class UserRateLimiter:
         self.burst_allowance = burst_allowance
 
         # Track requests per user: user_id -> deque of (timestamp, cost)
-        self.user_requests: Dict[str, deque] = defaultdict(lambda: deque())
+        self.user_requests: dict[str, deque] = defaultdict(lambda: deque())
         # Shadow-only request history used for RG comparisons. This is kept
         # separate from the enforcement queue so that enabling RG does not
         # mutate legacy limiter state while still allowing “what would legacy
         # do?” drift metrics to remain meaningful.
-        self._shadow_user_requests: Dict[str, deque] = defaultdict(lambda: deque())
+        self._shadow_user_requests: dict[str, deque] = defaultdict(lambda: deque())
 
         # Track user tiers: user_id -> tier
-        self.user_tiers: Dict[str, str] = {}
+        self.user_tiers: dict[str, str] = {}
 
         # Lock for thread safety
         self._lock = threading.RLock()
@@ -315,7 +314,7 @@ class UserRateLimiter:
 
             return True, None
 
-    def get_user_usage(self, user_id: str) -> Dict[str, any]:
+    def get_user_usage(self, user_id: str) -> dict[str, any]:
         """
         Get current usage statistics for a user.
 
@@ -361,7 +360,7 @@ class UserRateLimiter:
                 self.user_requests[user_id].clear()
                 logger.info(f"Rate limit reset for user {user_id}")
 
-    def get_statistics(self) -> Dict[str, any]:
+    def get_statistics(self) -> dict[str, any]:
         """
         Get overall rate limiter statistics.
 
@@ -663,7 +662,7 @@ class AsyncRateLimiter:
         # This is handled in check_rate_limit, but provided for compatibility
         pass
 
-    async def get_user_usage_async(self, user_id: str) -> Dict[str, any]:
+    async def get_user_usage_async(self, user_id: str) -> dict[str, any]:
         """Get user usage statistics asynchronously"""
         if self.rate_limiter is None:
             return {"available": False, "reason": "rate_limiter_disabled"}
@@ -716,7 +715,7 @@ def _rate_limit_mode() -> str:
     return "tokens"
 
 
-def _rg_embeddings_context() -> Dict[str, str]:
+def _rg_embeddings_context() -> dict[str, str]:
     policy_path = os.getenv(
         "RG_POLICY_PATH",
         "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
@@ -814,7 +813,7 @@ async def _maybe_enforce_with_rg(
     user_id: str,
     cost: int,
     tokens_units: int = 0,
-) -> Optional[Dict[str, object]]:
+) -> Optional[dict[str, object]]:
     """
     Attempt to enforce embeddings limits via Resource Governor.
 
@@ -837,7 +836,7 @@ async def _maybe_enforce_with_rg(
         tu = max(0, tu)
 
         # Only enforce token budgets here; request-rate limiting happens at ingress.
-        categories: Dict[str, Dict[str, int]] = {}
+        categories: dict[str, dict[str, int]] = {}
         if tu > 0:
             categories["tokens"] = {"units": tu}
         else:

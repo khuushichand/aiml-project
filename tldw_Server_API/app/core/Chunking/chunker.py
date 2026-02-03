@@ -4,50 +4,46 @@ Main Chunker class that provides a unified interface for all chunking strategies
 This is the primary entry point for the chunking module.
 """
 
-from typing import List, Dict, Any, Optional, Union, Generator, Tuple
-from contextlib import nullcontext
-import re
-import json
-import hashlib
-import time
-from pathlib import Path
-import unicodedata
-import ast
-import threading
 import copy
+import hashlib
+import json
+import re
+import threading
+import time
+import unicodedata
 from collections import OrderedDict
+from collections.abc import Generator
+from contextlib import nullcontext
 from dataclasses import asdict
+from pathlib import Path
+from typing import Any, Optional, Union
+
 from loguru import logger
 
-from .base import ChunkerConfig, ChunkingMethod, ChunkResult, ChunkMetadata
-from .exceptions import (
-    InvalidChunkingMethodError,
-    InvalidInputError,
-    ChunkingError,
-    ConfigurationError
-)
-from .strategies.words import WordChunkingStrategy
-from .strategies.sentences import SentenceChunkingStrategy
-from .strategies.tokens import TokenChunkingStrategy
-from .strategies.structure_aware import StructureAwareChunkingStrategy
+from .base import ChunkerConfig, ChunkingMethod, ChunkMetadata, ChunkResult
+from .constants import FRONTMATTER_SENTINEL_KEY
+from .exceptions import ChunkingError, InvalidChunkingMethodError, InvalidInputError
+from .security_logger import get_security_logger
 from .strategies.fixed_size import FixedSizeChunkingStrategy
 from .strategies.rolling_summarize import RollingSummarizeStrategy
-from .security_logger import get_security_logger, SecurityEventType
-from .constants import FRONTMATTER_SENTINEL_KEY
+from .strategies.sentences import SentenceChunkingStrategy
+from .strategies.structure_aware import StructureAwareChunkingStrategy
+from .strategies.tokens import TokenChunkingStrategy
+from .strategies.words import WordChunkingStrategy
 
 # Metrics / Telemetry (graceful on import failures)
 try:
     from tldw_Server_API.app.core.Metrics import (
-        observe_histogram,
-        set_gauge,
-        increment_counter,
-        start_span,
-        add_span_event,
-        set_span_attribute,
-        record_span_exception,
-        get_metrics_registry,
         MetricDefinition,
         MetricType,
+        add_span_event,
+        get_metrics_registry,
+        increment_counter,
+        observe_histogram,
+        record_span_exception,
+        set_gauge,
+        set_span_attribute,
+        start_span,
     )
     _METRICS_AVAILABLE = True
 except Exception:  # pragma: no cover - safety fallback
@@ -87,7 +83,7 @@ def _ensure_chunker_metrics_registered() -> None:
         registry = get_metrics_registry()
         if registry is None or not hasattr(registry, "metrics"):
             return
-        def _register(name: str, metric_type: MetricType, description: str, labels: List[str], unit: str = "") -> None:
+        def _register(name: str, metric_type: MetricType, description: str, labels: list[str], unit: str = "") -> None:
             if name not in registry.metrics:
                 registry.register_metric(
                     MetricDefinition(
@@ -262,7 +258,7 @@ class LRUCache:
             self.hits = 0
             self.misses = 0
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get cache statistics.
 
@@ -290,7 +286,7 @@ class Chunker:
 
     def __init__(self, config: Optional[ChunkerConfig] = None,
                  llm_call_func: Optional[Any] = None,
-                 llm_config: Optional[Dict[str, Any]] = None):
+                 llm_config: Optional[dict[str, Any]] = None):
         """
         Initialize the chunker with configuration.
 
@@ -384,19 +380,19 @@ class Chunker:
         logger.debug(f"Registered {len(self._strategy_factories)} strategy factories (lazy)")
 
     # ---------------- Hierarchical chunking (integrated) -----------------
-    def _compute_paragraph_spans(self, text: str, template: Optional[Dict[str, Any]] = None) -> List[Tuple[int, int, str]]:
+    def _compute_paragraph_spans(self, text: str, template: Optional[dict[str, Any]] = None) -> list[tuple[int, int, str]]:
         """Compute paragraph/block spans with kinds and optional template boundaries.
 
         Lightweight port of the structure detection used by the legacy utility to
         avoid maintaining two libraries. Recognizes blank lines, ATX headers, hrules,
         simple lists, code fences, markdown tables, and optional custom boundary rules.
         """
-        spans: List[Tuple[int, int, str]] = []
+        spans: list[tuple[int, int, str]] = []
         if not text:
             return spans
 
         # Compile template boundary patterns if provided, with safety limits
-        template_patterns: List[Tuple[str, re.Pattern]] = []
+        template_patterns: list[tuple[str, re.Pattern]] = []
         try:
             boundaries = (template or {}).get('boundaries') or []
             # Safety caps aligned with API validator: at most 20 rules
@@ -427,7 +423,7 @@ class Chunker:
             template_patterns = []
 
         lines = text.splitlines(keepends=True)
-        offsets: List[Tuple[int, int, str]] = []
+        offsets: list[tuple[int, int, str]] = []
         pos = 0
         for line in lines:
             start, end = pos, pos + len(line)
@@ -539,9 +535,9 @@ class Chunker:
         max_size: Optional[int] = None,
         overlap: Optional[int] = None,
         language: Optional[str] = None,
-        template: Optional[Dict[str, Any]] = None,
-        method_options: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        template: Optional[dict[str, Any]] = None,
+        method_options: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """Build a simple hierarchical tree (sections + blocks) and chunk leaves.
 
         Returns a dict with a root node and nested children, each child holding "chunks"
@@ -587,19 +583,19 @@ class Chunker:
         # Build blocks from spans
         spans = self._compute_paragraph_spans(text, template)
         root = {'kind': 'root', 'level': 0, 'title': None, 'start_offset': 0, 'end_offset': len(text), 'children': []}
-        current_section: Optional[Dict[str, Any]] = None
-        section_stack: List[Dict[str, Any]] = []
-        preface_section: Optional[Dict[str, Any]] = None
+        current_section: Optional[dict[str, Any]] = None
+        section_stack: list[dict[str, Any]] = []
+        preface_section: Optional[dict[str, Any]] = None
 
         # Helper to add a leaf block with chunks
-        def _add_block(parent: Dict[str, Any], start: int, end: int, kind: str):
+        def _add_block(parent: dict[str, Any], start: int, end: int, kind: str):
             if start >= end:
                 return
             segment_raw = text[start:end]
             # Use sanitized copy for downstream offset mapping
             segment_clean = clean_text[start:end]
             chunks = None
-            out_chunks: List[Dict[str, Any]] = []
+            out_chunks: list[dict[str, Any]] = []
             if method in rewrite_methods:
                 # Compute chunks using selected method (may rewrite text, offsets invalid)
                 chunks = self.chunk_text(
@@ -857,11 +853,11 @@ class Chunker:
                 'children': []
             })
 
-        def _close_section(section: Optional[Dict[str, Any]], end: int):
+        def _close_section(section: Optional[dict[str, Any]], end: int):
             if section is not None and section.get('end_offset') is None:
                 section['end_offset'] = end
 
-        def _ensure_preface_section(start: int) -> Dict[str, Any]:
+        def _ensure_preface_section(start: int) -> dict[str, Any]:
             nonlocal preface_section
             if preface_section is None:
                 preface_section = {
@@ -910,7 +906,7 @@ class Chunker:
                 # so these remain nested inside their parent chapter.
                 # Find the nearest ancestor section that was not itself created
                 # from a bold-only subsection.
-                target_parent: Optional[Dict[str, Any]] = None
+                target_parent: Optional[dict[str, Any]] = None
                 for sec in reversed(section_stack):
                     if sec.get('kind') == 'section' and sec.get('source_kind') != 'bold_subsection':
                         target_parent = sec
@@ -962,7 +958,7 @@ class Chunker:
             'root': root,
         }
 
-    def flatten_hierarchical(self, tree: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def flatten_hierarchical(self, tree: dict[str, Any]) -> list[dict[str, Any]]:
         """Flatten a hierarchical tree into a list of dict chunks with ancestry info."""
         if not isinstance(tree, dict):
             return []
@@ -971,11 +967,11 @@ class Chunker:
         # Elements-per-chunk semantics for structure_aware grouping
         sa_max = tree.get('max_size') if isinstance(tree.get('max_size'), int) else None
         sa_ovl = tree.get('overlap') if isinstance(tree.get('overlap'), int) else 0
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
 
         languages_no_space = {'zh', 'zh-cn', 'zh-tw', 'ja', 'th'}
 
-        def _merge_texts(parts: List[Tuple[str, Dict[str, Any]]], *, default_sep: str = ' ', kind_hint: Optional[str] = None) -> str:
+        def _merge_texts(parts: list[tuple[str, dict[str, Any]]], *, default_sep: str = ' ', kind_hint: Optional[str] = None) -> str:
             """Join text parts while guaranteeing at least minimal whitespace between them."""
             if not parts:
                 return ''
@@ -1034,7 +1030,7 @@ class Chunker:
                 prev_md = md
             return combined
 
-        def _append_with_titles(items: List[Dict[str, Any]], titles: List[str]):
+        def _append_with_titles(items: list[dict[str, Any]], titles: list[str]):
             for ch in items:
                 txt = ch.get('text') if isinstance(ch, dict) else str(ch)
                 md = dict(ch.get('metadata') or {}) if isinstance(ch, dict) else {}
@@ -1049,18 +1045,18 @@ class Chunker:
                     md['chunk_type'] = normalized_chunk_type
                 out.append({'text': txt, 'metadata': md})
 
-        def _gather_section_items(section_node: Dict[str, Any]) -> List[Dict[str, Any]]:
-            items: List[Dict[str, Any]] = []
-            header_buffer: List[Dict[str, Any]] = []
+        def _gather_section_items(section_node: dict[str, Any]) -> list[dict[str, Any]]:
+            items: list[dict[str, Any]] = []
+            header_buffer: list[dict[str, Any]] = []
 
-            def _flush_header_buffer(target_item: Dict[str, Any]) -> Dict[str, Any]:
+            def _flush_header_buffer(target_item: dict[str, Any]) -> dict[str, Any]:
                 """Merge buffered headers into the provided item without increasing element count."""
                 nonlocal header_buffer
                 if not header_buffer:
                     return target_item
-                parts: List[Tuple[str, Dict[str, Any]]] = []
-                starts: List[int] = []
-                ends: List[int] = []
+                parts: list[tuple[str, dict[str, Any]]] = []
+                starts: list[int] = []
+                ends: list[int] = []
                 for h in header_buffer:
                     txt = h.get('text') if isinstance(h, dict) else str(h)
                     md_h = h.get('metadata') if isinstance(h, dict) else {}
@@ -1124,13 +1120,13 @@ class Chunker:
 
             return items
 
-        def _group_items_by_elements(items: List[Dict[str, Any]], max_elements: int, overlap: int) -> List[Dict[str, Any]]:
+        def _group_items_by_elements(items: list[dict[str, Any]], max_elements: int, overlap: int) -> list[dict[str, Any]]:
             if max_elements is None or max_elements <= 0:
                 return items
             if overlap < 0:
                 overlap = 0
             step = max(1, max_elements - overlap)
-            grouped: List[Dict[str, Any]] = []
+            grouped: list[dict[str, Any]] = []
             i = 0
             n = len(items)
             while i < n:
@@ -1148,9 +1144,9 @@ class Chunker:
                 if not emit:
                     break
                 # Concatenate texts preserving original content
-                parts: List[Tuple[str, Dict[str, Any]]] = []
-                starts: List[int] = []
-                ends: List[int] = []
+                parts: list[tuple[str, dict[str, Any]]] = []
+                starts: list[int] = []
+                ends: list[int] = []
                 for it in group:
                     t = it.get('text') if isinstance(it, dict) else str(it)
                     md = it.get('metadata') if isinstance(it, dict) else {}
@@ -1194,7 +1190,7 @@ class Chunker:
                 i += step
             return grouped
 
-        def _group_section_by_kind_weight(items: List[Dict[str, Any]], max_weight: int, overlap: int, weights: Dict[str, int]) -> List[Dict[str, Any]]:
+        def _group_section_by_kind_weight(items: list[dict[str, Any]], max_weight: int, overlap: int, weights: dict[str, int]) -> list[dict[str, Any]]:
             """Group contiguous items by paragraph_kind using weight budget per group.
 
             Does not cross kind boundaries; code_fence blocks tend to be heavier by default.
@@ -1205,7 +1201,7 @@ class Chunker:
                 overlap = 0
             # Clamp overlap to max_weight - 1 (no negative step)
             overlap = min(overlap, max(0, max_weight - 1))
-            out_groups: List[Dict[str, Any]] = []
+            out_groups: list[dict[str, Any]] = []
             i = 0
             n = len(items)
             while i < n:
@@ -1214,9 +1210,9 @@ class Chunker:
                 kind = (first.get('metadata') or {}).get('paragraph_kind') if isinstance(first, dict) else None
                 budget = max_weight
                 j = i
-                parts: List[Tuple[str, Dict[str, Any]]] = []
-                starts: List[int] = []
-                ends: List[int] = []
+                parts: list[tuple[str, dict[str, Any]]] = []
+                starts: list[int] = []
+                ends: list[int] = []
                 count = 0
                 while j < n:
                     it = items[j]
@@ -1287,7 +1283,7 @@ class Chunker:
                 i += step
             return out_groups
 
-        def walk(node: Dict[str, Any], titles: List[str]):
+        def walk(node: dict[str, Any], titles: list[str]):
             kind = node.get('kind')
             if kind == 'section':
                 title = str(node.get('title') or '').strip()
@@ -1337,9 +1333,9 @@ class Chunker:
         max_size: Optional[int] = None,
         overlap: Optional[int] = None,
         language: Optional[str] = None,
-        template: Optional[Dict[str, Any]] = None,
-        method_options: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
+        template: Optional[dict[str, Any]] = None,
+        method_options: Optional[dict[str, Any]] = None,
+    ) -> list[dict[str, Any]]:
         """Convenience wrapper returning flattened hierarchical chunks with metadata."""
         tree = self.chunk_text_hierarchical_tree(
             text=text,
@@ -1406,8 +1402,8 @@ class Chunker:
 
         # Check for control characters (except common ones like \n, \t, \r)
         allowed_control_chars = {'\n', '\t', '\r', '\f'}
-        control_characters: List[str] = []
-        control_char_samples: List[str] = []
+        control_characters: list[str] = []
+        control_char_samples: list[str] = []
         for char in text:
             if unicodedata.category(char) == 'Cc' and char not in allowed_control_chars:
                 control_characters.append(char)
@@ -1451,7 +1447,7 @@ class Chunker:
                    max_size: Optional[int] = None,
                    overlap: Optional[int] = None,
                    language: Optional[str] = None,
-                   **options) -> List[str]:
+                   **options) -> list[str]:
         """
         Chunk text using the specified method.
 
@@ -1481,7 +1477,7 @@ class Chunker:
         self._enforce_text_size(text, source="chunk_text")
 
         # Use defaults if not specified
-        options_raw: Dict[str, Any] = dict(options)
+        options_raw: dict[str, Any] = dict(options)
         align_text_to_source = bool(options_raw.pop("align_text_to_source", False))
         method = self._normalize_method_argument(method) or self.config.default_method.value
         max_size = max_size if max_size is not None else self.config.default_max_size
@@ -1512,7 +1508,7 @@ class Chunker:
         if isinstance(tokenizer_override, str):
             tokenizer_override = tokenizer_override.strip() or None
         use_per_call_strategy = bool(tokenizer_override) and method == ChunkingMethod.TOKENS.value
-        strategy_options: Dict[str, Any] = dict(options_raw)
+        strategy_options: dict[str, Any] = dict(options_raw)
         strategy_options.pop("code_mode", None)
         strategy_options.pop("tokenizer_name", None)
         strategy_options.pop("tokenizer_name_or_path", None)
@@ -1643,7 +1639,7 @@ class Chunker:
                                  max_size: Optional[int] = None,
                                  overlap: Optional[int] = None,
                                  language: Optional[str] = None,
-                                 **options) -> List[ChunkResult]:
+                                 **options) -> list[ChunkResult]:
         """
         Chunk text and return results with metadata.
 
@@ -1670,7 +1666,7 @@ class Chunker:
         self._enforce_text_size(text, source="chunk_text_with_metadata")
 
         # Use defaults if not specified
-        options_raw: Dict[str, Any] = dict(options)
+        options_raw: dict[str, Any] = dict(options)
         align_text_to_source_opt = options_raw.pop("align_text_to_source", None)
         align_text_to_source = bool(align_text_to_source_opt) if align_text_to_source_opt is not None else False
         method = self._normalize_method_argument(method) or self.config.default_method.value
@@ -1701,7 +1697,7 @@ class Chunker:
         if isinstance(tokenizer_override, str):
             tokenizer_override = tokenizer_override.strip() or None
         use_per_call_strategy = bool(tokenizer_override) and method == ChunkingMethod.TOKENS.value
-        strategy_options: Dict[str, Any] = dict(options_raw)
+        strategy_options: dict[str, Any] = dict(options_raw)
         if align_text_to_source_opt is not None:
             # Allow strategies to opt into/out of source-aligned text
             strategy_options["align_text_to_source"] = bool(align_text_to_source_opt)
@@ -1788,7 +1784,7 @@ class Chunker:
         self._enforce_text_size(text, source="chunk_text_generator")
 
         # Use defaults if not specified
-        options_raw: Dict[str, Any] = dict(options)
+        options_raw: dict[str, Any] = dict(options)
         method = self._normalize_method_argument(method) or self.config.default_method.value
         max_size = max_size if max_size is not None else self.config.default_max_size
         overlap = overlap if overlap is not None else self.config.default_overlap
@@ -1816,7 +1812,7 @@ class Chunker:
         if isinstance(tokenizer_override, str):
             tokenizer_override = tokenizer_override.strip() or None
         use_per_call_strategy = bool(tokenizer_override) and method == ChunkingMethod.TOKENS.value
-        strategy_options: Dict[str, Any] = dict(options_raw)
+        strategy_options: dict[str, Any] = dict(options_raw)
         strategy_options.pop("code_mode", None)
         strategy_options.pop("tokenizer_name", None)
         strategy_options.pop("tokenizer_name_or_path", None)
@@ -1852,7 +1848,7 @@ class Chunker:
                 for chunk in strategy.chunk(text, max_size, overlap, **strategy_options):
                     yield chunk
 
-    def get_available_methods(self) -> List[str]:
+    def get_available_methods(self) -> list[str]:
         """
         Get list of available chunking methods.
 
@@ -1949,7 +1945,7 @@ class Chunker:
         self,
         method: Optional[Any],
         language: Optional[str],
-        options: Optional[Dict[str, Any]] = None,
+        options: Optional[dict[str, Any]] = None,
     ) -> str:
         """Resolve the effective chunking method considering options and language hints."""
         normalized = self._normalize_method_argument(method) or self.config.default_method.value
@@ -1966,7 +1962,7 @@ class Chunker:
                 return 'code_ast'
         return normalized
 
-    def _apply_option_aliases(self, method: str, options: Dict[str, Any]) -> Dict[str, Any]:
+    def _apply_option_aliases(self, method: str, options: dict[str, Any]) -> dict[str, Any]:
         """Translate legacy/public option names into strategy-native keys."""
         mapped = dict(options or {})
         method_norm = str(method or "").lower()
@@ -1981,7 +1977,7 @@ class Chunker:
                 mapped["min_proposition_length"] = mapped.get("proposition_min_proposition_length")
         return mapped
 
-    def _override_overlap_for_method(self, method: str, overlap: Any, options: Dict[str, Any]) -> Any:
+    def _override_overlap_for_method(self, method: str, overlap: Any, options: dict[str, Any]) -> Any:
         """Override overlap with method-specific aliases when provided."""
         method_norm = str(method or "").lower()
         if method_norm == ChunkingMethod.SEMANTIC.value:
@@ -2070,7 +2066,7 @@ class Chunker:
         except Exception:
             return str(value)
 
-    def _get_effective_llm_hooks(self) -> Tuple[Any, Any]:
+    def _get_effective_llm_hooks(self) -> tuple[Any, Any]:
         """Return per-call LLM overrides if present, else defaults."""
         func = getattr(self, "llm_call_func", None)
         cfg = getattr(self, "llm_config", None)
@@ -2110,7 +2106,7 @@ class Chunker:
         return f"{func_sig}|llm_cfg:{cfg_sig}"
 
     def _get_cache_key(self, text: str, method: str, max_size: int,
-                      overlap: int, language: str, options: Dict, *,
+                      overlap: int, language: str, options: dict, *,
                       llm_signature: str = "") -> str:
         """
         Generate cache key for chunking parameters.
@@ -2148,7 +2144,7 @@ class Chunker:
         method: str,
         overlap: int,
         language: str,
-        options: Optional[Dict[str, Any]] = None,
+        options: Optional[dict[str, Any]] = None,
     ) -> str:
         """Compute textual overlap buffer aligned with strategy semantics."""
         if overlap <= 0 or not text:
@@ -2191,7 +2187,7 @@ class Chunker:
                 return text[start_idx:end_idx]
             if method_norm == ChunkingMethod.PARAGRAPHS.value:
                 # Match paragraph strategy semantics: split on two+ newlines
-                spans: List[Tuple[int, int]] = []
+                spans: list[tuple[int, int]] = []
                 sep = re.compile(r"\n{2,}")
                 pos = 0
                 n = len(text)
@@ -2273,7 +2269,7 @@ class Chunker:
             self._cache.clear()
             logger.debug("Chunk cache cleared")
 
-    def get_cache_stats(self) -> Optional[Dict[str, Any]]:
+    def get_cache_stats(self) -> Optional[dict[str, Any]]:
         """
         Get cache statistics.
 
@@ -2288,12 +2284,12 @@ class Chunker:
     def process_text(
         self,
         text: str,
-        options: Optional[Dict[str, Any]] = None,
+        options: Optional[dict[str, Any]] = None,
         *,
         tokenizer_name_or_path: Optional[str] = None,
         llm_call_func: Optional[Any] = None,
-        llm_config: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
+        llm_config: Optional[dict[str, Any]] = None,
+    ) -> list[dict[str, Any]]:
         """End-to-end processing: optional frontmatter extraction, chunking, normalization.
 
         Returns a list of chunks as dicts with consistent metadata fields.
@@ -2320,7 +2316,7 @@ class Chunker:
 
         # Attempt to parse JSON frontmatter when explicitly enabled and sentinel present
         fm_start = time.perf_counter()
-        json_meta: Dict[str, Any] = {}
+        json_meta: dict[str, Any] = {}
         processed_text = text
         # Offsets emitted by process_text are relative to the original input text.
         # Track how many leading characters we strip so we can restore offsets later.
@@ -2460,7 +2456,7 @@ class Chunker:
             code_mode_for_method = 'ast'
         elif method_lower == 'code':
             code_mode_for_method = 'auto'
-        method_options_for_chunk: Dict[str, Any] = dict(method_options)
+        method_options_for_chunk: dict[str, Any] = dict(method_options)
         if code_mode_for_method is not None and method_lower in ('code', 'code_ast'):
             method_options_for_chunk['code_mode'] = code_mode_for_method
 
@@ -2502,7 +2498,7 @@ class Chunker:
         # Multi-level paragraph-aware chunking for words/sentences (parity with legacy)
         multi_level = bool(opts.get('multi_level', False)) and method in ('words', 'sentences') and not (hierarchical or hier_template)
 
-        norm_chunks: List[Dict[str, Any]] = []
+        norm_chunks: list[dict[str, Any]] = []
         try:
             chunk_start = time.perf_counter()
             if hierarchical or hier_template:
@@ -2663,7 +2659,7 @@ class Chunker:
                         md[key] = val + prefix_offset
 
         total = len(norm_chunks)
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         norm_start = time.perf_counter()
         # Optional timecode mapping for media transcripts: offsets are in original input coordinates.
         time_segments = None
@@ -2995,7 +2991,7 @@ class Chunker:
             size = self.config.default_max_size
         size = max(size, 1)
         method_norm = (method or "").lower()
-        factors: Dict[str, int] = {
+        factors: dict[str, int] = {
             ChunkingMethod.WORDS.value: 6,
             ChunkingMethod.SENTENCES.value: 80,
             ChunkingMethod.TOKENS.value: 4,
@@ -3082,7 +3078,7 @@ class Chunker:
 
 
 # Convenience function for backward compatibility
-def create_chunker(config: Optional[Dict[str, Any]] = None) -> Chunker:
+def create_chunker(config: Optional[dict[str, Any]] = None) -> Chunker:
     """
     Create a chunker instance with optional configuration.
 

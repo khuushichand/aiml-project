@@ -11,9 +11,11 @@ This module provides centralized telemetry configuration supporting:
 import inspect
 import os
 import socket
-from typing import Dict, Any, Optional, List
 from contextlib import contextmanager
+from typing import Any, Optional
+
 from loguru import logger
+
 
 # Fallback implementations used when telemetry init fails or OTel is missing.
 class DummySpan:
@@ -62,30 +64,27 @@ class DummyMeter:
 
 # Try to import core OpenTelemetry components
 try:
-    from opentelemetry import trace, metrics, baggage
-    from opentelemetry.trace import Status, StatusCode, Tracer
+    from opentelemetry import baggage, metrics, trace
     from opentelemetry.metrics import Meter
+    from opentelemetry.sdk.metrics import MeterProvider
 
     # SDK components
     from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.trace import Status, StatusCode, Tracer
     # Views for configuring histogram boundaries
     try:
         from opentelemetry.sdk.metrics.view import (
-            View,
             ExplicitBucketHistogramAggregation,
             InstrumentSelector,
+            View,
         )
     except Exception:  # pragma: no cover - optional depending on OTel version
         View = None  # type: ignore
         ExplicitBucketHistogramAggregation = None  # type: ignore
         InstrumentSelector = None  # type: ignore
-    from opentelemetry.sdk.resources import Resource, SERVICE_NAME, SERVICE_VERSION
+    from opentelemetry.sdk.metrics.export import ConsoleMetricExporter, PeriodicExportingMetricReader
+    from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, Resource
     from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-    from opentelemetry.sdk.metrics.export import (
-        PeriodicExportingMetricReader,
-        ConsoleMetricExporter
-    )
 
     OTEL_AVAILABLE = True
 except ImportError as e:
@@ -222,7 +221,7 @@ class TelemetryConfig:
         self.pod_name = os.getenv("POD_NAME", self.hostname)
         self.pod_namespace = os.getenv("POD_NAMESPACE", "default")
 
-    def get_resource_attributes(self) -> Dict[str, Any]:
+    def get_resource_attributes(self) -> dict[str, Any]:
         """Get resource attributes for telemetry."""
         return {
             SERVICE_NAME: self.service_name,
@@ -558,7 +557,7 @@ class TelemetryManager:
             return metrics.get_meter(name, self.config.service_version)
         return self.meter
 
-    def register_histogram_view(self, instrument_name: str, boundaries: List[float]) -> None:
+    def register_histogram_view(self, instrument_name: str, boundaries: list[float]) -> None:
         """Register a histogram view for custom bucket boundaries.
 
         If the provider supports dynamic view registration, apply immediately;
@@ -582,7 +581,7 @@ class TelemetryManager:
             logger.debug(f"Failed to register histogram view for {instrument_name}: {e}")
 
     @contextmanager
-    def trace_context(self, operation_name: str, attributes: Optional[Dict[str, Any]] = None):
+    def trace_context(self, operation_name: str, attributes: Optional[dict[str, Any]] = None):
         """
         Context manager for creating a traced operation.
 

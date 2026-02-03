@@ -15,17 +15,17 @@ extracted unless trivially available; PDF ingest path uses the resolved pdf_url.
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple, Dict, Any, List
 import re
+from typing import Any
 from urllib.parse import quote as urlquote
-from tldw_Server_API.app.core.http_client import fetch
 
+from tldw_Server_API.app.core.http_client import fetch
 
 ABS_URL = "https://vixra.org/abs/{vid}"
 PDF_BASE = "https://vixra.org/pdf/{suffix}"
 
 
-def _try_pdf(url: str) -> Optional[str]:
+def _try_pdf(url: str) -> str | None:
     try:
         # Prefer a tiny GET with Range to preflight content-type without fetching the body
         r = fetch(method="GET", url=url, timeout=15, allow_redirects=True, headers={"Range": "bytes=0-0"})
@@ -37,7 +37,7 @@ def _try_pdf(url: str) -> Optional[str]:
     except Exception:
         return None
 
-def _extract_pdf_from_abs(abs_url: str) -> Optional[str]:
+def _extract_pdf_from_abs(abs_url: str) -> str | None:
     try:
         r = fetch(method="GET", url=abs_url, timeout=20)
         if r.status_code >= 400:
@@ -53,7 +53,7 @@ def _extract_pdf_from_abs(abs_url: str) -> Optional[str]:
         return None
 
 
-def get_vixra_by_id(vid: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_vixra_by_id(vid: str) -> tuple[dict[str, Any] | None, str | None]:
     """Resolve a viXra ID to a PDF URL and minimal metadata."""
     try:
         vid = (vid or "").strip()
@@ -104,7 +104,7 @@ def get_vixra_by_id(vid: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         return None, f"vixra error: {str(e)}"
 
 
-def search(term: str, page: int = 1, results_per_page: int = 10) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
+def search(term: str, page: int = 1, results_per_page: int = 10) -> tuple[list[dict[str, Any]] | None, int, str | None]:
     """Best-effort viXra search by term, scraping HTML for /abs/ links.
 
     Returns (items, total_estimate, error). We do not attempt strong pagination.
@@ -135,7 +135,7 @@ def search(term: str, page: int = 1, results_per_page: int = 10) -> Tuple[Option
 
         # Parse /abs/ links with titles
         # Look for anchors like <a href="/abs/1901.0001">Title...</a>
-        items: List[Dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         seen: set[str] = set()
         for m in re.finditer(r"<a[^>]+href=\"(/abs/[A-Za-z0-9\.v/_-]+)\"[^>]*>(.*?)</a>", html, re.IGNORECASE | re.DOTALL):
             href = m.group(1)
@@ -179,14 +179,14 @@ def search(term: str, page: int = 1, results_per_page: int = 10) -> Tuple[Option
         return None, 0, f"vixra search error: {str(e)}"
 
 
-def _parse_abs_details(html: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def _parse_abs_details(html: str) -> tuple[str | None, str | None, str | None]:
     """Extract title, authors, and date from viXra abstract HTML.
 
     Best-effort: try citation meta tags first; fall back to headings/text patterns.
     """
     try:
         title = None
-        authors_list: List[str] = []
+        authors_list: list[str] = []
         pub_date = None
 
         # Meta tags

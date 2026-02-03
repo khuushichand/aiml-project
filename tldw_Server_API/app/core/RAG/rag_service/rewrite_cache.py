@@ -8,20 +8,19 @@ runtime overhead and zero external dependencies.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
-import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
-def _safe_path(user_id: Optional[str]) -> Path:
+def _safe_path(user_id: str | None) -> Path:
     try:
         base = os.getenv("RAG_REWRITE_CACHE_PATH")
         if base:
@@ -76,7 +75,7 @@ def _normalize_query(q: str) -> str:
         return q or ""
 
 
-def _cluster_id(query: str, intent: Optional[str] = None, corpus: Optional[str] = None) -> str:
+def _cluster_id(query: str, intent: str | None = None, corpus: str | None = None) -> str:
     base = _normalize_query(query)
     key = f"{intent or 'unknown'}|{corpus or 'default'}|{base}"
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
@@ -85,9 +84,9 @@ def _cluster_id(query: str, intent: Optional[str] = None, corpus: Optional[str] 
 @dataclass
 class RewriteEntry:
     cluster_id: str
-    corpus: Optional[str]
-    intent: Optional[str]
-    rewrites: List[str]
+    corpus: str | None
+    intent: str | None
+    rewrites: list[str]
     weight: float = 1.0
     last_used: float = 0.0
     created_at: float = 0.0
@@ -98,10 +97,10 @@ class RewriteCache:
 
     def __init__(
         self,
-        path: Optional[str] = None,
+        path: str | None = None,
         half_life_hours: float = 72.0,
-        user_id: Optional[str] = None,
-        ttl_hours: Optional[float] = None,
+        user_id: str | None = None,
+        ttl_hours: float | None = None,
     ) -> None:
         # Determine storage path (per-user if provided)
         if path is None:
@@ -117,7 +116,7 @@ class RewriteCache:
         except Exception:
             ttl_fallback = None
         self.ttl_hours = float(ttl_hours) if ttl_hours is not None else (ttl_fallback if ttl_fallback is not None else None)
-        self._index: Dict[str, RewriteEntry] = {}
+        self._index: dict[str, RewriteEntry] = {}
         self._loaded = False
 
     def _load(self) -> None:
@@ -162,7 +161,7 @@ class RewriteCache:
         except Exception:
             return float(entry.weight)
 
-    def get(self, query: str, *, intent: Optional[str] = None, corpus: Optional[str] = None) -> Optional[List[str]]:
+    def get(self, query: str, *, intent: str | None = None, corpus: str | None = None) -> list[str] | None:
         self._load()
         cid = _cluster_id(query, intent=intent, corpus=corpus)
         entry = self._index.get(cid)
@@ -207,7 +206,7 @@ class RewriteCache:
         except Exception:
             return entry.rewrites[:5]
 
-    def put(self, query: str, rewrites: List[str], *, intent: Optional[str] = None, corpus: Optional[str] = None) -> None:
+    def put(self, query: str, rewrites: list[str], *, intent: str | None = None, corpus: str | None = None) -> None:
         if not rewrites:
             return
         self._load()

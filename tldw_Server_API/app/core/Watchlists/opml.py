@@ -7,19 +7,20 @@ attributes xmlUrl (feed URL), optional htmlUrl, and title/text for the name.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
 class OPMLSource:
     url: str
-    name: Optional[str] = None
-    html_url: Optional[str] = None
+    name: str | None = None
+    html_url: str | None = None
 
 
-def _gather_outlines(elem: ET.Element, out: List[OPMLSource]) -> None:
+def _gather_outlines(elem: ET.Element, out: list[OPMLSource]) -> None:
     for child in elem.findall("outline"):
         xml_url = child.attrib.get("xmlUrl") or child.attrib.get("xmlurl")
         title = child.attrib.get("title") or child.attrib.get("text")
@@ -30,9 +31,9 @@ def _gather_outlines(elem: ET.Element, out: List[OPMLSource]) -> None:
         _gather_outlines(child, out)
 
 
-def parse_opml(opml_bytes: bytes) -> List[OPMLSource]:
+def parse_opml(opml_bytes: bytes) -> list[OPMLSource]:
     """Parse OPML content and return a flat list of OPMLSource entries."""
-    sources: List[OPMLSource] = []
+    sources: list[OPMLSource] = []
     try:
         root = ET.fromstring(opml_bytes)
     except Exception:
@@ -44,7 +45,7 @@ def parse_opml(opml_bytes: bytes) -> List[OPMLSource]:
     _gather_outlines(body, sources)
     # Deduplicate by URL preserving order
     seen: set[str] = set()
-    uniq: List[OPMLSource] = []
+    uniq: list[OPMLSource] = []
     for s in sources:
         if not s.url or s.url in seen:
             continue
@@ -53,12 +54,12 @@ def parse_opml(opml_bytes: bytes) -> List[OPMLSource]:
     return uniq
 
 
-def generate_opml(sources: Iterable[Dict[str, Any]]) -> str:
+def generate_opml(sources: Iterable[dict[str, Any]]) -> str:
     """Generate a minimal OPML string from iterable of {'name','url','html_url'} dicts."""
-    def _escape(text: Optional[str]) -> str:
+    def _escape(text: str | None) -> str:
         return (text or "").replace("\"", "&quot;")
 
-    items: List[str] = []
+    items: list[str] = []
     for s in sources:
         url = str(s.get("url") or "").strip()
         if not url:

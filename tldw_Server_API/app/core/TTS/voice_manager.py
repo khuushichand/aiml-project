@@ -7,38 +7,38 @@ import hashlib
 import json
 import os
 import shutil
-import tempfile
 import uuid
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Optional
+
 #
 # Third-party Imports
 import aiofiles
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator
+
+from tldw_Server_API.app.core.AuthNZ.exceptions import QuotaExceededError, StorageError
+from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
+    FILE_CATEGORY_VOICE_CLONE,
+    SOURCE_FEATURE_VOICE_STUDIO,
+)
+from tldw_Server_API.app.core.config import settings
+
 #
 # Local Imports
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     _normalize_user_db_base_dir,
 )
-from tldw_Server_API.app.core.AuthNZ.exceptions import QuotaExceededError, StorageError
-from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
-    FILE_CATEGORY_VOICE_CLONE,
-    SOURCE_FEATURE_VOICE_STUDIO,
-)
 from tldw_Server_API.app.core.Storage.generated_file_helpers import AUDIO_MIME_TYPES
-from tldw_Server_API.app.services.storage_quota_service import get_storage_service
-from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
-from .tts_exceptions import (
-    TTSError,
-    TTSInvalidInputError,
-    TTSResourceError
-)
+from tldw_Server_API.app.services.storage_quota_service import get_storage_service
+
+from .tts_exceptions import TTSError
 from .utils import parse_bool
+
 #
 #######################################################################################################################
 #
@@ -157,7 +157,7 @@ class VoiceUploadResponse(BaseModel):
     duration: float
     format: str
     provider_compatible: bool
-    warnings: List[str] = []
+    warnings: list[str] = []
     info: str = ""
 
 
@@ -167,7 +167,7 @@ class VoiceReferenceMetadata(BaseModel):
     reference_text: Optional[str] = None
     voice_clone_prompt_b64: Optional[str] = None
     voice_clone_prompt_format: Optional[str] = None
-    provider_artifacts: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    provider_artifacts: dict[str, dict[str, Any]] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -219,7 +219,7 @@ class VoiceFileValidator:
     MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB default
 
     @staticmethod
-    def validate_filename(filename: str) -> Tuple[bool, str]:
+    def validate_filename(filename: str) -> tuple[bool, str]:
         """Validate and sanitize filename"""
         if not filename:
             return False, "No filename provided"
@@ -236,7 +236,7 @@ class VoiceFileValidator:
         return True, safe_name
 
     @staticmethod
-    def validate_file_size(size_bytes: int, provider: str = "vibevoice") -> Tuple[bool, str]:
+    def validate_file_size(size_bytes: int, provider: str = "vibevoice") -> tuple[bool, str]:
         """Validate file size for provider"""
         max_size = PROVIDER_REQUIREMENTS.get(provider, {}).get("max_size_mb", 50) * 1024 * 1024
 
@@ -270,7 +270,7 @@ class VoiceRegistry:
     """In-memory registry for voice samples"""
 
     def __init__(self):
-        self.user_voices: Dict[int, Dict[str, VoiceInfo]] = {}
+        self.user_voices: dict[int, dict[str, VoiceInfo]] = {}
         self._lock = asyncio.Lock()
 
     async def register_voice(self, user_id: int, voice_info: VoiceInfo):
@@ -287,7 +287,7 @@ class VoiceRegistry:
         async with self._lock:
             return self.user_voices.get(user_id, {}).get(voice_id)
 
-    async def list_voices(self, user_id: int) -> List[VoiceInfo]:
+    async def list_voices(self, user_id: int) -> list[VoiceInfo]:
         """List all voices for a user"""
         async with self._lock:
             return list(self.user_voices.get(user_id, {}).values())
@@ -316,8 +316,8 @@ class VoiceManager:
         self.registry = VoiceRegistry()
         self.processing_queue = asyncio.Queue()
         self.cleanup_interval = 3600  # 1 hour
-        self.user_upload_counts: Dict[int, List[datetime]] = {}
-        self._processing_tasks: Dict[str, asyncio.Task] = {}
+        self.user_upload_counts: dict[int, list[datetime]] = {}
+        self._processing_tasks: dict[str, asyncio.Task] = {}
 
     def get_user_voices_path(self, user_id: int) -> Path:
         """Get the voices directory path for a user.
@@ -542,7 +542,7 @@ class VoiceManager:
             logger.error(f"Failed to read voice audio for {voice_id}: {e}")
             raise VoiceProcessingError(f"Failed to read voice audio for {voice_id}") from e
 
-    async def check_rate_limits(self, user_id: int) -> Tuple[bool, str]:
+    async def check_rate_limits(self, user_id: int) -> tuple[bool, str]:
         """Check if user is within rate limits"""
         now = datetime.utcnow()
         hour_ago = now - timedelta(hours=1)
@@ -798,7 +798,7 @@ class VoiceManager:
 
         raise VoiceProcessingError(f"Provider not supported for encoding: {provider_key}")
 
-    async def _encode_neutts_reference(self, audio_path: Path) -> List[int]:
+    async def _encode_neutts_reference(self, audio_path: Path) -> list[int]:
         """Encode NeuTTS reference codes from a stored audio file."""
         try:
             from tldw_Server_API.app.core.TTS.adapters.neutts_adapter import NeuTTSAdapter
@@ -920,7 +920,7 @@ class VoiceManager:
             shutil.copy2(input_path, output_path)
             return output_path
 
-    async def list_user_voices(self, user_id: int) -> List[VoiceInfo]:
+    async def list_user_voices(self, user_id: int) -> list[VoiceInfo]:
         """List all voices for a user"""
         await self.ensure_default_voice(user_id)
         # Get from registry
@@ -932,7 +932,7 @@ class VoiceManager:
 
         return voices
 
-    async def _scan_user_voices(self, user_id: int) -> List[VoiceInfo]:
+    async def _scan_user_voices(self, user_id: int) -> list[VoiceInfo]:
         """Scan filesystem for user's voices"""
         voices = []
         voices_path = self.get_user_voices_path(user_id)

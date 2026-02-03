@@ -3,23 +3,18 @@ SQLite backend implementation for the scheduler.
 Optimized for development and single-user deployments.
 """
 
-import sqlite3
-import json
 import asyncio
-import aiosqlite
+import json
+import uuid
 from contextlib import asynccontextmanager
-from typing import List, Optional, Dict, Any, AsyncContextManager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import uuid
+from typing import Any, Optional
 
+import aiosqlite
 from loguru import logger
 
-from ..base import (
-    Task, TaskStatus, QueueBackend,
-    DuplicateTaskError, TaskNotFoundError,
-    ConnectionError, TransactionError
-)
+from ..base import ConnectionError, QueueBackend, Task, TaskStatus, TransactionError
 from ..config import SchedulerConfig
 
 
@@ -44,7 +39,7 @@ class SQLiteBackend(QueueBackend):
         self._connection: Optional[aiosqlite.Connection] = None
 
         # Connection pool for read operations
-        self._read_pool: List[aiosqlite.Connection] = []
+        self._read_pool: list[aiosqlite.Connection] = []
         self._read_pool_size = getattr(config, 'sqlite_pool_size', 5)
         self._pool_lock = asyncio.Lock()
 
@@ -327,7 +322,7 @@ class SQLiteBackend(QueueBackend):
 
         return task.id
 
-    async def bulk_enqueue(self, tasks: List[Task]) -> List[str]:
+    async def bulk_enqueue(self, tasks: list[Task]) -> list[str]:
         """
         Efficiently enqueue multiple tasks using INSERT OR IGNORE.
         This avoids N+1 queries for idempotency checks.
@@ -447,7 +442,7 @@ class SQLiteBackend(QueueBackend):
                 await self._connection.rollback()
                 raise TransactionError(f"Dequeue failed: {e}")
 
-    async def get_ready_tasks(self, queue_name: Optional[str] = None) -> List[str]:
+    async def get_ready_tasks(self, queue_name: Optional[str] = None) -> list[str]:
         """
         Efficient dependency resolution with only 2 queries.
         Avoids N+1 query pattern.
@@ -562,7 +557,7 @@ class SQLiteBackend(QueueBackend):
 
         return True
 
-    async def _row_to_task(self, row: Dict[str, Any]) -> Task:
+    async def _row_to_task(self, row: dict[str, Any]) -> Task:
         """Convert database row dict to Task object"""
         task_dict = dict(row)
 
@@ -627,7 +622,7 @@ class SQLiteBackend(QueueBackend):
         )
         return affected
 
-    async def get_dead_letter_queue(self) -> List[Task]:
+    async def get_dead_letter_queue(self) -> list[Task]:
         """Get DLQ tasks"""
         rows = await self.fetch("SELECT * FROM dead_letter_queue")
         # Convert to tasks (simplified)
@@ -705,7 +700,7 @@ class SQLiteBackend(QueueBackend):
         )
         return affected > 0
 
-    async def get_expired_leases(self) -> List[Dict[str, Any]]:
+    async def get_expired_leases(self) -> list[dict[str, Any]]:
         """Get expired leases"""
         return await self.fetch(
             "SELECT * FROM task_leases WHERE expires_at < datetime('now')"
@@ -734,7 +729,7 @@ class SQLiteBackend(QueueBackend):
             await self._connection.commit()
             return cursor.rowcount
 
-    async def fetch(self, query: str, *args) -> List[Dict[str, Any]]:
+    async def fetch(self, query: str, *args) -> list[dict[str, Any]]:
         """Fetch multiple rows using read pool for better concurrency"""
         async with self._get_read_connection() as conn:
             cursor = await conn.execute(query, args)
@@ -752,7 +747,7 @@ class SQLiteBackend(QueueBackend):
             row = await cursor.fetchone()
             return row[0] if row else None
 
-    async def fetchrow(self, query: str, *args) -> Optional[Dict[str, Any]]:
+    async def fetchrow(self, query: str, *args) -> Optional[dict[str, Any]]:
         """Fetch single row using read pool and return as dict"""
         async with self._get_read_connection() as conn:
             cursor = await conn.execute(query, args)
@@ -904,7 +899,7 @@ class SQLiteBackend(QueueBackend):
             # TODO: Implement migrations
             pass
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Get backend status for monitoring"""
         return {
             'type': 'sqlite',

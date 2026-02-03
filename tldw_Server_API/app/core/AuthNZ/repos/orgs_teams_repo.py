@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
@@ -10,7 +10,6 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DuplicateOrganizationError,
     DuplicateTeamError,
 )
-
 
 DEFAULT_BASE_TEAM_NAME = "Default-Base"
 DEFAULT_BASE_TEAM_SLUG = "default-base"
@@ -30,7 +29,7 @@ class AuthnzOrgsTeamsRepo:
 
     db_pool: DatabasePool
 
-    def _is_postgres(self, conn: Optional[Any] = None) -> bool:
+    def _is_postgres(self, conn: Any | None = None) -> bool:
         """
         Detect whether the current backend/connection is Postgres.
 
@@ -45,10 +44,10 @@ class AuthnzOrgsTeamsRepo:
         self,
         *,
         name: str,
-        owner_user_id: Optional[int] = None,
-        slug: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        owner_user_id: int | None = None,
+        slug: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Create an organization row with basic duplicate checks.
 
@@ -148,10 +147,10 @@ class AuthnzOrgsTeamsRepo:
         *,
         org_id: int,
         name: str,
-        slug: Optional[str] = None,
-        description: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        slug: str | None = None,
+        description: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Create a team row with per-organization duplicate checks.
 
@@ -239,10 +238,10 @@ class AuthnzOrgsTeamsRepo:
         *,
         limit: int = 100,
         offset: int = 0,
-        q: Optional[str] = None,
-        org_ids: Optional[List[int]] = None,
+        q: str | None = None,
+        org_ids: list[int] | None = None,
         with_total: bool = False,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         List organizations with optional server-side filtering and total count.
 
@@ -291,7 +290,7 @@ class AuthnzOrgsTeamsRepo:
                     else 0
                 )
 
-                normalized: List[Dict[str, Any]] = []
+                normalized: list[dict[str, Any]] = []
                 for r in rows:
                     d = dict(r)
                     d["is_active"] = bool(d.get("is_active", True))
@@ -355,9 +354,9 @@ class AuthnzOrgsTeamsRepo:
         self,
         *,
         org_id: int,
-        name: Optional[str] = None,
-        slug: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        name: str | None = None,
+        slug: str | None = None,
+    ) -> dict[str, Any] | None:
         """
         Update an organization row.
 
@@ -376,7 +375,7 @@ class AuthnzOrgsTeamsRepo:
             DuplicateOrganizationError: If name or slug collides with another org.
             ValueError: If no update fields are supplied.
         """
-        updates: Dict[str, Any] = {}
+        updates: dict[str, Any] = {}
         if name is not None:
             updates["name"] = name
         if slug is not None:
@@ -475,7 +474,7 @@ class AuthnzOrgsTeamsRepo:
     # Single-record getters
     # -------------------------------------------------------------------------
 
-    async def get_team(self, team_id: int) -> Optional[Dict[str, Any]]:
+    async def get_team(self, team_id: int) -> dict[str, Any] | None:
         """
         Get a team by ID.
 
@@ -525,7 +524,7 @@ class AuthnzOrgsTeamsRepo:
             logger.error(f"AuthnzOrgsTeamsRepo.get_team failed: {exc}")
             raise
 
-    async def get_org_member(self, org_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+    async def get_org_member(self, org_id: int, user_id: int) -> dict[str, Any] | None:
         """
         Get a specific org membership.
 
@@ -575,7 +574,7 @@ class AuthnzOrgsTeamsRepo:
     # Team membership helpers
     # -------------------------------------------------------------------------
 
-    async def get_team_member(self, team_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+    async def get_team_member(self, team_id: int, user_id: int) -> dict[str, Any] | None:
         """
         Get a specific team membership.
 
@@ -629,7 +628,7 @@ class AuthnzOrgsTeamsRepo:
         team_id: int,
         user_id: int,
         role: str = "member",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Add a user to a team (idempotent).
 
@@ -692,7 +691,7 @@ class AuthnzOrgsTeamsRepo:
             logger.error(f"AuthnzOrgsTeamsRepo.add_team_member failed: {exc}")
             raise
 
-    async def list_team_members(self, team_id: int) -> List[Dict[str, Any]]:
+    async def list_team_members(self, team_id: int) -> list[dict[str, Any]]:
         """
         List members of a team ordered by ``added_at`` descending.
         """
@@ -740,7 +739,7 @@ class AuthnzOrgsTeamsRepo:
         team_id: int,
         user_id: int,
         role: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Update a team member's role.
         """
@@ -788,7 +787,7 @@ class AuthnzOrgsTeamsRepo:
             logger.error(f"AuthnzOrgsTeamsRepo.update_team_member_role failed: {exc}")
             raise
 
-    async def list_memberships_for_user(self, user_id: int) -> List[Dict[str, Any]]:
+    async def list_memberships_for_user(self, user_id: int) -> list[dict[str, Any]]:
         """
         List team memberships (including org_id) for a user.
 
@@ -840,7 +839,7 @@ class AuthnzOrgsTeamsRepo:
         *,
         team_id: int,
         user_id: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Remove a user from a team.
 
@@ -893,7 +892,7 @@ class AuthnzOrgsTeamsRepo:
         org_id: int,
         *,
         create: bool = True,
-    ) -> Optional[int]:
+    ) -> int | None:
         """Fetch (and optionally create) the Default-Base team for an organization."""
         if hasattr(conn, "fetchrow"):
             row = await conn.fetchrow(
@@ -1021,7 +1020,7 @@ class AuthnzOrgsTeamsRepo:
         org_id: int,
         user_id: int,
         role: str = "member",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Add a user to an organization (idempotent) and ensure default-team membership.
         """
@@ -1101,16 +1100,16 @@ class AuthnzOrgsTeamsRepo:
         org_id: int,
         limit: int = 100,
         offset: int = 0,
-        role: Optional[str] = None,
-        status: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        role: str | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
         """
         List members of an organization with pagination and optional filters.
         """
         try:
             if self._is_postgres():
                 conditions = ["org_id = $1"]
-                params: List[Any] = [org_id]
+                params: list[Any] = [org_id]
                 p = 1
                 if role:
                     p += 1
@@ -1134,7 +1133,7 @@ class AuthnzOrgsTeamsRepo:
 
             async with self.db_pool.acquire() as conn:
                 conditions = ["org_id = ?"]
-                params2: List[Any] = [org_id]
+                params2: list[Any] = [org_id]
                 if role:
                     conditions.append("role = ?")
                     params2.append(role)
@@ -1167,7 +1166,7 @@ class AuthnzOrgsTeamsRepo:
         *,
         org_id: int,
         user_id: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Remove a user from an organization, enforcing at least one owner.
         """
@@ -1283,7 +1282,7 @@ class AuthnzOrgsTeamsRepo:
         org_id: int,
         user_id: int,
         role: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Update an org member's role, enforcing at least one owner.
         """
@@ -1391,7 +1390,7 @@ class AuthnzOrgsTeamsRepo:
     async def list_org_memberships_for_user(
         self,
         user_id: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         List org memberships for a user: ``[{org_id, role}]``.
         """
@@ -1433,7 +1432,7 @@ class AuthnzOrgsTeamsRepo:
         limit: int = 100,
         offset: int = 0,
         with_total: bool = False,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         List organizations a given user is a member of with pagination support.
 
@@ -1476,7 +1475,7 @@ class AuthnzOrgsTeamsRepo:
                     else 0
                 )
 
-                normalized: List[Dict[str, Any]] = []
+                normalized: list[dict[str, Any]] = []
                 for r in rows:
                     d = dict(r)
                     d["is_active"] = bool(d.get("is_active", True))

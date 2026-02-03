@@ -1,20 +1,19 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Set
 import os
+from typing import Any
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import normalize_provider_name
-from tldw_Server_API.app.core.LLM_Calls.provider_metadata import get_byok_credential_policy
 from tldw_Server_API.app.core.AuthNZ.principal_model import (
     AuthContext,
     AuthPrincipal,
     is_single_user_principal,
 )
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import normalize_provider_name
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import get_byok_credential_policy
 
-
-DEFAULT_BYOK_ALLOWED_PROVIDERS: Set[str] = {
+DEFAULT_BYOK_ALLOWED_PROVIDERS: set[str] = {
     "anthropic",
     "bedrock",
     "cohere",
@@ -35,7 +34,7 @@ DEFAULT_BYOK_ALLOWED_PROVIDERS: Set[str] = {
 }
 
 
-def resolve_byok_base_url_allowlist() -> Set[str]:
+def resolve_byok_base_url_allowlist() -> set[str]:
     settings = get_settings()
     raw = getattr(settings, "BYOK_ALLOWED_BASE_URL_PROVIDERS", []) or []
     allowed = {normalize_provider_name(p) for p in raw if str(p).strip()}
@@ -47,7 +46,7 @@ def is_byok_enabled() -> bool:
     return settings.AUTH_MODE == "multi_user" and bool(settings.BYOK_ENABLED)
 
 
-def resolve_byok_allowlist() -> Set[str]:
+def resolve_byok_allowlist() -> set[str]:
     settings = get_settings()
     raw = getattr(settings, "BYOK_ALLOWED_PROVIDERS", []) or []
     allowed = {normalize_provider_name(p) for p in raw if str(p).strip()}
@@ -61,10 +60,10 @@ def is_provider_allowlisted(provider: str) -> bool:
 
 def validate_credential_fields(
     provider: str,
-    credential_fields: Optional[Dict[str, Any]],
+    credential_fields: dict[str, Any] | None,
     *,
     allow_base_url: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if credential_fields is None:
         return {}
     if not isinstance(credential_fields, dict):
@@ -74,7 +73,7 @@ def validate_credential_fields(
     allowed_keys, required_keys = get_byok_credential_policy(provider_norm)
     if allow_base_url and provider_norm in resolve_byok_base_url_allowlist():
         allowed_keys.add("base_url")
-    cleaned: Dict[str, Any] = {}
+    cleaned: dict[str, Any] = {}
     for key, value in credential_fields.items():
         if key not in allowed_keys:
             raise ValueError(f"Unsupported credential field: {key}")
@@ -87,7 +86,7 @@ def validate_credential_fields(
     return cleaned
 
 
-def is_trusted_base_url_principal(principal: Optional[AuthPrincipal]) -> bool:
+def is_trusted_base_url_principal(principal: AuthPrincipal | None) -> bool:
     if not isinstance(principal, AuthPrincipal):
         return False
     if principal.is_admin:
@@ -102,8 +101,8 @@ def is_trusted_base_url_principal(principal: Optional[AuthPrincipal]) -> bool:
 def is_trusted_base_url_request(
     request: Any = None,
     *,
-    principal: Optional[AuthPrincipal] = None,
-    user: Optional[Dict[str, Any]] = None,
+    principal: AuthPrincipal | None = None,
+    user: dict[str, Any] | None = None,
 ) -> bool:
     if principal is None and request is not None:
         try:
@@ -148,7 +147,7 @@ def _provider_env_key(provider: str) -> str:
     return f"{normalized}_API_KEY"
 
 
-def resolve_server_default_key(provider: str) -> Optional[str]:
+def resolve_server_default_key(provider: str) -> str | None:
     provider_norm = normalize_provider_name(provider)
     try:
         from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import get_llm_provider_override

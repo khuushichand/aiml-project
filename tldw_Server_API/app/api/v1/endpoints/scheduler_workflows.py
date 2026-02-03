@@ -1,41 +1,38 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-from uuid import uuid4
-
-from fastapi import APIRouter, Depends, HTTPException, Query, status
 import os
-from pydantic import BaseModel, Field
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
+from pydantic import BaseModel, Field
 
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler
-from tldw_Server_API.app.core.Scheduler import Scheduler
-from tldw_Server_API.app.core.Scheduler import get_global_scheduler
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-    require_token_scope,
-    require_permissions,
     get_auth_principal,
+    require_permissions,
+    require_token_scope,
 )
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.permissions import WORKFLOWS_ADMIN
-
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Scheduler import get_global_scheduler
+from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler
 
 router = APIRouter(prefix="/api/v1/scheduler/workflows", tags=["scheduler", "workflows"])
 
 
 class ScheduleCreateRequest(BaseModel):
-    workflow_id: Optional[int] = Field(None, description="Saved workflow ID; optional if definition snapshot is used")
-    name: Optional[str] = None
+    workflow_id: int | None = Field(None, description="Saved workflow ID; optional if definition snapshot is used")
+    name: str | None = None
     cron: str = Field(..., description="Cron expression, e.g., '*/15 * * * *'")
-    timezone: Optional[str] = Field(
+    timezone: str | None = Field(
         None,
         description=(
             "IANA timezone name (e.g., 'UTC', 'America/New_York'). "
             "See tz database list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
         ),
     )
-    inputs: Dict[str, Any] = Field(default_factory=dict)
+    inputs: dict[str, Any] = Field(default_factory=dict)
     run_mode: str = Field("async", pattern="^(async|sync)$")
     validation_mode: str = Field("block", pattern="^(block|non-block)$")
     enabled: bool = True
@@ -46,32 +43,32 @@ class ScheduleCreateRequest(BaseModel):
 
 
 class ScheduleUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    cron: Optional[str] = None
-    timezone: Optional[str] = Field(
+    name: str | None = None
+    cron: str | None = None
+    timezone: str | None = Field(
         None,
         description=(
             "IANA timezone name (e.g., 'UTC', 'America/New_York'). "
             "See tz database list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
         ),
     )
-    inputs: Optional[Dict[str, Any]] = None
-    run_mode: Optional[str] = Field(None, pattern="^(async|sync)$")
-    validation_mode: Optional[str] = Field(None, pattern="^(block|non-block)$")
-    enabled: Optional[bool] = None
-    concurrency_mode: Optional[str] = Field(None, pattern="^(skip|queue)$")
-    misfire_grace_sec: Optional[int] = Field(None, ge=0, le=86400)
-    coalesce: Optional[bool] = None
-    require_online: Optional[bool] = Field(None, description="Toggle presence gating for this schedule")
+    inputs: dict[str, Any] | None = None
+    run_mode: str | None = Field(None, pattern="^(async|sync)$")
+    validation_mode: str | None = Field(None, pattern="^(block|non-block)$")
+    enabled: bool | None = None
+    concurrency_mode: str | None = Field(None, pattern="^(skip|queue)$")
+    misfire_grace_sec: int | None = Field(None, ge=0, le=86400)
+    coalesce: bool | None = None
+    require_online: bool | None = Field(None, description="Toggle presence gating for this schedule")
 
 
 class ScheduleResponse(BaseModel):
     id: str
-    workflow_id: Optional[int]
-    name: Optional[str]
+    workflow_id: int | None
+    name: str | None
     cron: str
-    timezone: Optional[str]
-    inputs: Dict[str, Any]
+    timezone: str | None
+    inputs: dict[str, Any]
     run_mode: str
     validation_mode: str
     enabled: bool
@@ -81,14 +78,14 @@ class ScheduleResponse(BaseModel):
     misfire_grace_sec: int
     coalesce: bool
     require_online: bool
-    last_run_at: Optional[str]
-    next_run_at: Optional[str]
-    last_status: Optional[str]
+    last_run_at: str | None
+    next_run_at: str | None
+    last_status: str | None
 
 
 @router.post(
     "",
-    response_model=Dict[str, str],
+    response_model=dict[str, str],
     status_code=201,
     dependencies=[Depends(require_token_scope("workflows", require_if_present=True, endpoint_id="scheduler.workflows.create"))],
 )
@@ -120,7 +117,7 @@ async def create_schedule(
 
 @router.post(
     "/admin/rescan",
-    response_model=Dict[str, Any],
+    response_model=dict[str, Any],
     status_code=200,
     dependencies=[
         Depends(
@@ -159,11 +156,11 @@ async def admin_rescan(
 
 @router.get(
     "",
-    response_model=List[ScheduleResponse],
+    response_model=list[ScheduleResponse],
     dependencies=[Depends(require_token_scope("workflows", require_if_present=True, endpoint_id="scheduler.workflows.list"))],
 )
 async def list_schedules(
-    owner: Optional[str] = Query(None, description="Admin-only: filter by owner user_id"),
+    owner: str | None = Query(None, description="Admin-only: filter by owner user_id"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_request_user),
@@ -171,7 +168,7 @@ async def list_schedules(
     svc = get_workflows_scheduler()
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     is_admin = bool(getattr(current_user, "is_admin", False))
-    user_filter: Optional[str] = None
+    user_filter: str | None = None
     if owner:
         if not is_admin:
             raise HTTPException(status_code=403, detail="Admin-only owner filter")
@@ -179,7 +176,7 @@ async def list_schedules(
     else:
         user_filter = str(current_user.id)
     rows = svc.list(tenant_id=tenant_id, user_id=user_filter, limit=limit, offset=offset)
-    out: List[ScheduleResponse] = []
+    out: list[ScheduleResponse] = []
     import json
     for r in rows:
         try:
@@ -274,7 +271,7 @@ async def get_schedule(
 
 @router.patch(
     "/{schedule_id}",
-    response_model=Dict[str, bool],
+    response_model=dict[str, bool],
     dependencies=[Depends(require_token_scope("workflows", require_if_present=True, endpoint_id="scheduler.workflows.update"))],
 )
 async def update_schedule(
@@ -289,7 +286,7 @@ async def update_schedule(
     is_admin = bool(getattr(current_user, "is_admin", False))
     if str(current_user.id) != s.user_id and not is_admin:
         raise HTTPException(status_code=403, detail="Forbidden")
-    update: Dict[str, Any] = {}
+    update: dict[str, Any] = {}
     if body.name is not None:
         update["name"] = body.name
     if body.cron is not None:
@@ -319,7 +316,7 @@ async def update_schedule(
 
 @router.delete(
     "/{schedule_id}",
-    response_model=Dict[str, bool],
+    response_model=dict[str, bool],
     dependencies=[Depends(require_token_scope("workflows", require_if_present=True, endpoint_id="scheduler.workflows.delete"))],
 )
 async def delete_schedule(
@@ -339,7 +336,7 @@ async def delete_schedule(
 
 @router.post(
     "/{schedule_id}/run-now",
-    response_model=Dict[str, str],
+    response_model=dict[str, str],
     dependencies=[Depends(require_token_scope("workflows", require_if_present=True, require_schedule_match=True, schedule_path_param="schedule_id", allow_admin_bypass=True, endpoint_id="scheduler.workflows.run_now", count_as="run"))],
 )
 async def run_now(
@@ -370,19 +367,19 @@ async def run_now(
 
 class DryRunRequest(BaseModel):
     cron: str
-    timezone: Optional[str] = Field(
+    timezone: str | None = Field(
         None,
         description=(
             "IANA timezone name (e.g., 'UTC', 'America/New_York'). "
             "See tz database list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
         ),
     )
-    inputs: Dict[str, Any] = Field(default_factory=dict)
+    inputs: dict[str, Any] = Field(default_factory=dict)
 
 
 @router.post(
     "/dry-run",
-    response_model=Dict[str, Any],
+    response_model=dict[str, Any],
     dependencies=[Depends(require_token_scope("workflows", require_if_present=True, endpoint_id="scheduler.workflows.dry_run"))],
 )
 async def dry_run_schedule(body: DryRunRequest, current_user: User = Depends(get_request_user)):
@@ -405,7 +402,7 @@ async def dry_run_schedule(body: DryRunRequest, current_user: User = Depends(get
         "next_run_at": nxt.isoformat() if nxt else None,
         "inputs_preview": body.inputs,
     }
-def _validate_cron_or_422(cron: str, timezone: Optional[str]) -> None:
+def _validate_cron_or_422(cron: str, timezone: str | None) -> None:
     try:
         from apscheduler.triggers.cron import CronTrigger
         CronTrigger.from_crontab(cron, timezone=timezone or "UTC")

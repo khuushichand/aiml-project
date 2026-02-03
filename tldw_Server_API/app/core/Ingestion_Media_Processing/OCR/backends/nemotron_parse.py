@@ -9,7 +9,7 @@ import os
 import re
 import tempfile
 import threading
-from typing import Optional, Dict, Any
+from typing import Any
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import (
@@ -17,7 +17,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import (
     normalize_ocr_format,
 )
 from tldw_Server_API.app.core.Utils.Utils import logging
-
 
 _DEFAULT_PROMPT = "</s><s><predict_bbox><predict_classes><output_markdown>"
 _MIN_W = 1024
@@ -29,7 +28,7 @@ _TF_MODEL = None
 _TF_PROCESSOR = None
 _TF_LOCK = threading.Lock()
 
-_POSTPROCESS_FUNCS: Optional[Dict[str, Any]] = None
+_POSTPROCESS_FUNCS: dict[str, Any] | None = None
 
 
 def _resolve_mode() -> str:
@@ -47,8 +46,8 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _resolve_skip_special_tokens(
-    output_format: Optional[str],
-    prompt_preset: Optional[str],
+    output_format: str | None,
+    prompt_preset: str | None,
 ) -> bool:
     env_val = os.getenv("NEMOTRON_SKIP_SPECIAL_TOKENS")
     if env_val is not None:
@@ -108,16 +107,16 @@ class NemotronParseBackend(OCRBackend):
             })
         return info
 
-    def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
+    def ocr_image(self, image_bytes: bytes, lang: str | None = None) -> str:
         result = self.ocr_image_structured(image_bytes, lang=lang, output_format="text")
         return result.text or ""
 
     def ocr_image_structured(
         self,
         image_bytes: bytes,
-        lang: Optional[str] = None,
-        output_format: Optional[str] = None,
-        prompt_preset: Optional[str] = None,
+        lang: str | None = None,
+        output_format: str | None = None,
+        prompt_preset: str | None = None,
     ) -> OCRResult:
         if not self.available():
             logging.warning("NemotronParseBackend not available: set NEMOTRON_VLLM_URL or install transformers+torch.")
@@ -221,8 +220,8 @@ def _prepare_image_bytes(image_bytes: bytes) -> bytes:
         return image_bytes
 
 
-def _postprocess_output(raw: str, text_format: str = "plain") -> Dict[str, Any]:
-    structured: Dict[str, Any] = {}
+def _postprocess_output(raw: str, text_format: str = "plain") -> dict[str, Any]:
+    structured: dict[str, Any] = {}
     keep_raw = _env_bool("NEMOTRON_KEEP_RAW_OUTPUT", True)
     if keep_raw:
         structured["raw_output"] = raw
@@ -264,7 +263,7 @@ def _postprocess_output(raw: str, text_format: str = "plain") -> Dict[str, Any]:
     return structured
 
 
-def _load_postprocess_funcs() -> Dict[str, Any]:
+def _load_postprocess_funcs() -> dict[str, Any]:
     global _POSTPROCESS_FUNCS
     if _POSTPROCESS_FUNCS is not None:
         return _POSTPROCESS_FUNCS
@@ -295,7 +294,7 @@ def _load_postprocess_funcs() -> Dict[str, Any]:
     return _POSTPROCESS_FUNCS
 
 
-def _try_parse_json(raw: str) -> Optional[Any]:
+def _try_parse_json(raw: str) -> Any | None:
     text = (raw or "").strip()
     if not text:
         return None
@@ -390,8 +389,8 @@ def _load_transformers():
         if _TF_MODEL is not None and _TF_PROCESSOR is not None:
             return _TF_MODEL, _TF_PROCESSOR
 
-        from transformers import AutoModel, AutoProcessor
         import torch
+        from transformers import AutoModel, AutoProcessor
 
         model_path = os.getenv("NEMOTRON_MODEL_PATH", "nvidia/NVIDIA-Nemotron-Parse-v1.1")
         device_env = os.getenv("NEMOTRON_DEVICE")

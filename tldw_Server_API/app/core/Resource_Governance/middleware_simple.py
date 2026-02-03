@@ -11,15 +11,14 @@ full-featured middleware later.
 import os
 import re
 import uuid
-from typing import Any, Callable, Awaitable, Optional
 
 from loguru import logger
-from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .deps import derive_client_ip, derive_entity_key
 from .governor import RGRequest
-from .deps import derive_entity_key, derive_client_ip
 
 
 class RGSimpleMiddleware:
@@ -82,7 +81,7 @@ class RGSimpleMiddleware:
         except Exception as e:
             logger.debug(f"RGSimpleMiddleware: route_map init skipped: {e}")
 
-    def _derive_policy_id(self, request: Request) -> Optional[str]:
+    def _derive_policy_id(self, request: Request) -> str | None:
         # Prefer path-based routing (works even before route resolution)
         try:
             # Use compiled route_map if available

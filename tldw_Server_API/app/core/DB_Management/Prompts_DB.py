@@ -29,19 +29,21 @@
 ####
 #
 import json
+import re
 import sqlite3
 import threading
 import uuid
-import re
 from contextlib import contextmanager
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from math import ceil
 from pathlib import Path
-from typing import List, Tuple, Dict, Any, Optional, Union
+from typing import Any, Optional, Union
+
 #
 # Third-Party Libraries
 from loguru import logger
 from loguru import logger as logging
+
 #
 # Local Imports
 #
@@ -452,7 +454,7 @@ class PromptsDatabase:
             logging.error(f"Query failed: {query[:200]}... Error: {e}", exc_info=True)
             raise DatabaseError(f"Query execution failed: {e}") from e
 
-    def execute_many(self, query: str, params_list: List[tuple], *, commit: bool = False) -> Optional[sqlite3.Cursor]:
+    def execute_many(self, query: str, params_list: list[tuple], *, commit: bool = False) -> Optional[sqlite3.Cursor]:
         conn = self.get_connection()
         if not isinstance(params_list, list):
             raise TypeError("params_list must be a list.")
@@ -622,7 +624,7 @@ class PromptsDatabase:
         return s
 
     def _get_next_version(self, conn: sqlite3.Connection, table: str, id_col: str, id_val: Any) -> Optional[
-        Tuple[int, int]]:
+        tuple[int, int]]:
         try:
             if not (_SAFE_IDENTIFIER_RE.fullmatch(table or "") and _SAFE_IDENTIFIER_RE.fullmatch(id_col or "")):
                 raise DatabaseError(
@@ -643,7 +645,7 @@ class PromptsDatabase:
         return None
 
     def _log_sync_event(self, conn: sqlite3.Connection, entity: str, entity_uuid: str, operation: str, version: int,
-                        payload: Optional[Dict] = None):
+                        payload: Optional[dict] = None):
         if not entity or not entity_uuid or not operation:
             logging.error("Sync log attempt with missing entity, uuid, or operation.")
             return
@@ -690,7 +692,7 @@ class PromptsDatabase:
             raise DatabaseError(f"Failed FTS update PromptKeyword ID {keyword_id}: {e}") from e
 
     # --- Version History ---
-    def _fetch_prompt_versions_from_sync_log(self, prompt_uuid: str) -> List[Dict[str, Any]]:
+    def _fetch_prompt_versions_from_sync_log(self, prompt_uuid: str) -> list[dict[str, Any]]:
         """Build version entries for a prompt using sync_log snapshots."""
         if not prompt_uuid:
             return []
@@ -704,20 +706,20 @@ class PromptsDatabase:
                    ORDER BY version ASC, change_id ASC""",
                 (prompt_uuid,)
             )
-            versions_by_number: Dict[int, Dict[str, Any]] = {}
+            versions_by_number: dict[int, dict[str, Any]] = {}
             for row in cursor.fetchall():
                 row_dict = dict(row)
                 ver = int(row_dict['version']) if isinstance(row_dict.get('version'), (int,)) else None
                 if ver is None or ver in versions_by_number:
                     continue
                 payload_raw = row_dict.get('payload')
-                payload: Optional[Dict[str, Any]] = None
+                payload: Optional[dict[str, Any]] = None
                 if payload_raw:
                     try:
                         payload = json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
                     except json.JSONDecodeError:
                         payload = None
-                entry: Dict[str, Any] = {
+                entry: dict[str, Any] = {
                     "version": ver,
                     "created_at": row_dict.get("timestamp"),
                     "comment": None,
@@ -736,7 +738,7 @@ class PromptsDatabase:
             logging.error(f"Error fetching version history for prompt UUID {prompt_uuid}: {e}")
             return []
 
-    def get_prompt_versions(self, prompt_id: int) -> List[Dict[str, Any]]:
+    def get_prompt_versions(self, prompt_id: int) -> list[dict[str, Any]]:
         """Return version history for a prompt, enriched by sync_log when available."""
         try:
             prompt = self.fetch_prompt_details(prompt_id, include_deleted=True)
@@ -754,7 +756,7 @@ class PromptsDatabase:
             logging.error(f"Error building version history for prompt {prompt_id}: {e}")
             return []
 
-    def _fetch_prompt_version_payload(self, prompt_uuid: str, version: int) -> Optional[Dict[str, Any]]:
+    def _fetch_prompt_version_payload(self, prompt_uuid: str, version: int) -> Optional[dict[str, Any]]:
         """Fetch a specific prompt version payload from sync_log."""
         if not prompt_uuid:
             return None
@@ -787,7 +789,7 @@ class PromptsDatabase:
             logging.error(f"Error fetching prompt version payload for {prompt_uuid} v{version}: {e}")
             return None
 
-    def restore_prompt_version(self, prompt_id: int, version: int) -> Tuple[Optional[str], str]:
+    def restore_prompt_version(self, prompt_id: int, version: int) -> tuple[Optional[str], str]:
         """Restore a prompt to a previous version using sync_log snapshots."""
         if not isinstance(version, int) or version < 1:
             raise InputError("Version must be a positive integer.")
@@ -798,7 +800,7 @@ class PromptsDatabase:
         if not payload:
             raise InputError(f"Version {version} not found for prompt {prompt_id}.")
 
-        update_data: Dict[str, Any] = {}
+        update_data: dict[str, Any] = {}
         for field in ("name", "author", "details", "system_prompt", "user_prompt"):
             if field in payload:
                 update_data[field] = payload.get(field)
@@ -819,7 +821,7 @@ class PromptsDatabase:
             raise DatabaseError(f"Failed FTS delete PromptKeyword ID {keyword_id}: {e}") from e
 
     # --- Public Mutating Methods ---
-    def add_keyword(self, keyword_text: str) -> Tuple[Optional[int], Optional[str]]:
+    def add_keyword(self, keyword_text: str) -> tuple[Optional[int], Optional[str]]:
         if not keyword_text or not keyword_text.strip():
             raise InputError("Keyword cannot be empty.")
         normalized_keyword = self._normalize_keyword(keyword_text)
@@ -873,7 +875,7 @@ class PromptsDatabase:
             else:
                 raise DatabaseError(f"Failed to add/update prompt keyword: {e}") from e
 
-    def get_active_keyword_by_text(self, keyword_text: str) -> Optional[Dict]:
+    def get_active_keyword_by_text(self, keyword_text: str) -> Optional[dict]:
         """
         Fetches an active (not deleted) keyword by its exact normalized text.
 
@@ -900,7 +902,7 @@ class PromptsDatabase:
 
     def add_prompt(self, name: str, author: Optional[str], details: Optional[str],
                    system_prompt: Optional[str] = None, user_prompt: Optional[str] = None,
-                   keywords: Optional[List[str]] = None, overwrite: bool = False) -> Tuple[
+                   keywords: Optional[list[str]] = None, overwrite: bool = False) -> tuple[
         Optional[int], Optional[str], str]:
         if not isinstance(name, str) or name == "":
             raise InputError("Prompt name cannot be empty.")
@@ -1000,7 +1002,7 @@ class PromptsDatabase:
             if isinstance(e, (InputError, ConflictError, DatabaseError)): raise e
             else: raise DatabaseError(f"Failed to process prompt '{name}': {e}") from e
 
-    def update_keywords_for_prompt(self, prompt_id: int, keywords_list: List[str]):
+    def update_keywords_for_prompt(self, prompt_id: int, keywords_list: list[str]):
         normalized_new_keywords = sorted(list(set([
             self._normalize_keyword(k) for k in keywords_list if k and k.strip()
         ])))
@@ -1029,7 +1031,7 @@ class PromptsDatabase:
             current_keyword_links = {row['keyword_id']: {'text': row['keyword'], 'uuid': row['keyword_uuid']} for row in cursor.fetchall()}
             current_keyword_ids = set(current_keyword_links.keys())
 
-            target_keyword_data: Dict[int, Dict[str,str]] = {} # {keyword_id: {'text': text, 'uuid': uuid}}
+            target_keyword_data: dict[int, dict[str,str]] = {} # {keyword_id: {'text': text, 'uuid': uuid}}
             if normalized_new_keywords:
                 for kw_text in normalized_new_keywords:
                     # add_keyword is an instance method, it will use the existing transaction
@@ -1071,7 +1073,7 @@ class PromptsDatabase:
             if isinstance(e, (InputError, DatabaseError)): raise e
             else: raise DatabaseError(f"Keyword update failed for prompt {prompt_id}: {e}") from e
 
-    def update_prompt_by_id(self, prompt_id: int, update_data: Dict[str, Any]) -> Tuple[Optional[str], str]:
+    def update_prompt_by_id(self, prompt_id: int, update_data: dict[str, Any]) -> tuple[Optional[str], str]:
         """
         Updates an existing prompt identified by its ID.
         Handles name changes and ensures the new name doesn't conflict with other existing prompts.
@@ -1350,7 +1352,7 @@ class PromptsDatabase:
             else: raise DatabaseError(f"Failed to soft delete prompt keyword: {e}") from e
 
     # --- Read Methods ---
-    def get_prompt_by_id(self, prompt_id: int, include_deleted: bool = False) -> Optional[Dict]:
+    def get_prompt_by_id(self, prompt_id: int, include_deleted: bool = False) -> Optional[dict]:
         query = "SELECT * FROM Prompts WHERE id = ?"
         params = [prompt_id]
         if not include_deleted:
@@ -1363,7 +1365,7 @@ class PromptsDatabase:
             logger.error(f"Error fetching prompt by ID {prompt_id}: {e}")
             raise DatabaseError(f"Failed fetch prompt by ID: {e}") from e
 
-    def get_prompt_by_uuid(self, prompt_uuid: str, include_deleted: bool = False) -> Optional[Dict]:
+    def get_prompt_by_uuid(self, prompt_uuid: str, include_deleted: bool = False) -> Optional[dict]:
         query = "SELECT * FROM Prompts WHERE uuid = ?"
         params = [prompt_uuid]
         if not include_deleted:
@@ -1376,7 +1378,7 @@ class PromptsDatabase:
             logger.error(f"Error fetching prompt by UUID {prompt_uuid}: {e}")
             raise DatabaseError(f"Failed fetch prompt by UUID: {e}") from e
 
-    def get_prompt_by_name(self, name: str, include_deleted: bool = False) -> Optional[Dict]:
+    def get_prompt_by_name(self, name: str, include_deleted: bool = False) -> Optional[dict]:
         query = "SELECT * FROM Prompts WHERE name = ?"
         params = [name]
         if not include_deleted:
@@ -1396,7 +1398,7 @@ class PromptsDatabase:
         include_deleted: bool = False,
         sort_by: str = "last_modified",
         sort_order: str = "desc"
-    ) -> Tuple[List[Dict], int, int, int]:
+    ) -> tuple[list[dict], int, int, int]:
         if page < 1:
             raise ValueError("Page number must be >= 1")
         if per_page < 1:
@@ -1463,7 +1465,7 @@ class PromptsDatabase:
             logger.error(f"Error listing prompts: {e}")
             raise DatabaseError(f"Failed to list prompts: {e}") from e
 
-    def fetch_prompt_details(self, prompt_id_or_name_or_uuid: Union[int, str], include_deleted: bool = False) -> Optional[Dict]:
+    def fetch_prompt_details(self, prompt_id_or_name_or_uuid: Union[int, str], include_deleted: bool = False) -> Optional[dict]:
         prompt_data = None
         if isinstance(prompt_id_or_name_or_uuid, int):
             prompt_data = self.get_prompt_by_id(prompt_id_or_name_or_uuid, include_deleted)
@@ -1487,7 +1489,7 @@ class PromptsDatabase:
         prompt_data_dict['keywords'] = keywords
         return prompt_data_dict
 
-    def fetch_all_keywords(self, include_deleted: bool = False) -> List[str]:
+    def fetch_all_keywords(self, include_deleted: bool = False) -> list[str]:
         query = "SELECT keyword FROM PromptKeywordsTable"
         if not include_deleted: query += " WHERE deleted = 0"
         query += " ORDER BY keyword COLLATE NOCASE"
@@ -1498,7 +1500,7 @@ class PromptsDatabase:
             logger.error(f"Error fetching all prompt keywords: {e}")
             raise DatabaseError("Failed to fetch all prompt keywords") from e
 
-    def fetch_all_prompt_names(self, include_deleted: bool = True) -> List[str]:
+    def fetch_all_prompt_names(self, include_deleted: bool = True) -> list[str]:
         """
         Returns all prompt names from the Prompts table.
 
@@ -1522,7 +1524,7 @@ class PromptsDatabase:
             logger.error(f"Error fetching all prompt names: {e}")
             raise DatabaseError("Failed to fetch all prompt names") from e
 
-    def fetch_keywords_for_prompt(self, prompt_id: int, include_deleted: bool = False) -> List[str]:
+    def fetch_keywords_for_prompt(self, prompt_id: int, include_deleted: bool = False) -> list[str]:
         # Note: include_deleted here refers to the keyword itself, not the link or prompt
         query = """SELECT k.keyword FROM PromptKeywordsTable k
                                              JOIN PromptKeywordLinks pkl ON k.id = pkl.keyword_id
@@ -1540,11 +1542,11 @@ class PromptsDatabase:
 
     def search_prompts(self,
                        search_query: Optional[str],
-                       search_fields: Optional[List[str]] = None,  # e.g. ['name', 'details', 'keywords']
+                       search_fields: Optional[list[str]] = None,  # e.g. ['name', 'details', 'keywords']
                        page: int = 1,
                        results_per_page: int = 20,
                        include_deleted: bool = False
-                       ) -> Tuple[List[Dict[str, Any]], int]:
+                       ) -> tuple[list[dict[str, Any]], int]:
         if page < 1: raise ValueError("Page must be >= 1")
         if results_per_page < 1: raise ValueError("Results per page must be >= 1")
 
@@ -1788,7 +1790,7 @@ class PromptsDatabase:
             return [], 0
 
     # --- Sync Log Access Methods ---
-    def get_sync_log_entries(self, since_change_id: int = 0, limit: Optional[int] = None) -> List[Dict]:
+    def get_sync_log_entries(self, since_change_id: int = 0, limit: Optional[int] = None) -> list[dict]:
         query = "SELECT * FROM sync_log WHERE change_id > ? ORDER BY change_id ASC"
         params_list = [since_change_id]
         if limit is not None:
@@ -1811,7 +1813,7 @@ class PromptsDatabase:
             raise DatabaseError("Failed to fetch sync_log entries") from e
 
 
-    def delete_sync_log_entries(self, change_ids: List[int]) -> int:
+    def delete_sync_log_entries(self, change_ids: list[int]) -> int:
         if not change_ids: return 0
         if not all(isinstance(cid, int) for cid in change_ids):
             raise ValueError("change_ids must be a list of integers.")
@@ -1836,7 +1838,7 @@ class PromptsDatabase:
 def add_or_update_prompt(db_instance: PromptsDatabase,
                          name: str, author: Optional[str], details: Optional[str],
                          system_prompt: Optional[str] = None, user_prompt: Optional[str] = None,
-                         keywords: Optional[List[str]] = None) -> Tuple[Optional[int], Optional[str], str]:
+                         keywords: Optional[list[str]] = None) -> tuple[Optional[int], Optional[str], str]:
     """
     Adds a new prompt or updates an existing one (identified by name).
     If the prompt exists (even if soft-deleted), it will be updated/undeleted.
@@ -1850,7 +1852,7 @@ def add_or_update_prompt(db_instance: PromptsDatabase,
         keywords=keywords, overwrite=True # Key change: always overwrite/update if exists
     )
 
-def load_prompt_details_for_ui(db_instance: PromptsDatabase, prompt_name: str) -> Tuple[str, str, str, str, str, str]:
+def load_prompt_details_for_ui(db_instance: PromptsDatabase, prompt_name: str) -> tuple[str, str, str, str, str, str]:
     """
     Loads prompt details for UI display, fetching by name.
     Returns empty strings if not found.
@@ -1873,10 +1875,10 @@ def load_prompt_details_for_ui(db_instance: PromptsDatabase, prompt_name: str) -
     return "", "", "", "", "", ""
 
 
-def export_prompt_keywords_to_csv(db_instance: PromptsDatabase) -> Tuple[str, str]:
+def export_prompt_keywords_to_csv(db_instance: PromptsDatabase) -> tuple[str, str]:
     import csv
-    import tempfile
     import os
+    import tempfile
     from datetime import datetime
 
     if not isinstance(db_instance, PromptsDatabase):
@@ -1960,18 +1962,18 @@ def view_prompt_keywords_markdown(db_instance: PromptsDatabase) -> str:
 
 def export_prompts_formatted(db_instance: PromptsDatabase,
                              export_format: str = 'csv', # 'csv' or 'markdown'
-                             filter_keywords: Optional[List[str]] = None,
+                             filter_keywords: Optional[list[str]] = None,
                              include_system: bool = True,
                              include_user: bool = True,
                              include_details: bool = True,
                              include_author: bool = True,
                              include_associated_keywords: bool = True, # Renamed for clarity
                              markdown_template_name: Optional[str] = "Basic Template" # Name of template
-                             ) -> Tuple[str, str]:
+                             ) -> tuple[str, str]:
     import csv
-    import tempfile
     import os
-    import zipfile # For markdown if multiple files
+    import tempfile
+    import zipfile  # For markdown if multiple files
     from datetime import datetime
 
     if not isinstance(db_instance, PromptsDatabase):

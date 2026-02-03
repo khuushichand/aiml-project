@@ -9,20 +9,21 @@
 
 import tempfile
 import xml.etree.ElementTree as ET
-from typing import Optional, List
+from typing import Optional
 
 from fastapi import HTTPException
+
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.Utils.Utils import logger
 
-from tldw_Server_API.app.core.Chunking import improved_chunking_process
 
 async def process_xml_task(
     file_bytes: bytes,
     filename: str,
     title: Optional[str],
     author: Optional[str],
-    keywords: List[str],
+    keywords: list[str],
     system_prompt: Optional[str],
     custom_prompt: Optional[str],
     auto_summarize: bool,

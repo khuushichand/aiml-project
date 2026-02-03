@@ -22,7 +22,6 @@ Tests can call reconcile_once(limit) directly for determinism.
 
 import os
 import time
-from typing import List, Tuple, Optional
 
 from loguru import logger
 
@@ -33,7 +32,7 @@ except Exception:  # Fallback path for historical imports
     from tldw_Server_API.app.core.Jobs.manager import JobManager  # type: ignore
 
 
-def _is_truthy(v: Optional[str]) -> bool:
+def _is_truthy(v: str | None) -> bool:
     return str(v or "").lower() in {"1", "true", "yes", "y", "on"}
 
 
@@ -45,7 +44,7 @@ class JobsMetricsService:
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         self.jm = JobManager(backend=backend, db_url=db_url)
 
-    def reconcile_once(self, *, limit_groups: Optional[int] = None) -> int:
+    def reconcile_once(self, *, limit_groups: int | None = None) -> int:
         """Recompute job_counters for up to limit_groups groups.
 
         Strategy:
@@ -235,7 +234,7 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
     except Exception:
         max_groups = 100
 
-    def _set_gauges(d: str, q: str, jt: str, owner: str, qlat_p: Tuple[float,float,float], dur_p: Tuple[float,float,float]):
+    def _set_gauges(d: str, q: str, jt: str, owner: str, qlat_p: tuple[float,float,float], dur_p: tuple[float,float,float]):
         labels = {"domain": d, "queue": q, "job_type": jt or "", "owner_user_id": owner or ""}
         reg.set_gauge("jobs.queue_latency_p50_seconds", float(qlat_p[0]), labels)
         reg.set_gauge("jobs.queue_latency_p90_seconds", float(qlat_p[1]), labels)
@@ -244,7 +243,7 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
         reg.set_gauge("jobs.duration_p90_seconds", float(dur_p[1]), labels)
         reg.set_gauge("jobs.duration_p99_seconds", float(dur_p[2]), labels)
 
-    def _percentiles(values: List[float]) -> Tuple[float, float, float]:
+    def _percentiles(values: list[float]) -> tuple[float, float, float]:
         if not values:
             return (0.0, 0.0, 0.0)
         vs = sorted(values)

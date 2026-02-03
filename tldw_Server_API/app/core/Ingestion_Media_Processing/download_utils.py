@@ -2,27 +2,31 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from typing import Any
 from urllib.parse import urlparse
 
 import aiofiles
 from loguru import logger
 
 from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.http_client import (
+    _validate_egress_or_raise,
+)
+from tldw_Server_API.app.core.http_client import (
+    afetch as _m_afetch,
+)
+from tldw_Server_API.app.core.http_client import (
+    create_async_client as _create_async_client,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
+    resolve_safe_local_path,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     DEFAULT_MEDIA_TYPE_CONFIG,
     EXT_TO_MEDIA_TYPE_KEY,
     _extension_candidates,
 )
 from tldw_Server_API.app.core.testing import is_test_mode
-from tldw_Server_API.app.core.http_client import (
-    afetch as _m_afetch,
-    create_async_client as _create_async_client,
-    _validate_egress_or_raise,
-)
-from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
-    resolve_safe_local_path,
-)
 
 
 def _validate_target_path(target_dir: Path, filename: str) -> Path:
@@ -44,7 +48,7 @@ def _validate_target_path(target_dir: Path, filename: str) -> Path:
     return resolved
 
 
-def _get_media_processing_config() -> Dict[str, Any]:
+def _get_media_processing_config() -> dict[str, Any]:
     try:
         cfg = loaded_config_data.get("media_processing", {}) if loaded_config_data else {}
         return cfg or {}
@@ -52,13 +56,13 @@ def _get_media_processing_config() -> Dict[str, Any]:
         return {}
 
 
-def _resolve_media_type_from_suffix(suffix: Optional[str]) -> Optional[str]:
+def _resolve_media_type_from_suffix(suffix: str | None) -> str | None:
     if not suffix:
         return None
     return EXT_TO_MEDIA_TYPE_KEY.get(suffix.lower())
 
 
-def _resolve_media_type_from_content_type(content_type: str) -> Optional[str]:
+def _resolve_media_type_from_content_type(content_type: str) -> str | None:
     content_map = {
         "application/json": "document",
         "application/pdf": "pdf",
@@ -102,15 +106,15 @@ def _strip_all_suffixes(name: str) -> str:
 
 def _pick_allowed_candidate(
     candidates: list[str],
-    allowed_extensions: Set[str],
-) -> Optional[str]:
+    allowed_extensions: set[str],
+) -> str | None:
     for candidate in candidates:
         if candidate in allowed_extensions:
             return candidate
     return None
 
 
-def _max_bytes_for_media_type(media_type_key: Optional[str]) -> Optional[int]:
+def _max_bytes_for_media_type(media_type_key: str | None) -> int | None:
     if not media_type_key:
         return None
     config = DEFAULT_MEDIA_TYPE_CONFIG.get(media_type_key.lower())
@@ -126,7 +130,7 @@ def _max_bytes_for_media_type(media_type_key: Optional[str]) -> Optional[int]:
     return None
 
 
-def _fallback_max_bytes() -> Optional[int]:
+def _fallback_max_bytes() -> int | None:
     cfg = _get_media_processing_config()
     size_mb = cfg.get("max_unknown_file_size_mb")
     if size_mb is None:
@@ -138,11 +142,11 @@ def _fallback_max_bytes() -> Optional[int]:
 
 def _resolve_max_bytes(
     *,
-    max_bytes: Optional[int],
-    media_type_key: Optional[str],
-    effective_suffix: Optional[str],
+    max_bytes: int | None,
+    media_type_key: str | None,
+    effective_suffix: str | None,
     content_type: str,
-) -> Optional[int]:
+) -> int | None:
     if isinstance(max_bytes, int) and max_bytes > 0:
         return max_bytes
     resolved_media_type = (
@@ -160,8 +164,8 @@ def _resolve_max_bytes(
 
 def _enforce_max_bytes_from_headers(
     url: str,
-    content_length: Optional[str],
-    max_bytes: Optional[int],
+    content_length: str | None,
+    max_bytes: int | None,
 ) -> None:
     if not max_bytes:
         return
@@ -182,7 +186,7 @@ async def _write_response_to_path(
     url: str,
     resp: Any,
     target_path: Path,
-    max_bytes: Optional[int],
+    max_bytes: int | None,
 ) -> None:
     total = 0
     async with aiofiles.open(target_path, "wb") as f:
@@ -198,15 +202,15 @@ async def _write_response_to_path(
             await f.write(chunk)
 
 async def download_url_async(
-    client: Optional[Any],
+    client: Any | None,
     url: str,
     target_dir: Path,
-    allowed_extensions: Optional[Set[str]] = None,
+    allowed_extensions: set[str] | None = None,
     check_extension: bool = True,
-    disallow_content_types: Optional[Set[str]] = None,
+    disallow_content_types: set[str] | None = None,
     allow_redirects: bool = True,
-    max_bytes: Optional[int] = None,
-    media_type_key: Optional[str] = None,
+    max_bytes: int | None = None,
+    media_type_key: str | None = None,
 ) -> Path:
     """
     Minimal core-backed URL downloader used by tests and modular endpoints.
@@ -252,14 +256,14 @@ async def download_url_async(
     # Plain stream-only clients are only honored in test mode; otherwise we fall
     # back to the central HTTP client helpers.
     stream_only_client = None
-    client_for_afetch: Optional[Any] = client if client and hasattr(client, "request") else None
+    client_for_afetch: Any | None = client if client and hasattr(client, "request") else None
     if client is not None and not hasattr(client, "request"):
         if test_mode_active and hasattr(client, "stream"):
             stream_only_client = client
         else:
             client_for_afetch = None
 
-    resp: Optional[Any] = None
+    resp: Any | None = None
     owns_client = False
     try:
         # Some tests supply lightweight clients that only implement `.stream`

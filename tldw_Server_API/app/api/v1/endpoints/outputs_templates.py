@@ -8,30 +8,28 @@ Implements request/response models using outputs_templates_schemas.
 DB access must be implemented via app.core.DB_Management (no raw SQL here).
 """
 
-from datetime import datetime, timezone
-from typing import Any, Optional
+import json
+from datetime import datetime
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Body
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.outputs_templates_schemas import (
     OutputTemplate,
     OutputTemplateCreate,
-    OutputTemplateUpdate,
     OutputTemplateList,
+    OutputTemplateUpdate,
     TemplatePreviewRequest,
     TemplatePreviewResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.services.outputs_service import (
     build_items_context_from_content_items,
     render_output_template,
 )
-from datetime import datetime
-import json
-
 
 router = APIRouter(prefix="/outputs/templates", tags=["outputs-templates"])
 
@@ -199,7 +197,10 @@ def _build_items_context_from_media_ids(media_db, item_ids: list[int], limit: in
         # Latest version to get analysis/safe_metadata
         latest = None
         try:
-            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_document_version, fetch_keywords_for_media
+            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+                fetch_keywords_for_media,
+                get_document_version,
+            )
             latest = get_document_version(media_db, media_id=mid, version_number=None, include_content=False)
             tags = fetch_keywords_for_media(media_id=mid, db_instance=media_db) or []
         except Exception:

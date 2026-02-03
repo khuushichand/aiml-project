@@ -14,16 +14,17 @@ and yield OpenAI-compatible SSE lines for streaming.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterable, Optional, AsyncIterator
+from collections.abc import AsyncIterator, Iterable
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAPIError,
     ChatAuthenticationError,
-    ChatRateLimitError,
     ChatBadRequestError,
     ChatProviderError,
+    ChatRateLimitError,
 )
 
 
@@ -33,7 +34,7 @@ class ChatProvider(ABC):
     name: str = "provider"
 
     @abstractmethod
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         """Return provider capability flags and hints.
 
         Example keys:
@@ -45,25 +46,25 @@ class ChatProvider(ABC):
         """
 
     @abstractmethod
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         """Non-streaming chat completion (OpenAI-compatible response)."""
 
     @abstractmethod
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         """Streaming chat completion.
 
         Yields OpenAI-compatible SSE lines. Callers are responsible for emitting a
         final [DONE] using sse.finalize_stream() to avoid duplicates.
         """
 
-    async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         """Async variant; adapters may override for native async paths.
 
         Default raises NotImplementedError to avoid silent sync-in-async fallbacks.
         """
         raise NotImplementedError("Async chat not implemented for this provider")
 
-    async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
+    async def astream(self, request: dict[str, Any], *, timeout: float | None = None) -> AsyncIterator[str]:
         """Async streaming variant; adapters may override for native async paths."""
         raise NotImplementedError("Async stream not implemented for this provider")
 
@@ -75,8 +76,8 @@ class ChatProvider(ABC):
         falling back to ChatProviderError.
         """
         from tldw_Server_API.app.core.LLM_Calls.error_utils import (
-            get_http_status_from_exception,
             get_http_error_text,
+            get_http_status_from_exception,
             is_http_status_error,
         )
 
@@ -98,7 +99,7 @@ class ChatProvider(ABC):
         return ChatProviderError(provider=self.name, message=str(exc))
 
 
-def apply_tool_choice(payload: Dict[str, Any], tools: Optional[list], tool_choice: Optional[Any]) -> None:
+def apply_tool_choice(payload: dict[str, Any], tools: list | None, tool_choice: Any | None) -> None:
     """Safely set tool_choice only when supported.
 
     - Always honor explicit "none" to disable tools.
@@ -124,7 +125,7 @@ class EmbeddingsProvider(ABC):
     name: str = "embeddings_provider"
 
     @abstractmethod
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         """Return provider capability flags and hints.
 
         Example keys:
@@ -134,7 +135,7 @@ class EmbeddingsProvider(ABC):
         """
 
     @abstractmethod
-    def embed(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def embed(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         """Create embeddings for given input(s).
 
         Request shape should accept keys similar to OpenAI's API:

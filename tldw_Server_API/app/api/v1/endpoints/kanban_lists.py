@@ -8,38 +8,37 @@ Provides CRUD operations for Kanban lists including:
 - Soft delete and restore lists
 - Reorder lists within a board
 """
-from typing import Optional, List
 from datetime import datetime
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Header, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
-    KanbanDB,
-    KanbanDBError,
-    InputError,
-    ConflictError,
-    NotFoundError,
-)
-from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
-    ListCreate,
-    ListUpdate,
-    ListResponse,
-    ListsListResponse,
-    ReorderRequest,
-    ReorderResponse,
-    DetailResponse,
-    ActivitiesListResponse,
-    ActivityResponse,
-    PaginationInfo,
-)
 from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     get_kanban_db_for_user,
     handle_kanban_db_error,
     kanban_rate_limit,
 )
 from tldw_Server_API.app.api.v1.endpoints._kanban_utils import to_db_timestamp
-
+from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
+    ActivitiesListResponse,
+    ActivityResponse,
+    DetailResponse,
+    ListCreate,
+    ListResponse,
+    ListsListResponse,
+    ListUpdate,
+    PaginationInfo,
+    ReorderRequest,
+    ReorderResponse,
+)
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
+    ConflictError,
+    InputError,
+    KanbanDB,
+    KanbanDBError,
+    NotFoundError,
+)
 
 router = APIRouter(tags=["Kanban Lists"])
 

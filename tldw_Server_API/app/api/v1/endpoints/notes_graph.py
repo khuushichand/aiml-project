@@ -1,24 +1,28 @@
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Body
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
-    require_token_scope,
     require_permissions,
+    require_token_scope,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.notes_graph import (
+    GraphLimits,
     NoteGraphRequest,
     NoteGraphResponse,
     NoteLinkCreate,
-    GraphLimits,
 )
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError, InputError, CharactersRAGDBError
 from tldw_Server_API.app.core.AuthNZ.permissions import NOTES_GRAPH_READ, NOTES_GRAPH_WRITE
-
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
 
 router = APIRouter()
 
@@ -252,7 +256,7 @@ async def create_manual_link(
     _: None = Depends(rbac_rate_limit("notes.graph.write")),
     __: None = Depends(require_permissions(NOTES_GRAPH_WRITE)),
     ___: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.write")),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Create a manual link in the user's ChaChaNotes DB. Populates created_by.
     """
@@ -315,7 +319,7 @@ async def delete_manual_link(
     _: None = Depends(rbac_rate_limit("notes.graph.write")),
     __: None = Depends(require_permissions(NOTES_GRAPH_WRITE)),
     ___: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.write")),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Delete a manual link by id for the current user.
     """

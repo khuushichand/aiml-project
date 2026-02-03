@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hmac
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Any, Mapping, Optional
+from typing import Any
+
 from loguru import logger
 
 
@@ -17,9 +19,9 @@ class TenantScopeConfig:
 
 def get_tenant_id(
     headers: Mapping[str, str],
-    claims: Optional[Mapping[str, Any]] = None,
-    config: Optional[TenantScopeConfig] = None,
-) -> Optional[str]:
+    claims: Mapping[str, Any] | None = None,
+    config: TenantScopeConfig | None = None,
+) -> str | None:
     """
     Extract a tenant identifier from request headers or JWT claims.
 
@@ -49,7 +51,7 @@ def get_tenant_id(
 _LOG_HASH_SECRET_WARNED = False
 
 
-def hash_entity(value: str, secret: Optional[str] = None) -> str:
+def hash_entity(value: str, secret: str | None = None) -> str:
     """
     Produce a stable, non-reversible identifier for logging/metrics.
 

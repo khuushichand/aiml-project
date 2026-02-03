@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from tldw_Server_API.app.core.Embeddings import redis_pipeline
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+
 _EMBEDDINGS_DOMAIN = "embeddings"
 _EMBEDDINGS_ROOT_JOB_TYPE = "embeddings_pipeline"
 _VALID_STAGES = {"chunking", "embedding", "storage"}
@@ -38,7 +39,7 @@ def _jobs_manager() -> JobManager:
     return JobManager(backend=backend, db_url=db_url)
 
 
-def _map_status(raw_status: Optional[str]) -> str:
+def _map_status(raw_status: str | None) -> str:
     status = str(raw_status or "").lower()
     if status == "quarantined":
         return "failed"
@@ -49,7 +50,7 @@ def _map_status(raw_status: Optional[str]) -> str:
     return "processing"
 
 
-def _dt_to_epoch(value: Any) -> Optional[int]:
+def _dt_to_epoch(value: Any) -> int | None:
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -71,7 +72,7 @@ def _dt_to_epoch(value: Any) -> Optional[int]:
     return int(dt.timestamp())
 
 
-def _normalize_payload(value: Any) -> Dict[str, Any]:
+def _normalize_payload(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     return {}
@@ -79,9 +80,9 @@ def _normalize_payload(value: Any) -> Dict[str, Any]:
 
 def _config_version(
     embedding_model: str,
-    embedding_provider: Optional[str],
-    chunk_size: Optional[int],
-    chunk_overlap: Optional[int],
+    embedding_provider: str | None,
+    chunk_size: int | None,
+    chunk_overlap: int | None,
 ) -> str:
     return ":".join(
         [
@@ -93,7 +94,7 @@ def _config_version(
     )
 
 
-def _map_priority(embedding_priority: Optional[int]) -> int:
+def _map_priority(embedding_priority: int | None) -> int:
     try:
         raw = int(embedding_priority) if embedding_priority is not None else 50
     except (TypeError, ValueError):
@@ -101,7 +102,7 @@ def _map_priority(embedding_priority: Optional[int]) -> int:
     return max(1, min(10, int(raw / 10)))
 
 
-def _derive_root_status(root_job: Dict[str, Any]) -> str:
+def _derive_root_status(root_job: dict[str, Any]) -> str:
     status = _map_status(root_job.get("status"))
     if status in {"completed", "failed", "cancelled"}:
         return status
@@ -136,20 +137,20 @@ class EmbeddingsJobsAdapter:
         user_id: str,
         media_id: int,
         embedding_model: str,
-        embedding_provider: Optional[str] = None,
-        chunk_size: Optional[int] = None,
-        chunk_overlap: Optional[int] = None,
-        request_source: Optional[str] = None,
-        request_id: Optional[str] = None,
-        trace_id: Optional[str] = None,
+        embedding_provider: str | None = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
+        request_source: str | None = None,
+        request_id: str | None = None,
+        trace_id: str | None = None,
         force_regenerate: bool = False,
-        stage: Optional[str] = None,
-        embedding_priority: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        stage: str | None = None,
+        embedding_priority: int | None = None,
+    ) -> dict[str, Any]:
         stage_name = (stage or "chunking").strip().lower() or "chunking"
         if stage_name not in _VALID_STAGES:
             raise ValueError(f"Invalid embeddings stage: {stage_name}")
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "media_id": int(media_id),
             "embedding_model": embedding_model,
             "embedding_provider": embedding_provider,
@@ -232,9 +233,9 @@ class EmbeddingsJobsAdapter:
         job_id: str,
         user_id: str,
         status: str,
-        embedding_count: Optional[int] = None,
-        chunks_processed: Optional[int] = None,
-        error: Optional[str] = None,
+        embedding_count: int | None = None,
+        chunks_processed: int | None = None,
+        error: str | None = None,
     ) -> bool:
         job = self._lookup_job(job_id, user_id)
         if not job:
@@ -242,7 +243,7 @@ class EmbeddingsJobsAdapter:
         job_db_id = int(job["id"])
         status_norm = str(status or "").lower()
         if status_norm == "completed":
-            result: Dict[str, Any] = {}
+            result: dict[str, Any] = {}
             if embedding_count is not None:
                 result["embedding_count"] = int(embedding_count)
             if chunks_processed is not None:
@@ -253,7 +254,7 @@ class EmbeddingsJobsAdapter:
             return bool(self._jm.fail_job(job_db_id, error=message, retryable=False, enforce=False))
         return False
 
-    def get_job(self, job_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    def get_job(self, job_id: str, user_id: str) -> dict[str, Any] | None:
         job = self._lookup_job(job_id, user_id)
         if job:
             derived = _derive_root_status(job)
@@ -264,10 +265,10 @@ class EmbeddingsJobsAdapter:
         self,
         *,
         user_id: str,
-        status: Optional[str],
+        status: str | None,
         limit: int,
         offset: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         desired = str(status).lower() if status else None
         status_filter = desired if desired in {"completed", "failed", "cancelled"} else None
         raw_limit = max(0, int(limit) + int(offset))
@@ -279,7 +280,7 @@ class EmbeddingsJobsAdapter:
             job_type=_EMBEDDINGS_ROOT_JOB_TYPE,
             limit=raw_limit or 1,
         )
-        filtered: List[Dict[str, Any]] = []
+        filtered: list[dict[str, Any]] = []
         for job in jobs:
             derived = _derive_root_status(job)
             if desired and derived != desired:
@@ -290,10 +291,10 @@ class EmbeddingsJobsAdapter:
             return sliced
         return []
 
-    def _format_job(self, job: Dict[str, Any], *, status_override: Optional[str] = None) -> Dict[str, Any]:
+    def _format_job(self, job: dict[str, Any], *, status_override: str | None = None) -> dict[str, Any]:
         payload = _normalize_payload(job.get("payload"))
         result = _normalize_payload(job.get("result"))
-        response: Dict[str, Any] = {
+        response: dict[str, Any] = {
             "id": str(job.get("uuid") or job.get("id")),
             "media_id": payload.get("media_id"),
             "user_id": job.get("owner_user_id"),
@@ -310,7 +311,7 @@ class EmbeddingsJobsAdapter:
             response["total_chunks"] = result.get("total_chunks")
         return response
 
-    def _lookup_job(self, job_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    def _lookup_job(self, job_id: str, user_id: str) -> dict[str, Any] | None:
         if not job_id:
             return None
         job = None

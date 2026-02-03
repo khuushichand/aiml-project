@@ -12,10 +12,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Tuple, Callable
+from typing import Any, Callable
 
 from tldw_Server_API.app.core.config import get_stt_config
 from tldw_Server_API.app.core.exceptions import BadRequestError, CancelCheckError, TranscriptionCancelled
@@ -27,7 +28,7 @@ try:
     from .Audio_Transcription_Lib import parse_transcription_model
 except Exception:  # pragma: no cover - defensive fallback for minimal envs
 
-    def parse_transcription_model(model_name: str) -> Tuple[str, str, Optional[str]]:  # type: ignore[override]
+    def parse_transcription_model(model_name: str) -> tuple[str, str, str | None]:  # type: ignore[override]
         model_name = (model_name or "").strip()
         lowered = model_name.lower() or "whisper-1"
         # Default everything to Whisper when the real parser is unavailable.
@@ -37,7 +38,7 @@ except Exception:  # pragma: no cover - defensive fallback for minimal envs
 _SUPPORTED_PARAKEET_VARIANTS = {"standard", "onnx", "mlx", "cuda"}
 
 
-def _raise_if_cancelled(cancel_check: Optional[Callable[[], bool]]) -> None:
+def _raise_if_cancelled(cancel_check: Callable[[], bool] | None) -> None:
     if cancel_check is None:
         return
     try:
@@ -62,7 +63,7 @@ def _raise_if_cancelled(cancel_check: Optional[Callable[[], bool]]) -> None:
         raise TranscriptionCancelled("Cancelled by user")
 
 
-def _normalize_parakeet_variant(raw: Optional[str]) -> str:
+def _normalize_parakeet_variant(raw: str | None) -> str:
     variant = (raw or "").strip().lower()
     if not variant or variant not in _SUPPORTED_PARAKEET_VARIANTS:
         return "standard"
@@ -76,8 +77,8 @@ def _parakeet_model_name_for_variant(variant: str) -> str:
 
 def _resolve_default_model_for_provider(
     provider: str,
-    stt_cfg: Dict[str, Any],
-) -> Tuple[str, Optional[str]]:
+    stt_cfg: dict[str, Any],
+) -> tuple[str, str | None]:
     normalized = (provider or "").strip().lower()
     if normalized == SttProviderName.PARAKEET.value:
         variant = _normalize_parakeet_variant(stt_cfg.get("nemo_model_variant"))
@@ -124,7 +125,7 @@ class SttProviderCapabilities:
     supports_batch: bool = True
     supports_streaming: bool = False
     supports_diarization: bool = False
-    notes: Optional[str] = None
+    notes: str | None = None
 
 
 class SttProviderAdapter(ABC):
@@ -153,15 +154,15 @@ class SttProviderAdapter(ABC):
         self,
         audio_path: str,
         *,
-        model: Optional[str] = None,
-        language: Optional[str] = None,
+        model: str | None = None,
+        language: str | None = None,
         task: str = "transcribe",
         word_timestamps: bool = False,
-        prompt: Optional[str] = None,
-        hotwords: Optional[Sequence[str]] = None,
-        base_dir: Optional[Path] = None,
-        cancel_check: Optional[Callable[[], bool]] = None,
-    ) -> Dict[str, Any]:
+        prompt: str | None = None,
+        hotwords: Sequence[str] | None = None,
+        base_dir: Path | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         """
         Perform a batch transcription and return a normalized artifact.
 
@@ -197,19 +198,21 @@ class FasterWhisperAdapter(SttProviderAdapter):
         self,
         audio_path: str,
         *,
-        model: Optional[str] = None,
-        language: Optional[str] = None,
+        model: str | None = None,
+        language: str | None = None,
         task: str = "transcribe",
         word_timestamps: bool = False,
-        prompt: Optional[str] = None,
-        hotwords: Optional[Sequence[str]] = None,
-        base_dir: Optional[Path] = None,
-        cancel_check: Optional[Callable[[], bool]] = None,
-    ) -> Dict[str, Any]:
+        prompt: str | None = None,
+        hotwords: Sequence[str] | None = None,
+        base_dir: Path | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         # We reuse the core speech_to_text helper so behavior stays aligned
         # with existing REST/media ingestion flows.
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
             speech_to_text as fw_speech_to_text,
+        )
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
             strip_whisper_metadata_header,
         )
 
@@ -275,15 +278,15 @@ class ParakeetAdapter(SttProviderAdapter):
         self,
         audio_path: str,
         *,
-        model: Optional[str] = None,
-        language: Optional[str] = None,
+        model: str | None = None,
+        language: str | None = None,
         task: str = "transcribe",
         word_timestamps: bool = False,
-        prompt: Optional[str] = None,
-        hotwords: Optional[Sequence[str]] = None,
-        base_dir: Optional[Path] = None,
-        cancel_check: Optional[Callable[[], bool]] = None,
-    ) -> Dict[str, Any]:
+        prompt: str | None = None,
+        hotwords: Sequence[str] | None = None,
+        base_dir: Path | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         # Parakeet batch flows are routed through speech_to_text's Parakeet
         # branch by encoding the model name (e.g. "parakeet-standard").
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
@@ -345,20 +348,21 @@ class CanaryAdapter(SttProviderAdapter):
         self,
         audio_path: str,
         *,
-        model: Optional[str] = None,
-        language: Optional[str] = None,
+        model: str | None = None,
+        language: str | None = None,
         task: str = "transcribe",
         word_timestamps: bool = False,
-        prompt: Optional[str] = None,
-        hotwords: Optional[Sequence[str]] = None,
-        base_dir: Optional[Path] = None,
-        cancel_check: Optional[Callable[[], bool]] = None,
-    ) -> Dict[str, Any]:
+        prompt: str | None = None,
+        hotwords: Sequence[str] | None = None,
+        base_dir: Path | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        import numpy as np  # type: ignore
+        import soundfile as sf  # type: ignore
+
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (  # type: ignore
             transcribe_with_canary,
         )
-        import soundfile as sf  # type: ignore
-        import numpy as np  # type: ignore
 
         path_obj = Path(audio_path)
         if base_dir is not None:
@@ -426,15 +430,15 @@ class Qwen2AudioAdapter(SttProviderAdapter):
         self,
         audio_path: str,
         *,
-        model: Optional[str] = None,
-        language: Optional[str] = None,
+        model: str | None = None,
+        language: str | None = None,
         task: str = "transcribe",
         word_timestamps: bool = False,
-        prompt: Optional[str] = None,
-        hotwords: Optional[Sequence[str]] = None,
-        base_dir: Optional[Path] = None,
-        cancel_check: Optional[Callable[[], bool]] = None,
-    ) -> Dict[str, Any]:
+        prompt: str | None = None,
+        hotwords: Sequence[str] | None = None,
+        base_dir: Path | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
             speech_to_text,
         )
@@ -506,15 +510,15 @@ class Qwen3ASRAdapter(SttProviderAdapter):
         self,
         audio_path: str,
         *,
-        model: Optional[str] = None,
-        language: Optional[str] = None,
+        model: str | None = None,
+        language: str | None = None,
         task: str = "transcribe",
         word_timestamps: bool = False,
-        prompt: Optional[str] = None,
-        hotwords: Optional[Sequence[str]] = None,
-        base_dir: Optional[Path] = None,
-        cancel_check: Optional[Callable[[], bool]] = None,
-    ) -> Dict[str, Any]:
+        prompt: str | None = None,
+        hotwords: Sequence[str] | None = None,
+        base_dir: Path | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Qwen3ASR import (
             transcribe_with_qwen3_asr,
         )
@@ -565,15 +569,15 @@ class VibeVoiceAdapter(SttProviderAdapter):
         self,
         audio_path: str,
         *,
-        model: Optional[str] = None,
-        language: Optional[str] = None,
+        model: str | None = None,
+        language: str | None = None,
         task: str = "transcribe",
         word_timestamps: bool = False,
-        prompt: Optional[str] = None,
-        hotwords: Optional[Sequence[str]] = None,
-        base_dir: Optional[Path] = None,
-        cancel_check: Optional[Callable[[], bool]] = None,
-    ) -> Dict[str, Any]:
+        prompt: str | None = None,
+        hotwords: Sequence[str] | None = None,
+        base_dir: Path | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_VibeVoice import (  # type: ignore
             transcribe_with_vibevoice,
         )
@@ -623,15 +627,15 @@ class ExternalAdapter(SttProviderAdapter):
         self,
         audio_path: str,
         *,
-        model: Optional[str] = None,
-        language: Optional[str] = None,
+        model: str | None = None,
+        language: str | None = None,
         task: str = "transcribe",
         word_timestamps: bool = False,
-        prompt: Optional[str] = None,
-        hotwords: Optional[Sequence[str]] = None,
-        base_dir: Optional[Path] = None,
-        cancel_check: Optional[Callable[[], bool]] = None,
-    ) -> Dict[str, Any]:
+        prompt: str | None = None,
+        hotwords: Sequence[str] | None = None,
+        base_dir: Path | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider import (  # type: ignore
             transcribe_with_external_provider,
         )
@@ -669,7 +673,7 @@ class ExternalAdapter(SttProviderAdapter):
         }
 
 
-def _normalize_provider_name(name: Optional[str]) -> str:
+def _normalize_provider_name(name: str | None) -> str:
     """
     Normalize provider identifiers from config or call sites.
 
@@ -700,7 +704,7 @@ class SttProviderRegistry:
     """
 
     def __init__(self) -> None:
-        self._adapters: Dict[str, SttProviderAdapter] = {
+        self._adapters: dict[str, SttProviderAdapter] = {
             SttProviderName.FASTER_WHISPER.value: FasterWhisperAdapter(),
             SttProviderName.PARAKEET.value: ParakeetAdapter(),
             SttProviderName.CANARY.value: CanaryAdapter(),
@@ -723,7 +727,7 @@ class SttProviderRegistry:
         - Fall back to `default_stt_provider`.
         - Final fallback is 'faster-whisper'.
         """
-        cfg: Dict[str, Any]
+        cfg: dict[str, Any]
         try:
             cfg = get_stt_config() or {}
         except Exception:
@@ -733,7 +737,7 @@ class SttProviderRegistry:
         normalized = _normalize_provider_name(raw_default)
         return normalized or "faster-whisper"
 
-    def get_adapter(self, provider_name: Optional[str] = None) -> SttProviderAdapter:
+    def get_adapter(self, provider_name: str | None = None) -> SttProviderAdapter:
         """
         Return the adapter for the given provider name.
 
@@ -753,13 +757,13 @@ class SttProviderRegistry:
         # Defensive fallback to faster-whisper
         return self._adapters[SttProviderName.FASTER_WHISPER.value]
 
-    def get_capabilities(self, provider_name: Optional[str] = None) -> SttProviderCapabilities:
+    def get_capabilities(self, provider_name: str | None = None) -> SttProviderCapabilities:
         """
         Convenience helper to fetch capability metadata for a provider.
         """
         return self.get_adapter(provider_name).get_capabilities()
 
-    def resolve_provider_for_model(self, model_name: Optional[str]) -> Tuple[str, str, Optional[str]]:
+    def resolve_provider_for_model(self, model_name: str | None) -> tuple[str, str, str | None]:
         """
         Resolve an HTTP/OpenAI-style model name to (provider, model, variant).
 
@@ -814,7 +818,7 @@ class SttProviderRegistry:
         return provider, model, variant
 
 
-_REGISTRY: Optional[SttProviderRegistry] = None
+_REGISTRY: SttProviderRegistry | None = None
 
 
 def get_stt_provider_registry() -> SttProviderRegistry:

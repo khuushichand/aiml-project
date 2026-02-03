@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -44,7 +44,7 @@ async def enqueue_embeddings_job_for_item(
     user_id: int | str,
     item_id: int,
     content: str,
-    metadata: Optional[Dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
     priority: int = 50,
 ) -> None:
     """Best-effort queueing of an embedding job for a collections item."""

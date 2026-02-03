@@ -11,23 +11,22 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Optional
 
 from cachetools import LRUCache
 from fastapi import Depends, HTTPException, status
 from loguru import logger
 
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
+    ConflictError,
+    InputError,
     KanbanDB,
     KanbanDBError,
-    InputError,
-    ConflictError,
     NotFoundError,
 )
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-
 
 # --- Configuration ---
 _KANBAN_EXECUTOR: Optional[ThreadPoolExecutor] = None
@@ -51,12 +50,12 @@ _KANBAN_HEALTH_MAX_RECENT_FAILURES = max(
 # --- Global Cache for KanbanDB Instances ---
 MAX_CACHED_KANBAN_DB_INSTANCES = int(settings.get("MAX_CACHED_KANBAN_DB_INSTANCES", "50"))
 _kanban_db_instances: LRUCache = LRUCache(maxsize=MAX_CACHED_KANBAN_DB_INSTANCES)
-_kanban_db_health_checks: Dict[str, float] = {}
+_kanban_db_health_checks: dict[str, float] = {}
 _kanban_db_lock = threading.Lock()
 
 # --- Health Tracking ---
 _KANBAN_HEALTH_LOCK = threading.Lock()
-_KANBAN_HEALTH: Dict[str, Any] = {
+_KANBAN_HEALTH: dict[str, Any] = {
     "init_attempts": 0,
     "init_failures": 0,
     "last_init_ms": None,
@@ -102,7 +101,7 @@ def _record_init(duration_ms: float, success: bool, error: Optional[Exception] =
             _KANBAN_RECENT_INIT_FAILURES.append(now_ts)
 
 
-def get_kanban_health_snapshot() -> Dict[str, Any]:
+def get_kanban_health_snapshot() -> dict[str, Any]:
     """Get current health metrics snapshot."""
     with _KANBAN_HEALTH_LOCK:
         now_ts = time.time()
@@ -356,7 +355,7 @@ def handle_kanban_db_error(e: Exception) -> HTTPException:
 # =============================================================================
 
 # Rate limiting configuration - default limits per minute
-KANBAN_RATE_LIMITS: Dict[str, int] = {
+KANBAN_RATE_LIMITS: dict[str, int] = {
     # Board operations
     "kanban.boards.create": int(os.getenv("KANBAN_RATE_LIMIT_BOARDS_CREATE", "30")),
     "kanban.boards.list": int(os.getenv("KANBAN_RATE_LIMIT_BOARDS_LIST", "120")),
@@ -434,7 +433,7 @@ KANBAN_RATE_LIMITS: Dict[str, int] = {
 # multiple server workers/instances. For distributed deployments, use a shared
 # store (e.g., Redis) and/or an ingress rate limiter.
 _rate_limit_lock = threading.Lock()
-_rate_limit_windows: Dict[str, deque] = {}
+_rate_limit_windows: dict[str, deque] = {}
 RATE_LIMIT_WINDOW_SECONDS = 60
 _RATE_LIMIT_CLEANUP_INTERVAL_SECONDS = max(
     1.0, float(os.getenv("KANBAN_RATE_LIMIT_CLEANUP_INTERVAL_SECONDS", "300"))
@@ -463,7 +462,7 @@ def _maybe_cleanup_rate_limit_windows(now: float) -> None:
     _rate_limit_last_cleanup_ts = now_monotonic
 
 
-def check_kanban_rate_limit(user_id: int, action: str) -> tuple[bool, Dict[str, Any]]:
+def check_kanban_rate_limit(user_id: int, action: str) -> tuple[bool, dict[str, Any]]:
     """
     Check if a user has exceeded the rate limit for an action.
 
@@ -544,7 +543,7 @@ def kanban_rate_limit(action: str) -> Callable:
     return rate_limit_dependency
 
 
-def get_rate_limit_status(user_id: int, action: str) -> Dict[str, Any]:
+def get_rate_limit_status(user_id: int, action: str) -> dict[str, Any]:
     """
     Get current rate limit status for a user/action without consuming a request.
 

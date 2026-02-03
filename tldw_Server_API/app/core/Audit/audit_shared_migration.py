@@ -11,23 +11,23 @@ import argparse
 import asyncio
 import json
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any
 from uuid import uuid4
 
 import aiosqlite
 from loguru import logger
 
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
-    UnifiedAuditService,
     HIGH_RISK_SCORE,
+    UnifiedAuditService,
 )
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Utils.Utils import get_project_root
-
 
 _UNIDENTIFIED_TENANT_ID = "unidentified_user"
 
@@ -35,7 +35,7 @@ _UNIDENTIFIED_TENANT_ID = "unidentified_user"
 @dataclass(frozen=True)
 class AuditMigrationSource:
     path: Path
-    tenant_id: Optional[str]
+    tenant_id: str | None
     label: str
 
 
@@ -49,13 +49,13 @@ class AuditMigrationCounts:
     stats_inserted: int = 0
     stats_skipped: int = 0
     failed: bool = False
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
 class AuditMigrationReport:
     shared_db_path: Path
-    sources: List[AuditMigrationCounts]
+    sources: list[AuditMigrationCounts]
 
     @property
     def total_events_inserted(self) -> int:
@@ -74,7 +74,7 @@ class AuditMigrationReport:
         return sum(c.stats_skipped for c in self.sources)
 
     @property
-    def failed_sources(self) -> List[AuditMigrationCounts]:
+    def failed_sources(self) -> list[AuditMigrationCounts]:
         return [c for c in self.sources if c.failed]
 
     @property
@@ -82,7 +82,7 @@ class AuditMigrationReport:
         return len(self.failed_sources)
 
 
-def _normalize_subpath(raw: Optional[str]) -> Optional[Path]:
+def _normalize_subpath(raw: str | None) -> Path | None:
     if raw is None:
         return None
     try:
@@ -102,14 +102,14 @@ def _normalize_subpath(raw: Optional[str]) -> Optional[Path]:
 
 def discover_audit_sources(
     *,
-    user_db_base_dir: Optional[Path] = None,
-    default_db_path: Optional[Path] = None,
-) -> List[AuditMigrationSource]:
+    user_db_base_dir: Path | None = None,
+    default_db_path: Path | None = None,
+) -> list[AuditMigrationSource]:
     base_dir = user_db_base_dir or DatabasePaths.get_user_db_base_dir()
-    sources: List[AuditMigrationSource] = []
+    sources: list[AuditMigrationSource] = []
     seen_paths: set[Path] = set()
 
-    def _add_source(path: Path, tenant_id: Optional[str], label: str) -> None:
+    def _add_source(path: Path, tenant_id: str | None, label: str) -> None:
         resolved = path.resolve()
         if resolved in seen_paths:
             return
@@ -174,7 +174,7 @@ async def _ensure_checkpoint_table(db: aiosqlite.Connection) -> None:
 
 async def _load_checkpoint(
     db: aiosqlite.Connection, source_path: Path
-) -> Tuple[int, Optional[str], Optional[str]]:
+) -> tuple[int, str | None, str | None]:
     try:
         async with db.execute(
             "SELECT last_rowid, last_event_id, last_timestamp FROM audit_migration_checkpoints WHERE source_path = ?",
@@ -207,8 +207,8 @@ async def _save_checkpoint(
     db: aiosqlite.Connection,
     source_path: Path,
     last_rowid: int,
-    last_event_id: Optional[str],
-    last_timestamp: Optional[str],
+    last_event_id: str | None,
+    last_timestamp: str | None,
 ) -> None:
     await db.execute(
         """
@@ -259,7 +259,7 @@ def _is_system_event(event_type: Any, category: Any) -> bool:
 
 def _resolve_tenant_id(
     *,
-    tenant_override: Optional[str],
+    tenant_override: str | None,
     raw_tenant: Any,
     context_user_id: Any,
     event_type: Any,
@@ -315,7 +315,7 @@ def _coerce_timestamp(value: Any) -> str:
         return str(value)
 
 
-def _checkpoint_timestamp(value: Any, previous: Optional[str]) -> Optional[str]:
+def _checkpoint_timestamp(value: Any, previous: str | None) -> str | None:
     """Return a safe checkpoint timestamp, preserving previous on empty values."""
     try:
         if value is None:
@@ -331,7 +331,7 @@ def _checkpoint_timestamp(value: Any, previous: Optional[str]) -> Optional[str]:
         return previous
 
 
-def _parse_timestamp_to_date(value: Any) -> Optional[date]:
+def _parse_timestamp_to_date(value: Any) -> date | None:
     try:
         if isinstance(value, datetime):
             dt_val = value
@@ -351,7 +351,7 @@ def _parse_timestamp_to_date(value: Any) -> Optional[date]:
         return None
 
 
-def _infer_category(event_type: Optional[str]) -> str:
+def _infer_category(event_type: str | None) -> str:
     if not event_type:
         return "system"
     val = str(event_type).strip().lower()
@@ -411,9 +411,9 @@ def _pick(row: dict[str, Any], *names: str) -> Any:
 
 def _build_event_record(
     row: dict[str, Any],
-    columns: List[str],
+    columns: list[str],
     *,
-    tenant_override: Optional[str],
+    tenant_override: str | None,
     system_tenant_id: str,
     unidentified_tenant_id: str,
 ) -> dict[str, Any]:
@@ -469,7 +469,7 @@ def _build_event_record(
 
 async def _fetch_existing_event_ids(
     db: aiosqlite.Connection,
-    event_ids: List[str],
+    event_ids: list[str],
     *,
     chunk_size: int = 500,
 ) -> set[str]:
@@ -529,7 +529,7 @@ def _normalize_result(value: Any) -> str:
 
 async def _update_shared_daily_stats_from_records(
     db: aiosqlite.Connection,
-    records: List[dict[str, Any]],
+    records: list[dict[str, Any]],
     *,
     unidentified_tenant_id: str,
 ) -> int:
@@ -614,7 +614,7 @@ async def _migrate_source(
     shared_db: aiosqlite.Connection,
     source: AuditMigrationSource,
     *,
-    columns: List[str],
+    columns: list[str],
     insert_sql: str,
     system_tenant_id: str,
     unidentified_tenant_id: str,
@@ -672,9 +672,9 @@ async def _migrate_source(
                         break
 
                     counts.events_read += len(rows)
-                    records: List[dict[str, Any]] = []
+                    records: list[dict[str, Any]] = []
                     seen: set[str] = set()
-                    duplicates_in_chunk: List[str] = []
+                    duplicates_in_chunk: list[str] = []
                     for row in rows:
                         record = _build_event_record(
                             dict(row),
@@ -759,9 +759,9 @@ async def _migrate_source(
 
 async def migrate_to_shared_audit_db(
     *,
-    shared_db_path: Optional[Path] = None,
-    user_db_base_dir: Optional[Path] = None,
-    default_db_path: Optional[Path] = None,
+    shared_db_path: Path | None = None,
+    user_db_base_dir: Path | None = None,
+    default_db_path: Path | None = None,
     system_tenant_id: str = "system",
     unidentified_tenant_id: str = _UNIDENTIFIED_TENANT_ID,
     chunk_size: int = 5000,
@@ -798,7 +798,7 @@ async def migrate_to_shared_audit_db(
         logger.warning("No audit databases found for migration.")
         return AuditMigrationReport(shared_db_path=shared_path, sources=[])
 
-    counts: List[AuditMigrationCounts] = []
+    counts: list[AuditMigrationCounts] = []
     async with aiosqlite.connect(shared_path) as shared_db:
         shared_db.row_factory = aiosqlite.Row
         try:
@@ -839,7 +839,7 @@ async def migrate_to_shared_audit_db(
     return report
 
 
-def _parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
+def _parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Migrate per-user audit DBs into shared audit DB.")
     parser.add_argument(
         "--shared-db",
@@ -881,7 +881,7 @@ def _parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: Optional[Iterable[str]] = None) -> int:
+def main(argv: Iterable[str] | None = None) -> int:
     args = _parse_args(argv)
     shared_db = Path(args.shared_db).expanduser() if args.shared_db else None
     user_db_base = Path(args.user_db_base).expanduser() if args.user_db_base else None

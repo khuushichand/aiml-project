@@ -9,10 +9,10 @@ API endpoints, ensuring proper validation and serialization.
 """
 
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Union
 from enum import Enum
-from pydantic import BaseModel, Field, field_validator
-from pydantic import ConfigDict
+from typing import Any, Optional
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class DocumentType(str, Enum):
@@ -121,14 +121,14 @@ class GeneratedDocument(BaseModel):
     generation_time_ms: int = Field(..., description="Generation time in milliseconds")
     token_count: Optional[int] = Field(None, description="Token count")
     created_at: datetime = Field(..., description="Creation timestamp")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class DocumentListResponse(BaseModel):
     """Response schema for listing generated documents."""
-    documents: List[GeneratedDocument] = Field(..., description="List of generated documents")
+    documents: list[GeneratedDocument] = Field(..., description="List of generated documents")
     total: int = Field(..., description="Total number of documents")
     conversation_id: Optional[str] = Field(None, description="Conversation ID if filtered")
     document_type: Optional[DocumentType] = Field(None, description="Document type if filtered")
@@ -157,8 +157,8 @@ class PromptConfigResponse(BaseModel):
 
 class BulkGenerateRequest(BaseModel):
     """Request schema for bulk document generation."""
-    conversation_ids: List[str] = Field(..., min_length=1, max_length=50, description="List of conversation IDs")
-    document_types: List[DocumentType] = Field(..., min_length=1, description="Types of documents to generate")
+    conversation_ids: list[str] = Field(..., min_length=1, max_length=50, description="List of conversation IDs")
+    document_types: list[DocumentType] = Field(..., min_length=1, description="Types of documents to generate")
     provider: str = Field(..., min_length=1, description="LLM provider name")
     model: str = Field(..., min_length=1, description="Model name")
     api_key: str = Field(..., min_length=1, description="API key for the provider")
@@ -166,11 +166,11 @@ class BulkGenerateRequest(BaseModel):
 
     @field_validator("conversation_ids", mode="before")
     @classmethod
-    def normalize_conversation_ids(cls, values: Any) -> List[str]:
+    def normalize_conversation_ids(cls, values: Any) -> list[str]:
         """Normalize all conversation IDs to strings for downstream consistency."""
         if not isinstance(values, (list, tuple)):
             raise ValueError("conversation_ids must be a list of identifiers.")
-        normalized: List[str] = []
+        normalized: list[str] = []
         for item in values:
             if isinstance(item, (int, float)):
                 if int(item) <= 0:
@@ -189,7 +189,7 @@ class BulkGenerateRequest(BaseModel):
 class BulkGenerateResponse(BaseModel):
     """Response schema for bulk generation."""
     total_jobs: int = Field(..., description="Total number of generation jobs created")
-    job_ids: List[str] = Field(..., description="List of job IDs for tracking")
+    job_ids: list[str] = Field(..., description="List of job IDs for tracking")
     estimated_time_seconds: Optional[int] = Field(None, description="Estimated completion time")
     message: str = Field(..., description="Status message")
 
@@ -232,7 +232,7 @@ class DocumentTemplateResponse(DocumentTemplateBase):
 
 class TemplateListResponse(BaseModel):
     """Response schema for listing templates."""
-    templates: List[DocumentTemplateResponse] = Field(..., description="List of templates")
+    templates: list[DocumentTemplateResponse] = Field(..., description="List of templates")
     total: int = Field(..., description="Total number of templates")
     document_type: Optional[DocumentType] = Field(None, description="Document type if filtered")
 
@@ -240,8 +240,8 @@ class TemplateListResponse(BaseModel):
 class GenerationStatistics(BaseModel):
     """Statistics for document generation."""
     total_documents: int = Field(..., description="Total documents generated")
-    by_type: Dict[str, int] = Field(..., description="Count by document type")
-    by_provider: Dict[str, int] = Field(..., description="Count by provider")
+    by_type: dict[str, int] = Field(..., description="Count by document type")
+    by_provider: dict[str, int] = Field(..., description="Count by provider")
     average_generation_time_ms: float = Field(..., description="Average generation time")
     total_tokens_used: Optional[int] = Field(None, description="Total tokens used")
     last_generated: Optional[datetime] = Field(None, description="Last generation timestamp")
@@ -270,7 +270,7 @@ class DocumentGeneratorError(BaseModel):
     """Error response for document generator operations."""
     error: str = Field(..., description="Error type")
     message: str = Field(..., description="Error message")
-    details: Optional[Dict[str, Any]] = Field(None, description="Additional error details")
+    details: Optional[dict[str, Any]] = Field(None, description="Additional error details")
 
 
 class QuotaExceededError(DocumentGeneratorError):

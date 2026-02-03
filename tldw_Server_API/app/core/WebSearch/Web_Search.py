@@ -4,24 +4,24 @@
 # Imports
 import asyncio
 import json
-from html import unescape
 import random
 import re
 import time
-from typing import Optional, Dict, Any, List, TypedDict
-from urllib.parse import urlparse, urlencode, unquote
+from html import unescape
+from typing import Any, Optional, TypedDict
+from urllib.parse import unquote, urlencode, urlparse
+
 #
 # 3rd-Party Imports
 from lxml.etree import _Element
 from lxml.html import document_fromstring
 
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
-from tldw_Server_API.app.core.http_client import fetch, fetch_json, RetryPolicy
 #
 # Local Imports
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.http_client import RetryPolicy, fetch
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
     get_adapter_or_raise,
@@ -30,6 +30,7 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
     split_system_message,
 )
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import scrape_article
 from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
@@ -42,7 +43,7 @@ def _websearch_browser_headers(
         *,
         accept_lang: str = "en-US,en;q=0.5",
         referer: str = "https://www.google.com/",
-) -> Dict[str, str]:
+) -> dict[str, str]:
     profile = pick_ua_profile("fixed")
     headers = build_browser_headers(
         profile=profile,
@@ -89,8 +90,8 @@ def _build_messages(
         *,
         system_prompt: Optional[str],
         user_prompt: Optional[str],
-) -> List[Dict[str, str]]:
-    messages: List[Dict[str, str]] = []
+) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     if user_prompt:
@@ -101,11 +102,11 @@ def _build_messages(
 def _call_adapter_text(
         *,
         api_endpoint: str,
-        messages_payload: List[Dict[str, Any]],
+        messages_payload: list[dict[str, Any]],
         temperature: Optional[float] = None,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
         timeout: Optional[float] = None,
         **extra_kwargs: Any,
 ) -> str:
@@ -117,7 +118,7 @@ def _call_adapter_text(
     if not resolved_model:
         raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
     system_message, cleaned_messages = split_system_message(messages_payload or [])
-    request: Dict[str, Any] = {
+    request: dict[str, Any] = {
         "messages": cleaned_messages,
         "system_message": system_message,
         "model": resolved_model,
@@ -142,7 +143,7 @@ def _call_adapter_text(
 
 ######################### Main Orchestration Workflow #########################
 
-def initialize_web_search_results_dict(search_params: Dict) -> Dict:
+def initialize_web_search_results_dict(search_params: dict) -> dict:
     """
     Initializes and returns a dictionary for storing web search results and metadata.
 
@@ -176,7 +177,7 @@ def initialize_web_search_results_dict(search_params: Dict) -> Dict:
     }
 
 
-def generate_and_search(question: str, search_params: Dict) -> Dict:
+def generate_and_search(question: str, search_params: dict) -> dict:
     """
     Generates sub-queries (if enabled) and performs web searches for each query.
 
@@ -272,11 +273,11 @@ def generate_and_search(question: str, search_params: Dict) -> Dict:
 
 
 async def analyze_and_aggregate(
-        web_search_results_dict: Dict,
-        sub_query_dict: Dict,
-        search_params: Dict,
+        web_search_results_dict: dict,
+        sub_query_dict: dict,
+        search_params: dict,
         cancel_event: Optional[asyncio.Event] = None
-) -> Dict:
+) -> dict:
     logging.info("Starting analyze_and_aggregate")
 
     # 4. Score/filter results
@@ -323,7 +324,7 @@ async def analyze_and_aggregate(
 ######################### Question Analysis #########################
 #
 #
-def analyze_question(question: str, api_endpoint) -> Dict:
+def analyze_question(question: str, api_endpoint) -> dict:
     logging.debug(f"Analyzing question: {question} with API endpoint: {api_endpoint}")
     """
     Analyzes the input question and generates sub-questions
@@ -374,7 +375,7 @@ def analyze_question(question: str, api_endpoint) -> Dict:
         user_prompt=input_data,
     )
 
-    sub_questions: List[str] = []
+    sub_questions: list[str] = []
     for attempt in range(3):
         try:
             logging.info(f"Generating sub-questions (attempt {attempt + 1})")
@@ -427,12 +428,12 @@ def analyze_question(question: str, api_endpoint) -> Dict:
 #
 # TODO(websearch): Transition relevance parsing to structured outputs to reduce regex fragility.
 async def search_result_relevance(
-        search_results: List[Dict],
+        search_results: list[dict],
         original_question: str,
-        sub_questions: List[str],
+        sub_questions: list[str],
         api_endpoint: str,
         cancel_event: Optional[asyncio.Event] = None
-) -> Dict[str, Dict]:
+) -> dict[str, dict]:
     """
     Evaluate whether each search result is relevant to the original question and sub-questions.
 
@@ -577,7 +578,7 @@ async def search_result_relevance(
     return relevant_results
 
 
-def review_and_select_results(web_search_results_dict: Dict) -> Dict:
+def review_and_select_results(web_search_results_dict: dict) -> dict:
     """
     Allows the user to review and select relevant results from the search results.
 
@@ -606,15 +607,15 @@ def review_and_select_results(web_search_results_dict: Dict) -> Dict:
 class FinalAnswerDict(TypedDict):
     """Structured payload returned by the aggregation phase."""
     text: str
-    evidence: List[Dict[str, Any]]
+    evidence: list[dict[str, Any]]
     confidence: float
-    chunks: List[Dict[str, Any]]
+    chunks: list[dict[str, Any]]
 
 
 def aggregate_results(
-        relevant_results: Dict[str, Dict],
+        relevant_results: dict[str, dict],
         question: str,
-        sub_questions: List[str],
+        sub_questions: list[str],
         api_endpoint: Optional[str]
 ) -> FinalAnswerDict:
     """
@@ -645,11 +646,11 @@ def aggregate_results(
     logging.info("Summarizing relevant results")
 
     def _build_chunk_infos(
-            items: List[tuple[str, Dict[str, Any]]],
+            items: list[tuple[str, dict[str, Any]]],
             max_chars: int = 6000
-    ) -> List[Dict[str, Any]]:
-        chunk_infos: List[Dict[str, Any]] = []
-        current_entries: List[tuple[str, str]] = []
+    ) -> list[dict[str, Any]]:
+        chunk_infos: list[dict[str, Any]] = []
+        current_entries: list[tuple[str, str]] = []
         current_length = 0
 
         def flush_entries() -> None:
@@ -706,13 +707,13 @@ def aggregate_results(
 
     result_items = list(relevant_results.items())
     chunk_infos = _build_chunk_infos(result_items)
-    chunk_assignments: Dict[str, int] = {}
+    chunk_assignments: dict[str, int] = {}
     for info in chunk_infos:
         for rid in info["result_ids"]:
             chunk_assignments[rid] = info["index"]
 
-    chunk_metadata: List[Dict[str, Any]] = []
-    evidence_payload: List[Dict[str, Any]] = []
+    chunk_metadata: list[dict[str, Any]] = []
+    evidence_payload: list[dict[str, Any]] = []
 
     for rid, res in relevant_results.items():
         evidence_payload.append({
@@ -744,7 +745,7 @@ def aggregate_results(
         }
         return fallback_answer
 
-    summarized_chunks: List[str] = []
+    summarized_chunks: list[str] = []
     failed_chunks = 0
 
     for info in chunk_infos:
@@ -1099,7 +1100,7 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
 ######################### Search Result Parsing ##################################################################
 #
 
-def process_web_search_results(search_results: Dict, search_engine: str) -> Dict:
+def process_web_search_results(search_results: dict, search_engine: str) -> dict:
     """
     Processes search results from a search engine and formats them into a standardized dictionary structure.
 
@@ -1296,7 +1297,7 @@ def search_web_bing(search_query, bing_lang, bing_country, result_count=None, bi
         raise ex
 
 
-def parse_bing_results(raw_results: Dict, output_dict: Dict) -> None:
+def parse_bing_results(raw_results: dict, output_dict: dict) -> None:
     """
     Parse Bing search results and update the output dictionary
 
@@ -1380,8 +1381,8 @@ def search_web_brave(
         result_filter: Optional[str] = None,
         search_type: str = "ai",
         date_range: Optional[str] = None,
-        site_blacklist: Optional[List[str]] = None
-) -> Dict[str, Any]:
+        site_blacklist: Optional[list[str]] = None
+) -> dict[str, Any]:
     search_url = "https://api.search.brave.com/res/v1/web/search"
 
     search_engines_cfg = loaded_config_data.get("search_engines", {})
@@ -1407,7 +1408,7 @@ def search_web_brave(
         "X-Subscription-Token": brave_api_key
     }
 
-    params: Dict[str, Any] = {
+    params: dict[str, Any] = {
         "q": search_term,
         "count": result_count,
         "freshness": date_range,
@@ -1432,7 +1433,7 @@ def search_web_brave(
     return brave_search_results
 
 
-def parse_brave_results(raw_results: Dict, output_dict: Dict) -> None:
+def parse_brave_results(raw_results: dict, output_dict: dict) -> None:
     """
     Parse Brave search results and update the output dictionary
 
@@ -1586,7 +1587,7 @@ def search_web_duckduckgo(
 
 
 
-def parse_duckduckgo_results(raw_results: Dict, output_dict: Dict) -> None:
+def parse_duckduckgo_results(raw_results: dict, output_dict: dict) -> None:
     """
     Parse DuckDuckGo search results and update the output dictionary
 
@@ -1685,7 +1686,7 @@ def search_web_google(
         siteSearch: Optional[str] = None,
         siteSearchFilter: Optional[str] = None,
         sort_results_by: Optional[str] = None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Perform a Google web search with the given parameters.
 
@@ -1715,7 +1716,7 @@ def search_web_google(
         logging.info(f"Using search URL: {search_url}")
 
         # Initialize params dictionary
-        params: Dict[str, Any] = {"q": search_query}
+        params: dict[str, Any] = {"q": search_query}
 
         # Handle c2coff
         if c2coff is None:
@@ -1798,7 +1799,7 @@ def search_web_google(
 
 
 
-def parse_google_results(raw_results: Dict, output_dict: Dict) -> None:
+def parse_google_results(raw_results: dict, output_dict: dict) -> None:
     """
     Parse Google Custom Search API results and update the output dictionary.
 
@@ -1898,7 +1899,7 @@ def parse_google_results(raw_results: Dict, output_dict: Dict) -> None:
 ######################### Kagi Search #########################
 #
 # https://help.kagi.com/kagi/api/search.html
-def search_web_kagi(query: str, limit: int = 10) -> Dict:
+def search_web_kagi(query: str, limit: int = 10) -> dict:
     search_url = "https://kagi.com/api/v0/search"
 
     # load key from config file
@@ -1924,7 +1925,7 @@ def search_web_kagi(query: str, limit: int = 10) -> Dict:
 
 
 
-def parse_kagi_results(raw_results: Dict, output_dict: Dict) -> None:
+def parse_kagi_results(raw_results: dict, output_dict: dict) -> None:
     """
     Parse Kagi search results and update the output dictionary
 
@@ -2150,7 +2151,7 @@ def parse_yandex_results(yandex_search_results, web_search_results_dict):
 #
 # End of Web_Search.py
 #######################################################################################################################
-def brave_http_get(url: str, *, headers: Dict[str, str], params: Dict[str, Any]):
+def brave_http_get(url: str, *, headers: dict[str, str], params: dict[str, Any]):
     """Wrapper seam for Brave HTTP GET used by tests to monkeypatch easily.
 
     Production path routes through centralized http client with retries and egress checks.

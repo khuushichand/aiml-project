@@ -1,20 +1,19 @@
 from __future__ import annotations
 
-from typing import List, Optional
-
 import json
+
 from fastapi import Form, HTTPException, status
 from loguru import logger
 from pydantic import ValidationError
 
 from tldw_Server_API.app.api.v1.schemas.media_request_models import (
+    TRANSCRIPTION_MODEL_ENUM,
     ProcessAudiosForm,
     ProcessDocumentsForm,
-    ProcessVideosForm,
-    ProcessPDFsForm,
     ProcessEbooksForm,
     ProcessEmailsForm,
-    TRANSCRIPTION_MODEL_ENUM,
+    ProcessPDFsForm,
+    ProcessVideosForm,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
     resolve_default_transcription_model,
@@ -26,7 +25,7 @@ except AttributeError:  # Starlette < 0.27
     HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
-def _coerce_urls(urls: Optional[List[str]]) -> Optional[List[str]]:
+def _coerce_urls(urls: list[str] | None) -> list[str] | None:
     """
     Normalize urls form input into a list of strings.
 
@@ -65,7 +64,7 @@ def _coerce_urls(urls: Optional[List[str]]) -> Optional[List[str]]:
 
 
 def _resolve_transcription_model_or_default(
-    transcription_model: Optional[str],
+    transcription_model: str | None,
     *,
     fallback_whisper_model: str,
     context: str,
@@ -107,26 +106,26 @@ def _raise_422(exc: ValidationError) -> None:
 
 
 async def get_process_documents_form(
-    urls: Optional[List[str]] = Form(None),
-    title: Optional[str] = Form(None),
-    titles: Optional[str] = Form(None),
-    author: Optional[str] = Form(None),
-    keywords: Optional[str] = Form(None),
-    keywords_str: Optional[str] = Form(None),
-    custom_prompt: Optional[str] = Form(None),
-    system_prompt: Optional[str] = Form(None),
+    urls: list[str] | None = Form(None),
+    title: str | None = Form(None),
+    titles: str | None = Form(None),
+    author: str | None = Form(None),
+    keywords: str | None = Form(None),
+    keywords_str: str | None = Form(None),
+    custom_prompt: str | None = Form(None),
+    system_prompt: str | None = Form(None),
     keep_original_file: bool = Form(False),
     perform_analysis: bool = Form(True),
     perform_chunking: bool = Form(True),
     summarize_recursively: bool = Form(False),
-    chunk_method: Optional[str] = Form(None),
+    chunk_method: str | None = Form(None),
     chunk_size: int = Form(500),
     chunk_overlap: int = Form(200),
-    api_provider: Optional[str] = Form(None),
-    model_name: Optional[str] = Form(None),
-    api_name: Optional[str] = Form(None),
+    api_provider: str | None = Form(None),
+    model_name: str | None = Form(None),
+    api_name: str | None = Form(None),
     use_cookies: bool = Form(False),
-    cookies: Optional[str] = Form(None),
+    cookies: str | None = Form(None),
 ) -> ProcessDocumentsForm:
     """
     Dependency that parses multipart/form-data into a ProcessDocumentsForm.
@@ -164,17 +163,17 @@ async def get_process_documents_form(
 
 
 async def get_process_videos_form(
-    urls: Optional[List[str]] = Form(None),
-    title: Optional[str] = Form(None),
-    titles: Optional[str] = Form(None),
-    author: Optional[str] = Form(None),
+    urls: list[str] | None = Form(None),
+    title: str | None = Form(None),
+    titles: str | None = Form(None),
+    author: str | None = Form(None),
     keywords: str = Form(""),
-    custom_prompt: Optional[str] = Form(None),
-    system_prompt: Optional[str] = Form(None),
+    custom_prompt: str | None = Form(None),
+    system_prompt: str | None = Form(None),
     perform_analysis: bool = Form(True),
     perform_chunking: bool = Form(True),
     summarize_recursively: bool = Form(False),
-    transcription_model: Optional[str] = Form(
+    transcription_model: str | None = Form(
         None,
         description="Transcription model for video audio tracks (defaults to config when omitted)",
         json_schema_extra={"enum": TRANSCRIPTION_MODEL_ENUM},
@@ -184,14 +183,14 @@ async def get_process_videos_form(
     timestamp_option: bool = Form(True),
     vad_use: bool = Form(False),
     perform_confabulation_check_of_analysis: bool = Form(False),
-    start_time: Optional[str] = Form(None),
-    end_time: Optional[str] = Form(None),
-    api_provider: Optional[str] = Form(None),
-    model_name: Optional[str] = Form(None),
-    api_name: Optional[str] = Form(None),
+    start_time: str | None = Form(None),
+    end_time: str | None = Form(None),
+    api_provider: str | None = Form(None),
+    model_name: str | None = Form(None),
+    api_name: str | None = Form(None),
     use_cookies: bool = Form(False),
-    cookies: Optional[str] = Form(None),
-    chunk_method: Optional[str] = Form(None),
+    cookies: str | None = Form(None),
+    chunk_method: str | None = Form(None),
     chunk_size: int = Form(500),
     chunk_overlap: int = Form(200),
 ) -> ProcessVideosForm:
@@ -240,17 +239,17 @@ async def get_process_videos_form(
 
 
 async def get_process_audios_form(
-    urls: Optional[List[str]] = Form(None),
-    title: Optional[str] = Form(None),
-    titles: Optional[str] = Form(None),
-    author: Optional[str] = Form(None),
+    urls: list[str] | None = Form(None),
+    title: str | None = Form(None),
+    titles: str | None = Form(None),
+    author: str | None = Form(None),
     keywords: str = Form(""),
-    custom_prompt: Optional[str] = Form(None),
-    system_prompt: Optional[str] = Form(None),
+    custom_prompt: str | None = Form(None),
+    system_prompt: str | None = Form(None),
     perform_analysis: bool = Form(True),
     perform_chunking: bool = Form(True),
     summarize_recursively: bool = Form(False),
-    transcription_model: Optional[str] = Form(
+    transcription_model: str | None = Form(
         None,
         description="Transcription model for audio inputs (defaults to config when omitted)",
         json_schema_extra={"enum": TRANSCRIPTION_MODEL_ENUM},
@@ -260,14 +259,14 @@ async def get_process_audios_form(
     timestamp_option: bool = Form(True),
     vad_use: bool = Form(False),
     perform_confabulation_check_of_analysis: bool = Form(False),
-    start_time: Optional[str] = Form(None),
-    end_time: Optional[str] = Form(None),
-    api_provider: Optional[str] = Form(None),
-    model_name: Optional[str] = Form(None),
-    api_name: Optional[str] = Form(None),
+    start_time: str | None = Form(None),
+    end_time: str | None = Form(None),
+    api_provider: str | None = Form(None),
+    model_name: str | None = Form(None),
+    api_name: str | None = Form(None),
     use_cookies: bool = Form(False),
-    cookies: Optional[str] = Form(None),
-    chunk_method: Optional[str] = Form(None),
+    cookies: str | None = Form(None),
+    chunk_method: str | None = Form(None),
     chunk_size: int = Form(500),
     chunk_overlap: int = Form(200),
 ) -> ProcessAudiosForm:
@@ -316,32 +315,32 @@ async def get_process_audios_form(
 
 
 async def get_process_pdfs_form(
-    urls: Optional[List[str]] = Form(None),
-    title: Optional[str] = Form(None),
-    author: Optional[str] = Form(None),
+    urls: list[str] | None = Form(None),
+    title: str | None = Form(None),
+    author: str | None = Form(None),
     keywords: str = Form(""),
-    custom_prompt: Optional[str] = Form(None),
-    system_prompt: Optional[str] = Form(None),
+    custom_prompt: str | None = Form(None),
+    system_prompt: str | None = Form(None),
     perform_analysis: bool = Form(True),
     perform_chunking: bool = Form(True),
     summarize_recursively: bool = Form(False),
-    chunk_method: Optional[str] = Form(None),
+    chunk_method: str | None = Form(None),
     chunk_size: int = Form(500),
     chunk_overlap: int = Form(200),
     auto_apply_template: bool = Form(False),
-    chunking_template_name: Optional[str] = Form(None),
+    chunking_template_name: str | None = Form(None),
     pdf_parsing_engine: str = Form("pymupdf4llm"),
     enable_ocr: bool = Form(False),
-    ocr_backend: Optional[str] = Form(None),
-    ocr_lang: Optional[str] = Form("eng"),
+    ocr_backend: str | None = Form(None),
+    ocr_lang: str | None = Form("eng"),
     ocr_dpi: int = Form(300),
-    ocr_mode: Optional[str] = Form("fallback"),
+    ocr_mode: str | None = Form("fallback"),
     ocr_min_page_text_chars: int = Form(40),
-    ocr_output_format: Optional[str] = Form(None),
-    ocr_prompt_preset: Optional[str] = Form(None),
+    ocr_output_format: str | None = Form(None),
+    ocr_prompt_preset: str | None = Form(None),
     use_adaptive_chunking: bool = Form(False),
     use_multi_level_chunking: bool = Form(False),
-    chunk_language: Optional[str] = Form(None),
+    chunk_language: str | None = Form(None),
 ) -> ProcessPDFsForm:
     try:
         urls_norm = _coerce_urls(urls)
@@ -378,24 +377,24 @@ async def get_process_pdfs_form(
 
 
 async def get_process_ebooks_form(
-    urls: Optional[List[str]] = Form(None),
-    title: Optional[str] = Form(None),
-    author: Optional[str] = Form(None),
-    keywords: Optional[str] = Form(None),
-    keywords_str: Optional[str] = Form(None),
-    custom_prompt: Optional[str] = Form(None),
-    system_prompt: Optional[str] = Form(None),
+    urls: list[str] | None = Form(None),
+    title: str | None = Form(None),
+    author: str | None = Form(None),
+    keywords: str | None = Form(None),
+    keywords_str: str | None = Form(None),
+    custom_prompt: str | None = Form(None),
+    system_prompt: str | None = Form(None),
     perform_analysis: bool = Form(True),
     perform_chunking: bool = Form(True),
     summarize_recursively: bool = Form(False),
-    chunk_method: Optional[str] = Form(None),
+    chunk_method: str | None = Form(None),
     chunk_size: int = Form(500),
     chunk_overlap: int = Form(200),
-    chunk_language: Optional[str] = Form(None),
-    custom_chapter_pattern: Optional[str] = Form(None),
+    chunk_language: str | None = Form(None),
+    custom_chapter_pattern: str | None = Form(None),
     extraction_method: str = Form("filtered"),
-    api_name: Optional[str] = Form(None),
-    api_key: Optional[str] = Form(None),
+    api_name: str | None = Form(None),
+    api_key: str | None = Form(None),
 ) -> ProcessEbooksForm:
     try:
         urls_norm = _coerce_urls(urls)
@@ -426,23 +425,23 @@ async def get_process_ebooks_form(
 
 
 async def get_process_emails_form(
-    urls: Optional[List[str]] = Form(None),
-    title: Optional[str] = Form(None),
-    author: Optional[str] = Form(None),
+    urls: list[str] | None = Form(None),
+    title: str | None = Form(None),
+    author: str | None = Form(None),
     keywords: str = Form(""),
-    custom_prompt: Optional[str] = Form(None),
-    system_prompt: Optional[str] = Form(None),
+    custom_prompt: str | None = Form(None),
+    system_prompt: str | None = Form(None),
     overwrite_existing: bool = Form(False),
     perform_analysis: bool = Form(False),
-    perform_claims_extraction: Optional[bool] = Form(None),
-    claims_extractor_mode: Optional[str] = Form(None),
-    claims_max_per_chunk: Optional[int] = Form(None),
+    perform_claims_extraction: bool | None = Form(None),
+    claims_extractor_mode: str | None = Form(None),
+    claims_max_per_chunk: int | None = Form(None),
     perform_chunking: bool = Form(True),
-    chunk_method: Optional[str] = Form("sentences"),
-    chunk_language: Optional[str] = Form(None),
+    chunk_method: str | None = Form("sentences"),
+    chunk_language: str | None = Form(None),
     chunk_size: int = Form(1000),
     chunk_overlap: int = Form(200),
-    custom_chapter_pattern: Optional[str] = Form(None),
+    custom_chapter_pattern: str | None = Form(None),
     use_adaptive_chunking: bool = Form(False),
     use_multi_level_chunking: bool = Form(False),
     accept_archives: bool = Form(False),

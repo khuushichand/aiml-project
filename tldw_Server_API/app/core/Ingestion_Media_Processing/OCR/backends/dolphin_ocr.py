@@ -6,9 +6,9 @@ import io
 import json
 import os
 import tempfile
-from urllib.parse import urlparse
 import threading
-from typing import Any, Dict, Optional
+from typing import Any
+from urllib.parse import urlparse
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import (
@@ -16,7 +16,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import (
     normalize_ocr_format,
 )
 from tldw_Server_API.app.core.Utils.Utils import logging
-
 
 _TF_MODEL = None
 _TF_PROCESSOR = None
@@ -46,7 +45,7 @@ def _resolve_remote_mode() -> str:
     return "dolphin_trt"
 
 
-_PROMPT_PRESETS: Dict[str, str] = {
+_PROMPT_PRESETS: dict[str, str] = {
     "general": "Extract all visible text from the image.",
     "doc": "Parse the document and return all text in Markdown. Render tables as Markdown.",
     "table": "Extract tables as Markdown. Return all other text in Markdown.",
@@ -110,7 +109,7 @@ class DolphinOCRBackend(OCRBackend):
 
     def describe(self) -> dict:
         mode = _resolve_mode()
-        info: Dict[str, Any] = {
+        info: dict[str, Any] = {
             "mode": mode,
             "remote_mode": _resolve_remote_mode(),
             "prompt": os.getenv("DOLPHIN_PROMPT"),
@@ -135,16 +134,16 @@ class DolphinOCRBackend(OCRBackend):
             )
         return info
 
-    def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
+    def ocr_image(self, image_bytes: bytes, lang: str | None = None) -> str:
         result = self.ocr_image_structured(image_bytes, lang=lang, output_format="markdown")
         return result.text or ""
 
     def ocr_image_structured(
         self,
         image_bytes: bytes,
-        lang: Optional[str] = None,
-        output_format: Optional[str] = None,
-        prompt_preset: Optional[str] = None,
+        lang: str | None = None,
+        output_format: str | None = None,
+        prompt_preset: str | None = None,
     ) -> OCRResult:
         if not self.available():
             logging.warning("DolphinOCRBackend not available: set DOLPHIN_URL or install transformers+torch+Pillow.")
@@ -204,7 +203,7 @@ class DolphinOCRBackend(OCRBackend):
         return result
 
 
-def _resolve_prompt(prompt_preset: Optional[str], output_format: Optional[str]) -> str:
+def _resolve_prompt(prompt_preset: str | None, output_format: str | None) -> str:
     env_prompt = os.getenv("DOLPHIN_PROMPT")
     if env_prompt:
         return env_prompt
@@ -221,7 +220,7 @@ def _resolve_prompt(prompt_preset: Optional[str], output_format: Optional[str]) 
     return _PROMPT_PRESETS.get(preset, _PROMPT_PRESETS["doc"])
 
 
-def _resolve_json_prompt(prompt_preset: Optional[str], output_format: Optional[str]) -> str:
+def _resolve_json_prompt(prompt_preset: str | None, output_format: str | None) -> str:
     if _bool_env("DOLPHIN_DISABLE_JSON", False):
         return ""
 
@@ -275,7 +274,7 @@ def _ocr_via_generate(image_bytes: bytes, prompt: str, remote_mode: str) -> str:
     if not url.endswith("/generate"):
         url = f"{url}/generate"
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "image_base64": base64.b64encode(image_bytes).decode("ascii"),
         "stream": False,
     }
@@ -354,8 +353,8 @@ def _load_transformers():
         if _TF_MODEL is not None and _TF_PROCESSOR is not None and _TF_TOKENIZER is not None:
             return _TF_MODEL, _TF_PROCESSOR, _TF_TOKENIZER, _TF_DEVICE, _TF_DTYPE
 
-        from transformers import AutoProcessor, VisionEncoderDecoderModel
         import torch
+        from transformers import AutoProcessor, VisionEncoderDecoderModel
 
         model_path = os.getenv("DOLPHIN_MODEL_PATH", "ByteDance/Dolphin-v2")
         device_env = os.getenv("DOLPHIN_DEVICE")
@@ -406,7 +405,7 @@ def _ocr_via_transformers(image_bytes: bytes, prompt: str) -> str:
     prompt_input_ids = prompt_inputs["input_ids"].to(device)
     prompt_attention_mask = prompt_inputs["attention_mask"].to(device)
 
-    generation_kwargs: Dict[str, Any] = {
+    generation_kwargs: dict[str, Any] = {
         "max_length": _getf("DOLPHIN_MAX_LENGTH", int, 4096),
         "max_new_tokens": _getf("DOLPHIN_MAX_NEW_TOKENS", int, 2048),
         "repetition_penalty": _getf("DOLPHIN_REPETITION_PENALTY", float, 1.0),
@@ -435,7 +434,7 @@ def _ocr_via_transformers(image_bytes: bytes, prompt: str) -> str:
     return sequence
 
 
-def _apply_generation_params(payload: Dict[str, Any]) -> None:
+def _apply_generation_params(payload: dict[str, Any]) -> None:
     payload["max_new_tokens"] = _getf("DOLPHIN_MAX_NEW_TOKENS", int, 2048)
     if "messages" in payload:
         payload["max_tokens"] = payload["max_new_tokens"]
@@ -479,7 +478,7 @@ def _is_local_url(url: str) -> bool:
         return False
 
 
-def _try_parse_json(raw_text: str) -> Optional[Any]:
+def _try_parse_json(raw_text: str) -> Any | None:
     if not raw_text:
         return None
     txt = raw_text.strip()

@@ -1,10 +1,11 @@
 from __future__ import annotations
-from typing import Generator
-from pathlib import Path
-import os
+
 import inspect
-import numpy as np
 import re
+from collections.abc import Generator
+from pathlib import Path
+
+import numpy as np
 
 # Defer heavy imports; set to None if missing and import lazily where needed
 try:  # pragma: no cover
@@ -27,7 +28,7 @@ except Exception:  # pragma: no cover - dev env fallback
         perth = None  # type: ignore
 
 try:
-    from neucodec import NeuCodec, DistillNeuCodec  # type: ignore
+    from neucodec import DistillNeuCodec, NeuCodec  # type: ignore
 except Exception:  # pragma: no cover - adapter will gracefully handle missing dep
     NeuCodec = None  # type: ignore
     DistillNeuCodec = None  # type: ignore
@@ -145,7 +146,8 @@ class NeuTTSAir:
             global AutoTokenizer, AutoModelForCausalLM
             if AutoTokenizer is None or AutoModelForCausalLM is None:
                 try:
-                    from transformers import AutoTokenizer as _AT, AutoModelForCausalLM as _AM  # type: ignore
+                    from transformers import AutoModelForCausalLM as _AM
+                    from transformers import AutoTokenizer as _AT  # type: ignore
                     AutoTokenizer, AutoModelForCausalLM = _AT, _AM
                 except Exception as e:  # pragma: no cover
                     raise ImportError(

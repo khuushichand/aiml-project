@@ -3,20 +3,22 @@
 #
 # Imports
 import asyncio
-import json
-import time
-import threading
 import concurrent.futures
-from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Dict, Iterator, Optional, Union, Tuple, List
-from loguru import logger
+import json
 
 #######################################################################################################################
 #
 # Constants:
-
 # Load configuration values
 import os
+import threading
+import time
+from collections.abc import AsyncIterator, Iterator
+from datetime import datetime, timezone
+from typing import Any, Optional, Union
+
+from loguru import logger
+
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
 _config = load_comprehensive_config()
@@ -122,7 +124,7 @@ except (ValueError, TypeError) as exc:
 #
 # Functions:
 
-def _extract_text_from_upstream_sse(chunk_str: str) -> Tuple[Optional[str], Optional[Dict[str, Any]], bool]:
+def _extract_text_from_upstream_sse(chunk_str: str) -> tuple[Optional[str], Optional[dict[str, Any]], bool]:
     """
     Normalize provider-emitted SSE frames to plain text content.
 
@@ -224,10 +226,10 @@ async def _async_iter_sync_stream(
     """
     loop = asyncio.get_running_loop()
     maxsize = max(int(queue_maxsize or 0), 1)
-    queue: asyncio.Queue[Tuple[str, Any]] = asyncio.Queue(maxsize=maxsize)
+    queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=maxsize)
     stop_event = threading.Event()
 
-    def _queue_put(item: Tuple[str, Any]) -> None:
+    def _queue_put(item: tuple[str, Any]) -> None:
         if loop.is_closed():
             return
         try:
@@ -320,7 +322,7 @@ class StreamingResponseHandler:
         self.max_response_size = max_response_size
         self.last_activity = time.time()
         self.is_cancelled = False
-        self.full_response: List[str] = []
+        self.full_response: list[str] = []
         self.response_size = 0
         self.error_occurred = False
         # Optional transform to apply to textual deltas before emission (e.g., moderation redaction)
@@ -330,15 +332,15 @@ class StreamingResponseHandler:
         # Track upstream DONE so we can defer the terminal sentinel until after metadata.
         self.upstream_done_received = False
         # Accumulate tool/function call deltas for persistence once the stream completes
-        self.tool_call_accumulator: Dict[int, Dict[str, Any]] = {}
-        self.tool_call_order: List[int] = []
-        self.function_call_accumulator: Optional[Dict[str, Any]] = None
+        self.tool_call_accumulator: dict[int, dict[str, Any]] = {}
+        self.tool_call_order: list[int] = []
+        self.function_call_accumulator: Optional[dict[str, Any]] = None
         self.saved_message_id: Optional[str] = None
         self.system_message_id: Optional[str] = None
         # Lock for thread-safe state modifications
         self._state_lock = asyncio.Lock()
 
-    def _attach_stream_metadata(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _attach_stream_metadata(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict):
             return payload
         if not CHAT_STREAM_INCLUDE_METADATA:
@@ -365,7 +367,7 @@ class StreamingResponseHandler:
         self.is_cancelled = True
         logger.info(f"Stream cancelled for conversation {self.conversation_id}")
 
-    def _accumulate_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> None:
+    def _accumulate_tool_calls(self, tool_calls: list[dict[str, Any]]) -> None:
         """Merge incremental tool call deltas into a final structure.
 
         This method includes bounds checking to prevent memory exhaustion from
@@ -422,7 +424,7 @@ class StreamingResponseHandler:
                 else:
                     accumulator["function"]["arguments"] += new_args
 
-    def _accumulate_function_call(self, function_delta: Dict[str, Any]) -> None:
+    def _accumulate_function_call(self, function_delta: dict[str, Any]) -> None:
         """Merge incremental function call deltas into a final structure."""
         if not isinstance(function_delta, dict):
             return
@@ -444,12 +446,12 @@ class StreamingResponseHandler:
             else:
                 self.function_call_accumulator["arguments"] += new_args
 
-    def get_accumulated_tool_calls(self) -> Optional[List[Dict[str, Any]]]:
+    def get_accumulated_tool_calls(self) -> Optional[list[dict[str, Any]]]:
         """Return the finalized list of tool calls, if any were streamed."""
         if not self.tool_call_accumulator:
             return None
         ordered_indices = sorted(set(self.tool_call_order))
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for index in ordered_indices:
             data = self.tool_call_accumulator.get(index)
             if not data:
@@ -467,7 +469,7 @@ class StreamingResponseHandler:
             )
         return results or None
 
-    def get_accumulated_function_call(self) -> Optional[Dict[str, Any]]:
+    def get_accumulated_function_call(self) -> Optional[dict[str, Any]]:
         """Return the finalized function call payload, if one was streamed."""
         if not self.function_call_accumulator:
             return None
@@ -529,7 +531,7 @@ class StreamingResponseHandler:
             yield f"event: stream_start\ndata: {json.dumps(start_payload)}\n\n"
             self.update_activity()
 
-            def iter_logical_lines(raw_chunk: str) -> List[str]:
+            def iter_logical_lines(raw_chunk: str) -> list[str]:
                 return raw_chunk.splitlines() if ("\n" in raw_chunk or raw_chunk.count("data:") > 1) else [raw_chunk]
 
             def append_content(text_piece: str) -> bool:
@@ -548,8 +550,8 @@ class StreamingResponseHandler:
                 self.response_size += chunk_size
                 return True
 
-            def process_line(raw_line: str) -> Tuple[List[str], bool]:
-                outputs: List[str] = []
+            def process_line(raw_line: str) -> tuple[list[str], bool]:
+                outputs: list[str] = []
                 stripped_leading = raw_line.lstrip("\ufeff\u200b\u200c\u200d\u2060")
                 candidate = stripped_leading.strip()
                 if not candidate and not stripped_leading:

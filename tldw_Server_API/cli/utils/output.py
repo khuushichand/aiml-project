@@ -7,16 +7,16 @@ progress indicators, and rich formatting.
 
 import json
 import sys
-from typing import Dict, List, Any, Optional
 from datetime import datetime
+from typing import Any, Optional
 
 from rich.console import Console
-from rich.table import Table
-from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn
 from rich.json import JSON
 from rich.panel import Panel
-from rich.tree import Tree
+from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
 from rich.syntax import Syntax
+from rich.table import Table
+from rich.tree import Tree
 from tabulate import tabulate
 
 # Global console instance
@@ -62,7 +62,7 @@ def print_json(data: Any, title: Optional[str] = None):
     console.print(json_renderable)
 
 
-def print_table(data: List[Dict[str, Any]], title: Optional[str] = None, format_style: str = "rich"):
+def print_table(data: list[dict[str, Any]], title: Optional[str] = None, format_style: str = "rich"):
     """
     Print data as a formatted table.
 
@@ -81,7 +81,7 @@ def print_table(data: List[Dict[str, Any]], title: Optional[str] = None, format_
         _print_simple_table(data, title)
 
 
-def _print_rich_table(data: List[Dict[str, Any]], title: Optional[str] = None):
+def _print_rich_table(data: list[dict[str, Any]], title: Optional[str] = None):
     """Print table using Rich formatting."""
     if not data:
         return
@@ -102,7 +102,7 @@ def _print_rich_table(data: List[Dict[str, Any]], title: Optional[str] = None):
     console.print(table)
 
 
-def _print_simple_table(data: List[Dict[str, Any]], title: Optional[str] = None):
+def _print_simple_table(data: list[dict[str, Any]], title: Optional[str] = None):
     """Print table using tabulate."""
     if not data:
         return
@@ -114,7 +114,7 @@ def _print_simple_table(data: List[Dict[str, Any]], title: Optional[str] = None)
     print(tabulate(data, headers="keys", tablefmt="grid"))
 
 
-def print_health_status(health_data: Dict[str, Any]):
+def print_health_status(health_data: dict[str, Any]):
     """Print health status with color coding."""
     status = health_data.get("status", "unknown")
 
@@ -158,7 +158,7 @@ def print_health_status(health_data: Dict[str, Any]):
         console.print(components_tree)
 
 
-def print_metrics_summary(metrics: Dict[str, Any]):
+def print_metrics_summary(metrics: dict[str, Any]):
     """Print metrics in a formatted summary."""
     console.print("\n[bold]Metrics Summary[/bold]")
 
@@ -181,7 +181,7 @@ def print_metrics_summary(metrics: Dict[str, Any]):
     console.print(table)
 
 
-def print_config_section(config: Dict[str, Any], section: Optional[str] = None):
+def print_config_section(config: dict[str, Any], section: Optional[str] = None):
     """Print configuration section with syntax highlighting."""
     if section:
         if section in config:
@@ -209,7 +209,7 @@ def print_progress_bar(total: int, description: str = "Processing"):
     )
 
 
-def print_evaluation_results(results: Dict[str, Any]):
+def print_evaluation_results(results: dict[str, Any]):
     """Print evaluation results in a formatted way."""
     console.print("\n[bold]Evaluation Results[/bold]")
 

@@ -4,15 +4,16 @@ Metrics collection for the chunking system.
 Uses Prometheus client for metrics export.
 """
 
-from typing import Optional, Dict, Any
-from functools import wraps
 import threading
 import time
+from functools import wraps
+from typing import Optional
+
 from loguru import logger
 
 # Try to import prometheus_client
 try:
-    from prometheus_client import Counter, Histogram, Gauge, Summary
+    from prometheus_client import Counter, Gauge, Histogram, Summary
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False

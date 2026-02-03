@@ -2,93 +2,91 @@
 # Description: Authentication endpoints for user login, logout, refresh, and registration
 #
 # Imports
-from typing import Dict, Any, Optional, List
-import os
 import base64
 import json
+import os
+import re
 import secrets
 import string
-import re
-from datetime import datetime, timezone, timedelta
+import time
+from datetime import datetime, timedelta, timezone
 from importlib import import_module
+from typing import Any, Optional
+
 #
 # 3rd-party imports
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Form, Query
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel, EmailStr, Field
 from loguru import logger
-import time
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from pydantic import BaseModel, EmailStr, Field
+
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+    get_or_create_audit_service_for_user_id,
+)
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    check_auth_rate_limit,
+    get_current_active_user,
+    get_current_user,
+    get_db_transaction,
+    get_jwt_service_dep,
+    get_password_service_dep,
+    get_rate_limiter_dep,
+    get_registration_service_dep,
+    get_session_manager_dep,
+)
+
 #
 # Local imports
 from tldw_Server_API.app.api.v1.schemas.auth_schemas import (
-    LoginRequest,
-    TokenResponse,
+    DeprecatedUserResponse,
+    MagicLinkRequest,
+    MagicLinkVerifyRequest,
+    MessageResponse,
+    MFAChallengeResponse,
     RefreshTokenRequest,
     RegisterRequest,
     RegistrationResponse,
-    MessageResponse,
-    UserResponse,
-    DeprecatedUserResponse,
     SessionResponse,
-    MFAChallengeResponse,
-    MagicLinkRequest,
-    MagicLinkVerifyRequest,
+    TokenResponse,
 )
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-    get_db_transaction,
-    get_password_service_dep,
-    get_jwt_service_dep,
-    get_session_manager_dep,
-    get_rate_limiter_dep,
-    get_registration_service_dep,
-    get_current_user,
-    get_current_active_user,
-    check_auth_rate_limit
-)
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.csrf_protection import (
     global_settings as _csrf_globals,
 )
-from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
-from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
-from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
-from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.exceptions import (
+    DatabaseError,
+    DuplicateOrganizationError,
+    DuplicateUserError,
+    InvalidRegistrationCodeError,
+    InvalidTokenError,
+    RegistrationError,
+    SessionError,
+    TokenExpiredError,
+    WeakPasswordError,
+)
 from tldw_Server_API.app.core.AuthNZ.input_validation import get_input_validator
-from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
-from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
-from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError
-from tldw_Server_API.app.services.registration_service import RegistrationService
-from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings, get_profile
-from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
     is_single_user_ip_allowed,
     resolve_client_ip,
 )
-from tldw_Server_API.app.core.Audit.unified_audit_service import (
-    AuditEventType,
-    AuditContext
-)
-from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
-    get_or_create_audit_service_for_user_id,
-)
-from tldw_Server_API.app.core.AuthNZ.exceptions import (
-    InvalidTokenError,
-    TokenExpiredError,
-    RegistrationError,
-    DuplicateUserError,
-    WeakPasswordError,
-    InvalidRegistrationCodeError,
-    DatabaseError,
-    SessionError,
-)
+from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
+from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
+from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
+from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
+from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_profile, get_settings
+from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.services.auth_service import (
-    fetch_user_by_login_identifier,
-    update_user_password_hash,
-    update_user_last_login,
     fetch_active_user_by_id,
+    fetch_user_by_login_identifier,
+    update_user_last_login,
+    update_user_password_hash,
 )
+from tldw_Server_API.app.services.registration_service import RegistrationService
 
 #######################################################################################################################
 #
@@ -112,7 +110,7 @@ def _extract_bearer_token(auth_header: Optional[str]) -> str:
     except Exception:
         return ""
 
-def _build_deprecation_headers(successor: str) -> Dict[str, str]:
+def _build_deprecation_headers(successor: str) -> dict[str, str]:
     try:
         sunset_days = int(os.getenv("DEPRECATION_SUNSET_DAYS", "120"))
         sunset = (datetime.now(timezone.utc) + timedelta(days=sunset_days)).strftime(
@@ -132,7 +130,7 @@ def _legacy_user_me_enabled() -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _legacy_warning_payload(successor: str) -> Dict[str, str]:
+def _legacy_warning_payload(successor: str) -> dict[str, str]:
     return {"warning": "deprecated_endpoint", "successor": successor}
 
 def _get_email_service():
@@ -230,9 +228,9 @@ async def _ensure_user_org_membership(user_id: int, username: Optional[str] = No
     base_name = base_name.strip() or "Personal Workspace"
 
     try:
+        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
         from tldw_Server_API.app.core.AuthNZ.orgs_teams import create_organization
         from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
-        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 
         org = None
         for attempt in range(3):
@@ -330,7 +328,7 @@ class MFASetupResponse(BaseModel):
     """Response for MFA setup initiation."""
     secret: str = Field(..., description="TOTP secret (store securely)")
     qr_code: str = Field(..., description="QR code image as base64")
-    backup_codes: List[str] = Field(..., description="Backup codes for recovery")
+    backup_codes: list[str] = Field(..., description="Backup codes for recovery")
 
 
 class MFAVerifyRequest(BaseModel):
@@ -353,7 +351,7 @@ class LogoutRequest(BaseModel):
 #
 # Register endpoint diagnostics (test-only)
 
-async def _build_scope_claims(user_id: int) -> Dict[str, Any]:
+async def _build_scope_claims(user_id: int) -> dict[str, Any]:
     try:
         memberships = await list_memberships_for_user(int(user_id))
     except Exception:
@@ -362,7 +360,7 @@ async def _build_scope_claims(user_id: int) -> Dict[str, Any]:
     team_ids = sorted({m.get("team_id") for m in memberships if m.get("team_id") is not None})
     org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
 
-    claims: Dict[str, Any] = {}
+    claims: dict[str, Any] = {}
     if team_ids:
         claims["team_ids"] = team_ids
     if org_ids:
@@ -451,9 +449,9 @@ class SelfVirtualKeyRequest(BaseModel):
     ttl_minutes: int = Field(60, ge=1, le=1440)
     scope: str = Field("workflows")
     schedule_id: Optional[str] = None
-    allowed_endpoints: Optional[List[str]] = None
-    allowed_methods: Optional[List[str]] = None
-    allowed_paths: Optional[List[str]] = None
+    allowed_endpoints: Optional[list[str]] = None
+    allowed_methods: Optional[list[str]] = None
+    allowed_paths: Optional[list[str]] = None
     max_calls: Optional[int] = Field(None, ge=0)
     max_runs: Optional[int] = Field(None, ge=0)
     not_before: Optional[str] = Field(None, description="Optional ISO timestamp when token becomes valid")
@@ -462,7 +460,7 @@ class SelfVirtualKeyRequest(BaseModel):
 @router.post("/virtual-key")
 async def mint_self_virtual_key(
     body: SelfVirtualKeyRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    current_user: dict[str, Any] = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ):
     """Mint a short-lived, scoped JWT for the current user.
@@ -475,7 +473,7 @@ async def mint_self_virtual_key(
         raise HTTPException(status_code=400, detail="Virtual keys require multi-user mode")
     try:
         svc = JWTService(settings)
-        add_claims: Dict[str, Any] = {}
+        add_claims: dict[str, Any] = {}
         if body.allowed_endpoints:
             add_claims["allowed_endpoints"] = [str(x) for x in body.allowed_endpoints]
         if body.allowed_methods:
@@ -1012,7 +1010,7 @@ async def login(
 async def logout(
     request: Request,
     data: Optional[LogoutRequest] = None,
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    current_user: dict[str, Any] = Depends(get_current_user),
     session_manager: SessionManager = Depends(get_session_manager_dep),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
 ) -> MessageResponse:
@@ -1123,11 +1121,11 @@ async def logout(
 #
 # Session Management (auth-scoped)
 
-@router.get("/sessions", response_model=List[SessionResponse])
+@router.get("/sessions", response_model=list[SessionResponse])
 async def list_user_sessions(
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     session_manager: SessionManager = Depends(get_session_manager_dep)
-) -> List[SessionResponse]:
+) -> list[SessionResponse]:
     """
     List all active sessions for the current user.
     """
@@ -1163,7 +1161,7 @@ async def list_user_sessions(
 @router.delete("/sessions/{session_id}", response_model=MessageResponse)
 async def revoke_session(
     session_id: int,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     session_manager: SessionManager = Depends(get_session_manager_dep)
 ) -> MessageResponse:
     """
@@ -1216,7 +1214,7 @@ async def revoke_session(
 
 @router.post("/sessions/revoke-all", response_model=MessageResponse)
 async def revoke_all_sessions(
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     session_manager: SessionManager = Depends(get_session_manager_dep)
 ) -> MessageResponse:
     """
@@ -1433,6 +1431,7 @@ async def refresh_token(
             # Always blacklist the prior refresh token's JTI to prevent reuse
             try:
                 from datetime import datetime as _dt
+
                 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist as _get_bl
                 old_jti = token_payload.get("jti") if isinstance(token_payload, dict) else None
                 old_exp = token_payload.get("exp") if isinstance(token_payload, dict) else None
@@ -1518,7 +1517,7 @@ async def forgot_password(
     db=Depends(get_db_transaction),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
     rate_limiter=Depends(get_rate_limiter_dep),
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Request password reset email.
 
@@ -1635,7 +1634,7 @@ async def reset_password(
     jwt_service: JWTService = Depends(get_jwt_service_dep),
     password_service: PasswordService = Depends(get_password_service_dep),
     rate_limiter=Depends(get_rate_limiter_dep),
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Reset password with valid token.
 
@@ -1804,7 +1803,7 @@ async def verify_email(
     token: str = Query(..., description="Email verification token"),
     db=Depends(get_db_transaction),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Verify email address with token.
 
@@ -1867,7 +1866,7 @@ async def resend_verification(
     db=Depends(get_db_transaction),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
     rate_limiter=Depends(get_rate_limiter_dep),
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Resend email verification link.
 
@@ -2079,7 +2078,7 @@ async def verify_magic_link(
         elif not email and isinstance(sub, str) and "@" in sub:
             email = _normalize_magic_email(sub)
 
-    user: Optional[Dict[str, Any]] = None
+    user: Optional[dict[str, Any]] = None
     if user_id is not None:
         user = await fetch_active_user_by_id(db, int(user_id))
     if not user and email:
@@ -2095,7 +2094,7 @@ async def verify_magic_link(
         # Create a new user on first magic-link sign-in
         username_base = _derive_username_from_email(email or "user")
         password = _generate_magic_password()
-        user_info: Optional[Dict[str, Any]] = None
+        user_info: Optional[dict[str, Any]] = None
         for attempt in range(5):
             username = username_base if attempt == 0 else f"{username_base}-{secrets.token_hex(2)}"
             try:
@@ -2318,7 +2317,7 @@ async def verify_mfa_setup(
     current_user=Depends(get_current_active_user),
     rate_limiter=Depends(get_rate_limiter_dep),
     session_manager: SessionManager = Depends(get_session_manager_dep),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Verify and enable MFA with TOTP token.
 
@@ -2413,7 +2412,7 @@ async def disable_mfa(
     password: str = Form(..., description="Current password for verification"),
     db=Depends(get_db_transaction),
     password_service: PasswordService = Depends(get_password_service_dep),
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Disable MFA for current user.
 
@@ -2895,7 +2894,7 @@ async def register(
 
 @router.get("/me", response_model=DeprecatedUserResponse, deprecated=True)
 async def get_current_user_info(
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     response: Response = None,
 ) -> DeprecatedUserResponse:
     """

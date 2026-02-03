@@ -5,12 +5,11 @@ These schemas provide a cleaner, more developer-friendly interface
 for search and agent functionality.
 """
 
-from typing import List, Optional, Dict, Any, Literal
-from pydantic import BaseModel, Field, field_validator
-from pydantic import ConfigDict
-from uuid import UUID, uuid4
 from enum import Enum
+from typing import Any, Optional
+from uuid import uuid4
 
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ============= Enums =============
 
@@ -79,13 +78,13 @@ class SimpleSearchRequest(BaseModel):
         description="Maximum number of results to return"
     )
 
-    databases: List[str] = Field(
+    databases: list[str] = Field(
         default=["media_db"],
         description="List of databases to search. Options: media_db, notes, characters, chat_history",
         examples=[["media_db", "notes"], ["media_db"]]
     )
 
-    keywords: Optional[List[str]] = Field(
+    keywords: Optional[list[str]] = Field(
         default=None,
         description="Optional keywords to filter results",
         examples=[["AI", "ML"], ["python", "tutorial"]]
@@ -117,7 +116,7 @@ class SearchResult(BaseModel):
     content: str = Field(..., description="Content snippet relevant to the query")
     score: float = Field(..., description="Relevance score (higher is better)")
     source: str = Field(..., description="Source database")
-    metadata: Dict[str, Any] = Field(
+    metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Additional metadata about the result"
     )
@@ -125,7 +124,7 @@ class SearchResult(BaseModel):
 
 class SimpleSearchResponse(BaseModel):
     """Simple search response"""
-    results: List[SearchResult] = Field(
+    results: list[SearchResult] = Field(
         ...,
         description="List of search results"
     )
@@ -203,14 +202,14 @@ class SearchConfig(BaseModel):
     search_type: SearchType = Field(default=SearchType.HYBRID)
     limit: int = Field(default=10, ge=1, le=1000)
     offset: int = Field(default=0, ge=0)
-    databases: List[str] = Field(default=["media_db"])
-    keywords: Optional[List[str]] = None
-    date_range: Optional[Dict[str, str]] = Field(
+    databases: list[str] = Field(default=["media_db"])
+    keywords: Optional[list[str]] = None
+    date_range: Optional[dict[str, str]] = Field(
         default=None,
         description="Date range filter with 'start' and 'end' keys (ISO format)",
         examples=[{"start": "2024-01-01", "end": "2024-12-31"}]
     )
-    metadata_filters: Optional[Dict[str, Any]] = Field(
+    metadata_filters: Optional[dict[str, Any]] = Field(
         default=None,
         description="Complex metadata filters",
         examples=[{"author": "John Doe", "type": "article"}]
@@ -230,15 +229,15 @@ class AdvancedSearchRequest(BaseModel):
 
 class AdvancedSearchResponse(BaseModel):
     """Advanced search response with additional details"""
-    results: List[SearchResult]
+    results: list[SearchResult]
     total_results: int
     query_id: str = Field(default_factory=lambda: str(uuid4()))
     search_type_used: SearchType
     strategy_used: SearchStrategy
-    search_config: Dict[str, Any] = Field(
+    search_config: dict[str, Any] = Field(
         description="The actual search configuration used"
     )
-    debug_info: Optional[Dict[str, Any]] = Field(
+    debug_info: Optional[dict[str, Any]] = Field(
         default=None,
         description="Debug information (if requested)"
     )
@@ -263,7 +262,7 @@ class SimpleAgentRequest(BaseModel):
         description="Optional conversation ID to maintain context"
     )
 
-    search_databases: List[str] = Field(
+    search_databases: list[str] = Field(
         default=["media_db"],
         description="Which databases to search for context",
         examples=[["media_db", "notes"]]
@@ -312,7 +311,7 @@ class SimpleAgentResponse(BaseModel):
         ...,
         description="Conversation ID for continuing the conversation"
     )
-    sources: List[Source] = Field(
+    sources: list[Source] = Field(
         default_factory=list,
         description="Sources used to generate the response"
     )
@@ -362,8 +361,8 @@ class GenerationConfig(BaseModel):
 class AgentSearchConfig(BaseModel):
     """Search configuration for agent context retrieval"""
     search_type: SearchType = Field(default=SearchType.HYBRID)
-    databases: List[str] = Field(default=["media_db"])
-    keywords: Optional[List[str]] = None
+    databases: list[str] = Field(default=["media_db"])
+    keywords: Optional[list[str]] = None
     limit: int = Field(default=10, ge=1, le=50)
 
 
@@ -377,7 +376,7 @@ class AdvancedAgentRequest(BaseModel):
     )
     generation_config: Optional[GenerationConfig] = None
     search_config: Optional[AgentSearchConfig] = None
-    tools: Optional[List[ResearchTool]] = Field(
+    tools: Optional[list[ResearchTool]] = Field(
         default=None,
         description="Tools available for research mode"
     )
@@ -391,14 +390,14 @@ class AdvancedAgentResponse(BaseModel):
     """Advanced agent response with additional details"""
     response: str
     conversation_id: str
-    sources: List[Source]
+    sources: list[Source]
     mode_used: AgentMode
-    tools_used: Optional[List[str]] = None
-    search_stats: Optional[Dict[str, Any]] = Field(
+    tools_used: Optional[list[str]] = None
+    search_stats: Optional[dict[str, Any]] = Field(
         default=None,
         description="Statistics about the search process"
     )
-    generation_stats: Optional[Dict[str, Any]] = Field(
+    generation_stats: Optional[dict[str, Any]] = Field(
         default=None,
         description="Statistics about the generation process"
     )
@@ -455,11 +454,11 @@ class SearchApiRequest(BaseModel):
     query: str = Field(..., description="Search query string")
     mode: Optional[SearchModeEnum] = Field(default=SearchModeEnum.BASIC, description="Search mode")
     top_k: Optional[int] = Field(default=10, ge=1, le=100, description="Number of results to return")
-    filters: Optional[Dict[str, Any]] = Field(default=None, description="Optional filters")
-    data_sources: Optional[List[str]] = Field(default=None, description="Databases to search")
+    filters: Optional[dict[str, Any]] = Field(default=None, description="Optional filters")
+    data_sources: Optional[list[str]] = Field(default=None, description="Databases to search")
 
     # Additional fields expected by tests
-    search_databases: Optional[List[str]] = Field(default=None, description="Databases to search (alias)")
+    search_databases: Optional[list[str]] = Field(default=None, description="Databases to search (alias)")
     offset: Optional[int] = Field(default=0, ge=0, description="Pagination offset")
     date_range_start: Optional[str] = Field(default=None, description="Start date for filtering")
     date_range_end: Optional[str] = Field(default=None, description="End date for filtering")
@@ -470,8 +469,8 @@ class SearchApiRequest(BaseModel):
 class RetrievalAgentRequest(BaseModel):
     """Compatibility wrapper for agent requests - maps to SimpleAgentRequest"""
     message: Optional[Message] = Field(default=None, description="Single message")
-    messages: Optional[List[Message]] = Field(default=None, description="Conversation history")
+    messages: Optional[list[Message]] = Field(default=None, description="Conversation history")
     mode: Optional[AgentModeEnum] = Field(default=AgentModeEnum.RAG, description="Agent mode")
     rag_generation_config: Optional[GenerationConfig] = Field(default=None, description="Generation config")
-    api_config: Optional[Dict[str, Any]] = Field(default=None, description="API configuration")
-    search_config: Optional[Dict[str, Any]] = Field(default=None, description="Search configuration")
+    api_config: Optional[dict[str, Any]] = Field(default=None, description="API configuration")
+    search_config: Optional[dict[str, Any]] = Field(default=None, description="Search configuration")

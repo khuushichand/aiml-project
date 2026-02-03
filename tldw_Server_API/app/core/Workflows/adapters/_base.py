@@ -5,7 +5,7 @@ This module defines the base Pydantic models and type aliases used by adapters.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 
@@ -17,16 +17,16 @@ class AdapterContext(BaseModel):
     Adapters can access these fields for user/tenant info, previous step outputs, etc.
     """
 
-    user_id: Optional[str] = None
-    tenant_id: Optional[str] = None
-    run_id: Optional[str] = None
-    step_run_id: Optional[str] = None
-    inputs: Dict[str, Any] = Field(default_factory=dict)
-    prev: Dict[str, Any] = Field(default_factory=dict)
-    last: Dict[str, Any] = Field(default_factory=dict)
-    secrets: Dict[str, str] = Field(default_factory=dict)
-    workflow_metadata: Dict[str, Any] = Field(default_factory=dict)
-    workflow_mcp_policy: Dict[str, Any] = Field(default_factory=dict)
+    user_id: str | None = None
+    tenant_id: str | None = None
+    run_id: str | None = None
+    step_run_id: str | None = None
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    prev: dict[str, Any] = Field(default_factory=dict)
+    last: dict[str, Any] = Field(default_factory=dict)
+    secrets: dict[str, str] = Field(default_factory=dict)
+    workflow_metadata: dict[str, Any] = Field(default_factory=dict)
+    workflow_mcp_policy: dict[str, Any] = Field(default_factory=dict)
 
     class Config:
         extra = "allow"  # Allow is_cancelled, add_artifact, etc.
@@ -39,16 +39,16 @@ class BaseAdapterConfig(BaseModel):
     extra fields to support forward compatibility.
     """
 
-    timeout_seconds: Optional[int] = Field(None, description="Step timeout in seconds")
-    save_artifact: Optional[bool] = Field(False, description="Whether to save output as artifact")
+    timeout_seconds: int | None = Field(None, description="Step timeout in seconds")
+    save_artifact: bool | None = Field(False, description="Whether to save output as artifact")
 
     class Config:
         extra = "allow"  # Allow additional fields
 
 
 # Type aliases for adapter signatures
-AdapterFunc = Callable[[Dict[str, Any], Dict[str, Any]], Any]
+AdapterFunc = Callable[[dict[str, Any], dict[str, Any]], Any]
 """Type alias for adapter function signature: async (config, context) -> result"""
 
-AdapterResult = Dict[str, Any]
+AdapterResult = dict[str, Any]
 """Type alias for adapter return value"""

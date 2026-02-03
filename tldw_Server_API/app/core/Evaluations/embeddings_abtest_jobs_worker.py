@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
@@ -49,19 +49,19 @@ from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
     abtest_jobs_queue,
 )
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
-    cleanup_abtest_resources,
     EmbeddingsABTestPolicyError,
     EmbeddingsABTestRunError,
+    cleanup_abtest_resources,
     run_abtest_full,
 )
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
-from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerSDK, WorkerConfig
+from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
 
 
 class EmbeddingsABTestJobError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: Optional[int] = None) -> None:
+    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: int | None = None) -> None:
         super().__init__(message)
         self.retryable = retryable
         if backoff_seconds is not None:
@@ -75,7 +75,7 @@ def _coerce_int(value: Any, default: int) -> int:
         return int(default)
 
 
-def _normalize_user_id(value: Any) -> Tuple[str, int]:
+def _normalize_user_id(value: Any) -> tuple[str, int]:
     if value is None or str(value).strip() == "":
         uid = DatabasePaths.get_single_user_id()
         return str(uid), int(uid)
@@ -86,7 +86,7 @@ def _normalize_user_id(value: Any) -> Tuple[str, int]:
     return str(value), uid_int
 
 
-def _normalize_payload(raw: Any) -> Dict[str, Any]:
+def _normalize_payload(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return dict(raw)
     if isinstance(raw, str):
@@ -98,7 +98,7 @@ def _normalize_payload(raw: Any) -> Dict[str, Any]:
     return {}
 
 
-def _load_config_from_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _load_config_from_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
     cfg = payload.get("config")
     if cfg is None:
         return None
@@ -113,7 +113,7 @@ def _load_config_from_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any
     return None
 
 
-def _load_config_from_db(db, test_id: str, *, created_by: Optional[str] = None) -> Dict[str, Any]:
+def _load_config_from_db(db, test_id: str, *, created_by: str | None = None) -> dict[str, Any]:
     row = db.get_abtest(test_id, created_by=created_by)
     if not row:
         raise EmbeddingsABTestJobError(f"A/B test not found: {test_id}", retryable=False)
@@ -131,7 +131,7 @@ def _load_config_from_db(db, test_id: str, *, created_by: Optional[str] = None) 
     return parsed
 
 
-def _normalize_config(cfg: Dict[str, Any]) -> EmbeddingsABTestConfig:
+def _normalize_config(cfg: dict[str, Any]) -> EmbeddingsABTestConfig:
     try:
         if hasattr(EmbeddingsABTestConfig, "model_validate"):
             config = EmbeddingsABTestConfig.model_validate(cfg)  # type: ignore[attr-defined]
@@ -155,7 +155,7 @@ def _build_media_db(user_id: str) -> Any:
     )
 
 
-async def handle_abtest_job(job: Dict[str, Any]) -> Dict[str, Any]:
+async def handle_abtest_job(job: dict[str, Any]) -> dict[str, Any]:
     job_type = str(job.get("job_type") or "").strip().lower()
     if job_type not in {ABTEST_JOBS_JOB_TYPE, ABTEST_JOBS_CLEANUP_TYPE}:
         raise EmbeddingsABTestJobError(
@@ -239,7 +239,7 @@ async def handle_abtest_job(job: Dict[str, Any]) -> Dict[str, Any]:
         raise EmbeddingsABTestRunError(str(exc), retryable=retryable) from exc
 
 
-async def run_embeddings_abtest_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_embeddings_abtest_jobs_worker(stop_event: asyncio.Event | None = None) -> None:
     worker_id = (os.getenv("EVALUATIONS_JOBS_WORKER_ID") or f"evals-abtest-jobs-{os.getpid()}").strip()
     queue = abtest_jobs_queue()
 

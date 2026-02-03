@@ -3,66 +3,49 @@
 #
 # Imports
 import asyncio
+import base64
 import copy
 import inspect
 import os
 import time
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Optional, Dict, Any, List, Set
+from typing import Any, Optional
+
 #
 # Third-party Imports
 from loguru import logger
+
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.Metrics.metrics_manager import MetricDefinition, MetricType
-from .adapter_registry import (
-    get_tts_factory,
-    close_tts_factory,
-    TTSAdapterFactory,
-    TTSProvider
-)
-from .adapters.base import (
-    TTSAdapter,
-    TTSRequest,
-    TTSResponse,
-    AudioFormat
-)
-from .circuit_breaker import (
-    get_circuit_manager,
-    CircuitBreakerManager,
-    CircuitOpenError
-)
-from .tts_exceptions import (
-    TTSError,
-    TTSProviderNotConfiguredError,
-    TTSProviderInitializationError,
-    TTSModelNotFoundError,
-    TTSGenerationError,
-    TTSValidationError,
-    TTSAuthenticationError,
-    TTSRateLimitError,
-    TTSNetworkError,
-    TTSTimeoutError,
-    TTSProviderError,
-    TTSResourceError,
-    TTSInsufficientMemoryError,
-    TTSGPUError,
-    TTSFallbackExhaustedError,
-    TTSInvalidVoiceReferenceError,
-    categorize_error,
-    is_retryable_error
-)
-from .tts_validation import validate_tts_request, validate_text_input
-import base64
-from .tts_resource_manager import get_resource_manager
+
+from .adapter_registry import TTSAdapterFactory, TTSProvider, close_tts_factory, get_tts_factory
+from .adapters.base import AudioFormat, TTSAdapter, TTSRequest, TTSResponse
+from .circuit_breaker import CircuitBreakerManager, CircuitOpenError, get_circuit_manager
 from .realtime_session import (
+    BufferedRealtimeSession,
     RealtimeSessionConfig,
     RealtimeSessionHandle,
     RealtimeTTSSession,
-    BufferedRealtimeSession,
 )
+from .tts_exceptions import (
+    TTSError,
+    TTSFallbackExhaustedError,
+    TTSGenerationError,
+    TTSInvalidVoiceReferenceError,
+    TTSProviderError,
+    TTSProviderNotConfiguredError,
+    TTSResourceError,
+    TTSValidationError,
+    categorize_error,
+    is_retryable_error,
+)
+from .tts_resource_manager import get_resource_manager
+from .tts_validation import validate_text_input, validate_tts_request
+
 #
 #######################################################################################################################
 #
@@ -150,16 +133,16 @@ class TTSServiceV2:
                 "Errors will be embedded as audio bytes; this mode is not "
                 "recommended for production deployments."
             )
-        self._active_request_counts: Dict[str, int] = {}
+        self._active_request_counts: dict[str, int] = {}
         self._active_requests_lock = asyncio.Lock()
-        self._provider_semaphores: Dict[str, asyncio.Semaphore] = {}
-        self._provider_limits: Dict[str, int] = {}
+        self._provider_semaphores: dict[str, asyncio.Semaphore] = {}
+        self._provider_limits: dict[str, int] = {}
 
         # Initialize metrics
         self.metrics = get_metrics_registry()
         self._register_tts_metrics()
 
-    def _get_validation_config(self) -> Optional[Dict[str, Any]]:
+    def _get_validation_config(self) -> Optional[dict[str, Any]]:
         """Return config dictionary for validation (best-effort)."""
         try:
             registry = None
@@ -310,7 +293,7 @@ class TTSServiceV2:
         async for chunk in stream:
             yield chunk
 
-    async def list_providers(self) -> List[str]:
+    async def list_providers(self) -> list[str]:
         """Legacy provider listing wrapper."""
         if hasattr(self, "_factory") and self._factory is not None and hasattr(self._factory, "list_available_providers"):
             return self._factory.list_available_providers()  # type: ignore[attr-defined,return-value]
@@ -321,14 +304,14 @@ class TTSServiceV2:
         except Exception:
             return []
 
-    async def get_capabilities(self) -> Dict[str, Any]:
+    async def get_capabilities(self) -> dict[str, Any]:
         """
         Return capabilities for all available TTS providers.
 
         The structure is JSON-serializable and suitable for the
         `/api/v1/audio/providers` endpoint.
         """
-        capabilities: Dict[str, Any] = {}
+        capabilities: dict[str, Any] = {}
 
         try:
             factory = await self._ensure_factory()
@@ -372,16 +355,16 @@ class TTSServiceV2:
 
         return capabilities
 
-    async def list_voices(self) -> Dict[str, List[Dict[str, Any]]]:
+    async def list_voices(self) -> dict[str, list[dict[str, Any]]]:
         """
         Return a mapping of provider -> list of voice descriptors.
 
         Used by `/api/v1/audio/voices/catalog` and WebUI audio configuration.
         """
-        voices_by_provider: Dict[str, List[Dict[str, Any]]] = {}
+        voices_by_provider: dict[str, list[dict[str, Any]]] = {}
         caps = await self.get_capabilities()
         for provider, provider_caps in caps.items():
-            voices: Optional[List[Dict[str, Any]]] = None
+            voices: Optional[list[dict[str, Any]]] = None
             if isinstance(provider_caps, dict):
                 maybe_voices = provider_caps.get("voices")
                 if isinstance(maybe_voices, list):
@@ -461,7 +444,7 @@ class TTSServiceV2:
         )
         return RealtimeSessionHandle(session=session, provider=provider_used or hint, warning=warning)
 
-    def _serialize_capabilities(self, caps_obj: Any) -> Dict[str, Any]:
+    def _serialize_capabilities(self, caps_obj: Any) -> dict[str, Any]:
         """
         Convert a TTSCapabilities instance (or compatible mapping)
         into a JSON-serializable dictionary.
@@ -496,9 +479,9 @@ class TTSServiceV2:
         data["formats"] = [getattr(f, "value", str(f)) for f in formats]
 
         # Normalize voices (VoiceInfo dataclasses) into plain dicts
-        norm_voices: List[Dict[str, Any]] = []
+        norm_voices: list[dict[str, Any]] = []
         for v in voices:
-            v_dict: Optional[Dict[str, Any]] = None
+            v_dict: Optional[dict[str, Any]] = None
             try:
                 from dataclasses import asdict as _asdict
                 v_dict = _asdict(v)
@@ -522,7 +505,7 @@ class TTSServiceV2:
 
         return data
 
-    async def get_provider_info(self, provider: str) -> Dict[str, Any]:
+    async def get_provider_info(self, provider: str) -> dict[str, Any]:
         """Legacy provider information wrapper used by tests."""
         adapter = None
         if hasattr(self, "_factory") and self._factory is not None:
@@ -539,7 +522,7 @@ class TTSServiceV2:
         """Set default provider (legacy behavior for tests)."""
         self._default_provider = provider
 
-    async def generate_with_fallback(self, request: TTSRequest, fallback_providers: Optional[List[str]] = None) -> TTSResponse:
+    async def generate_with_fallback(self, request: TTSRequest, fallback_providers: Optional[list[str]] = None) -> TTSResponse:
         """Legacy helper to try primary provider then fall back to others."""
         primary = getattr(request, "provider", None) or getattr(self, "_default_provider", "openai")
         # Try primary
@@ -631,7 +614,7 @@ class TTSServiceV2:
         request: OpenAISpeechRequest,
         provider: Optional[str] = None,
         fallback: bool = True,
-        provider_overrides: Optional[Dict[str, Any]] = None,
+        provider_overrides: Optional[dict[str, Any]] = None,
         voice_to_voice_start: Optional[float] = None,
         voice_to_voice_route: str = "audio.speech",
         user_id: Optional[int] = None,
@@ -709,7 +692,7 @@ class TTSServiceV2:
         audio_size = 0
         chunks_count = 0
         released_active_slot = False
-        fallback_plan: Optional[Tuple[List[str], str]] = None
+        fallback_plan: Optional[Tuple[list[str], str]] = None
         voice_to_voice_recorded = False
         voice_to_voice_route_label = voice_to_voice_route or "audio.speech"
         voice_to_voice_start_ts: Optional[float] = None
@@ -1247,7 +1230,7 @@ class TTSServiceV2:
         if not raw_id:
             return
         try:
-            from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager, VoiceProcessingError
+            from tldw_Server_API.app.core.TTS.voice_manager import VoiceProcessingError, get_voice_manager
 
             voice_manager = get_voice_manager()
             if request.voice_reference is None:
@@ -1313,7 +1296,7 @@ class TTSServiceV2:
         if not data_b64:
             return
         try:
-            from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager, VoiceReferenceMetadata
+            from tldw_Server_API.app.core.TTS.voice_manager import VoiceReferenceMetadata, get_voice_manager
 
             voice_manager = get_voice_manager()
             metadata = await voice_manager.load_reference_metadata(user_id, raw_id)
@@ -1334,7 +1317,7 @@ class TTSServiceV2:
         self,
         model: str,
         provider: Optional[str] = None,
-        overrides: Optional[Dict[str, Any]] = None,
+        overrides: Optional[dict[str, Any]] = None,
     ) -> Optional[TTSAdapter]:
         """Get appropriate adapter for the request"""
         factory = await self._ensure_factory()
@@ -1360,7 +1343,7 @@ class TTSServiceV2:
             return provider_name.lower()
         return "unknown"
 
-    def _get_tts_config(self) -> Optional[Dict[str, Any]]:
+    def _get_tts_config(self) -> Optional[dict[str, Any]]:
         for factory in (self.factory, self._factory):
             registry = getattr(factory, "registry", None) if factory else None
             cfg = getattr(registry, "config", None) if registry else None
@@ -1417,7 +1400,7 @@ class TTSServiceV2:
         sanitized_request.text = sanitized_text
         return sanitized_request
 
-    def _provider_aliases(self, adapter: TTSAdapter) -> Set[str]:
+    def _provider_aliases(self, adapter: TTSAdapter) -> set[str]:
         """Return a normalized alias set for a provider/adapter."""
         aliases = set()
         provider_name = getattr(adapter, "provider_name", None)
@@ -1441,7 +1424,7 @@ class TTSServiceV2:
             normalized.add(alias.replace("adapter", "").replace("_", "").replace("-", ""))
         return {alias for alias in normalized if alias}
 
-    def _build_exclude_tokens(self, adapter: TTSAdapter) -> List[str]:
+    def _build_exclude_tokens(self, adapter: TTSAdapter) -> list[str]:
         """Build normalized exclude tokens for a provider."""
         return list(self._provider_aliases(adapter))
 
@@ -1481,7 +1464,7 @@ class TTSServiceV2:
     async def _get_fallback_adapter(
         self,
         request: TTSRequest,
-        exclude: Optional[List[str]] = None
+        exclude: Optional[list[str]] = None
     ) -> Optional[TTSAdapter]:
         """Get a fallback adapter that can handle the request"""
         factory = await self._ensure_factory()
@@ -1648,7 +1631,7 @@ class TTSServiceV2:
     async def _try_fallback_providers(
         self,
         request: TTSRequest,
-        exclude_providers: List[str],
+        exclude_providers: list[str],
         failed_provider: Optional[str],
         *,
         metadata_only: bool = False,
@@ -1794,7 +1777,7 @@ class TTSServiceV2:
             else:
                 raise TTSFallbackExhaustedError("No fallback providers available")
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Get service status"""
         factory = self.factory or self._factory
         if not factory or not hasattr(factory, "get_status"):
@@ -1813,7 +1796,7 @@ _service_instance: Optional[TTSServiceV2] = None
 _service_lock = asyncio.Lock()
 
 
-async def get_tts_service_v2(config: Optional[Dict[str, Any]] = None) -> TTSServiceV2:
+async def get_tts_service_v2(config: Optional[dict[str, Any]] = None) -> TTSServiceV2:
     """
     Get or create the enhanced TTS service singleton.
 

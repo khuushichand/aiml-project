@@ -3,11 +3,11 @@ Task model for the scheduler system.
 Defines the complete lifecycle and metadata for tasks.
 """
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
-import uuid
+from typing import Any, Optional
 
 
 class TaskStatus(Enum):
@@ -46,7 +46,7 @@ class Task:
 
     # Handler
     handler: str = ""  # Registry key for handler function
-    payload: Dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=dict)
 
     # Scheduling
     priority: int = TaskPriority.NORMAL.value
@@ -60,13 +60,13 @@ class Task:
     timeout: int = 300  # seconds
 
     # Dependencies
-    depends_on: List[str] = field(default_factory=list)
+    depends_on: list[str] = field(default_factory=list)
 
     # State
     status: TaskStatus = TaskStatus.PENDING
     result: Optional[Any] = None
     error: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     # Metadata
     created_at: datetime = field(default_factory=datetime.utcnow)
@@ -85,7 +85,7 @@ class Task:
     payload_ref: Optional[str] = None
     result_ref: Optional[str] = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert task to dictionary for serialization"""
         return {
             'id': self.id,
@@ -119,7 +119,7 @@ class Task:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Task':
+    def from_dict(cls, data: dict[str, Any]) -> 'Task':
         """Create task from dictionary"""
         task = cls()
 

@@ -3,28 +3,32 @@
 #
 # Imports
 import os
-import yaml
-from typing import Dict, Any, Optional, List
 from pathlib import Path
+from typing import Any, Optional
+
+import yaml
+
 #
 # Third-party Imports
 from loguru import logger
 from pydantic import BaseModel, Field
+
 try:
     from pydantic import field_validator
 except Exception:
     from pydantic import validator as field_validator  # type: ignore
 #
 # Local Imports
-from .adapters.base import AudioFormat
-from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.config_utils import (
     apply_default_sources,
     load_module_yaml,
     merge_config_layers,
 )
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+
 from .utils import parse_bool
+
 #
 #######################################################################################################################
 #
@@ -65,7 +69,7 @@ class ProviderConfig(BaseModel):
     verify_api_key_on_init: bool = False
     # Optional: opt-in text sanitization before validation/generation.
     sanitize_text: bool = False
-    extra_params: Dict[str, Any] = Field(default_factory=dict)
+    extra_params: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator('api_key', mode='before')
     @classmethod
@@ -79,8 +83,8 @@ class ProviderConfig(BaseModel):
 
 class VoiceMappingConfig(BaseModel):
     """Voice mapping configuration"""
-    generic: Dict[str, Dict[str, str]] = Field(default_factory=dict)
-    emotions: Dict[str, Dict[str, str]] = Field(default_factory=dict)
+    generic: dict[str, dict[str, str]] = Field(default_factory=dict)
+    emotions: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 class PerformanceConfig(BaseModel):
@@ -107,7 +111,7 @@ class FallbackConfig(BaseModel):
     enabled: bool = True
     max_attempts: int = 3
     retry_delay_ms: int = 1000
-    exclude_providers: List[str] = Field(default_factory=list)
+    exclude_providers: list[str] = Field(default_factory=list)
 
 
 class LoggingConfig(BaseModel):
@@ -120,10 +124,10 @@ class LoggingConfig(BaseModel):
 
 class TTSConfig(BaseModel):
     """Complete TTS configuration"""
-    provider_priority: List[str] = Field(default_factory=lambda: ["openai", "kokoro"])
-    providers: Dict[str, ProviderConfig] = Field(default_factory=dict)
+    provider_priority: list[str] = Field(default_factory=lambda: ["openai", "kokoro"])
+    providers: dict[str, ProviderConfig] = Field(default_factory=dict)
     voice_mappings: VoiceMappingConfig = Field(default_factory=VoiceMappingConfig)
-    format_preferences: Dict[str, List[str]] = Field(default_factory=dict)
+    format_preferences: dict[str, list[str]] = Field(default_factory=dict)
     performance: PerformanceConfig = Field(default_factory=PerformanceConfig)
     fallback: FallbackConfig = Field(default_factory=FallbackConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
@@ -157,8 +161,8 @@ class TTSConfigManager:
         self.yaml_path = Path(yaml_path).expanduser() if yaml_path else None
         self.config_txt_path = Path(config_txt_path).expanduser() if config_txt_path else None
         self._config: Optional[TTSConfig] = None
-        self._env_overrides: Dict[str, Any] = {}
-        self._sources: Dict[str, Any] = {}
+        self._env_overrides: dict[str, Any] = {}
+        self._sources: dict[str, Any] = {}
 
         # Load configurations
         self.reload()
@@ -187,7 +191,7 @@ class TTSConfigManager:
         logger.info(f"TTS configuration loaded with {len(self._config.providers)} providers")
         logger.debug(f"TTS config sources: {sources}")
 
-    def _load_config_txt(self) -> Dict[str, Any]:
+    def _load_config_txt(self) -> dict[str, Any]:
         """Load settings from config.txt"""
         config_dict = {}
 
@@ -322,7 +326,7 @@ class TTSConfigManager:
             logger.error(f"Error loading config.txt: {e}")
             return {}
 
-    def _load_env_overrides(self) -> Dict[str, Any]:
+    def _load_env_overrides(self) -> dict[str, Any]:
         """Load environment variable overrides"""
         config_dict = {}
 
@@ -367,7 +371,7 @@ class TTSConfigManager:
             self.reload()
         return self._config
 
-    def get_sources(self) -> Dict[str, Any]:
+    def get_sources(self) -> dict[str, Any]:
         """Return source tags for the current configuration."""
         if not self._sources:
             self.reload()
@@ -383,7 +387,7 @@ class TTSConfigManager:
         provider_config = self.get_provider_config(provider)
         return provider_config.enabled if provider_config else False
 
-    def get_enabled_providers(self) -> List[str]:
+    def get_enabled_providers(self) -> list[str]:
         """Get list of enabled providers"""
         config = self.get_config()
         return [
@@ -391,14 +395,14 @@ class TTSConfigManager:
             if cfg.enabled
         ]
 
-    def get_provider_priority(self) -> List[str]:
+    def get_provider_priority(self) -> list[str]:
         """Get provider priority order"""
         config = self.get_config()
         # Filter to only enabled providers
         enabled = self.get_enabled_providers()
         return [p for p in config.provider_priority if p in enabled]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary"""
         cfg = self.get_config()
         return model_dump_compat(cfg)

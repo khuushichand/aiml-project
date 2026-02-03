@@ -13,18 +13,20 @@ import atexit
 import os
 import threading
 import warnings
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Audit.unified_audit_service import (
-    UnifiedAuditService,
-    AuditEventType as UEvent,
-    AuditContext,
-)
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
     get_or_create_audit_service_for_user_id_optional,
     shutdown_all_audit_services,
+)
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditContext,
+    UnifiedAuditService,
+)
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditEventType as UEvent,
 )
 
 _TRUTHY = {"1", "true", "yes", "y", "on"}
@@ -43,8 +45,8 @@ def _parse_cache_size(env_key: str, default: int) -> int:
     return value
 
 
-_SYNC_LOOP: Optional[asyncio.AbstractEventLoop] = None
-_SYNC_LOOP_THREAD: Optional[threading.Thread] = None
+_SYNC_LOOP: asyncio.AbstractEventLoop | None = None
+_SYNC_LOOP_THREAD: threading.Thread | None = None
 _SYNC_LOOP_LOCK = threading.Lock()
 _SYNC_LOOP_READY = threading.Event()
 _MANDATORY_TIMEOUT_S = 5.0
@@ -64,7 +66,7 @@ def _in_test_mode() -> bool:
     return _env_truthy("TEST_MODE") or _env_truthy("TLDW_TEST_MODE")
 
 
-def _ensure_sync_loop() -> Optional[asyncio.AbstractEventLoop]:
+def _ensure_sync_loop() -> asyncio.AbstractEventLoop | None:
     """Ensure a background event loop exists for sync/threadpool calls."""
     global _SYNC_LOOP, _SYNC_LOOP_THREAD
     with _SYNC_LOOP_LOCK:
@@ -120,7 +122,7 @@ def _stop_sync_loop() -> None:
     _SYNC_LOOP_READY.clear()
 
 
-async def _get_svc(user_id: Optional[str]) -> UnifiedAuditService:
+async def _get_svc(user_id: str | None) -> UnifiedAuditService:
     """Resolve the shared audit service via the central cache."""
     return await get_or_create_audit_service_for_user_id_optional(user_id)
 
@@ -157,13 +159,13 @@ def _schedule(coro) -> None:
 
 async def _emit(
     *,
-    user_id: Optional[str],
+    user_id: str | None,
     event_type: UEvent,
-    action: Optional[str] = None,
-    resource_type: Optional[str] = None,
-    resource_id: Optional[str] = None,
+    action: str | None = None,
+    resource_type: str | None = None,
+    resource_id: str | None = None,
     result: str = "success",
-    metadata: Optional[Dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     svc = await _get_svc(user_id)
     ctx = AuditContext(user_id=user_id)
@@ -186,7 +188,7 @@ async def log_evaluation_created_async(*, user_id: str, eval_id: str, name: str,
     await _emit(user_id=user_id, event_type=UEvent.DATA_WRITE, action="evaluation_create", resource_type="evaluation", resource_id=eval_id, metadata={"name": name, "type": eval_type})
 
 
-async def log_evaluation_updated_async(*, user_id: str, eval_id: str, updates: Dict[str, Any]) -> None:
+async def log_evaluation_updated_async(*, user_id: str, eval_id: str, updates: dict[str, Any]) -> None:
     await _emit(user_id=user_id, event_type=UEvent.DATA_UPDATE, action="evaluation_update", resource_type="evaluation", resource_id=eval_id, metadata={"updates": list(updates.keys())})
 
 
@@ -194,8 +196,8 @@ async def log_evaluation_deleted_async(*, user_id: str, eval_id: str) -> None:
     await _emit(user_id=user_id, event_type=UEvent.DATA_DELETE, action="evaluation_delete", resource_type="evaluation", resource_id=eval_id)
 
 
-async def log_evaluation_exported_async(*, user_id: str, eval_id: str, eval_type: str, export_format: str, total: Optional[int] = None) -> None:
-    metadata: Dict[str, Any] = {"type": eval_type, "format": export_format}
+async def log_evaluation_exported_async(*, user_id: str, eval_id: str, eval_type: str, export_format: str, total: int | None = None) -> None:
+    metadata: dict[str, Any] = {"type": eval_type, "format": export_format}
     if total is not None:
         metadata["total"] = int(total)
     await _emit(user_id=user_id, event_type=UEvent.DATA_EXPORT, action="evaluation_export", resource_type="evaluation", resource_id=eval_id, metadata=metadata)
@@ -217,13 +219,13 @@ async def log_dataset_deleted_async(*, user_id: str, dataset_id: str) -> None:
     await _emit(user_id=user_id, event_type=UEvent.DATA_DELETE, action="dataset_delete", resource_type="dataset", resource_id=dataset_id)
 
 
-async def log_webhook_registration_async(*, user_id: str, webhook_id: Optional[str], url: str, events: list[str], success: bool, error: Optional[str] = None) -> None:
+async def log_webhook_registration_async(*, user_id: str, webhook_id: str | None, url: str, events: list[str], success: bool, error: str | None = None) -> None:
     event = UEvent.SECURITY_SCAN if success else UEvent.SECURITY_VIOLATION
     res = "success" if success else "failure"
     await _emit(user_id=user_id, event_type=event, action="webhook_register", resource_type="webhook", resource_id=str(webhook_id) if webhook_id else None, result=res, metadata={"url": url, "events": events, "error": error})
 
 
-async def log_webhook_unregistration_async(*, user_id: str, webhook_id: Optional[str], url: str, events: list[str], success: bool, error: Optional[str] = None) -> None:
+async def log_webhook_unregistration_async(*, user_id: str, webhook_id: str | None, url: str, events: list[str], success: bool, error: str | None = None) -> None:
     event = UEvent.SECURITY_SCAN if success else UEvent.SECURITY_VIOLATION
     res = "success" if success else "failure"
     await _emit(user_id=user_id, event_type=event, action="webhook_unregister", resource_type="webhook", resource_id=str(webhook_id) if webhook_id else None, result=res, metadata={"url": url, "events": events, "error": error})
@@ -233,7 +235,7 @@ def log_evaluation_created(*, user_id: str, eval_id: str, name: str, eval_type: 
     _schedule(_emit(user_id=user_id, event_type=UEvent.DATA_WRITE, action="evaluation_create", resource_type="evaluation", resource_id=eval_id, metadata={"name": name, "type": eval_type}))
 
 
-def log_evaluation_updated(*, user_id: str, eval_id: str, updates: Dict[str, Any]) -> None:
+def log_evaluation_updated(*, user_id: str, eval_id: str, updates: dict[str, Any]) -> None:
     _schedule(_emit(user_id=user_id, event_type=UEvent.DATA_UPDATE, action="evaluation_update", resource_type="evaluation", resource_id=eval_id, metadata={"updates": list(updates.keys())}))
 
 
@@ -241,8 +243,8 @@ def log_evaluation_deleted(*, user_id: str, eval_id: str) -> None:
     _schedule(_emit(user_id=user_id, event_type=UEvent.DATA_DELETE, action="evaluation_delete", resource_type="evaluation", resource_id=eval_id))
 
 
-def log_evaluation_exported(*, user_id: str, eval_id: str, eval_type: str, export_format: str, total: Optional[int] = None) -> None:
-    metadata: Dict[str, Any] = {"type": eval_type, "format": export_format}
+def log_evaluation_exported(*, user_id: str, eval_id: str, eval_type: str, export_format: str, total: int | None = None) -> None:
+    metadata: dict[str, Any] = {"type": eval_type, "format": export_format}
     if total is not None:
         metadata["total"] = int(total)
     _schedule(_emit(user_id=user_id, event_type=UEvent.DATA_EXPORT, action="evaluation_export", resource_type="evaluation", resource_id=eval_id, metadata=metadata))
@@ -264,13 +266,13 @@ def log_dataset_deleted(*, user_id: str, dataset_id: str) -> None:
     _schedule(_emit(user_id=user_id, event_type=UEvent.DATA_DELETE, action="dataset_delete", resource_type="dataset", resource_id=dataset_id))
 
 
-def log_webhook_registration(*, user_id: str, webhook_id: Optional[str], url: str, events: list[str], success: bool, error: Optional[str] = None) -> None:
+def log_webhook_registration(*, user_id: str, webhook_id: str | None, url: str, events: list[str], success: bool, error: str | None = None) -> None:
     event = UEvent.SECURITY_SCAN if success else UEvent.SECURITY_VIOLATION
     res = "success" if success else "failure"
     _schedule(_emit(user_id=user_id, event_type=event, action="webhook_register", resource_type="webhook", resource_id=str(webhook_id) if webhook_id else None, result=res, metadata={"url": url, "events": events, "error": error}))
 
 
-def log_webhook_unregistration(*, user_id: str, webhook_id: Optional[str], url: str, events: list[str], success: bool, error: Optional[str] = None) -> None:
+def log_webhook_unregistration(*, user_id: str, webhook_id: str | None, url: str, events: list[str], success: bool, error: str | None = None) -> None:
     event = UEvent.SECURITY_SCAN if success else UEvent.SECURITY_VIOLATION
     res = "success" if success else "failure"
     _schedule(_emit(user_id=user_id, event_type=event, action="webhook_unregister", resource_type="webhook", resource_id=str(webhook_id) if webhook_id else None, result=res, metadata={"url": url, "events": events, "error": error}))

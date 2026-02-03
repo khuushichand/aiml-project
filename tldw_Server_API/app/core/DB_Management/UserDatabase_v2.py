@@ -7,27 +7,24 @@
 #
 ########################################################################################################################
 
-import hashlib
 import json
 import secrets
-from contextlib import contextmanager
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Tuple, Dict, Any, Optional, Union
+from typing import Any, Optional
 from uuid import uuid4
+
 from loguru import logger
 
 # Local imports
 from tldw_Server_API.app.core.DB_Management.backends.base import (
+    BackendType,
     DatabaseBackend,
     DatabaseConfig,
-    BackendType,
     DatabaseError,
-    QueryResult
 )
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.sql_utils import split_sql_statements
-
 
 ########################################################################################################################
 # Custom Exceptions
@@ -121,7 +118,7 @@ class UserDatabase:
             logger.warning(f"No schema path defined for backend type: {self.backend.backend_type}")
             return
 
-        schema_statements: Optional[List[str]] = None
+        schema_statements: Optional[list[str]] = None
         loaded_from_file = False
 
         if schema_path.exists():
@@ -257,7 +254,7 @@ class UserDatabase:
             raise UserDatabaseError(f"Failed to create user: {e}")
 
     def get_user(self, user_id: Optional[int] = None, username: Optional[str] = None,
-                 email: Optional[str] = None) -> Optional[Dict[str, Any]]:
+                 email: Optional[str] = None) -> Optional[dict[str, Any]]:
         """
         Get user by ID, username, or email.
 
@@ -371,7 +368,7 @@ class UserDatabase:
     # Role and Permission Management
     ########################################################################################################################
 
-    def get_user_roles(self, user_id: int) -> List[str]:
+    def get_user_roles(self, user_id: int) -> list[str]:
         """
         Get all roles assigned to a user.
 
@@ -485,7 +482,7 @@ class UserDatabase:
                 return True
             return False
 
-    def get_user_permissions(self, user_id: int) -> List[str]:
+    def get_user_permissions(self, user_id: int) -> list[str]:
         """
         Get all permissions for a user (from roles and direct assignments).
 
@@ -585,7 +582,7 @@ class UserDatabase:
             logger.info(f"Created registration code {code[:8]}... with {max_uses} uses")
             return code
 
-    def validate_registration_code(self, code: str) -> Optional[Dict[str, Any]]:
+    def validate_registration_code(self, code: str) -> Optional[dict[str, Any]]:
         """
         Validate a registration code.
 
@@ -819,7 +816,7 @@ class UserDatabase:
         event_type: str,
         user_id: Optional[int],
         target_user_id: Optional[int],
-        details: Optional[Dict[str, Any]] = None,
+        details: Optional[dict[str, Any]] = None,
         connection: Optional[Any] = None,
     ):
         """Create an audit log entry."""
@@ -841,10 +838,10 @@ class UserDatabase:
     # ------------------------------------------------------------------------------------------------------------------
 
     @staticmethod
-    def _split_sql_statements(sql: str) -> List[str]:
+    def _split_sql_statements(sql: str) -> list[str]:
         return split_sql_statements(sql)
 
-    def _apply_schema_statements(self, statements: List[str]) -> None:
+    def _apply_schema_statements(self, statements: list[str]) -> None:
         if not statements:
             return
 
@@ -860,13 +857,13 @@ class UserDatabase:
                 finally:
                     cursor.close()
 
-    def _default_schema_statements(self) -> List[str]:
+    def _default_schema_statements(self) -> list[str]:
         if self.backend.backend_type == BackendType.POSTGRESQL:
             return self._default_schema_statements_postgres()
         return self._default_schema_statements_sqlite()
 
     @staticmethod
-    def _default_schema_statements_sqlite() -> List[str]:
+    def _default_schema_statements_sqlite() -> list[str]:
         return [
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -980,7 +977,7 @@ class UserDatabase:
         ]
 
     @staticmethod
-    def _default_schema_statements_postgres() -> List[str]:
+    def _default_schema_statements_postgres() -> list[str]:
         return [
             "CREATE EXTENSION IF NOT EXISTS pgcrypto;",
             """

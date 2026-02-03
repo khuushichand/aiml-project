@@ -7,42 +7,50 @@ interactions with various LLM providers.
 """
 #
 # Imports
-from loguru import logger as logging
+import asyncio
 import atexit
 import os
 import threading
 import time
-import asyncio
+from collections.abc import Awaitable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Awaitable, Dict, List, Optional, TypeVar, Union, Callable
+from typing import Any, Callable, Optional, TypeVar, Union
+
 #
 # 3rd-party Libraries
 from loguru import logger
+from loguru import logger as logging
+
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import ResponseFormat
+from tldw_Server_API.app.core.Chat import command_router
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAPIError,
     ChatAuthenticationError,
     ChatBadRequestError,
     ChatConfigurationError,
     ChatProviderError,
-    ChatRateLimitError
-)
-from tldw_Server_API.app.core.Chat.chat_service import (
-    perform_chat_api_call,
-    perform_chat_api_call_async,
+    ChatRateLimitError,
 )
 from tldw_Server_API.app.core.Chat.chat_dictionary import (
     ChatDictionary,
     parse_user_dict_markdown_file,
     process_user_input,
 )
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
-from tldw_Server_API.app.core.Chat import command_router
+from tldw_Server_API.app.core.Chat.chat_service import (
+    perform_chat_api_call,
+    perform_chat_api_call_async,
+)
 from tldw_Server_API.app.core.config import load_and_log_configs
-from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
+from tldw_Server_API.app.core.exceptions import (
+    NetworkError,
+    RetryExhaustedError,
+    SyncCallInEventLoopError,
+)
 from tldw_Server_API.app.core.LLM_Calls.deprecation import log_legacy_once
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+
 #
 ####################################################################################################
 #
@@ -248,7 +256,7 @@ def approximate_token_count(history):
 
 def chat_api_call(
     api_endpoint: str,
-    messages_payload: List[Dict[str, Any]], # CHANGED from input_data, prompt
+    messages_payload: list[dict[str, Any]], # CHANGED from input_data, prompt
     api_key: Optional[str] = None,
     temp: Optional[float] = None,
     system_message: Optional[str] = None, # Still passed separately, some providers might use it, others expect it in messages_payload
@@ -260,22 +268,22 @@ def chat_api_call(
     topp: Optional[float] = None, # Often maps to top_p
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
-    logit_bias: Optional[Dict[str, float]] = None,
+    logit_bias: Optional[dict[str, float]] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    tools: Optional[list[dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, dict[str, Any]]] = None,
     max_tokens: Optional[int] = None,
     seed: Optional[int] = None,
-    stop: Optional[Union[str, List[str]]] = None,
-    response_format: Optional[Dict[str, str]] = None,  # Expects {'type': 'text' | 'json_object'}
+    stop: Optional[Union[str, list[str]]] = None,
+    response_format: Optional[dict[str, str]] = None,  # Expects {'type': 'text' | 'json_object'}
     n: Optional[int] = None,
     user_identifier: Optional[str] = None,  # Renamed from 'user' to avoid conflict with 'user' role in messages
     # Provider-specific extensions (e.g., Bedrock guardrails)
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    extra_headers: Optional[dict[str, str]] = None,
+    extra_body: Optional[dict[str, Any]] = None,
     # Optional preloaded config to reduce repeated IO in hot paths
-    app_config: Optional[Dict[str, Any]] = None,
+    app_config: Optional[dict[str, Any]] = None,
     # Testing hooks
     http_client_factory: Optional[Callable[[int], Any]] = None,
     http_fetcher: Optional[Callable[..., Any]] = None,
@@ -477,7 +485,7 @@ def chat_api_call(
 
 async def chat_api_call_async(
     api_endpoint: str,
-    messages_payload: List[Dict[str, Any]],
+    messages_payload: list[dict[str, Any]],
     api_key: Optional[str] = None,
     temp: Optional[float] = None,
     system_message: Optional[str] = None,
@@ -489,20 +497,20 @@ async def chat_api_call_async(
     topp: Optional[float] = None,
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
-    logit_bias: Optional[Dict[str, float]] = None,
+    logit_bias: Optional[dict[str, float]] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    tools: Optional[list[dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, dict[str, Any]]] = None,
     max_tokens: Optional[int] = None,
     seed: Optional[int] = None,
-    stop: Optional[Union[str, List[str]]] = None,
-    response_format: Optional[Dict[str, str]] = None,
+    stop: Optional[Union[str, list[str]]] = None,
+    response_format: Optional[dict[str, str]] = None,
     n: Optional[int] = None,
     user_identifier: Optional[str] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    app_config: Optional[Dict[str, Any]] = None,
+    extra_headers: Optional[dict[str, str]] = None,
+    extra_body: Optional[dict[str, Any]] = None,
+    app_config: Optional[dict[str, Any]] = None,
     http_client_factory: Optional[Callable[[int], Any]] = None,
     http_fetcher: Optional[Callable[..., Any]] = None,
 ):
@@ -638,9 +646,9 @@ def _run_coro_sync(coro: Awaitable[_T], timeout: float = _SYNC_CORO_TIMEOUT_SECO
 
 def _run_achat_sync(
     message: str,
-    history: List[Dict[str, Any]],
-    media_content: Optional[Dict[str, str]],
-    selected_parts: List[str],
+    history: list[dict[str, Any]],
+    media_content: Optional[dict[str, str]],
+    selected_parts: list[str],
     api_endpoint: str,
     api_key: Optional[str],
     custom_prompt: Optional[str],
@@ -652,24 +660,24 @@ def _run_achat_sync(
     model: Optional[str] = None,
     topp: Optional[float] = None,
     topk: Optional[int] = None,
-    chatdict_entries: Optional[List[Any]] = None,
+    chatdict_entries: Optional[list[Any]] = None,
     max_tokens: int = 500,
     strategy: str = "sorted_evenly",
-    current_image_input: Optional[Dict[str, str]] = None,
+    current_image_input: Optional[dict[str, str]] = None,
     image_history_mode: str = "tag_past",
     llm_max_tokens: Optional[int] = None,
     llm_seed: Optional[int] = None,
-    llm_stop: Optional[Union[str, List[str]]] = None,
+    llm_stop: Optional[Union[str, list[str]]] = None,
     llm_response_format: Optional[ResponseFormat] = None,
     llm_n: Optional[int] = None,
     llm_user_identifier: Optional[str] = None,
     llm_logprobs: Optional[bool] = None,
     llm_top_logprobs: Optional[int] = None,
-    llm_logit_bias: Optional[Dict[str, float]] = None,
+    llm_logit_bias: Optional[dict[str, float]] = None,
     llm_presence_penalty: Optional[float] = None,
     llm_frequency_penalty: Optional[float] = None,
-    llm_tools: Optional[List[Dict[str, Any]]] = None,
-    llm_tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    llm_tools: Optional[list[dict[str, Any]]] = None,
+    llm_tool_choice: Optional[Union[str, dict[str, Any]]] = None,
 ) -> Union[str, Any]:
     """Run the async achat() orchestrator from synchronous code.
 
@@ -738,9 +746,9 @@ def _run_achat_sync(
 #     _handle_llm_call_and_response(loop, llm_call_func, request_data, chat_db, final_conversation_id, character_card)
 def _chat_sync_impl(
     message: str,
-    history: List[Dict[str, Any]],
-    media_content: Optional[Dict[str, str]],
-    selected_parts: List[str],
+    history: list[dict[str, Any]],
+    media_content: Optional[dict[str, str]],
+    selected_parts: list[str],
     api_endpoint: str,
     api_key: Optional[str],
     custom_prompt: Optional[str],
@@ -752,24 +760,24 @@ def _chat_sync_impl(
     model: Optional[str] = None,
     topp: Optional[float] = None,
     topk: Optional[int] = None,
-    chatdict_entries: Optional[List[Any]] = None, # Should be List[ChatDictionary]
+    chatdict_entries: Optional[list[Any]] = None, # Should be List[ChatDictionary]
     max_tokens: int = 500,
     strategy: str = "sorted_evenly",
-    current_image_input: Optional[Dict[str, str]] = None,
+    current_image_input: Optional[dict[str, str]] = None,
     image_history_mode: str = "tag_past",
     llm_max_tokens: Optional[int] = None,
     llm_seed: Optional[int] = None,
-    llm_stop: Optional[Union[str, List[str]]] = None,
+    llm_stop: Optional[Union[str, list[str]]] = None,
     llm_response_format: Optional[ResponseFormat] = None,
     llm_n: Optional[int] = None,
     llm_user_identifier: Optional[str] = None,
     llm_logprobs: Optional[bool] = None,
     llm_top_logprobs: Optional[int] = None,
-    llm_logit_bias: Optional[Dict[str, float]] = None,
+    llm_logit_bias: Optional[dict[str, float]] = None,
     llm_presence_penalty: Optional[float] = None,
     llm_frequency_penalty: Optional[float] = None,
-    llm_tools: Optional[List[Dict[str, Any]]] = None,
-    llm_tool_choice: Optional[Union[str, Dict[str, Any]]] = None
+    llm_tools: Optional[list[dict[str, Any]]] = None,
+    llm_tool_choice: Optional[Union[str, dict[str, Any]]] = None
 ) -> Union[str, Any]:  # Any for streaming generator
     """
     Internal synchronous implementation of the chat orchestration logic.
@@ -838,7 +846,7 @@ def _chat_sync_impl(
             )
 
         # --- Construct messages payload for the LLM API (OpenAI format) ---
-        llm_messages_payload: List[Dict[str, Any]] = []
+        llm_messages_payload: list[dict[str, Any]] = []
 
         # PHILOSOPHY:
         # `chat()` prepares the `llm_messages_payload` (user/assistant turns with multimodal content)
@@ -915,7 +923,7 @@ def _chat_sync_impl(
                 rag_text_prefix += "\n\n---\n\n"
 
         # 4. Construct Current User Message (text + optional new image)
-        current_user_content_parts: List[Dict[str, Any]] = []
+        current_user_content_parts: list[dict[str, Any]] = []
 
         # Combine RAG, custom_prompt (if it's for current turn's text), and processed_text_message
         # Deciding where `custom_prompt` goes: if it's a direct instruction for *this* turn,
@@ -1060,9 +1068,9 @@ def _chat_sync_impl(
 
 def chat(
     message: str,
-    history: List[Dict[str, Any]],
-    media_content: Optional[Dict[str, str]],
-    selected_parts: List[str],
+    history: list[dict[str, Any]],
+    media_content: Optional[dict[str, str]],
+    selected_parts: list[str],
     api_endpoint: str,
     api_key: Optional[str],
     custom_prompt: Optional[str],
@@ -1074,24 +1082,24 @@ def chat(
     model: Optional[str] = None,
     topp: Optional[float] = None,
     topk: Optional[int] = None,
-    chatdict_entries: Optional[List[Any]] = None,  # Should be List[ChatDictionary]
+    chatdict_entries: Optional[list[Any]] = None,  # Should be List[ChatDictionary]
     max_tokens: int = 500,
     strategy: str = "sorted_evenly",
-    current_image_input: Optional[Dict[str, str]] = None,
+    current_image_input: Optional[dict[str, str]] = None,
     image_history_mode: str = "tag_past",
     llm_max_tokens: Optional[int] = None,
     llm_seed: Optional[int] = None,
-    llm_stop: Optional[Union[str, List[str]]] = None,
+    llm_stop: Optional[Union[str, list[str]]] = None,
     llm_response_format: Optional[ResponseFormat] = None,
     llm_n: Optional[int] = None,
     llm_user_identifier: Optional[str] = None,
     llm_logprobs: Optional[bool] = None,
     llm_top_logprobs: Optional[int] = None,
-    llm_logit_bias: Optional[Dict[str, float]] = None,
+    llm_logit_bias: Optional[dict[str, float]] = None,
     llm_presence_penalty: Optional[float] = None,
     llm_frequency_penalty: Optional[float] = None,
-    llm_tools: Optional[List[Dict[str, Any]]] = None,
-    llm_tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    llm_tools: Optional[list[dict[str, Any]]] = None,
+    llm_tool_choice: Optional[Union[str, dict[str, Any]]] = None,
 ) -> Union[str, Any]:
     """
     Public synchronous chat entrypoint.
@@ -1196,7 +1204,7 @@ def chat(
         )
 
     if _sync_in_event_loop_strict():
-        raise RuntimeError(
+        raise SyncCallInEventLoopError(
             "chat() called from a running event loop. "
             "Use await achat(...) or disable CHAT_SYNC_IN_EVENT_LOOP_STRICT."
         )
@@ -1248,9 +1256,9 @@ def chat(
 
 async def achat(
     message: str,
-    history: List[Dict[str, Any]],
-    media_content: Optional[Dict[str, str]],
-    selected_parts: List[str],
+    history: list[dict[str, Any]],
+    media_content: Optional[dict[str, str]],
+    selected_parts: list[str],
     api_endpoint: str,
     api_key: Optional[str],
     custom_prompt: Optional[str],
@@ -1262,24 +1270,24 @@ async def achat(
     model: Optional[str] = None,
     topp: Optional[float] = None,
     topk: Optional[int] = None,
-    chatdict_entries: Optional[List[Any]] = None, # Should be List[ChatDictionary]
+    chatdict_entries: Optional[list[Any]] = None, # Should be List[ChatDictionary]
     max_tokens: int = 500,
     strategy: str = "sorted_evenly",
-    current_image_input: Optional[Dict[str, str]] = None,
+    current_image_input: Optional[dict[str, str]] = None,
     image_history_mode: str = "tag_past",
     llm_max_tokens: Optional[int] = None,
     llm_seed: Optional[int] = None,
-    llm_stop: Optional[Union[str, List[str]]] = None,
+    llm_stop: Optional[Union[str, list[str]]] = None,
     llm_response_format: Optional[ResponseFormat] = None,
     llm_n: Optional[int] = None,
     llm_user_identifier: Optional[str] = None,
     llm_logprobs: Optional[bool] = None,
     llm_top_logprobs: Optional[int] = None,
-    llm_logit_bias: Optional[Dict[str, float]] = None,
+    llm_logit_bias: Optional[dict[str, float]] = None,
     llm_presence_penalty: Optional[float] = None,
     llm_frequency_penalty: Optional[float] = None,
-    llm_tools: Optional[List[Dict[str, Any]]] = None,
-    llm_tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    llm_tools: Optional[list[dict[str, Any]]] = None,
+    llm_tool_choice: Optional[Union[str, dict[str, Any]]] = None,
 ) -> Union[str, Any]:
     """Async variant of chat() that uses async slash-command dispatch and async provider calls.
 
@@ -1335,14 +1343,14 @@ async def achat(
                 message, chatdict_entries, max_tokens=max_tokens, strategy=strategy
             )
 
-        llm_messages_payload: List[Dict[str, Any]] = []
+        llm_messages_payload: list[dict[str, Any]] = []
 
         # 2. Process History (now expecting list of OpenAI message dicts)
         last_user_image_url_from_history: Optional[str] = None
         for hist_msg_obj in history:
             role = hist_msg_obj.get("role")
             original_content = hist_msg_obj.get("content")
-            processed_hist_content_parts: List[Dict[str, Any]] = []
+            processed_hist_content_parts: list[dict[str, Any]] = []
 
             if isinstance(original_content, str):
                 processed_hist_content_parts.append({"type": "text", "text": original_content})
@@ -1417,7 +1425,7 @@ async def achat(
             except Exception:
                 rag_text_prefix = ""
 
-        current_user_content_parts: List[Dict[str, Any]] = []
+        current_user_content_parts: list[dict[str, Any]] = []
         final_text_for_current_message = processed_text_message
         if custom_prompt:
             final_text_for_current_message = f"{custom_prompt}\n\n{final_text_for_current_message}"

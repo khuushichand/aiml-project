@@ -10,15 +10,15 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.exceptions import AdapterError
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import resolve_user_id_value
+from tldw_Server_API.app.core.exceptions import AdapterError
 
 
-def extract_openai_content(response: Any) -> Optional[str]:
+def extract_openai_content(response: Any) -> str | None:
     """Extract text content from an OpenAI-style response.
 
     Args:
@@ -90,7 +90,7 @@ def is_subpath(parent: Path, child: Path) -> bool:
         return False
 
 
-def resolve_context_user_id(context: Dict[str, Any]) -> Optional[str]:
+def resolve_context_user_id(context: dict[str, Any]) -> str | None:
     """Resolve user ID from workflow context.
 
     Args:
@@ -183,7 +183,7 @@ def resolve_artifact_filename(name: str, ext: str, default_stem: str = "artifact
     return f"{safe_stem}.{ext}"
 
 
-def unsafe_file_access_allowed(config: Dict[str, Any] | None) -> bool:  # noqa: ARG001
+def unsafe_file_access_allowed(config: dict[str, Any] | None) -> bool:  # noqa: ARG001
     """Determine whether unsafe file access is explicitly enabled.
 
     Args:
@@ -234,7 +234,7 @@ def resolve_workflows_file_allowlist_paths(paths: list[str]) -> list[Path]:
     return resolved
 
 
-def workflow_file_allowlist(context: Dict[str, Any]) -> list[Path]:
+def workflow_file_allowlist(context: dict[str, Any]) -> list[Path]:
     """Return the resolved allowlist for the current tenant, if configured."""
     tenant_id = str(context.get("tenant_id") or "default") if isinstance(context, dict) else "default"
     tenant_key = f"WORKFLOWS_FILE_ALLOWLIST_{tenant_id.upper().replace('-', '_')}"
@@ -245,7 +245,7 @@ def workflow_file_allowlist(context: Dict[str, Any]) -> list[Path]:
     return resolve_workflows_file_allowlist_paths(parse_workflows_file_allowlist(raw))
 
 
-def workflow_file_base_dir(context: Dict[str, Any], config: Dict[str, Any] | None) -> Path:  # noqa: ARG001
+def workflow_file_base_dir(context: dict[str, Any], config: dict[str, Any] | None) -> Path:  # noqa: ARG001
     """Resolve the base directory for workflow file access.
 
     Args:
@@ -285,7 +285,7 @@ def workflow_file_base_dir(context: Dict[str, Any], config: Dict[str, Any] | Non
         return Path("Databases").resolve()
 
 
-def resolve_workflow_file_path(path_value: str, context: Dict[str, Any], config: Dict[str, Any] | None = None) -> Path:
+def resolve_workflow_file_path(path_value: str, context: dict[str, Any], config: dict[str, Any] | None = None) -> Path:
     """Resolve a workflow file path relative to the allowed base directory.
 
     Args:
@@ -325,7 +325,7 @@ def resolve_workflow_file_path(path_value: str, context: Dict[str, Any], config:
     return resolved
 
 
-def resolve_workflow_file_uri(file_uri: str, context: Dict[str, Any], config: Dict[str, Any] | None = None) -> Path:
+def resolve_workflow_file_uri(file_uri: str, context: dict[str, Any], config: dict[str, Any] | None = None) -> Path:
     """Resolve a `file://` URI to a safe local filesystem path.
 
     Args:
@@ -345,7 +345,7 @@ def resolve_workflow_file_uri(file_uri: str, context: Dict[str, Any], config: Di
     return resolve_workflow_file_path(raw_path, context, config)
 
 
-def normalize_str_list(value: Any) -> List[str]:
+def normalize_str_list(value: Any) -> list[str]:
     """Normalize a value to a list of strings.
 
     Args:
@@ -373,7 +373,7 @@ def normalize_str_list(value: Any) -> List[str]:
     return [str(value).strip()]
 
 
-def extract_mcp_policy(context: Dict[str, Any]) -> Dict[str, Any]:
+def extract_mcp_policy(context: dict[str, Any]) -> dict[str, Any]:
     """Extract MCP policy from workflow context.
 
     Args:
@@ -394,7 +394,7 @@ def extract_mcp_policy(context: Dict[str, Any]) -> Dict[str, Any]:
     return policy or {}
 
 
-def tool_matches_allowlist(tool_name: str, allowlist: List[str]) -> bool:
+def tool_matches_allowlist(tool_name: str, allowlist: list[str]) -> bool:
     """Check if a tool name matches the allowlist.
 
     Args:
@@ -416,7 +416,7 @@ def tool_matches_allowlist(tool_name: str, allowlist: List[str]) -> bool:
     return False
 
 
-def extract_tool_scopes(tool_def: Optional[Dict[str, Any]]) -> List[str]:
+def extract_tool_scopes(tool_def: dict[str, Any] | None) -> list[str]:
     """Extract scopes from a tool definition.
 
     Args:

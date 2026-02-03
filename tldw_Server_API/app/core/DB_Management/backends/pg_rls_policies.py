@@ -9,19 +9,18 @@ This module builds and applies SQL similar to Docs/Deployment/Database/postgres-
 """
 from __future__ import annotations
 
-from typing import List
 from loguru import logger
 
 try:
-    from .base import DatabaseBackend, BackendType, DatabaseError
+    from .base import BackendType, DatabaseBackend, DatabaseError
 except Exception:  # pragma: no cover
     DatabaseBackend = object  # type: ignore
     BackendType = None  # type: ignore
     class DatabaseError(Exception): ...  # type: ignore
 
 
-def build_prompt_studio_rls_sql() -> List[str]:
-    stmts: List[str] = []
+def build_prompt_studio_rls_sql() -> list[str]:
+    stmts: list[str] = []
 
     def add(sql: str) -> None:
         stmts.append(sql.strip())
@@ -183,9 +182,9 @@ def build_prompt_studio_rls_sql() -> List[str]:
     return stmts
 
 
-def build_chacha_rls_sql() -> List[str]:
+def build_chacha_rls_sql() -> list[str]:
     """RLS for ChaChaNotes (notes, character_cards) using client_id scoping."""
-    stmts: List[str] = []
+    stmts: list[str] = []
 
     def add(sql: str) -> None:
         stmts.append(sql.strip())

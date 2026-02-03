@@ -9,13 +9,12 @@ import secrets
 import string
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-
 
 # Invite code configuration
 INVITE_CODE_LENGTH = 20
@@ -40,7 +39,7 @@ class AuthnzOrgInvitesRepo:
 
     db_pool: DatabasePool
 
-    def _is_postgres(self, conn: Optional[Any] = None) -> bool:
+    def _is_postgres(self, conn: Any | None = None) -> bool:
         """Detect whether the current backend/connection is Postgres."""
         if conn is not None:
             return hasattr(conn, "fetchrow")
@@ -51,14 +50,14 @@ class AuthnzOrgInvitesRepo:
         *,
         org_id: int,
         created_by: int,
-        team_id: Optional[int] = None,
+        team_id: int | None = None,
         role_to_grant: str = "member",
         max_uses: int = 1,
         expiry_days: int = 7,
-        description: Optional[str] = None,
-        allowed_email_domain: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        description: str | None = None,
+        allowed_email_domain: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Create a new organization invite code.
 
@@ -146,7 +145,7 @@ class AuthnzOrgInvitesRepo:
             logger.error(f"AuthnzOrgInvitesRepo.create_invite failed: {exc}")
             raise
 
-    async def get_invite_by_code(self, code: str) -> Optional[Dict[str, Any]]:
+    async def get_invite_by_code(self, code: str) -> dict[str, Any] | None:
         """
         Get invite details by code.
 
@@ -214,7 +213,7 @@ class AuthnzOrgInvitesRepo:
             logger.error(f"AuthnzOrgInvitesRepo.get_invite_by_code failed: {exc}")
             raise
 
-    async def get_invite_by_id(self, invite_id: int) -> Optional[Dict[str, Any]]:
+    async def get_invite_by_id(self, invite_id: int) -> dict[str, Any] | None:
         """Get invite details by ID."""
         try:
             async with self.db_pool.transaction() as conn:
@@ -275,7 +274,7 @@ class AuthnzOrgInvitesRepo:
         include_inactive: bool = False,
         limit: int = 50,
         offset: int = 0,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         List invites for an organization.
 
@@ -285,7 +284,7 @@ class AuthnzOrgInvitesRepo:
             async with self.db_pool.transaction() as conn:
                 # Build WHERE clause
                 conditions = ["i.org_id = $1" if self._is_postgres(conn) else "i.org_id = ?"]
-                params: List[Any] = [org_id]
+                params: list[Any] = [org_id]
 
                 if not include_inactive:
                     if self._is_postgres(conn):
@@ -432,9 +431,9 @@ class AuthnzOrgInvitesRepo:
         *,
         invite_id: int,
         user_id: int,
-        ip_address: Optional[str] = None,
-        user_agent: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> dict[str, Any]:
         """
         Record that a user redeemed an invite.
 

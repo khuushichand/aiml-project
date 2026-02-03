@@ -13,14 +13,18 @@
 ####################
 # Import necessary libraries
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Any
+
+import yaml
+
 #
 # Import 3rd Party Libraries
 from pyannote.audio.pipelines.speaker_diarization import SpeakerDiarization
-import yaml
+
 # Import Local Libraries
 from tldw_Server_API.app.core.Metrics.metrics_logger import timeit
 from tldw_Server_API.app.core.Utils.Utils import logging
+
 #
 #######################################################################################################################
 # Function Definitions
@@ -192,7 +196,7 @@ def audio_diarization(audio_file_path: str) -> list:
 #     return segments
 
 @timeit
-def combine_transcription_and_diarization(audio_file_path: str) -> List[Dict[str, Any]]:
+def combine_transcription_and_diarization(audio_file_path: str) -> list[dict[str, Any]]:
     logging.info('combine-transcription-and-diarization: Starting transcription and diarization...')
 
     try:

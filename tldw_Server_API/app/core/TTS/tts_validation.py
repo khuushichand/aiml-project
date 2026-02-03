@@ -3,29 +3,30 @@
 #
 # Imports
 import base64
-import re
 import html
+import re
 import unicodedata
-from typing import Dict, Any, List, Optional, Tuple, Union, Set
-from pathlib import Path
-import mimetypes
+from typing import Any, Optional, Union
+
 #
 # Third-party Imports
 from loguru import logger
+
+from .adapters.base import AudioFormat, TTSRequest
+
 #
 # Local Imports
 from .tts_exceptions import (
-    TTSValidationError,
     TTSInvalidInputError,
+    TTSInvalidVoiceReferenceError,
     TTSTextTooLongError,
     TTSUnsupportedFormatError,
     TTSUnsupportedLanguageError,
+    TTSValidationError,
     TTSVoiceNotFoundError,
-    TTSInvalidVoiceReferenceError,
-    validation_error
 )
-from .adapters.base import AudioFormat, TTSRequest
 from .utils import parse_bool
+
 #
 #######################################################################################################################
 #
@@ -137,7 +138,7 @@ class ProviderLimits:
     }
 
     @classmethod
-    def get_limits(cls, provider: str) -> Dict[str, Any]:
+    def get_limits(cls, provider: str) -> dict[str, Any]:
         """Get limits for a specific provider"""
         # Return default limits if provider not found
         default_limits = {
@@ -310,7 +311,7 @@ class TTSInputValidator:
         "sohee",
     }
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         """
         Initialize the validator with configuration.
 
@@ -470,7 +471,7 @@ class TTSInputValidator:
         else:
             return self._validate_text(text, provider)
 
-    def validate_language(self, language: Optional[str], provider: Optional[Union[str, List[str]]] = None):
+    def validate_language(self, language: Optional[str], provider: Optional[Union[str, list[str]]] = None):
         """Public method to validate language"""
         # None language is valid (will use default)
         if language is None:
@@ -487,7 +488,7 @@ class TTSInputValidator:
             return
         return self._validate_language(language, provider)
 
-    def validate_format(self, format: AudioFormat, provider: Optional[Union[str, Set[AudioFormat]]] = None):
+    def validate_format(self, format: AudioFormat, provider: Optional[Union[str, set[AudioFormat]]] = None):
         """Public method to validate format"""
         # Handle test case where supported formats are passed directly
         if isinstance(provider, set):
@@ -508,7 +509,7 @@ class TTSInputValidator:
         """Public method to validate voice reference"""
         return self._validate_voice_reference(voice_ref_data)
 
-    def validate_request(self, request: TTSRequest, provider: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+    def validate_request(self, request: TTSRequest, provider: Optional[str] = None) -> tuple[bool, Optional[str]]:
         """
         Validate a complete TTS request.
 
@@ -830,6 +831,7 @@ class TTSInputValidator:
         if min_duration is not None and min_duration > 0:
             try:
                 import io
+
                 import soundfile as sf
             except Exception as exc:
                 raise TTSInvalidVoiceReferenceError(
@@ -932,7 +934,7 @@ class TTSInputValidator:
 
 
 # Convenience validation functions
-def validate_text_input(text: str, provider: Optional[str] = None, config: Optional[Dict[str, Any]] = None) -> str:
+def validate_text_input(text: str, provider: Optional[str] = None, config: Optional[dict[str, Any]] = None) -> str:
     """
     Validate and sanitize text input for TTS.
 
@@ -951,7 +953,7 @@ def validate_text_input(text: str, provider: Optional[str] = None, config: Optio
     return validator.sanitize_text(text, provider)
 
 
-def validate_tts_request(request: TTSRequest, provider: Optional[str] = None, config: Optional[Dict[str, Any]] = None) -> None:
+def validate_tts_request(request: TTSRequest, provider: Optional[str] = None, config: Optional[dict[str, Any]] = None) -> None:
     """
     Validate complete TTS request.
 
@@ -970,7 +972,7 @@ def validate_tts_request(request: TTSRequest, provider: Optional[str] = None, co
         raise TTSValidationError(error_message, provider=provider)
 
 
-def validate_voice_reference(voice_ref_data: bytes, config: Optional[Dict[str, Any]] = None) -> None:
+def validate_voice_reference(voice_ref_data: bytes, config: Optional[dict[str, Any]] = None) -> None:
     """
     Validate voice reference audio data.
 

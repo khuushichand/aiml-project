@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -11,7 +11,6 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.quota_config import (
     apply_prompt_studio_quota_defaults,
 )
-
 
 _PROMPT_STUDIO_DOMAIN = "prompt_studio"
 
@@ -37,7 +36,7 @@ def _jobs_manager() -> JobManager:
     return JobManager(backend=backend, db_url=db_url)
 
 
-def _map_status(raw_status: Optional[str]) -> str:
+def _map_status(raw_status: str | None) -> str:
     status = str(raw_status or "").lower()
     if status == "quarantined":
         return "failed"
@@ -46,7 +45,7 @@ def _map_status(raw_status: Optional[str]) -> str:
     return "queued"
 
 
-def _normalize_payload(value: Any) -> Dict[str, Any]:
+def _normalize_payload(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     if isinstance(value, str):
@@ -58,7 +57,7 @@ def _normalize_payload(value: Any) -> Dict[str, Any]:
     return {}
 
 
-def _format_datetime(value: Any) -> Optional[str]:
+def _format_datetime(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -66,7 +65,7 @@ def _format_datetime(value: Any) -> Optional[str]:
     return str(value)
 
 
-def _entity_id_from_payload(payload: Dict[str, Any]) -> Optional[int]:
+def _entity_id_from_payload(payload: dict[str, Any]) -> int | None:
     for key in ("optimization_id", "evaluation_id", "generation_id", "entity_id"):
         value = payload.get(key)
         if value is None:
@@ -84,7 +83,7 @@ class PromptStudioJobsAdapter:
     def __init__(
         self,
         *,
-        backend: Optional[str] = None,
+        backend: str | None = None,
     ) -> None:
         if backend and backend != "core":
             logger.warning("Prompt Studio jobs adapter forced to core backend; legacy backend removed.")
@@ -100,9 +99,9 @@ class PromptStudioJobsAdapter:
         job_id: str,
         *,
         db,
-        user_id: Optional[str],
-        job_type: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        user_id: str | None,
+        job_type: str | None = None,
+    ) -> dict[str, Any] | None:
         if self._backend == "core":
             job = self._lookup_core_job(job_id, user_id=user_id, job_type=job_type)
             if job is not None:
@@ -113,10 +112,10 @@ class PromptStudioJobsAdapter:
         self,
         *,
         db,
-        user_id: Optional[str],
-        job_type: Optional[str] = None,
+        user_id: str | None,
+        job_type: str | None = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         if self._backend == "core":
             jobs = self._jm.list_jobs(
                 domain=_PROMPT_STUDIO_DOMAIN,
@@ -133,10 +132,10 @@ class PromptStudioJobsAdapter:
         self,
         *,
         db,
-        user_id: Optional[str],
+        user_id: str | None,
         job_type: str,
         entity_id: int,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         jobs = self.list_jobs_for_entity(
             db=db,
             user_id=user_id,
@@ -151,12 +150,12 @@ class PromptStudioJobsAdapter:
         self,
         *,
         db,
-        user_id: Optional[str],
+        user_id: str | None,
         job_type: str,
         entity_id: int,
         limit: int = 50,
         ascending: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         if self._backend == "core":
             raw_jobs = self._jm.list_jobs(
                 domain=_PROMPT_STUDIO_DOMAIN,
@@ -178,17 +177,17 @@ class PromptStudioJobsAdapter:
     def create_job(
         self,
         *,
-        user_id: Optional[str],
+        user_id: str | None,
         job_type: str,
-        entity_id: Optional[int],
-        payload: Optional[Dict[str, Any]],
-        project_id: Optional[int] = None,
+        entity_id: int | None,
+        payload: dict[str, Any] | None,
+        project_id: int | None = None,
         priority: int = 5,
         max_retries: int = 3,
-        request_id: Optional[str] = None,
-        trace_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        payload_dict: Dict[str, Any] = dict(payload or {})
+        request_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload_dict: dict[str, Any] = dict(payload or {})
         if entity_id is not None:
             try:
                 payload_dict.setdefault("entity_id", int(entity_id))
@@ -211,9 +210,9 @@ class PromptStudioJobsAdapter:
         self,
         job_id: str,
         *,
-        user_id: Optional[str],
-        reason: Optional[str] = None,
-        job_type: Optional[str] = None,
+        user_id: str | None,
+        reason: str | None = None,
+        job_type: str | None = None,
     ) -> bool:
         job = self._lookup_core_job(job_id, user_id=user_id, job_type=job_type)
         if not job:
@@ -227,9 +226,9 @@ class PromptStudioJobsAdapter:
         self,
         job_id: str,
         *,
-        user_id: Optional[str],
-        job_type: Optional[str],
-    ) -> Optional[Dict[str, Any]]:
+        user_id: str | None,
+        job_type: str | None,
+    ) -> dict[str, Any] | None:
         job = None
         if job_id:
             try:
@@ -264,7 +263,7 @@ class PromptStudioJobsAdapter:
                     return candidate
         return None
 
-    def _matches(self, job: Dict[str, Any], *, user_id: Optional[str], job_type: Optional[str]) -> bool:
+    def _matches(self, job: dict[str, Any], *, user_id: str | None, job_type: str | None) -> bool:
         if not job:
             return False
         if str(job.get("domain")) != _PROMPT_STUDIO_DOMAIN:
@@ -276,11 +275,11 @@ class PromptStudioJobsAdapter:
             return False
         return True
 
-    def _format_job(self, job: Dict[str, Any]) -> Dict[str, Any]:
+    def _format_job(self, job: dict[str, Any]) -> dict[str, Any]:
         payload = _normalize_payload(job.get("payload"))
         result = _normalize_payload(job.get("result"))
         progress = job.get("progress_percent")
-        formatted: Dict[str, Any] = {
+        formatted: dict[str, Any] = {
             "id": str(job.get("uuid") or job.get("id")),
             "uuid": job.get("uuid"),
             "job_type": job.get("job_type"),

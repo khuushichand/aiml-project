@@ -6,26 +6,25 @@ import os
 import shutil
 import tempfile
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.media_request_models import AddMediaForm
+from tldw_Server_API.app.core.Chunking.templates import TemplateClassifier
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerSDK, WorkerConfig
+from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
+    apply_chunking_template_if_any,
+    prepare_chunking_options_dict,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
     process_batch_media,
     process_document_like_item,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
-    prepare_chunking_options_dict,
-    apply_chunking_template_if_any,
-)
-from tldw_Server_API.app.core.Chunking.templates import TemplateClassifier
-from tldw_Server_API.app.core.config import settings
-
+from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
 
 _MEDIA_DOMAIN = "media_ingest"
 _MEDIA_JOB_TYPE = "media_ingest_item"
@@ -33,12 +32,12 @@ _MEDIA_JOB_TYPE = "media_ingest_item"
 
 @dataclass
 class _ProgressState:
-    percent: Optional[float] = None
-    message: Optional[str] = None
+    percent: float | None = None
+    message: str | None = None
 
 
 class MediaIngestJobError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: Optional[int] = None) -> None:
+    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: int | None = None) -> None:
         super().__init__(message)
         self.retryable = retryable
         if backoff_seconds is not None:
@@ -79,7 +78,7 @@ def _build_worker_config(*, worker_id: str, queue: str) -> WorkerConfig:
     )
 
 
-def _normalize_payload(value: Any) -> Dict[str, Any]:
+def _normalize_payload(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
     if isinstance(value, str):
@@ -91,7 +90,7 @@ def _normalize_payload(value: Any) -> Dict[str, Any]:
     return {}
 
 
-def _resolve_user_id(job: Dict[str, Any], payload: Dict[str, Any]) -> str:
+def _resolve_user_id(job: dict[str, Any], payload: dict[str, Any]) -> str:
     owner = job.get("owner_user_id") or payload.get("user_id")
     if owner is None or str(owner).strip() == "":
         raise MediaIngestJobError("missing owner_user_id", retryable=False)
@@ -107,7 +106,7 @@ def _should_cancel(jm: JobManager, job_id: int) -> bool:
         return False
 
 
-def _cleanup_temp_dir(temp_dir: Optional[str]) -> None:
+def _cleanup_temp_dir(temp_dir: str | None) -> None:
     if not temp_dir:
         return
     try:
@@ -116,7 +115,7 @@ def _cleanup_temp_dir(temp_dir: Optional[str]) -> None:
         pass
 
 
-def _build_form_data(payload: Dict[str, Any]) -> AddMediaForm:
+def _build_form_data(payload: dict[str, Any]) -> AddMediaForm:
     options = payload.get("options") or {}
     if not isinstance(options, dict):
         options = {}
@@ -168,7 +167,7 @@ async def _schedule_embeddings(
         logger.warning("Embedding generation failed for media %s: %s", media_id, exc)
 
 
-async def _handle_job(job: Dict[str, Any], jm: JobManager, progress: _ProgressState) -> Dict[str, Any]:
+async def _handle_job(job: dict[str, Any], jm: JobManager, progress: _ProgressState) -> dict[str, Any]:
     job_id = int(job.get("id"))
     payload = _normalize_payload(job.get("payload"))
     if str(job.get("job_type") or "").lower() != _MEDIA_JOB_TYPE:
@@ -306,7 +305,7 @@ async def _handle_job(job: Dict[str, Any], jm: JobManager, progress: _ProgressSt
             _cleanup_temp_dir(temp_dir)
 
 
-async def run_media_ingest_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_media_ingest_jobs_worker(stop_event: asyncio.Event | None = None) -> None:
     jm = _jobs_manager()
     worker_id = "media-ingest-worker"
     queue = (os.getenv("MEDIA_INGEST_JOBS_QUEUE") or "default").strip() or "default"
@@ -314,15 +313,15 @@ async def run_media_ingest_jobs_worker(stop_event: Optional[asyncio.Event] = Non
     sdk = WorkerSDK(jm, cfg)
     progress_state = _ProgressState()
 
-    async def _cancel_check(job: Dict[str, Any]) -> bool:
+    async def _cancel_check(job: dict[str, Any]) -> bool:
         job_id = int(job.get("id"))
         return _should_cancel(jm, job_id)
 
-    async def _handler(job: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handler(job: dict[str, Any]) -> dict[str, Any]:
         return await _handle_job(job, jm, progress_state)
 
-    def _progress_cb() -> Dict[str, Any]:
-        out: Dict[str, Any] = {}
+    def _progress_cb() -> dict[str, Any]:
+        out: dict[str, Any] = {}
         if progress_state.percent is not None:
             out["progress_percent"] = progress_state.percent
         if progress_state.message is not None:

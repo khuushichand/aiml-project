@@ -4,22 +4,25 @@
 # Imports
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Optional
+
 #
 # 3rd-party imports
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from loguru import logger
+
+from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import AuthnzMonitoringRepo
+from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
+from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
-from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
-from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
-from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import AuthnzMonitoringRepo
 from tldw_Server_API.app.core.Metrics import set_gauge
 
 #######################################################################################################################
@@ -288,6 +291,7 @@ class AuthNZScheduler:
         """Iterate user evaluation DBs and purge old idempotency keys."""
         try:
             from pathlib import Path
+
             from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
             from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase as _EDB
             # Discover user database base dir (reuse DatabasePaths fallback by building a known path)
@@ -690,7 +694,7 @@ class AuthNZScheduler:
         message: str,
         *,
         severity: str = "high",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> bool:
         """
         Dispatch a security alert using the configured dispatcher.
@@ -699,7 +703,7 @@ class AuthNZScheduler:
             True if the dispatcher attempted to send the alert, False otherwise.
         """
         dispatcher = get_security_alert_dispatcher()
-        payload_metadata: Dict[str, Any] = {"source": "authnz_scheduler"}
+        payload_metadata: dict[str, Any] = {"source": "authnz_scheduler"}
         if metadata:
             payload_metadata.update(metadata)
 

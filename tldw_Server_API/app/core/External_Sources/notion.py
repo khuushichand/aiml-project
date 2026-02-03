@@ -1,24 +1,25 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import urlencode
 
-from .connector_base import BaseConnector
 from tldw_Server_API.app.core.http_client import afetch
+
+from .connector_base import BaseConnector
 
 
 class NotionConnector(BaseConnector):
     name = "notion"
 
-    def __init__(self, client_id: Optional[str] = None, client_secret: Optional[str] = None, redirect_base: Optional[str] = None):
+    def __init__(self, client_id: str | None = None, client_secret: str | None = None, redirect_base: str | None = None):
         super().__init__(
             client_id=client_id or os.getenv("CONNECTOR_NOTION_CLIENT_ID"),
             client_secret=client_secret or os.getenv("CONNECTOR_NOTION_SECRET"),
             redirect_base=redirect_base or os.getenv("CONNECTOR_REDIRECT_BASE_URL"),
         )
 
-    def authorize_url(self, state: Optional[str] = None, scopes: Optional[List[str]] = None, redirect_path: str = "/api/v1/connectors/providers/notion/callback") -> str:
+    def authorize_url(self, state: str | None = None, scopes: list[str] | None = None, redirect_path: str = "/api/v1/connectors/providers/notion/callback") -> str:
         redirect_uri = f"{self.redirect_base}{redirect_path}"
         if not self.client_id:
             return f"{redirect_uri}?scaffold=1&state={state or ''}"
@@ -32,7 +33,7 @@ class NotionConnector(BaseConnector):
             params["state"] = state
         return f"https://api.notion.com/v1/oauth/authorize?{urlencode(params)}"
 
-    async def exchange_code(self, code: str, redirect_uri: str) -> Dict[str, Any]:
+    async def exchange_code(self, code: str, redirect_uri: str) -> dict[str, Any]:
         token_url = "https://api.notion.com/v1/oauth/token"
         headers = {"Content-Type": "application/json"}
         body = {
@@ -66,7 +67,7 @@ class NotionConnector(BaseConnector):
             "workspace_name": tok.get("workspace_name"),
         }
 
-    async def list_sources(self, account: Dict[str, Any], parent_remote_id: Optional[str] = None, *, page_size: int = 50, cursor: Optional[str] = None):
+    async def list_sources(self, account: dict[str, Any], parent_remote_id: str | None = None, *, page_size: int = 50, cursor: str | None = None):
         token = (account.get("tokens") or {}).get("access_token") or account.get("access_token")
         if not token:
             return [], None
@@ -144,7 +145,7 @@ class NotionConnector(BaseConnector):
                 items.append({"id": did, "name": (r.get("title") or [{}])[0].get("plain_text") if r.get("title") else did, "type": "database"})
         return items, data.get("next_cursor")
 
-    async def download_file(self, account: Dict[str, Any], file_id: str) -> bytes:
+    async def download_file(self, account: dict[str, Any], file_id: str) -> bytes:
         """Return Markdown bytes for a page by traversing blocks recursively, with code/table handling."""
         token = (account.get("tokens") or {}).get("access_token") or account.get("access_token")
         if not token:
@@ -153,8 +154,8 @@ class NotionConnector(BaseConnector):
             "Authorization": f"Bearer {token}",
             "Notion-Version": "2022-06-28",
         }
-        async def _fetch_children(block_id: str) -> List[Dict[str, Any]]:
-            out: List[Dict[str, Any]] = []
+        async def _fetch_children(block_id: str) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
             cursor = None
             while True:
                 params = {"page_size": 50}
@@ -180,7 +181,7 @@ class NotionConnector(BaseConnector):
                 cursor = data.get("next_cursor")
             return out
 
-        def _rich_text_to_md(rich: List[Dict[str, Any]]) -> str:
+        def _rich_text_to_md(rich: list[dict[str, Any]]) -> str:
             out = []
             for p in rich or []:
                 txt = p.get("plain_text") or ""
@@ -196,10 +197,10 @@ class NotionConnector(BaseConnector):
                 out.append(txt)
             return "".join(out)
 
-        async def _render_block(b: Dict[str, Any], depth: int = 0) -> List[str]:
+        async def _render_block(b: dict[str, Any], depth: int = 0) -> list[str]:
             t = b.get("type")
             bt = b.get(t) or {}
-            lines: List[str] = []
+            lines: list[str] = []
             indent = "  " * depth
             # Headings
             if t in {"heading_1", "heading_2", "heading_3"}:
@@ -250,7 +251,7 @@ class NotionConnector(BaseConnector):
                     rows = await _fetch_children(b.get("id"))
                     # Build Markdown table; infer column count from first row
                     head_cells = []
-                    body_rows: List[List[str]] = []
+                    body_rows: list[list[str]] = []
                     for i, row in enumerate(rows):
                         if row.get("type") != "table_row":
                             continue
@@ -291,13 +292,13 @@ class NotionConnector(BaseConnector):
 
         # Render the whole page
         top_level = await _fetch_children(file_id)
-        lines: List[str] = []
+        lines: list[str] = []
         for b in top_level:
             lines.extend(await _render_block(b, 0))
         md = "\n".join(lines).encode("utf-8")
         return md
 
-    async def refresh_access_token(self, refresh_token: str) -> Optional[Dict[str, Any]]:
+    async def refresh_access_token(self, refresh_token: str) -> dict[str, Any] | None:
         """Refresh Notion access token using Basic auth."""
         if not (self.client_id and self.client_secret and refresh_token):
             return None

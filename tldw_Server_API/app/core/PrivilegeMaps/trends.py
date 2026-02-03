@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 
 from loguru import logger
 
@@ -16,13 +17,13 @@ class TrendBaseline:
     users: int
     endpoints: int
     scopes: int
-    generated_at: Optional[datetime]
+    generated_at: datetime | None
 
 
 class PrivilegeTrendStore:
     """Persists privilege summary history to support trend calculations."""
 
-    def __init__(self, pool: Optional[DatabasePool] = None) -> None:
+    def __init__(self, pool: DatabasePool | None = None) -> None:
         self._pool = pool
         self._initialized = False
 
@@ -33,9 +34,9 @@ class PrivilegeTrendStore:
         group_by: str,
         catalog_version: str,
         generated_at: datetime,
-        buckets: Sequence[Dict[str, Any]],
-        team_id: Optional[str] = None,
-        org_id: Optional[str] = None,
+        buckets: Sequence[dict[str, Any]],
+        team_id: str | None = None,
+        org_id: str | None = None,
     ) -> None:
         if not buckets:
             return
@@ -115,12 +116,12 @@ class PrivilegeTrendStore:
         *,
         scope: str,
         group_by: str,
-        bucket_counts: Dict[str, Dict[str, int]],
+        bucket_counts: dict[str, dict[str, int]],
         window_start: datetime,
         window_end: datetime,
-        team_id: Optional[str] = None,
-        org_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        team_id: str | None = None,
+        org_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         if not bucket_counts:
             return []
         pool = await self._get_pool()
@@ -130,7 +131,7 @@ class PrivilegeTrendStore:
         window_start_iso = self._to_iso(window_start)
         window_end_iso = self._to_iso(window_end)
 
-        trends: List[Dict[str, Any]] = []
+        trends: list[dict[str, Any]] = []
         for key, counts in bucket_counts.items():
             baseline = await self._baseline_for_bucket(
                 pool=pool,
@@ -170,7 +171,7 @@ class PrivilegeTrendStore:
         team_bucket: str,
         org_bucket: str,
         window_start_iso: str,
-    ) -> Optional[TrendBaseline]:
+    ) -> TrendBaseline | None:
         # Prefer most recent record at or before window start.
         row = await pool.fetchone(
             """
@@ -285,12 +286,12 @@ class PrivilegeTrendStore:
         self._initialized = True
 
     @staticmethod
-    def _normalize_bucket(value: Optional[str], *, default: str) -> str:
+    def _normalize_bucket(value: str | None, *, default: str) -> str:
         raw = str(value).strip() if value else ""
         return raw or default
 
     @staticmethod
-    def _row_to_dict(row: Any) -> Dict[str, Any]:
+    def _row_to_dict(row: Any) -> dict[str, Any]:
         if row is None:
             return {}
         if isinstance(row, dict):
@@ -302,7 +303,7 @@ class PrivilegeTrendStore:
         return {}
 
     @staticmethod
-    def _parse_datetime(value: Any) -> Optional[datetime]:
+    def _parse_datetime(value: Any) -> datetime | None:
         if value is None:
             return None
         if isinstance(value, datetime):

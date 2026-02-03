@@ -10,24 +10,24 @@ layer (status codes, request/response models) remains in the endpoint module.
 
 import asyncio
 import functools
-from typing import Any, Dict, List
+from typing import Any
 
+from tldw_Server_API.app.core.config import config
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import (
     process_videos,
 )
 from tldw_Server_API.app.core.Utils.Utils import logging as logger
-from tldw_Server_API.app.core.config import config
 
 
 async def run_video_batch(
-    all_inputs_to_process: List[str],
+    all_inputs_to_process: list[str],
     *,
     form_data: Any,
     current_user: Any,
     temp_dir: str,
-    temp_path_to_original_name: Dict[str, str],
-    file_handling_errors_structured: List[Dict[str, Any]],
-) -> Dict[str, Any]:
+    temp_path_to_original_name: dict[str, str],
+    file_handling_errors_structured: list[dict[str, Any]],
+) -> dict[str, Any]:
     """
     Execute the video processing library and merge results with file errors.
 
@@ -42,7 +42,7 @@ async def run_video_batch(
     """
     loop = asyncio.get_running_loop()
 
-    batch_result: Dict[str, Any] = {
+    batch_result: dict[str, Any] = {
         "processed_count": 0,
         "errors_count": 0,
         "errors": [],
@@ -219,7 +219,7 @@ async def run_video_batch(
         batch_result["errors_count"] = sum(
             1 for r in final_results_list if str(r.get("status", "")).lower() == "error"
         )
-        deduped_errors: List[str] = []
+        deduped_errors: list[str] = []
         for err in final_errors_list:
             if err is None:
                 continue

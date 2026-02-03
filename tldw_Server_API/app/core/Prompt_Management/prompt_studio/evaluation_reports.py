@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import csv
+
 # evaluation_reports.py
 # Generate evaluation reports for Prompt Studio
-
 import json
-import csv
-from io import StringIO
-from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from datetime import datetime
+from io import StringIO
+from typing import TYPE_CHECKING, Any
+
 import numpy as np
 from loguru import logger
 
@@ -57,7 +58,7 @@ class EvaluationReportGenerator:
     ####################################################################################################################
     # Text Reports
 
-    def generate_text_report(self, evaluation_results: Dict[str, Any]) -> str:
+    def generate_text_report(self, evaluation_results: dict[str, Any]) -> str:
         """
         Generate a human-readable text report.
 
@@ -191,7 +192,7 @@ class EvaluationReportGenerator:
     ####################################################################################################################
     # CSV Reports
 
-    def generate_csv_report(self, evaluation_results: Dict[str, Any]) -> str:
+    def generate_csv_report(self, evaluation_results: dict[str, Any]) -> str:
         """
         Generate CSV report of test runs.
 
@@ -254,7 +255,7 @@ class EvaluationReportGenerator:
     ####################################################################################################################
     # JSON Reports
 
-    def generate_json_report(self, evaluation_results: Dict[str, Any]) -> str:
+    def generate_json_report(self, evaluation_results: dict[str, Any]) -> str:
         """
         Generate detailed JSON report.
 
@@ -301,7 +302,7 @@ class EvaluationReportGenerator:
     ####################################################################################################################
     # Visualization Reports
 
-    def generate_visual_report(self, evaluation_results: Dict[str, Any],
+    def generate_visual_report(self, evaluation_results: dict[str, Any],
                               output_path: str = "evaluation_report.pdf"):
         """
         Generate visual report with charts.
@@ -343,7 +344,7 @@ class EvaluationReportGenerator:
         except Exception as e:
             logger.error(f"Failed to generate visual report: {e}")
 
-    def _create_summary_page(self, results: Dict[str, Any], pdf: PdfPages):
+    def _create_summary_page(self, results: dict[str, Any], pdf: PdfPages):
         """Create summary page for visual report."""
         fig = self._plt.figure(figsize=(8.5, 11))
 
@@ -384,7 +385,7 @@ class EvaluationReportGenerator:
         pdf.savefig(fig)
         self._plt.close()
 
-    def _create_score_distribution_page(self, results: Dict[str, Any], pdf: PdfPages):
+    def _create_score_distribution_page(self, results: dict[str, Any], pdf: PdfPages):
         """Create score distribution visualization."""
         fig, axes = self._plt.subplots(2, 2, figsize=(8.5, 11))
         fig.suptitle('Score Distributions', size=16, weight='bold')
@@ -422,7 +423,7 @@ class EvaluationReportGenerator:
         pdf.savefig(fig)
         self._plt.close()
 
-    def _create_model_comparison_page(self, results: Dict[str, Any], pdf: PdfPages):
+    def _create_model_comparison_page(self, results: dict[str, Any], pdf: PdfPages):
         """Create model comparison visualization."""
         fig, axes = self._plt.subplots(2, 2, figsize=(8.5, 11))
         fig.suptitle('Model Comparison', size=16, weight='bold')
@@ -480,7 +481,7 @@ class EvaluationReportGenerator:
         pdf.savefig(fig)
         self._plt.close()
 
-    def _create_performance_page(self, results: Dict[str, Any], pdf: PdfPages):
+    def _create_performance_page(self, results: dict[str, Any], pdf: PdfPages):
         """Create performance metrics visualization."""
         fig, axes = self._plt.subplots(2, 2, figsize=(8.5, 11))
         fig.suptitle('Performance Metrics', size=16, weight='bold')
@@ -623,7 +624,7 @@ class ReportManager:
         else:
             raise ValueError(f"Unknown report format: {format}")
 
-    def _get_evaluation_results(self, evaluation_id: int) -> Optional[Dict[str, Any]]:
+    def _get_evaluation_results(self, evaluation_id: int) -> dict[str, Any] | None:
         """Get evaluation results from database."""
         conn = self.db.get_connection()
         cursor = conn.cursor()

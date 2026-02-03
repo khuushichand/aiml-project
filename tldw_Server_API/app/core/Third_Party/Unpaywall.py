@@ -6,14 +6,13 @@ Returns (pdf_url, error_message).
 from __future__ import annotations
 
 import os
-from typing import Optional, Tuple
-from tldw_Server_API.app.core.http_client import fetch
 
+from tldw_Server_API.app.core.http_client import fetch
 
 BASE_URL = "https://api.unpaywall.org/v2"
 
 
-def resolve_oa_pdf(doi: str) -> Tuple[Optional[str], Optional[str]]:
+def resolve_oa_pdf(doi: str) -> tuple[str | None, str | None]:
     """Resolve an OA PDF URL for the given DOI using Unpaywall.
 
     Returns (pdf_url, error_message). Missing email -> error; 404 -> (None, None).

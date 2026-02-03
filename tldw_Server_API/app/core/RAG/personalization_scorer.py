@@ -6,8 +6,9 @@ Provides optional lightweight explanation signals.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any
 
 
 @dataclass
@@ -18,10 +19,10 @@ class ScoreWeights:
 
 
 def rerank(
-    items: Iterable[Dict[str, Any]],
+    items: Iterable[dict[str, Any]],
     weights: ScoreWeights | None = None,
     with_explanations: bool = False,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]] | None]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
     """Scaffold reranker that passes through items and attaches dummy scores.
 
     Args:
@@ -33,8 +34,8 @@ def rerank(
         (ranked_items, explanations?)
     """
     w = weights or ScoreWeights()
-    ranked: List[Dict[str, Any]] = []
-    expl: List[Dict[str, Any]] = []
+    ranked: list[dict[str, Any]] = []
+    expl: list[dict[str, Any]] = []
 
     for idx, it in enumerate(items):
         base = float(it.get("bm25", 0.0))

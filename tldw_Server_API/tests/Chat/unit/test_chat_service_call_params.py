@@ -1,10 +1,17 @@
+"""Unit tests for chat_service call parameter construction."""
+
 import pytest
 
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import ChatCompletionRequest
 from tldw_Server_API.app.core.Chat.chat_service import build_call_params_from_request
 
 
-def test_build_call_params_excludes_extension_fields():
+pytestmark = pytest.mark.unit
+
+
+@pytest.mark.unit
+def test_build_call_params_excludes_extension_fields() -> None:
+    """Ensure extension-only fields are stripped from call params."""
     req = ChatCompletionRequest(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],

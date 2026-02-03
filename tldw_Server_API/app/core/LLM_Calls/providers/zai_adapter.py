@@ -1,47 +1,54 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, List, Union
+from collections.abc import Iterable
+from typing import Any
 
-from .base import ChatProvider
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError, ChatProviderError
+from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from tldw_Server_API.app.core.LLM_Calls.chat_calls import _safe_cast
-from tldw_Server_API.app.core.LLM_Calls.error_utils import raise_chat_error_from_http
-from tldw_Server_API.app.core.LLM_Calls.payload_utils import (
-    _sanitize_payload_for_logging,
-    merge_extra_body,
-    merge_extra_headers,
-)
-from tldw_Server_API.app.core.LLM_Calls.sse import finalize_stream, is_done_line, sse_done, sse_data
-from tldw_Server_API.app.core.LLM_Calls.sse import normalize_provider_line
 from tldw_Server_API.app.core.LLM_Calls.error_utils import (
     get_http_error_text,
     get_http_status_from_exception,
     is_chunked_encoding_error,
     is_http_status_error,
     is_network_error,
+    raise_chat_error_from_http,
+)
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import (
+    _sanitize_payload_for_logging,
+    merge_extra_body,
+    merge_extra_headers,
+)
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    finalize_stream,
+    is_done_line,
+    normalize_provider_line,
+    sse_data,
+    sse_done,
 )
 from tldw_Server_API.app.core.Utils.Utils import logging
-from tldw_Server_API.app.core.config import load_and_log_configs
+
+from .base import ChatProvider
 
 
 def _zai_request(
-    input_data: List[Dict[str, Any]],
-    model: Optional[str] = None,
-    api_key: Optional[str] = None,
-    system_message: Optional[str] = None,
-    temp: Optional[float] = None,
-    maxp: Optional[float] = None,
-    streaming: Optional[bool] = False,
-    max_tokens: Optional[int] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    do_sample: Optional[bool] = None,
-    request_id: Optional[str] = None,
-    custom_prompt_arg: Optional[str] = None,
-    app_config: Optional[Dict[str, Any]] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    base_url: Optional[str] = None,
+    input_data: list[dict[str, Any]],
+    model: str | None = None,
+    api_key: str | None = None,
+    system_message: str | None = None,
+    temp: float | None = None,
+    maxp: float | None = None,
+    streaming: bool | None = False,
+    max_tokens: int | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    do_sample: bool | None = None,
+    request_id: str | None = None,
+    custom_prompt_arg: str | None = None,
+    app_config: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    base_url: str | None = None,
 ):
     loaded_config_data = app_config or load_and_log_configs()
     zai_config = loaded_config_data.get("zai_api", {})
@@ -69,7 +76,7 @@ def _zai_request(
         api_messages.append({"role": "system", "content": system_message})
     api_messages.extend(input_data)
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "model": current_model,
         "messages": api_messages,
         "stream": current_streaming,
@@ -217,7 +224,7 @@ def _zai_request(
 class ZaiAdapter(ChatProvider):
     name = "zai"
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "supports_streaming": True,
             "supports_tools": True,
@@ -225,7 +232,7 @@ class ZaiAdapter(ChatProvider):
             "max_output_tokens_default": 4096,
         }
 
-    def _to_handler_args(self, request: Dict[str, Any], *, streaming: Optional[bool]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any], *, streaming: bool | None) -> dict[str, Any]:
         stream_flag = request.get("stream")
         if streaming is not None:
             stream_flag = streaming
@@ -248,10 +255,10 @@ class ZaiAdapter(ChatProvider):
             "base_url": request.get("base_url"),
         }
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         sanitized = validate_payload(self.name, request or {})
         return _zai_request(**self._to_handler_args(sanitized, streaming=False))
 
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         sanitized = validate_payload(self.name, request or {})
         return _zai_request(**self._to_handler_args(sanitized, streaming=True))

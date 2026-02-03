@@ -8,13 +8,15 @@ the import path stable for existing callers.
 """
 
 # Import all functions from the refactored modules
+from typing import Any, Optional
+
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
 from .modules import *
 
 # Compatibility wrapper: expose retrieve_message_details and role mapping
 from .modules.character_chat import retrieve_message_details as _retrieve_msg_basic
 from .modules.character_utils import map_sender_to_role as map_sender_to_role
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from typing import Optional, Dict, Any
 
 
 def retrieve_message_details(
@@ -22,7 +24,7 @@ def retrieve_message_details(
     message_id: str,
     character_name_for_placeholders: Optional[str] = None,
     user_name_for_placeholders: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
+) -> Optional[dict[str, Any]]:
     """Wrapper that delegates to modules implementation.
 
     The modules implementation already performs placeholder replacement.

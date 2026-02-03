@@ -11,9 +11,9 @@ full ResourceGovernor integration is rolled out.
 
 from __future__ import annotations
 
-import os
 import inspect
-from typing import Any, Dict, Tuple
+import os
+from typing import Any
 
 from loguru import logger
 
@@ -38,7 +38,7 @@ class AuthGovernor:
         api_key_id: int,
         *,
         fail_open: bool | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Check LLM budget state for a given API key and principal.
 
@@ -88,7 +88,7 @@ class AuthGovernor:
                 },
             }
 
-        out: Dict[str, Any] = dict(result or {})
+        out: dict[str, Any] = dict(result or {})
         limits = out.get("limits") or {}
         out["limits"] = limits
         out["principal"] = {
@@ -107,7 +107,7 @@ class AuthGovernor:
         *,
         attempt_type: str = "login",
         rate_limiter=None,
-    ) -> Tuple[bool, Any]:
+    ) -> tuple[bool, Any]:
         """
         Check lockout status for an identifier using the existing rate limiter.
 
@@ -142,7 +142,7 @@ class AuthGovernor:
         *,
         attempt_type: str = "login",
         rate_limiter=None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Record an authentication failure via the existing rate limiter.
 
@@ -177,7 +177,7 @@ class AuthGovernor:
         limit: int | None = None,
         window_minutes: int | None = None,
         rate_limiter=None,
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> tuple[bool, dict[str, Any]]:
         """
         Rate limit check delegated to the existing AuthNZ rate limiter.
 

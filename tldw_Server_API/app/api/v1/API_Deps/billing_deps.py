@@ -6,7 +6,7 @@ Provides guards that check subscription limits before allowing operations.
 """
 from __future__ import annotations
 
-from typing import Dict, Any, Optional
+from typing import Any
 
 from fastapi import Depends, Header, HTTPException, Query, Response, status
 from loguru import logger
@@ -15,16 +15,14 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
-from tldw_Server_API.app.core.Resource_Governance import cost_units
 from tldw_Server_API.app.core.Billing.enforcement import (
-    BillingEnforcer,
+    EnforcementAction,
     LimitCategory,
     LimitCheckResult,
-    EnforcementAction,
-    get_billing_enforcer,
     enforcement_enabled,
+    get_billing_enforcer,
 )
-
+from tldw_Server_API.app.core.Resource_Governance import cost_units
 
 # Warning header name for soft limit notifications
 BILLING_WARNING_HEADER = "X-Billing-Warning"
@@ -34,9 +32,9 @@ BILLING_USAGE_HEADER = "X-Billing-Usage"
 
 async def _resolve_org_id(
     principal: AuthPrincipal,
-    org_id: Optional[int] = None,
-    x_tldw_org_id: Optional[int] = None,
-) -> Optional[int]:
+    org_id: int | None = None,
+    x_tldw_org_id: int | None = None,
+) -> int | None:
     """
     Resolve the organization ID for billing purposes.
 
@@ -103,8 +101,8 @@ def require_within_limit(category: LimitCategory, units: int = 1):
     async def _check_limit(
         response: Response,
         principal: AuthPrincipal = Depends(get_auth_principal),
-        x_tldw_org_id: Optional[int] = Header(None, alias="X-TLDW-Org-Id"),
-        org_id: Optional[int] = Query(None, description="Organization ID"),
+        x_tldw_org_id: int | None = Header(None, alias="X-TLDW-Org-Id"),
+        org_id: int | None = Query(None, description="Organization ID"),
     ) -> LimitCheckResult:
         # Skip enforcement if disabled
         if not enforcement_enabled():
@@ -184,8 +182,8 @@ def require_feature(feature: str):
     """
     async def _check_feature(
         principal: AuthPrincipal = Depends(get_auth_principal),
-        x_tldw_org_id: Optional[int] = Header(None, alias="X-TLDW-Org-Id"),
-        org_id: Optional[int] = Query(None, description="Organization ID"),
+        x_tldw_org_id: int | None = Header(None, alias="X-TLDW-Org-Id"),
+        org_id: int | None = Query(None, description="Organization ID"),
     ) -> bool:
         # Skip enforcement if disabled
         if not enforcement_enabled():
@@ -220,9 +218,9 @@ def require_feature(feature: str):
 
 async def get_org_limits(
     principal: AuthPrincipal = Depends(get_auth_principal),
-    x_tldw_org_id: Optional[int] = Header(None, alias="X-TLDW-Org-Id"),
-    org_id: Optional[int] = Query(None, description="Organization ID"),
-) -> Dict[str, Any]:
+    x_tldw_org_id: int | None = Header(None, alias="X-TLDW-Org-Id"),
+    org_id: int | None = Query(None, description="Organization ID"),
+) -> dict[str, Any]:
     """
     Dependency that returns the current org's subscription limits.
 
@@ -248,8 +246,8 @@ async def get_org_limits(
 async def add_billing_headers(
     response: Response,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    x_tldw_org_id: Optional[int] = Header(None, alias="X-TLDW-Org-Id"),
-    org_id: Optional[int] = Query(None, description="Organization ID"),
+    x_tldw_org_id: int | None = Header(None, alias="X-TLDW-Org-Id"),
+    org_id: int | None = Query(None, description="Organization ID"),
 ) -> None:
     """
     Dependency that adds billing info headers to the response.
@@ -297,9 +295,9 @@ class LimitEnforcer:
         self.org_id = org_id
         self.category = category
         self.estimated_units = estimated_units
-        self.actual_units: Optional[int] = None
+        self.actual_units: int | None = None
         self._enforcer = get_billing_enforcer()
-        self._check_result: Optional[LimitCheckResult] = None
+        self._check_result: LimitCheckResult | None = None
 
     async def __aenter__(self) -> "LimitEnforcer":
         """Check limit on entry."""
@@ -377,6 +375,6 @@ class LimitEnforcer:
         self.actual_units = units
 
     @property
-    def check_result(self) -> Optional[LimitCheckResult]:
+    def check_result(self) -> LimitCheckResult | None:
         """Get the limit check result."""
         return self._check_result

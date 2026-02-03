@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
+
 from loguru import logger
-from tldw_Server_API.app.core.Metrics import get_metrics_registry
+
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
 def _fmt_csv_value(x: Any) -> str:
@@ -18,17 +20,17 @@ def _fmt_csv_value(x: Any) -> str:
 async def fetch_usage_daily(
     db,
     *,
-    user_id: Optional[int],
-    org_ids: Optional[List[int]],
-    start: Optional[str],
-    end: Optional[str],
+    user_id: int | None,
+    org_ids: list[int] | None,
+    start: str | None,
+    end: str | None,
     page: int,
     limit: int,
-) -> Tuple[List[Dict[str, Any]], int, bool]:
+) -> tuple[list[dict[str, Any]], int, bool]:
     """Return (rows, total, has_bytes_in_total). Rows keys: user_id, day, requests, errors, bytes_total, bytes_in_total, latency_avg_ms."""
     offset = (page - 1) * limit
-    conditions: List[str] = []
-    params: List[Any] = []
+    conditions: list[str] = []
+    params: list[Any] = []
     pg = await is_postgres_backend()
     if org_ids is not None and len(org_ids) == 0:
         return [], 0, True
@@ -84,7 +86,7 @@ async def fetch_usage_daily(
             )
             rows = await db.fetch(sql, *params, limit, offset)
         # Normalize
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for r in rows:
             # asyncpg.Record supports dict(), sqlite rows don't reliably;
             # build a name-keyed dict defensively.
@@ -173,10 +175,10 @@ async def fetch_usage_daily(
 async def export_usage_daily_csv_text(
     db,
     *,
-    user_id: Optional[int],
-    org_ids: Optional[List[int]],
-    start: Optional[str],
-    end: Optional[str],
+    user_id: int | None,
+    org_ids: list[int] | None,
+    start: str | None,
+    end: str | None,
     limit: int,
 ) -> str:
     rows, _, has_in = await fetch_usage_daily(
@@ -199,15 +201,15 @@ async def export_usage_daily_csv_text(
 async def fetch_usage_top(
     db,
     *,
-    start: Optional[str],
-    end: Optional[str],
+    start: str | None,
+    end: str | None,
     limit: int,
     metric: str,
-    org_ids: Optional[List[int]],
-) -> List[Dict[str, Any]]:
+    org_ids: list[int] | None,
+) -> list[dict[str, Any]]:
     pg = await is_postgres_backend()
-    conditions: List[str] = []
-    params: List[Any] = []
+    conditions: list[str] = []
+    params: list[Any] = []
     if org_ids is not None and len(org_ids) == 0:
         return []
     def _add(cond: str, val: Any, typed_date: bool = False):
@@ -269,7 +271,7 @@ async def fetch_usage_top(
         else:
             cur = await db.execute(sql, params + [limit])
             rows = await cur.fetchall()
-        out_rows: List[Dict[str, Any]] = []
+        out_rows: list[dict[str, Any]] = []
         for r in rows:
             if hasattr(r, "keys"):
                 # sqlite3.Row: use key access, not .get
@@ -308,7 +310,7 @@ async def fetch_usage_top(
         else:
             cur = await db.execute(sql, params + [limit])
             rows = await cur.fetchall()
-        out_rows: List[Dict[str, Any]] = []
+        out_rows: list[dict[str, Any]] = []
         for r in rows:
             if hasattr(r, "keys"):
                 out_rows.append({
@@ -334,11 +336,11 @@ async def fetch_usage_top(
 async def export_usage_top_csv_text(
     db,
     *,
-    start: Optional[str],
-    end: Optional[str],
+    start: str | None,
+    end: str | None,
     limit: int,
     metric: str,
-    org_ids: Optional[List[int]],
+    org_ids: list[int] | None,
 ) -> str:
     rows = await fetch_usage_top(db, start=start, end=end, limit=limit, metric=metric, org_ids=org_ids)
     header = ["user_id","requests","errors","bytes_total","bytes_in_total","latency_avg_ms"]
@@ -351,21 +353,21 @@ async def export_usage_top_csv_text(
 async def fetch_llm_usage(
     db,
     *,
-    user_id: Optional[int],
-    provider: Optional[str],
-    model: Optional[str],
-    operation: Optional[str],
-    status_code: Optional[int],
-    start: Optional[str],
-    end: Optional[str],
+    user_id: int | None,
+    provider: str | None,
+    model: str | None,
+    operation: str | None,
+    status_code: int | None,
+    start: str | None,
+    end: str | None,
     page: int,
     limit: int,
-    org_ids: Optional[List[int]],
-) -> Tuple[List[Dict[str, Any]], int]:
+    org_ids: list[int] | None,
+) -> tuple[list[dict[str, Any]], int]:
     offset = (page - 1) * limit
     pg = await is_postgres_backend()
-    conditions: List[str] = []
-    params: List[Any] = []
+    conditions: list[str] = []
+    params: list[Any] = []
     if org_ids is not None and len(org_ids) == 0:
         return [], 0
 
@@ -435,18 +437,18 @@ async def fetch_llm_usage_summary(
     db,
     *,
     group_by: str,
-    provider: Optional[str],
-    start: Optional[str],
-    end: Optional[str],
-    org_ids: Optional[List[int]],
-) -> List[Dict[str, Any]]:
+    provider: str | None,
+    start: str | None,
+    end: str | None,
+    org_ids: list[int] | None,
+) -> list[dict[str, Any]]:
     """Summarize llm_usage_log grouped by a key.
 
     group_by: one of user|operation|day|endpoint|provider|model|status
     """
     pg = await is_postgres_backend()
-    params: List[Any] = []
-    where: List[str] = []
+    params: list[Any] = []
+    where: list[str] = []
     if org_ids is not None and len(org_ids) == 0:
         return []
     def _add(cond: str, val: Any):
@@ -494,7 +496,7 @@ async def fetch_llm_usage_summary(
             f"FROM llm_usage_log{join_clause}{where_clause} GROUP BY {key_expr} ORDER BY requests DESC"
         )
         rows = await db.fetch(sql, *params)
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for r in rows:
             d = dict(r)
             try:
@@ -513,7 +515,7 @@ async def fetch_llm_usage_summary(
     )
     cur = await db.execute(sql, params)
     rows = await cur.fetchall()
-    out_rows: List[Dict[str, Any]] = []
+    out_rows: list[dict[str, Any]] = []
     for r in rows:
         gv = r[0]
         try:
@@ -536,14 +538,14 @@ async def fetch_llm_usage_summary(
 async def fetch_llm_top_spenders(
     db,
     *,
-    start: Optional[str],
-    end: Optional[str],
+    start: str | None,
+    end: str | None,
     limit: int,
-    org_ids: Optional[List[int]],
-) -> List[Dict[str, Any]]:
+    org_ids: list[int] | None,
+) -> list[dict[str, Any]]:
     pg = await is_postgres_backend()
-    params: List[Any] = []
-    where: List[str] = []
+    params: list[Any] = []
+    where: list[str] = []
     if org_ids is not None and len(org_ids) == 0:
         return []
     def _add(cond: str, val: Any):

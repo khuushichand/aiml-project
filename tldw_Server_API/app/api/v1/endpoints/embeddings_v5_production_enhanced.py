@@ -13,102 +13,99 @@ Key enhancements over v5:
 from __future__ import annotations
 
 import asyncio
-import json
+import atexit
 import base64
 import hashlib
-import time
-import threading
-from datetime import datetime
-from typing import List, Union, Optional, Dict, Any, Tuple
-from enum import Enum
-import numpy as np
-from functools import lru_cache
-import atexit
+import json
 import os
+import threading
+import time
 import uuid
-
-from fastapi import APIRouter, HTTPException, Body, Depends, status, BackgroundTasks, Request, Query, Header, Response
-from contextlib import asynccontextmanager
-from fastapi.responses import JSONResponse, StreamingResponse
-import tiktoken
-from loguru import logger
 from asyncio import Lock
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from contextlib import asynccontextmanager
+from datetime import datetime
+from enum import Enum
+from fnmatch import fnmatch
+from functools import lru_cache
+from typing import Any, Union
+
+import numpy as np
+import redis.asyncio as aioredis
+import tiktoken
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Header, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse, StreamingResponse
+from loguru import logger
+
+# Rate limiting
+# Monitoring
+from prometheus_client import Counter, Gauge, Histogram
+from pydantic import BaseModel, Field
+
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    rbac_rate_limit,
+    require_permissions,
+    require_roles,
+)
 
 # Schemas
 from tldw_Server_API.app.api.v1.schemas.embeddings_models import (
     CreateEmbeddingRequest,
     CreateEmbeddingResponse,
     EmbeddingData,
-    EmbeddingUsage
+    EmbeddingUsage,
 )
-from tldw_Server_API.app.core.Usage.usage_tracker import (
-    backfill_legacy_tokens_to_ledger,
-    log_llm_usage,
-)
-from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
-from tldw_Server_API.app.core.http_client import (
-    afetch as _http_afetch,
-    create_async_client as _create_async_client,
-    RetryPolicy as _RetryPolicy,
-)
-from pydantic import BaseModel, Field
-
-# Authentication
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
-    get_request_user,
-    User,
-    resolve_user_id_for_request,
-)
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-    rbac_rate_limit,
-    require_roles,
-    require_permissions,
-)
-from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode
-from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE, EMBEDDINGS_ADMIN
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventCategory, AuditEventType
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     ResolvedByokCredentials,
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
+from tldw_Server_API.app.core.AuthNZ.permissions import EMBEDDINGS_ADMIN, SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal, is_single_user_principal
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode
+
+# Authentication
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    User,
+    get_request_user,
+    resolve_user_id_for_request,
+)
 
 # Configuration
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.config import load_comprehensive_config
-from pathlib import Path
-import configparser
 
 # Audit logging: unify later via unified audit DI; legacy import removed (unused here)
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 
 # Circuit Breaker
-from tldw_Server_API.app.core.Embeddings.circuit_breaker import (
-    CircuitBreaker,
-    CircuitBreakerError,
-    circuit_breaker,
-    registry as circuit_breaker_registry
+from tldw_Server_API.app.core.Embeddings.circuit_breaker import CircuitBreaker, CircuitBreakerError
+from tldw_Server_API.app.core.Embeddings.circuit_breaker import registry as circuit_breaker_registry
+from tldw_Server_API.app.core.Embeddings.dlq_crypto import decrypt_payload_if_present
+from tldw_Server_API.app.core.Embeddings.messages import validate_schema
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
+from tldw_Server_API.app.core.http_client import (
+    RetryPolicy as _RetryPolicy,
 )
-
-# Rate limiting
-# Monitoring
-from prometheus_client import Counter, Histogram, Gauge
-import redis.asyncio as aioredis
+from tldw_Server_API.app.core.http_client import (
+    afetch as _http_afetch,
+)
+from tldw_Server_API.app.core.http_client import (
+    create_async_client as _create_async_client,
+)
 from tldw_Server_API.app.core.Infrastructure.redis_factory import (
     create_async_redis_client,
     ensure_async_client_closed,
 )
 from tldw_Server_API.app.core.LLM_Calls.embeddings_adapter_registry import get_embeddings_registry
-from tldw_Server_API.app.core.Embeddings.dlq_crypto import decrypt_payload_if_present
-from tldw_Server_API.app.core.Embeddings.messages import validate_schema
-from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
-from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
-from fnmatch import fnmatch
-from tldw_Server_API.app.core.Streaming.streams import SSEStream
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
+from tldw_Server_API.app.core.Usage.usage_tracker import (
+    backfill_legacy_tokens_to_ledger,
+    log_llm_usage,
+)
 
 # ============================================================================
 # Embeddings Implementation Import (Safe/Lazy)
@@ -117,12 +114,10 @@ from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 
 try:
     from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-        EmbeddingConfigSchema,
         HFModelCfg,
+        LocalAPICfg,
         ONNXModelCfg,
         OpenAIModelCfg,
-        LocalAPICfg,
-        create_embeddings_batch,
         resolve_model_storage_base_dir,
     )
     EMBEDDINGS_AVAILABLE = True
@@ -135,16 +130,18 @@ except Exception as e:
     def resolve_model_storage_base_dir(*_args, **_kwargs):
         return "./models/embedding_models_data/"
 
-from tldw_Server_API.app.core.Embeddings.request_batching import (
-    EmbeddingsRateLimitError,
-    create_embeddings_batch_async as batching_create_embeddings_batch_async,
-)
-
 # ============================================================================
 # Metrics and Monitoring
 # ============================================================================
-
 from prometheus_client import REGISTRY
+
+from tldw_Server_API.app.core.Embeddings.request_batching import (
+    EmbeddingsRateLimitError,
+)
+from tldw_Server_API.app.core.Embeddings.request_batching import (
+    create_embeddings_batch_async as batching_create_embeddings_batch_async,
+)
+
 
 # Safely get or create metrics
 def get_or_create_counter(name, description, labelnames):
@@ -460,7 +457,7 @@ def _should_enforce_tenant_rps(request: Request) -> bool:
         # Compatibility path: preserve legacy AUTH_MODE/profile heuristics.
         return _is_multi_user_runtime()
 
-    principal: Optional[AuthPrincipal] = None
+    principal: AuthPrincipal | None = None
     try:
         ctx = getattr(request.state, "auth", None)
         if isinstance(ctx, AuthContext):
@@ -486,7 +483,7 @@ def _should_enforce_tenant_rps(request: Request) -> bool:
     # Multi-tenant runtime: enforce quotas when a positive RPS is configured.
     return True
 
-async def _check_backpressure_and_quotas(request: Request, user: User) -> Optional[HTTPException]:
+async def _check_backpressure_and_quotas(request: Request, user: User) -> HTTPException | None:
     """Return HTTPException(429) if backpressure or tenant quota exceeded; else None."""
     # Orchestrator-based backpressure
     try:
@@ -583,8 +580,8 @@ EMBEDDINGS_PROVIDERS_REQUIRE_KEY = {
 
 async def _resolve_embeddings_byok(
     provider: str,
-    current_user: Optional[User],
-    request: Optional[Request],
+    current_user: User | None,
+    request: Request | None,
 ) -> ResolvedByokCredentials:
     user_id_int = getattr(current_user, "id_int", None) if current_user else None
     if user_id_int is None and current_user is not None:
@@ -623,7 +620,7 @@ def _is_test_context() -> bool:
 
 def _should_skip_missing_key(
     provider: str,
-    credentials: Optional[ResolvedByokCredentials] = None,
+    credentials: ResolvedByokCredentials | None = None,
 ) -> bool:
     if not _is_test_context():
         return False
@@ -667,7 +664,7 @@ PROVIDER_MODELS = {
 }
 
 # Optional allowlists and per-model token limits (override via settings)
-def _get_allowed_providers() -> Optional[List[str]]:
+def _get_allowed_providers() -> list[str] | None:
     try:
         vals = settings.get("ALLOWED_EMBEDDING_PROVIDERS", [])
         if isinstance(vals, list) and vals:
@@ -684,7 +681,7 @@ def _chroma_manager_for_user(user: User) -> ChromaDBManager:
     return ChromaDBManager(user_id=str(user_id), user_embedding_config=cfg)
 
 
-def _split_provider_model(model: str) -> Tuple[Optional[str], str]:
+def _split_provider_model(model: str) -> tuple[str | None, str]:
     """Split provider-qualified model IDs like 'openai:model'."""
     if not isinstance(model, str):
         return None, str(model)
@@ -697,7 +694,7 @@ def _split_provider_model(model: str) -> Tuple[Optional[str], str]:
     return None, model
 
 
-def _resolve_model_and_provider(model: Optional[str], provider: Optional[str]) -> Tuple[str, str]:
+def _resolve_model_and_provider(model: str | None, provider: str | None) -> tuple[str, str]:
     cfg = settings.get("EMBEDDING_CONFIG", {}) or {}
     default_model = model or cfg.get("embedding_model") or cfg.get("default_model_id") or "sentence-transformers/all-MiniLM-L6-v2"
     prefix_provider, stripped_model = _split_provider_model(default_model)
@@ -715,7 +712,7 @@ def _resolve_model_and_provider(model: Optional[str], provider: Optional[str]) -
     return stripped_model, resolved_provider
 
 
-def _get_allowed_models() -> Optional[List[str]]:
+def _get_allowed_models() -> list[str] | None:
     try:
         vals = settings.get("ALLOWED_EMBEDDING_MODELS", [])
         if isinstance(vals, list) and vals:
@@ -742,7 +739,7 @@ def _get_model_max_tokens(provider: str, model: str) -> int:
     return 8192
 
 
-def _build_user_metadata(user: Optional[User]) -> Optional[Dict[str, Any]]:
+def _build_user_metadata(user: User | None) -> dict[str, Any] | None:
     """Create metadata dict for rate limiter propagation.
 
     In test contexts (TESTING=true), skip attaching user metadata so that
@@ -771,12 +768,12 @@ class TTLCache:
     def __init__(self, max_size: int = MAX_CACHE_SIZE, ttl_seconds: int = CACHE_TTL_SECONDS):
         self.max_size = max_size
         self.ttl_seconds = ttl_seconds
-        self.cache: Dict[str, Dict[str, Any]] = {}
+        self.cache: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
         self.cleanup_task = None
         # Optional daemon-thread cleanup to decouple from app loop
-        self._cleanup_thread: Optional[threading.Thread] = None
-        self._cleanup_stop: Optional[threading.Event] = None
+        self._cleanup_thread: threading.Thread | None = None
+        self._cleanup_stop: threading.Event | None = None
         try:
             self._use_thread = str(os.getenv("EMBEDDINGS_TTLCACHE_DAEMON", "true")).lower() in ("1", "true", "yes", "on")
         except Exception:
@@ -869,7 +866,7 @@ class TTLCache:
         """Async wrapper for cache cleanup."""
         self._cleanup_expired_locked()
 
-    async def get(self, key: str) -> Optional[Any]:
+    async def get(self, key: str) -> Any | None:
         """Get value from cache if not expired"""
         with self._lock:
             entry = self.cache.get(key)
@@ -917,7 +914,7 @@ class TTLCache:
             self.hits = 0
             self.misses = 0
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         """Get cache statistics"""
         with self._lock:
             total_requests = self.hits + self.misses
@@ -938,7 +935,7 @@ class ConnectionPoolManager:
     """Manages connection pools with proper cleanup"""
 
     def __init__(self):
-        self.pools: Dict[str, Any] = {}
+        self.pools: dict[str, Any] = {}
         self.lock = Lock()
         self._closed = False
 
@@ -1160,7 +1157,7 @@ def count_tokens(text: str, model_name: str) -> int:
         logger.warning(f"Token counting failed: {e}, estimating")
         return len(text) // 4
 
-def get_cache_key(text: str, provider: str, model: str, dimensions: Optional[int] = None) -> str:
+def get_cache_key(text: str, provider: str, model: str, dimensions: int | None = None) -> str:
     """Generate cache key for embedding"""
     key_parts = [text, provider, model]
     if dimensions:
@@ -1174,8 +1171,8 @@ def get_cache_key(text: str, provider: str, model: str, dimensions: Optional[int
 # ---------------------------------------------------------------------------
 
 class CompactorRunRequest(BaseModel):
-    user_id: Optional[str] = Field(default=None, description="Target user_id; defaults to current admin in single-user mode")
-    media_db_path: Optional[str] = Field(default=None, description="Override path to Media_DB_v2.db; defaults to settings")
+    user_id: str | None = Field(default=None, description="Target user_id; defaults to current admin in single-user mode")
+    media_db_path: str | None = Field(default=None, description="Override path to Media_DB_v2.db; defaults to settings")
 
 
 class CompactorRunResponse(BaseModel):
@@ -1196,7 +1193,9 @@ async def run_compactor_once(
 ):
     try:
         # Lazy import to avoid heavy imports on module import
-        from tldw_Server_API.app.core.Embeddings.services.vector_compactor import compact_once as _compact_once  # type: ignore
+        from tldw_Server_API.app.core.Embeddings.services.vector_compactor import (
+            compact_once as _compact_once,  # type: ignore
+        )
     except Exception as exc:
         logger.exception("Compactor module import failed")
         raise HTTPException(status_code=503, detail="Compactor unavailable") from exc
@@ -1219,9 +1218,9 @@ async def run_compactor_once(
 # ============================================================================
 
 def tokens_to_texts(
-    tokens_input: Union[List[int], List[List[int]]],
+    tokens_input: Union[list[int], list[list[int]]],
     model_name: str
-) -> Tuple[List[str], int, List[int]]:
+) -> tuple[list[str], int, list[int]]:
     """Convert token arrays to text using model tokenizer when possible.
 
     Returns (texts, total_token_count, per_input_token_counts).
@@ -1232,9 +1231,9 @@ def tokens_to_texts(
     except Exception:
         enc = tiktoken.get_encoding("cl100k_base")
 
-    texts: List[str] = []
+    texts: list[str] = []
     total_tokens = 0
-    token_counts: List[int] = []
+    token_counts: list[int] = []
     # Single token array
     if tokens_input and isinstance(tokens_input, list) and tokens_input and isinstance(tokens_input[0], int):
         arr = tokens_input  # type: ignore[assignment]
@@ -1292,7 +1291,7 @@ def _supports_openai_dimensions(model: str) -> bool:
     model_key = (model or "").split(":", 1)[-1]
     return model_key.startswith("text-embedding-3")
 
-def _validate_dimensions_request(provider: str, model: str, dimensions: Optional[int]) -> Optional[int]:
+def _validate_dimensions_request(provider: str, model: str, dimensions: int | None) -> int | None:
     """Validate requested dimensions for the provider/model pair."""
     if dimensions is None:
         return None
@@ -1334,15 +1333,15 @@ def _validate_dimensions_request(provider: str, model: str, dimensions: Optional
     return dim
 
 def adjust_dimensions(
-    vectors: List[List[float]],
-    target_dim: Optional[int],
+    vectors: list[list[float]],
+    target_dim: int | None,
     provider: str,
     model: str
-) -> List[List[float]]:
+) -> list[list[float]]:
     if not target_dim or target_dim <= 0:
         return vectors
     policy = _dimension_policy()
-    adjusted: List[List[float]] = []
+    adjusted: list[list[float]] = []
     for v in vectors:
         if not isinstance(v, (list, tuple)):
             adjusted.append(v)
@@ -1370,10 +1369,10 @@ def adjust_dimensions(
     return adjusted
 
 def decide_and_apply_l2(
-    embedding: Union[List[float], np.ndarray],
+    embedding: Union[list[float], np.ndarray],
     encoding_format: str,
     embeddings_from_adapter: bool,
-) -> Tuple[np.ndarray, bool]:
+) -> tuple[np.ndarray, bool]:
     """Decide and apply L2-normalization policy.
 
     Policy:
@@ -1389,7 +1388,7 @@ def decide_and_apply_l2(
     # Default: normalize for numeric outputs; never for base64
     do_l2 = encoding_format != "base64"
 
-    normalize_requested: Optional[bool] = None
+    normalize_requested: bool | None = None
     try:
         env_val = os.getenv("LLM_EMBEDDINGS_L2_NORMALIZE", "")
         normalize_requested = str(env_val).lower() in {"1", "true", "yes", "on"}
@@ -1429,7 +1428,7 @@ def decide_and_apply_l2(
             arr = np.array(embedding)
         return arr, False
 
-def _should_enforce_policy(user: Optional[User] = None) -> bool:
+def _should_enforce_policy(user: User | None = None) -> bool:
     # 1) Explicit env override takes highest precedence
     env_val = os.getenv("EMBEDDINGS_ENFORCE_POLICY")
     if env_val is not None:
@@ -1453,7 +1452,7 @@ def _should_enforce_policy(user: Optional[User] = None) -> bool:
     # Default: do not enforce
     return False
 
-def resolve_fallback_chain(primary_provider: str) -> List[str]:
+def resolve_fallback_chain(primary_provider: str) -> list[str]:
     # Configurable chain; else default
     try:
         mapping = settings.get("EMBEDDINGS_FALLBACK_CHAIN", {}) or {}
@@ -1471,7 +1470,7 @@ def resolve_fallback_chain(primary_provider: str) -> List[str]:
     }
     return defaults.get(primary_provider, [primary_provider])
 
-def _fallback_model_map() -> Dict[str, Dict[str, str]]:
+def _fallback_model_map() -> dict[str, dict[str, str]]:
     """Return mapping for provider-specific model fallbacks.
 
     Shape: {"<src_provider>:<src_model>": {"<dst_provider>": "<dst_model>"}}
@@ -1582,7 +1581,7 @@ def is_model_allowed(provider: str, model: str) -> bool:
         return False
     return True
 
-def guess_provider_for_model(model: str, explicit_provider: Optional[str] = None) -> str:
+def guess_provider_for_model(model: str, explicit_provider: str | None = None) -> str:
     if explicit_provider:
         return explicit_provider.lower()
     if ":" in model:
@@ -1603,11 +1602,11 @@ def guess_provider_for_model(model: str, explicit_provider: Optional[str] = None
 
 def build_provider_config(
     provider: EmbeddingProvider,
-    model: Optional[str],
-    api_key: Optional[str] = None,
-    api_url: Optional[str] = None,
-    dimensions: Optional[int] = None
-) -> Dict[str, Any]:
+    model: str | None,
+    api_key: str | None = None,
+    api_url: str | None = None,
+    dimensions: int | None = None
+) -> dict[str, Any]:
     """Build provider-specific configuration"""
     if not model:
         raise ValueError(f"model is required for provider {provider.value}")
@@ -1684,13 +1683,13 @@ def build_provider_config(
 # ============================================================================
 
 async def create_embeddings_with_circuit_breaker(
-    texts: List[str],
+    texts: list[str],
     provider: str,
     model_id: str,
-    config: Dict[str, Any],
-    metadata: Optional[Dict[str, Any]] = None,
-    dimensions: Optional[int] = None,
-) -> List[List[float]]:
+    config: dict[str, Any],
+    metadata: dict[str, Any] | None = None,
+    dimensions: int | None = None,
+) -> list[list[float]]:
     """Create embeddings with circuit breaker protection"""
     breaker = get_or_create_circuit_breaker(provider)
 
@@ -1881,14 +1880,14 @@ async def create_embeddings_with_circuit_breaker(
         raise
 
 async def create_embeddings_batch_async(
-    texts: List[str],
+    texts: list[str],
     provider: str,
-    model_id: Optional[str] = None,
-    dimensions: Optional[int] = None,
-    api_key: Optional[str] = None,
-    api_url: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-) -> List[List[float]]:
+    model_id: str | None = None,
+    dimensions: int | None = None,
+    api_key: str | None = None,
+    api_url: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> list[list[float]]:
     """Async wrapper for embeddings with caching and circuit breaker"""
     provider = (provider or "").strip().lower()
 
@@ -2044,7 +2043,7 @@ async def create_embedding_endpoint(
     embedding_request: CreateEmbeddingRequest = Body(...),
     current_user: User = Depends(get_request_user),
     background_tasks: BackgroundTasks = BackgroundTasks(),
-    x_provider: Optional[str] = Header(None, alias="x-provider"),
+    x_provider: str | None = Header(None, alias="x-provider"),
     response: Response = None
 ):
     """Create embeddings with circuit breaker protection and enhanced error recovery"""
@@ -2059,8 +2058,8 @@ async def create_embedding_endpoint(
     start_time = time.time()
 
     user_metadata = _build_user_metadata(current_user)
-    rg_handle_id: Optional[str] = None
-    rg_commit_op_id: Optional[str] = None
+    rg_handle_id: str | None = None
+    rg_commit_op_id: str | None = None
     rg_reserved_units: int = 0
     rg_actual_units: int = 0
     rg_governor = None
@@ -2124,10 +2123,10 @@ async def create_embedding_endpoint(
         _validate_dimensions_request(provider, model, embedding_request.dimensions)
 
         # Parse and validate input FIRST (before policy checks)
-        texts_to_embed: List[str] = []
+        texts_to_embed: list[str] = []
         provided_token_arrays = False
         provided_token_count = 0
-        token_lengths: Optional[List[int]] = None
+        token_lengths: list[int] | None = None
 
         if isinstance(embedding_request.input, str):
             if not embedding_request.input.strip():
@@ -2172,7 +2171,7 @@ async def create_embedding_endpoint(
 
         # Enforce per-model token length limits (fail-fast)
         max_tokens = _get_model_max_tokens(provider, model)
-        too_long: List[Tuple[int, int]] = []  # (index, token_count)
+        too_long: list[tuple[int, int]] = []  # (index, token_count)
         token_total = 0
         if provided_token_arrays and token_lengths is not None:
             for idx, tok in enumerate(token_lengths):
@@ -2197,7 +2196,6 @@ async def create_embedding_endpoint(
             )
 
         # Provider/model allowlist enforcement (after input validation)
-        import os as _os
         # Enforce allowlists based on config/env; admin may bypass unless STRICT is set
         enforce_policy = _should_enforce_policy(current_user)
         allowed_providers = _get_allowed_providers()
@@ -2228,7 +2226,7 @@ async def create_embedding_endpoint(
             if provider.lower() not in IMPLEMENTED_PROVIDERS:
                 raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=f"Provider '{provider}' not implemented")
 
-        byok_cache: Dict[str, ResolvedByokCredentials] = {}
+        byok_cache: dict[str, ResolvedByokCredentials] = {}
 
         async def _resolve_provider_credentials(name: str) -> ResolvedByokCredentials:
             key = (name or "").strip().lower()
@@ -2335,7 +2333,7 @@ async def create_embedding_endpoint(
             and os.getenv("USE_REAL_OPENAI_IN_TESTS", "").lower() != "true"
         )
 
-        embeddings: List[List[float]] = []
+        embeddings: list[list[float]] = []
         embeddings_from_adapter = False
 
         original_provider = provider
@@ -2361,9 +2359,9 @@ async def create_embedding_endpoint(
                 if provider in EMBEDDINGS_PROVIDERS_REQUIRE_KEY and not byok_resolution.api_key:
                     if not _should_skip_missing_key(provider, byok_resolution):
                         _raise_missing_embeddings_key(provider)
-                _api_key: Optional[str] = byok_resolution.api_key
+                _api_key: str | None = byok_resolution.api_key
 
-                adapter_request: Dict[str, Any] = {
+                adapter_request: dict[str, Any] = {
                     "input": texts_to_embed if len(texts_to_embed) > 1 else texts_to_embed[0],
                     "model": model,
                     "api_key": _api_key,
@@ -2376,7 +2374,7 @@ async def create_embedding_endpoint(
                     adapter_request["dimensions"] = embedding_request.dimensions
                 result = adapter.embed(adapter_request) if adapter else None
                 if isinstance(result, dict) and isinstance(result.get("data"), list):
-                    embs: List[List[float]] = []
+                    embs: list[list[float]] = []
                     for item in result["data"]:
                         vec = item.get("embedding") if isinstance(item, dict) else None
                         if isinstance(vec, list):
@@ -2384,7 +2382,7 @@ async def create_embedding_endpoint(
                     if embs and len(embs) == len(texts_to_embed):
                         # Adapter-provided vectors may already be normalized. Preserve them as-is
                         # unless LLM_EMBEDDINGS_L2_NORMALIZE explicitly requests normalization.
-                        processed: List[List[float]] = []
+                        processed: list[list[float]] = []
                         for v in embs:
                             arr, did_l2 = decide_and_apply_l2(
                                 v,
@@ -2424,7 +2422,7 @@ async def create_embedding_endpoint(
                 embeddings.append(vec.tolist())
         elif not embeddings:
             # Try provider with fallback chain on failure
-            last_error: Optional[Exception] = None
+            last_error: Exception | None = None
             # Fallback policy when explicit provider header is present:
             # Strict by default: do NOT fallback when `x-provider` header is set.
             # To allow fallback even with header, set EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER=true
@@ -2436,7 +2434,7 @@ async def create_embedding_endpoint(
             chain = [provider] if fallback_disabled else resolve_fallback_chain(provider)
             if enforce_policy and allowed_providers is not None:
                 chain = [p for p in chain if p.lower() in allowed_providers or p == provider]
-            fallback_from: Optional[str] = None
+            fallback_from: str | None = None
             for p in chain:
                 try:
                     if p != provider:
@@ -2509,7 +2507,7 @@ async def create_embedding_endpoint(
                 try:
                     import numpy as _np
                     target = int(embedding_request.dimensions)
-                    adjusted: List[List[float]] = []
+                    adjusted: list[list[float]] = []
                     for v in embeddings:
                         try:
                             arr = _np.asarray(v, dtype=_np.float32)
@@ -2645,15 +2643,15 @@ async def create_embedding_endpoint(
         active_embedding_requests.dec()
 
 class EmbeddingsBatchRequest(BaseModel):
-    texts: List[str] = Field(..., min_length=1, description="Texts to embed")
-    model: Optional[str] = Field(None, description="Embedding model identifier")
-    provider: Optional[str] = Field(None, description="Embedding provider override")
-    dimensions: Optional[int] = Field(None, description="Requested output dimensions if supported")
-    batch_size: Optional[int] = Field(None, description="Hint for provider batch sizing")
+    texts: list[str] = Field(..., min_length=1, description="Texts to embed")
+    model: str | None = Field(None, description="Embedding model identifier")
+    provider: str | None = Field(None, description="Embedding provider override")
+    dimensions: int | None = Field(None, description="Requested output dimensions if supported")
+    batch_size: int | None = Field(None, description="Hint for provider batch sizing")
 
 
 class EmbeddingsBatchResponse(BaseModel):
-    embeddings: List[List[float]]
+    embeddings: list[list[float]]
     model: str
     provider: str
     count: int
@@ -2771,7 +2769,7 @@ async def list_embedding_models():
     default_provider = cfg.get("embedding_provider", "openai")
 
     # Collect known models from provider table + default
-    known: List[Dict[str, Any]] = []
+    known: list[dict[str, Any]] = []
     seen = set()
     # static provider models
     for prov, lst in PROVIDER_MODELS.items():
@@ -2804,7 +2802,7 @@ async def list_embedding_models():
 async def get_embedding_model_info(
     model_id: str,
     request: Request,
-    provider: Optional[str] = Query(None, description="Provider override"),
+    provider: str | None = Query(None, description="Provider override"),
     current_user: User = Depends(get_request_user),
 ):
     model = model_id
@@ -2852,7 +2850,7 @@ async def get_embedding_model_info(
 
 class TenantQuotaResponse(BaseModel):
     limit_rps: int
-    remaining: Optional[int] = None
+    remaining: int | None = None
 
 
 def _is_single_user_profile() -> bool:
@@ -2900,7 +2898,7 @@ async def get_tenant_quotas(
 class PriorityBumpRequest(BaseModel):
     job_id: str
     priority: str = Field(..., description="one of: high|normal|low")
-    ttl_seconds: Optional[int] = Field(default=600, ge=1, le=86400)
+    ttl_seconds: int | None = Field(default=600, ge=1, le=86400)
 
 
 @router.post(
@@ -2914,7 +2912,7 @@ class PriorityBumpRequest(BaseModel):
 async def bump_job_priority(
     req: PriorityBumpRequest,
     current_user: User = Depends(get_request_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     pr = (req.priority or "").strip().lower()
     if pr not in ("high", "normal", "low"):
         raise HTTPException(status_code=400, detail="priority must be one of: high|normal|low")
@@ -2931,7 +2929,7 @@ async def bump_job_priority(
     except Exception:
         # Logging must not interfere with admin operations
         pass
-    client: Optional[aioredis.Redis] = None
+    client: aioredis.Redis | None = None
     try:
         client = await _get_redis_client()
         key = f"embeddings:priority:override:{req.job_id}"
@@ -2956,26 +2954,26 @@ async def bump_job_priority(
 
 class ModelActionRequest(BaseModel):
     model: str
-    provider: Optional[str] = None
+    provider: str | None = None
 
 
 class CollectionCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, description="Collection name")
-    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Collection metadata")
-    embedding_model: Optional[str] = Field(default=None, description="Embedding model to associate")
-    provider: Optional[str] = Field(default=None, description="Provider override for dimension detection")
+    metadata: dict[str, Any] | None = Field(default=None, description="Collection metadata")
+    embedding_model: str | None = Field(default=None, description="Embedding model to associate")
+    provider: str | None = Field(default=None, description="Provider override for dimension detection")
 
 
 class CollectionResponse(BaseModel):
     name: str
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class CollectionStatsResponse(BaseModel):
     name: str
     count: int
-    embedding_dimension: Optional[int] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    embedding_dimension: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 @router.post(
@@ -3124,13 +3122,13 @@ async def create_collection(
 
 @router.get(
     "/embeddings/collections",
-    response_model=List[CollectionResponse],
+    response_model=list[CollectionResponse],
     summary="List ChromaDB collections"
 )
-async def list_collections(current_user: User = Depends(get_request_user)) -> List[CollectionResponse]:
+async def list_collections(current_user: User = Depends(get_request_user)) -> list[CollectionResponse]:
     manager = _chroma_manager_for_user(current_user)
     collections = manager.client.list_collections()
-    response: List[CollectionResponse] = []
+    response: list[CollectionResponse] = []
     for collection in collections:
         metadata = getattr(collection, "metadata", {}) or {}
         response.append(CollectionResponse(name=collection.name, metadata=metadata))
@@ -3405,13 +3403,13 @@ async def get_metrics(
 class DLQItem(BaseModel):
     entry_id: str = Field(..., description="Redis stream entry ID")
     queue: str = Field(..., description="DLQ stream name")
-    job_id: Optional[str] = None
-    error: Optional[str] = None
-    failed_at: Optional[str] = None
-    payload: Optional[Dict[str, Any]] = None
-    fields: Dict[str, Any] = Field(default_factory=dict)
-    dlq_state: Optional[str] = None
-    operator_note: Optional[str] = None
+    job_id: str | None = None
+    error: str | None = None
+    failed_at: str | None = None
+    payload: dict[str, Any] | None = None
+    fields: dict[str, Any] = Field(default_factory=dict)
+    dlq_state: str | None = None
+    operator_note: str | None = None
 
 
 def _redact_obj(obj: Any, depth: int = 0) -> Any:
@@ -3444,20 +3442,20 @@ def _redact_obj(obj: Any, depth: int = 0) -> Any:
 async def list_dlq_items(
     stage: str = Query("embedding", description="Stage: chunking|embedding|storage|content"),
     count: int = Query(50, ge=1, le=500, description="Max items to return"),
-    job_id: Optional[str] = Query(None, description="Optional job_id to filter"),
+    job_id: str | None = Query(None, description="Optional job_id to filter"),
     _current_user: User = Depends(get_request_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """List DLQ items for a stage.
 
     _current_user is included to enforce authentication via dependencies.
     """
     stream = _dlq_stream_name(stage)
-    client: Optional[aioredis.Redis] = None
+    client: aioredis.Redis | None = None
     try:
         client = await _get_redis_client()
         # Reverse range: most recent first
         entries = await client.xrevrange(stream, "+", "-", count=count)
-        items: List[DLQItem] = []
+        items: list[DLQItem] = []
         for entry_id, fields in entries:
             # fields is a dict[str,str]
             payload = None
@@ -3516,7 +3514,7 @@ class DLQRequeueRequest(BaseModel):
     stage: str = Field(..., description="Stage: chunking|embedding|storage|content")
     entry_id: str = Field(..., description="Redis stream entry ID")
     delete_from_dlq: bool = Field(default=True)
-    override_fields: Optional[Dict[str, Any]] = Field(default=None, description="Optional field overrides before requeue")
+    override_fields: dict[str, Any] | None = Field(default=None, description="Optional field overrides before requeue")
 
 
 @router.post(
@@ -3527,7 +3525,7 @@ class DLQRequeueRequest(BaseModel):
 async def requeue_dlq_item(
     req: DLQRequeueRequest,
     current_user: User = Depends(get_request_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     dlq_stream = _dlq_stream_name(req.stage)
     live_stream = _live_stream_name(req.stage)
     client = await _get_redis_client()
@@ -3614,9 +3612,9 @@ async def requeue_dlq_item(
 
 class DLQRequeueBulkRequest(BaseModel):
     stage: str
-    entry_ids: List[str]
+    entry_ids: list[str]
     delete_from_dlq: bool = True
-    override_fields: Optional[Dict[str, Any]] = None
+    override_fields: dict[str, Any] | None = None
 
 
 @router.post(
@@ -3627,11 +3625,11 @@ class DLQRequeueBulkRequest(BaseModel):
 async def requeue_dlq_bulk(
     req: DLQRequeueBulkRequest,
     current_user: User = Depends(get_request_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     dlq_stream = _dlq_stream_name(req.stage)
     live_stream = _live_stream_name(req.stage)
     client = await _get_redis_client()
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     try:
         for eid in req.entry_ids:
             status = "success"
@@ -3790,7 +3788,7 @@ class DLQStateSetRequest(BaseModel):
     stage: str
     entry_id: str
     state: str  # quarantined | approved_for_requeue | ignored
-    operator_note: Optional[str] = None
+    operator_note: str | None = None
 
 
 def _dlq_state_key(stream: str, entry_id: str) -> str:
@@ -3934,7 +3932,7 @@ async def control_stage(req: StageControlRequest, current_user: User = Depends(g
 
 class JobSkipRequest(BaseModel):
     job_id: str
-    ttl_seconds: Optional[int] = Field(default=7 * 24 * 3600, ge=60, description="TTL for skip registry entry")
+    ttl_seconds: int | None = Field(default=7 * 24 * 3600, ge=60, description="TTL for skip registry entry")
 
 
 def _skip_key(job_id: str) -> str:
@@ -3994,11 +3992,11 @@ async def get_job_skip_status(job_id: str = Query(..., description="Job ID to ch
 
 class LedgerEntry(BaseModel):
     key: str
-    status: Optional[str] = None
-    ts: Optional[int] = None
-    job_id: Optional[str] = None
-    raw: Optional[Union[Dict[str, Any], str]] = None
-    ttl_seconds: Optional[int] = None
+    status: str | None = None
+    ts: int | None = None
+    job_id: str | None = None
+    raw: Union[dict[str, Any], str] | None = None
+    ttl_seconds: int | None = None
 
 
 @router.get(
@@ -4007,10 +4005,10 @@ class LedgerEntry(BaseModel):
     dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def get_ledger_status(
-    idempotency_key: Optional[str] = Query(default=None),
-    dedupe_key: Optional[str] = Query(default=None),
+    idempotency_key: str | None = Query(default=None),
+    dedupe_key: str | None = Query(default=None),
     _current_user: User = Depends(get_request_user),
-) -> Dict[str, Optional[LedgerEntry]]:
+) -> dict[str, LedgerEntry | None]:
     """Return current ledger values for provided keys.
 
     _current_user is included to enforce authentication and RBAC via dependencies.
@@ -4024,7 +4022,7 @@ async def get_ledger_status(
         raise HTTPException(status_code=400, detail="Provide idempotency_key and/or dedupe_key")
     client = await _get_redis_client()
     try:
-        out: Dict[str, Optional[LedgerEntry]] = {"idempotency": None, "dedupe": None}
+        out: dict[str, LedgerEntry | None] = {"idempotency": None, "dedupe": None}
         if idempotency_key:
             k = f"embeddings:ledger:idemp:{idempotency_key}"
             raw = await client.get(k)
@@ -4068,19 +4066,19 @@ async def get_ledger_status(
 
 class ReembedScheduleRequest(BaseModel):
     media_id: int = Field(..., description="Target media_id to re-embed")
-    user_id: Optional[str] = Field(default=None, description="Owner user id; defaults to current admin")
-    idempotency_key: Optional[str] = Field(default=None, description="Optional idempotency key to dedupe creation")
-    dedupe_key: Optional[str] = Field(default=None, description="Optional dedupe key; defaults to idempotency_key if not provided")
-    operation_id: Optional[str] = Field(default=None, description="Optional operation id for replay prevention")
-    priority: Optional[int] = Field(default=50, ge=0, le=100)
-    user_tier: Optional[str] = Field(default="free")
-    embedder_name: Optional[str] = None
-    embedder_version: Optional[str] = None
+    user_id: str | None = Field(default=None, description="Owner user id; defaults to current admin")
+    idempotency_key: str | None = Field(default=None, description="Optional idempotency key to dedupe creation")
+    dedupe_key: str | None = Field(default=None, description="Optional dedupe key; defaults to idempotency_key if not provided")
+    operation_id: str | None = Field(default=None, description="Optional operation id for replay prevention")
+    priority: int | None = Field(default=50, ge=0, le=100)
+    user_tier: str | None = Field(default="free")
+    embedder_name: str | None = None
+    embedder_version: str | None = None
 
 
 class ReembedScheduleResponse(BaseModel):
     id: int
-    uuid: Optional[str] = None
+    uuid: str | None = None
     status: str
     domain: str
     queue: str
@@ -4196,7 +4194,7 @@ async def schedule_reembed(
 # Orchestrator snapshot + SSE (admin only)
 # ---------------------------------------------------------------------------
 
-async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[float] = None) -> Dict[str, Any]:
+async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: float | None = None) -> dict[str, Any]:
     """Compute a single orchestrator snapshot.
 
     Returns dict with keys: queues, dlq, ages, stages, flags, ts
@@ -4207,12 +4205,12 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
 
     # Build the same structure as get_dlq_stats and add queue ages and stage flags
     queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage", "embeddings:content"]
-    depths: Dict[str, int] = {}
-    dlq_depths: Dict[str, int] = {}
-    ages: Dict[str, float] = {}
+    depths: dict[str, int] = {}
+    dlq_depths: dict[str, int] = {}
+    ages: dict[str, float] = {}
     # Optional per-priority depths when priority routing is enabled
     priority_enabled = str(os.getenv("EMBEDDINGS_PRIORITY_ENABLED", "false")).lower() in ("1", "true", "yes")
-    priority_depths: Dict[str, Dict[str, int]] = {"chunking": {}, "embedding": {}, "storage": {}, "content": {}}
+    priority_depths: dict[str, dict[str, int]] = {"chunking": {}, "embedding": {}, "storage": {}, "content": {}}
     for q in queues:
         try:
             depths[q] = await client.xlen(q)
@@ -4251,7 +4249,7 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
             pass
 
     # stage counters (aggregate from worker snapshots)
-    stages: Dict[str, Dict[str, int]] = {
+    stages: dict[str, dict[str, int]] = {
         "chunking": {"processed": 0, "failed": 0},
         "embedding": {"processed": 0, "failed": 0},
         "storage": {"processed": 0, "failed": 0},
@@ -4284,7 +4282,7 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
         pass
 
     # stage flags
-    flags: Dict[str, Dict[str, bool]] = {}
+    flags: dict[str, dict[str, bool]] = {}
     for st in ("chunking", "embedding", "storage", "content"):
         p = await client.get(f"embeddings:stage:{st}:paused")
         d = await client.get(f"embeddings:stage:{st}:drain")
@@ -4430,8 +4428,8 @@ async def orchestrator_summary(current_user: User = Depends(get_request_user)):
 
     Includes: queues, dlq, ages, stages, flags, ts
     """
-    client: Optional[aioredis.Redis] = None
-    def _zero_snapshot() -> Dict[str, Any]:
+    client: aioredis.Redis | None = None
+    def _zero_snapshot() -> dict[str, Any]:
         return {"queues": {}, "dlq": {}, "ages": {}, "stages": {}, "flags": {}, "ts": datetime.utcnow().timestamp()}
 
     try:

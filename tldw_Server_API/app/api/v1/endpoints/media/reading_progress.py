@@ -19,7 +19,6 @@ from tldw_Server_API.app.api.v1.schemas.reading_progress import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
-
 router = APIRouter(tags=["Document Workspace"])
 
 

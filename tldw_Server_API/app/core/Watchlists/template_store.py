@@ -10,11 +10,11 @@ stored in a sibling <name>.meta.json file.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-import os
 
 from loguru import logger
 

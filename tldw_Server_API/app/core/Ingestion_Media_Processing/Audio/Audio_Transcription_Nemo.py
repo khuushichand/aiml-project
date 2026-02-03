@@ -17,25 +17,26 @@
 #
 ####################
 
+import logging
 import os
 import sys
-import logging
-from loguru import logger
 import tempfile
 from pathlib import Path
-from typing import Optional, Union, Tuple, Dict, Any, Callable
+from typing import Any, Callable, Optional, Union
+
 import numpy as np
 import torch
 
 # Apply NumPy 2.0 compatibility patches before importing Nemo
 from .numpy_compat import ensure_numpy_compatibility
+
 ensure_numpy_compatibility()
 
 # Import local config helpers
-from tldw_Server_API.app.core.config import get_stt_config, loaded_config_data
+from tldw_Server_API.app.core.config import get_stt_config
 
 # Global model cache
-_model_cache: Dict[str, Any] = {}
+_model_cache: dict[str, Any] = {}
 
 # Canonical language codes supported by Canary-1b-v2.
 # See: https://huggingface.co/nvidia/canary-1b-v2
@@ -282,7 +283,7 @@ def _load_parakeet_onnx(device: str):
     try:
         # Import the proper ONNX implementation
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
-            load_parakeet_onnx_model
+            load_parakeet_onnx_model,
         )
 
         logging.info("Loading Parakeet TDT ONNX model...")
@@ -303,7 +304,7 @@ def _load_parakeet_onnx(device: str):
             def transcribe(self, audio_path, chunk_duration=None, overlap_duration=15.0, chunk_callback=None):
                 # Use the proper ONNX transcription
                 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
-                    transcribe_with_parakeet_onnx
+                    transcribe_with_parakeet_onnx,
                 )
 
                 result = transcribe_with_parakeet_onnx(
@@ -342,8 +343,8 @@ def _load_parakeet_mlx():
     try:
         # Import the specialized MLX implementation
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
+            check_mlx_available,
             load_parakeet_mlx_model,
-            check_mlx_available
         )
 
         if not check_mlx_available():
@@ -435,7 +436,7 @@ def transcribe_with_canary(
 
     # Build language kwargs for NeMo; we only pass values that survived
     # normalization to avoid raising on unsupported codes.
-    lang_kwargs: Dict[str, Any] = {}
+    lang_kwargs: dict[str, Any] = {}
     if source_lang:
         lang_kwargs["source_lang"] = source_lang
     if target_lang:
@@ -531,7 +532,7 @@ def transcribe_with_parakeet(
         if variant == 'mlx':
             # Use specialized MLX transcription
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
-                transcribe_with_parakeet_mlx as mlx_transcribe
+                transcribe_with_parakeet_mlx as mlx_transcribe,
             )
             result = mlx_transcribe(
                 audio_source,

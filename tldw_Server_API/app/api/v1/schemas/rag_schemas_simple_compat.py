@@ -4,10 +4,10 @@ Compatibility layer to support old test imports while using new simplified schem
 This file provides the missing classes and enums that tests expect.
 """
 
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
-from pydantic import ConfigDict
 from enum import Enum
+from typing import Any, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 # Import everything from the main schema file
 from tldw_Server_API.app.api.v1.schemas.rag_schemas_simple import *
@@ -47,11 +47,11 @@ class SearchApiRequest(BaseModel):
     query: str = Field(..., description="Search query string", alias="querystring")
     mode: Optional[SearchModeEnum] = Field(default=SearchModeEnum.BASIC, description="Search mode")
     top_k: Optional[int] = Field(default=10, ge=1, le=100, description="Number of results to return")
-    filters: Optional[Dict[str, Any]] = Field(default=None, description="Optional filters")
-    data_sources: Optional[List[str]] = Field(default=None, description="Databases to search")
+    filters: Optional[dict[str, Any]] = Field(default=None, description="Optional filters")
+    data_sources: Optional[list[str]] = Field(default=None, description="Databases to search")
 
     # Additional fields expected by tests
-    search_databases: Optional[List[str]] = Field(default=None, description="Databases to search (alias)")
+    search_databases: Optional[list[str]] = Field(default=None, description="Databases to search (alias)")
     offset: Optional[int] = Field(default=0, ge=0, description="Pagination offset")
     date_range_start: Optional[str] = Field(default=None, description="Start date for filtering")
     date_range_end: Optional[str] = Field(default=None, description="End date for filtering")
@@ -64,13 +64,13 @@ class SearchApiRequest(BaseModel):
 class RetrievalAgentRequest(BaseModel):
     """Compatibility wrapper for agent requests"""
     message: Optional[Message] = Field(default=None, description="Single message")
-    messages: Optional[List[Message]] = Field(default=None, description="Conversation history")
+    messages: Optional[list[Message]] = Field(default=None, description="Conversation history")
     mode: Optional[AgentModeEnum] = Field(default=AgentModeEnum.RAG, description="Agent mode")
     rag_generation_config: Optional[GenerationConfig] = Field(default=None, description="Generation config")
-    api_config: Optional[Dict[str, Any]] = Field(default=None, description="API configuration")
+    api_config: Optional[dict[str, Any]] = Field(default=None, description="API configuration")
 
     # Additional fields for compatibility
-    search_config: Optional[Dict[str, Any]] = Field(default=None, description="Search configuration")
+    search_config: Optional[dict[str, Any]] = Field(default=None, description="Search configuration")
 
     @field_validator('messages', mode='before')
     def ensure_messages_list(cls, v, values):

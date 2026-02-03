@@ -5,27 +5,26 @@ Scaffold only - minimal models to enable endpoint stubs.
 """
 from __future__ import annotations
 
-from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
 class PersonaInfo(BaseModel):
     id: str
     name: str
-    description: Optional[str] = None
-    voice: Optional[str] = None
-    avatar_url: Optional[str] = None
-    capabilities: List[str] = Field(default_factory=list)
-    default_tools: List[str] = Field(default_factory=list)
+    description: str | None = None
+    voice: str | None = None
+    avatar_url: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    default_tools: list[str] = Field(default_factory=list)
 
 
 class PersonaSessionRequest(BaseModel):
     persona_id: str
-    project_id: Optional[str] = None
-    resume_session_id: Optional[str] = None
+    project_id: str | None = None
+    resume_session_id: str | None = None
 
 
 class PersonaSessionResponse(BaseModel):
     session_id: str
     persona: PersonaInfo
-    scopes: List[str] = Field(default_factory=list)
+    scopes: list[str] = Field(default_factory=list)

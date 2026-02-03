@@ -2,36 +2,37 @@
 Webhook management endpoints extracted from evaluations_unified.
 """
 
-from datetime import datetime, timezone
 import inspect
-from typing import List, Optional, Dict, Any
+from datetime import datetime, timezone
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
-    verify_api_key,
-    create_error_response,
-    sanitize_error_message,
     get_eval_request_user,
+    sanitize_error_message,
+    verify_api_key,
+)
+from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
+    WebhookRegistrationRequest,
+    WebhookRegistrationResponse,
+    WebhookStatusResponse,
+    WebhookTestRequest,
+    WebhookTestResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
-from tldw_Server_API.app.core.Evaluations.webhook_manager import (
-    WebhookManager,
-    WebhookEvent,
-    webhook_manager,
-)
 from tldw_Server_API.app.core.Evaluations.webhook_identity import (
     webhook_user_id_from_user,
 )
-from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
-    WebhookRegistrationRequest, WebhookRegistrationResponse,
-    WebhookUpdateRequest, WebhookStatusResponse,
-    WebhookTestRequest, WebhookTestResponse,
+from tldw_Server_API.app.core.Evaluations.webhook_manager import (
+    WebhookEvent,
+    WebhookManager,
+    webhook_manager,
 )
-
 
 webhooks_router = APIRouter()
 
@@ -55,7 +56,7 @@ def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
     return manager
 
 
-def _normalize_webhook_status_record(record: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_webhook_status_record(record: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(record)
     status = normalized.get("status")
     if "active" not in normalized:
@@ -112,7 +113,7 @@ async def register_webhook(
         )
 
 
-@webhooks_router.get("/webhooks", response_model=List[WebhookStatusResponse])
+@webhooks_router.get("/webhooks", response_model=list[WebhookStatusResponse])
 async def list_webhooks(
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),

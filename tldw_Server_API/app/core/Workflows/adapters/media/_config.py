@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Literal
 
 from pydantic import Field
 
@@ -17,20 +17,20 @@ class ChunkingConfig(BaseAdapterConfig):
     )
     max_size: int = Field(500, ge=50, description="Maximum chunk size")
     overlap: int = Field(50, ge=0, description="Overlap between chunks")
-    language: Optional[str] = Field(None, description="Language hint for chunking")
+    language: str | None = Field(None, description="Language hint for chunking")
 
 
 class MediaIngestConfig(BaseAdapterConfig):
     """Config for media ingestion adapter."""
 
-    url: Optional[str] = Field(None, description="URL to ingest (web page, YouTube, etc.)")
-    file_uri: Optional[str] = Field(None, description="file:// path to local file")
-    content: Optional[str] = Field(None, description="Raw text content to ingest")
-    title: Optional[str] = Field(None, description="Content title (optional)")
-    author: Optional[str] = Field(None, description="Content author (optional)")
-    tags: Optional[List[str]] = Field(None, description="Tags for the content")
-    keywords: Optional[List[str]] = Field(None, description="Keywords for the content")
-    chunking: Optional[ChunkingConfig] = Field(None, description="Chunking configuration")
+    url: str | None = Field(None, description="URL to ingest (web page, YouTube, etc.)")
+    file_uri: str | None = Field(None, description="file:// path to local file")
+    content: str | None = Field(None, description="Raw text content to ingest")
+    title: str | None = Field(None, description="Content title (optional)")
+    author: str | None = Field(None, description="Content author (optional)")
+    tags: list[str] | None = Field(None, description="Tags for the content")
+    keywords: list[str] | None = Field(None, description="Keywords for the content")
+    chunking: ChunkingConfig | None = Field(None, description="Chunking configuration")
     transcribe: bool = Field(True, description="Transcribe audio/video content")
     extract_metadata: bool = Field(True, description="Extract metadata from content")
     store_embeddings: bool = Field(True, description="Generate and store embeddings")
@@ -40,12 +40,12 @@ class MediaIngestConfig(BaseAdapterConfig):
 class ProcessMediaConfig(BaseAdapterConfig):
     """Config for process_media adapter."""
 
-    url: Optional[str] = Field(None, description="URL to process")
-    file_uri: Optional[str] = Field(None, description="file:// path to local file")
+    url: str | None = Field(None, description="URL to process")
+    file_uri: str | None = Field(None, description="file:// path to local file")
     transcribe: bool = Field(True, description="Transcribe audio/video content")
     summarize: bool = Field(False, description="Generate summary after processing")
-    chunking: Optional[ChunkingConfig] = Field(None, description="Chunking configuration")
-    output_format: Optional[str] = Field(None, description="Preferred output format")
+    chunking: ChunkingConfig | None = Field(None, description="Chunking configuration")
+    output_format: str | None = Field(None, description="Preferred output format")
 
 
 class PDFExtractConfig(BaseAdapterConfig):
@@ -55,7 +55,7 @@ class PDFExtractConfig(BaseAdapterConfig):
     extract_images: bool = Field(False, description="Extract images from PDF")
     extract_tables: bool = Field(False, description="Extract tables from PDF")
     ocr_enabled: bool = Field(False, description="Use OCR for scanned pages")
-    page_range: Optional[str] = Field(None, description="Page range (e.g., '1-5,10,15-20')")
+    page_range: str | None = Field(None, description="Page range (e.g., '1-5,10,15-20')")
     output_format: Literal["text", "markdown", "html", "json"] = Field(
         "text", description="Output format"
     )
@@ -80,6 +80,6 @@ class DocumentTableExtractConfig(BaseAdapterConfig):
     output_format: Literal["csv", "json", "markdown", "html"] = Field(
         "json", description="Output format for tables"
     )
-    page_range: Optional[str] = Field(None, description="Page range to extract from")
+    page_range: str | None = Field(None, description="Page range to extract from")
     merge_cells: bool = Field(True, description="Merge spanning cells")
     header_detection: bool = Field(True, description="Auto-detect table headers")

@@ -1,31 +1,34 @@
 # Llamafile_Handler.py
 #
 # Imports
+#
+# Third-party imports
+import asyncio
 import os
 import platform
-import re
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
-import zipfile
-import shutil
-from pathlib import Path
-from typing import List, Optional, Dict, Any
-#
-# Third-party imports
-import asyncio
-import socket
 import time
+import zipfile
+from pathlib import Path
+from typing import Any, Optional
+
+from tldw_Server_API.app.core.Local_LLM import handler_utils, http_utils
+
 #
 # Local imports
 from tldw_Server_API.app.core.Local_LLM.LLM_Base_Handler import BaseLLMHandler
-from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ModelDownloadError, ServerError, \
-    ModelNotFoundError, InferenceError
+from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import (
+    InferenceError,
+    ModelDownloadError,
+    ModelNotFoundError,
+    ServerError,
+)
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LlamafileConfig
-from tldw_Server_API.app.core.Utils.Utils import download_file, verify_checksum
-from tldw_Server_API.app.core.Local_LLM import http_utils
-from tldw_Server_API.app.core.Local_LLM import handler_utils
+from tldw_Server_API.app.core.Utils.Utils import verify_checksum
 
 
 def redact_cmd_args(*args, **kwargs):
@@ -53,7 +56,7 @@ async def wait_for_http_ready(*args, **kwargs):
 
 
 class LlamafileHandler(BaseLLMHandler):
-    def __init__(self, config: LlamafileConfig, global_app_config: Dict[str, Any]):
+    def __init__(self, config: LlamafileConfig, global_app_config: dict[str, Any]):
         super().__init__(config, global_app_config)
         self.config: LlamafileConfig  # For type hinting
 
@@ -64,8 +67,8 @@ class LlamafileHandler(BaseLLMHandler):
         self.models_dir.mkdir(parents=True, exist_ok=True)
 
         # Corrected type hint for asyncio.subprocess.Process
-        self._active_servers: Dict[int, asyncio.subprocess.Process] = {}
-        self._stream_tasks: Dict[int, list[asyncio.Task]] = {}
+        self._active_servers: dict[int, asyncio.subprocess.Process] = {}
+        self._stream_tasks: dict[int, list[asyncio.Task]] = {}
 
         # Apply environment overrides
         handler_utils.apply_env_overrides(self.config)
@@ -175,7 +178,7 @@ class LlamafileHandler(BaseLLMHandler):
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(extracted_path), str(output_path))
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         return dict(self.metrics)
 
     def _is_port_free(self, host: str, port: int) -> bool:
@@ -192,7 +195,7 @@ class LlamafileHandler(BaseLLMHandler):
                 return candidate
         return start_port  # Fallback
 
-    def _denylist_check(self, args: Dict[str, Any]):
+    def _denylist_check(self, args: dict[str, Any]):
         try:
             handler_utils.check_denylist(
                 args,
@@ -222,7 +225,7 @@ class LlamafileHandler(BaseLLMHandler):
         repo = "Mozilla-Ocho/llamafile"
         latest_release_url = f"https://api.github.com/repos/{repo}/releases/latest"
 
-        from tldw_Server_API.app.core.Local_LLM.http_utils import request_json, async_stream_download
+        from tldw_Server_API.app.core.Local_LLM.http_utils import async_stream_download, request_json
 
         async with create_async_client(timeout=60.0) as client:  # Increased timeout for fetching release info
             try:
@@ -395,7 +398,7 @@ class LlamafileHandler(BaseLLMHandler):
             if model_path.exists(): model_path.unlink(missing_ok=True)
             raise ModelDownloadError(f"Failed to download model {model_name}: {e}")
 
-    async def list_models(self) -> List[str]:
+    async def list_models(self) -> list[str]:
         if not self.models_dir.exists():
             return []
 
@@ -411,7 +414,7 @@ class LlamafileHandler(BaseLLMHandler):
         return (self.models_dir / model_filename).is_file()  # Check if it's a file
 
     # --- Server Management ---
-    async def start_server(self, model_filename: str, server_args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def start_server(self, model_filename: str, server_args: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         llamafile_exe = await self.download_latest_llamafile_executable()
         if not llamafile_exe or not llamafile_exe.exists():
             raise ServerError("Llamafile executable not found or could not be downloaded.")
@@ -448,7 +451,7 @@ class LlamafileHandler(BaseLLMHandler):
                     "model": model_filename}
 
         # Allowlist of supported args
-        allowed_formatters: Dict[str, Any] = {
+        allowed_formatters: dict[str, Any] = {
             "port": lambda v: ["--port", str(int(v))],
             "host": lambda v: ["--host", str(v)],
             "threads": lambda v: ["-t", str(int(v))],
@@ -715,7 +718,7 @@ class LlamafileHandler(BaseLLMHandler):
                         top_k: int = 40,
                         top_p: float = 0.95,
                         api_key: Optional[str] = None,
-                        **kwargs) -> Dict[str, Any]:
+                        **kwargs) -> dict[str, Any]:
         if port is None:
             port = self.config.default_port
         if port is None:

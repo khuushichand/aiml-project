@@ -6,8 +6,9 @@ Requires `IEEE_API_KEY` in environment.
 from __future__ import annotations
 
 import os
-from typing import Optional, Tuple, List, Dict, Any
-from tldw_Server_API.app.core.http_client import fetch, fetch_json
+from typing import Any
+
+from tldw_Server_API.app.core.http_client import fetch_json
 
 
 def _missing_key_error() -> str:
@@ -17,7 +18,7 @@ def _missing_key_error() -> str:
 BASE_URL = "https://ieeexploreapi.ieee.org/api/v1/search/articles"
 
 
-def _join_authors(authors_block: Any) -> Optional[str]:
+def _join_authors(authors_block: Any) -> str | None:
     try:
         auths = ((authors_block or {}).get("authors") or [])
         names = []
@@ -30,7 +31,7 @@ def _join_authors(authors_block: Any) -> Optional[str]:
         return None
 
 
-def _pdf_url(article: Dict[str, Any]) -> Optional[str]:
+def _pdf_url(article: dict[str, Any]) -> str | None:
     # Prefer pdf_url when present
     if article.get("pdf_url"):
         return article.get("pdf_url")
@@ -38,7 +39,7 @@ def _pdf_url(article: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _normalize_article(article: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_article(article: dict[str, Any]) -> dict[str, Any]:
     doi = article.get("doi")
     return {
         "id": str(article.get("article_number") or ""),
@@ -55,28 +56,28 @@ def _normalize_article(article: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def search_ieee(
-    q: Optional[str],
+    q: str | None,
     offset: int,
     limit: int,
-    from_year: Optional[int] = None,
-    to_year: Optional[int] = None,
-    publication_title: Optional[str] = None,
-    authors: Optional[str] = None,
-) -> Tuple[Optional[List[Dict]], int, Optional[str]]:
+    from_year: int | None = None,
+    to_year: int | None = None,
+    publication_title: str | None = None,
+    authors: str | None = None,
+) -> tuple[list[dict] | None, int, str | None]:
     api_key = os.getenv("IEEE_API_KEY")
     if not api_key:
         return None, 0, _missing_key_error()
     try:
         # IEEE uses 1-based start_record; limit via max_records
         start_record = max(1, offset + 1)
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "apikey": api_key,
             "format": "json",
             "start_record": start_record,
             "max_records": limit,
         }
         # Build querytext combining free text and author/publication if provided
-        q_parts: List[str] = []
+        q_parts: list[str] = []
         if q:
             q_parts.append(q)
         if authors:
@@ -105,7 +106,7 @@ def search_ieee(
         return None, 0, f"IEEE Xplore error: {str(e)}"
 
 
-def get_ieee_by_doi(doi: str) -> Tuple[Optional[Dict], Optional[str]]:
+def get_ieee_by_doi(doi: str) -> tuple[dict | None, str | None]:
     api_key = os.getenv("IEEE_API_KEY")
     if not api_key:
         return None, _missing_key_error()
@@ -126,7 +127,7 @@ def get_ieee_by_doi(doi: str) -> Tuple[Optional[Dict], Optional[str]]:
         return None, f"IEEE Xplore error: {str(e)}"
 
 
-def get_ieee_by_id(article_number: str) -> Tuple[Optional[Dict], Optional[str]]:
+def get_ieee_by_id(article_number: str) -> tuple[dict | None, str | None]:
     api_key = os.getenv("IEEE_API_KEY")
     if not api_key:
         return None, _missing_key_error()

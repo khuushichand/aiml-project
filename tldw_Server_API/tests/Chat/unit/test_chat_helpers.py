@@ -203,6 +203,7 @@ class TestValidateRequestPayload:
         assert is_valid is False
         assert "too large" in error.lower()
 
+    @pytest.mark.unit
     async def test_image_size_enforcement_allows_http_url(self):
         """Test validation allows non-data image URLs when base64 enforcement is enabled."""
         msg = MockMessage()
@@ -217,6 +218,7 @@ class TestValidateRequestPayload:
         assert is_valid is True
         assert error is None
 
+    @pytest.mark.unit
     async def test_image_size_enforcement_rejects_invalid_data_uri(self):
         """Test validation rejects invalid data URI payloads when enforcing size."""
         msg = MockMessage()

@@ -3,14 +3,17 @@
 # Imports
 import abc
 import asyncio
-from typing import Dict, Any
+from typing import Any
+
 #
 # Third-party imports
 from loguru import logger
+
 #
 # Local imports
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ServerError
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import BaseHandlerConfig
+
 #
 #######################################################################################################################
 #
@@ -18,7 +21,7 @@ from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import BaseHandler
 
 
 class BaseLLMHandler(abc.ABC):
-    def __init__(self, config: BaseHandlerConfig, global_app_config: Dict[str, Any]):
+    def __init__(self, config: BaseHandlerConfig, global_app_config: dict[str, Any]):
         self.config = config
         self.global_app_config = global_app_config
         # Use loguru logger instance for structured logging

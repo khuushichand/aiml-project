@@ -1,30 +1,37 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
 from datetime import datetime
 from pathlib import Path as PathlibPath
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path as FastAPIPath
-from pydantic import BaseModel
+from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import Path as FastAPIPath
 from loguru import logger
+from pydantic import BaseModel
+from starlette.responses import FileResponse
 
-from tldw_Server_API.app.api.v1.schemas.outputs_schemas import OutputArtifact, OutputCreateRequest, OutputListResponse, OutputUpdateRequest
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.endpoints.outputs_templates import (
+    _build_items_context_from_media_ids,
+    _select_media_ids_for_run,
+)
+from tldw_Server_API.app.api.v1.schemas.outputs_schemas import (
+    OutputArtifact,
+    OutputCreateRequest,
+    OutputListResponse,
+    OutputUpdateRequest,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     User,
     get_request_user,
     resolve_user_id_for_request,
 )
-from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.endpoints.outputs_templates import _build_items_context_from_media_ids, _select_media_ids_for_run
 from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseError
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
-from starlette.responses import FileResponse
 from tldw_Server_API.app.services.outputs_service import (
-    build_items_context_from_content_items,
     _build_output_filename,
     _ingest_output_to_media_db,
     _outputs_dir_for_user,
@@ -32,13 +39,13 @@ from tldw_Server_API.app.services.outputs_service import (
     _sanitize_title_for_filename,
     _strip_html_for_tts,
     _write_tts_audio_file,
+    build_items_context_from_content_items,
     delete_outputs_by_ids,
     find_outputs_to_purge,
     normalize_output_storage_path,
     render_output_template,
     update_output_artifact_db,
 )
-
 
 router = APIRouter(prefix="/outputs", tags=["outputs"])
 

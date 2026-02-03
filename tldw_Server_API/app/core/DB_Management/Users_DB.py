@@ -2,12 +2,11 @@
 # Description: Database operations for user management in multi-user mode
 #
 # Imports
-from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
-import hashlib
-import uuid
-import sqlite3
 import asyncio
+import sqlite3
+import uuid
+from datetime import datetime
+from typing import Any, Optional
 
 # Guarded optional imports for async drivers. Users_DB relies on the
 # unified DatabasePool abstraction and should not hard-depend on these
@@ -38,6 +37,7 @@ except Exception:  # pragma: no cover
 #
 # 3rd-party imports
 from loguru import logger
+
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
@@ -230,7 +230,7 @@ class UsersDB:
                 logger.error(f"Failed to create users table: {e}")
                 raise DatabaseError(f"Failed to create users table: {e}")
 
-    async def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+    async def get_user_by_id(self, user_id: int) -> Optional[dict[str, Any]]:
         """
         Get user by ID
 
@@ -273,7 +273,7 @@ class UsersDB:
             logger.error(f"Failed to get user by ID {user_id}: {e}")
             raise DatabaseError(f"Failed to get user: {e}")
 
-    async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+    async def get_user_by_username(self, username: str) -> Optional[dict[str, Any]]:
         """
         Get user by username
 
@@ -311,7 +311,7 @@ class UsersDB:
             logger.error(f"Failed to get user by username {username}: {e}")
             raise DatabaseError(f"Failed to get user: {e}")
 
-    async def get_user_by_uuid(self, user_uuid: str) -> Optional[Dict[str, Any]]:
+    async def get_user_by_uuid(self, user_uuid: str) -> Optional[dict[str, Any]]:
         """
         Get user by UUID (textual identifier) when available.
 
@@ -350,7 +350,7 @@ class UsersDB:
             logger.error(f"Failed to get user by uuid {user_uuid}: {e}")
             raise DatabaseError(f"Failed to get user: {e}")
 
-    async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+    async def get_user_by_email(self, email: str) -> Optional[dict[str, Any]]:
         """
         Get user by email
 
@@ -399,7 +399,7 @@ class UsersDB:
         is_superuser: bool = False,
         storage_quota_mb: int = 5120,
         uuid_value: Optional[uuid.UUID | str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new user
 
@@ -547,7 +547,7 @@ class UsersDB:
         self,
         user_id: int,
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Update user information
 
@@ -655,7 +655,7 @@ class UsersDB:
         limit: int = 100,
         role: Optional[str] = None,
         is_active: Optional[bool] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         List users with optional filtering
 
@@ -731,22 +731,22 @@ async def reset_users_db() -> None:
     _users_db = None
 
 # Convenience functions for backward compatibility
-async def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
+async def get_user_by_id(user_id: int) -> Optional[dict[str, Any]]:
     """Get user by ID (convenience function)"""
     db = await get_users_db()
     return await db.get_user_by_id(user_id)
 
-async def get_user_by_uuid(user_uuid: str) -> Optional[Dict[str, Any]]:
+async def get_user_by_uuid(user_uuid: str) -> Optional[dict[str, Any]]:
     """Get user by UUID (convenience function)"""
     db = await get_users_db()
     return await db.get_user_by_uuid(user_uuid)
 
-async def create_user(username: str, email: str, password_hash: str, **kwargs) -> Dict[str, Any]:
+async def create_user(username: str, email: str, password_hash: str, **kwargs) -> dict[str, Any]:
     """Create user (convenience function)"""
     db = await get_users_db()
     return await db.create_user(username, email, password_hash, **kwargs)
 
-async def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
+async def get_user_by_username(username: str) -> Optional[dict[str, Any]]:
     """Get user by username (convenience function)"""
     db = await get_users_db()
     return await db.get_user_by_username(username)

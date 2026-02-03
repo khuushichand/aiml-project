@@ -3,11 +3,12 @@ from __future__ import annotations
 import inspect
 import json
 import uuid
-from typing import Any, AsyncIterator, Dict, List, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
 
-def _blocks_to_text(blocks: List[Dict[str, Any]]) -> str:
-    parts: List[str] = []
+def _blocks_to_text(blocks: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
     for block in blocks:
         if not isinstance(block, dict):
             continue
@@ -18,7 +19,7 @@ def _blocks_to_text(blocks: List[Dict[str, Any]]) -> str:
     return "".join(parts)
 
 
-def _system_to_text(system: Any) -> Optional[str]:
+def _system_to_text(system: Any) -> str | None:
     if system is None:
         return None
     if isinstance(system, str):
@@ -29,7 +30,7 @@ def _system_to_text(system: Any) -> Optional[str]:
     return None
 
 
-def _image_block_to_openai_part(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _image_block_to_openai_part(block: dict[str, Any]) -> dict[str, Any] | None:
     source = block.get("source")
     if not isinstance(source, dict):
         return None
@@ -47,7 +48,7 @@ def _image_block_to_openai_part(block: Dict[str, Any]) -> Optional[Dict[str, Any
     return {"type": "image_url", "image_url": {"url": url}}
 
 
-def _tool_result_to_text(block: Dict[str, Any]) -> str:
+def _tool_result_to_text(block: dict[str, Any]) -> str:
     content = block.get("content")
     if isinstance(content, str):
         return content
@@ -61,7 +62,7 @@ def _tool_result_to_text(block: Dict[str, Any]) -> str:
         return str(content)
 
 
-def _tool_use_to_openai_call(block: Dict[str, Any], tool_index: int) -> Optional[Dict[str, Any]]:
+def _tool_use_to_openai_call(block: dict[str, Any], tool_index: int) -> dict[str, Any] | None:
     name = block.get("name")
     tool_id = block.get("id") or f"tool_{tool_index}"
     if not isinstance(name, str) or not name:
@@ -80,11 +81,11 @@ def _tool_use_to_openai_call(block: Dict[str, Any], tool_index: int) -> Optional
 
 
 def anthropic_messages_to_openai(
-    messages: List[Dict[str, Any]],
-    system: Optional[Any],
-) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    messages: list[dict[str, Any]],
+    system: Any | None,
+) -> Tuple[list[dict[str, Any]], str | None]:
     system_message = _system_to_text(system)
-    openai_messages: List[Dict[str, Any]] = []
+    openai_messages: list[dict[str, Any]] = []
     tool_result_counter = 0
 
     for msg in messages:
@@ -104,8 +105,8 @@ def anthropic_messages_to_openai(
             continue
 
         if role == "assistant":
-            text_parts: List[str] = []
-            tool_calls: List[Dict[str, Any]] = []
+            text_parts: list[str] = []
+            tool_calls: list[dict[str, Any]] = []
             tool_index = 0
             for block in content:
                 if not isinstance(block, dict):
@@ -120,7 +121,7 @@ def anthropic_messages_to_openai(
                     if call:
                         tool_calls.append(call)
                         tool_index += 1
-            message_payload: Dict[str, Any] = {
+            message_payload: dict[str, Any] = {
                 "role": "assistant",
                 "content": "".join(text_parts),
             }
@@ -130,7 +131,7 @@ def anthropic_messages_to_openai(
             continue
 
         # user role with mixed content
-        user_parts: List[Dict[str, Any]] = []
+        user_parts: list[dict[str, Any]] = []
         has_image = False
 
         def _flush_user_parts() -> None:
@@ -180,10 +181,10 @@ def anthropic_messages_to_openai(
     return openai_messages, system_message
 
 
-def anthropic_tools_to_openai(tools: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
+def anthropic_tools_to_openai(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
     if not tools:
         return None
-    converted: List[Dict[str, Any]] = []
+    converted: list[dict[str, Any]] = []
     for tool in tools:
         if not isinstance(tool, dict):
             continue
@@ -192,7 +193,7 @@ def anthropic_tools_to_openai(tools: Optional[List[Dict[str, Any]]]) -> Optional
             continue
         description = tool.get("description")
         input_schema = tool.get("input_schema")
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "type": "function",
             "function": {
                 "name": name,
@@ -228,8 +229,8 @@ def anthropic_tool_choice_to_openai(choice: Any) -> Any:
     return choice
 
 
-def _openai_content_to_blocks(content: Any) -> List[Dict[str, Any]]:
-    blocks: List[Dict[str, Any]] = []
+def _openai_content_to_blocks(content: Any) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
     if isinstance(content, str):
         if content:
             blocks.append({"type": "text", "text": content})
@@ -251,7 +252,7 @@ def _openai_content_to_blocks(content: Any) -> List[Dict[str, Any]]:
     return blocks
 
 
-def _finish_reason_to_stop_reason(reason: Optional[str]) -> Optional[str]:
+def _finish_reason_to_stop_reason(reason: str | None) -> str | None:
     if not reason:
         return None
     mapping = {
@@ -264,7 +265,7 @@ def _finish_reason_to_stop_reason(reason: Optional[str]) -> Optional[str]:
     return mapping.get(reason, reason)
 
 
-def openai_response_to_anthropic(response: Dict[str, Any], *, model: Optional[str]) -> Dict[str, Any]:
+def openai_response_to_anthropic(response: dict[str, Any], *, model: str | None) -> dict[str, Any]:
     choice = None
     if isinstance(response.get("choices"), list) and response["choices"]:
         choice = response["choices"][0]
@@ -317,14 +318,14 @@ def openai_response_to_anthropic(response: Dict[str, Any], *, model: Optional[st
     }
 
 
-def _sse_event(event_type: str, payload: Dict[str, Any]) -> str:
+def _sse_event(event_type: str, payload: dict[str, Any]) -> str:
     if "type" not in payload:
         payload = dict(payload)
         payload["type"] = event_type
     return f"event: {event_type}\n" + f"data: {json.dumps(payload, ensure_ascii=True)}\n\n"
 
 
-def _parse_openai_sse_line(line: str) -> Optional[Dict[str, Any]]:
+def _parse_openai_sse_line(line: str) -> dict[str, Any] | None:
     stripped = line.strip()
     if not stripped:
         return None
@@ -377,7 +378,7 @@ async def _maybe_close_stream(stream: Any) -> None:
             pass
 
 
-def _extract_choice(data: Dict[str, Any]) -> Dict[str, Any]:
+def _extract_choice(data: dict[str, Any]) -> dict[str, Any]:
     choices = data.get("choices")
     if isinstance(choices, list) and choices:
         choice = choices[0]
@@ -389,16 +390,16 @@ def _extract_choice(data: Dict[str, Any]) -> Dict[str, Any]:
 async def openai_stream_to_anthropic(
     stream: Any,
     *,
-    model: Optional[str],
+    model: str | None,
 ) -> AsyncIterator[str]:
     message_id = f"msg_{uuid.uuid4().hex}"
     message_started = False
-    text_block_index: Optional[int] = None
+    text_block_index: int | None = None
     next_block_index = 0
-    open_blocks: List[int] = []
-    tool_blocks_by_id: Dict[str, Dict[str, Any]] = {}
-    tool_blocks_by_index: Dict[int, Dict[str, Any]] = {}
-    final_usage: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+    open_blocks: list[int] = []
+    tool_blocks_by_id: dict[str, dict[str, Any]] = {}
+    tool_blocks_by_index: dict[int, dict[str, Any]] = {}
+    final_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
 
     try:
         async for raw_line in _aiter_lines(stream):

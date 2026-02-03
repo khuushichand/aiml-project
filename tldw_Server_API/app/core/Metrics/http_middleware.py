@@ -1,9 +1,10 @@
 from time import monotonic
 from typing import Callable
+
+from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
-from fastapi.exceptions import RequestValidationError
 
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 

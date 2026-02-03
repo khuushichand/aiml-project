@@ -28,9 +28,9 @@ import os
 import sqlite3
 import threading
 import uuid as uuid_module
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any
 
 from loguru import logger
 
@@ -38,6 +38,7 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths, _is_test_context
 from tldw_Server_API.app.core.DB_Management.kanban_vector_search import create_kanban_vector_search
 from tldw_Server_API.app.core.exceptions import StorageUnavailableError
+
 
 # --- Helper Functions ---
 def _utcnow_iso() -> str:
@@ -61,7 +62,7 @@ def _normalize_user_id_for_records(user_id: str) -> str:
 def _normalize_db_path(
     db_path: str,
     user_id: str,
-) -> Tuple[str, bool]:
+) -> tuple[str, bool]:
     """Normalize db_path and always enforce user directory containment."""
     if not db_path or not str(db_path).strip():
         raise InputError("db_path is required")
@@ -107,7 +108,7 @@ def _kanban_card_indexable(
     *,
     user_id: str,
     card_id: int,
-    expected_version: Optional[Any] = None,
+    expected_version: Any | None = None,
 ) -> bool:
     """Return True when a card exists, is not deleted/archived, and matches the expected version."""
     try:
@@ -176,7 +177,7 @@ class ConflictError(KanbanDBError):
     an update/delete operation (optimistic locking), or if an insert/update
     violates a unique constraint (e.g., duplicate client_id).
     """
-    def __init__(self, message: str = "Conflict detected.", entity: Optional[str] = None, entity_id: Any = None):
+    def __init__(self, message: str = "Conflict detected.", entity: str | None = None, entity_id: Any = None):
         super().__init__(message)
         self.entity = entity
         self.entity_id = entity_id
@@ -193,7 +194,7 @@ class ConflictError(KanbanDBError):
 
 class NotFoundError(KanbanDBError):
     """Exception when a requested resource is not found."""
-    def __init__(self, message: str = "Resource not found.", entity: Optional[str] = None, entity_id: Any = None):
+    def __init__(self, message: str = "Resource not found.", entity: str | None = None, entity_id: Any = None):
         super().__init__(message)
         self.entity = entity
         self.entity_id = entity_id
@@ -249,10 +250,10 @@ class KanbanDB:
             db_path,
             raw_user_id,
         )
-        self._memory_conn: Optional[_KanbanMemoryConnection] = None
+        self._memory_conn: _KanbanMemoryConnection | None = None
         self._vector_search = None
         self._vector_search_initialized = False
-        self._vector_index_retry_pending: Set[Tuple[str, int]] = set()
+        self._vector_index_retry_pending: set[tuple[str, int]] = set()
         self._vector_index_retry_lock = threading.Lock()
         self._apply_limit_overrides()
 
@@ -630,10 +631,10 @@ END;
         self,
         name: str,
         client_id: str,
-        description: Optional[str] = None,
-        activity_retention_days: Optional[int] = None,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        description: str | None = None,
+        activity_retention_days: int | None = None,
+        metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """
         Create a new board.
 
@@ -716,7 +717,7 @@ END;
         self,
         board_id: int,
         include_deleted: bool = False
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Get a board by ID.
 
@@ -739,7 +740,7 @@ END;
         conn: sqlite3.Connection,
         board_id: int,
         include_deleted: bool = False
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Internal method to get a board by ID using an existing connection."""
         sql = """
             SELECT id, uuid, user_id, client_id, name, description, archived,
@@ -748,7 +749,7 @@ END;
             FROM kanban_boards
             WHERE id = ? AND user_id = ?
         """
-        params: List[Any] = [board_id, self.user_id]
+        params: list[Any] = [board_id, self.user_id]
 
         if not include_deleted:
             sql += " AND deleted = 0"
@@ -761,7 +762,7 @@ END;
 
         return self._row_to_board_dict(row)
 
-    def _row_to_board_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_board_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         """Convert a board row to a dictionary."""
         return {
             "id": row["id"],
@@ -787,7 +788,7 @@ END;
         include_deleted: bool = False,
         limit: int = 50,
         offset: int = 0
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         List boards for the user with pagination.
 
@@ -804,7 +805,7 @@ END;
             conn = self._connect()
             try:
                 conditions = ["user_id = ?"]
-                params: List[Any] = [self.user_id]
+                params: list[Any] = [self.user_id]
 
                 if not include_archived:
                     conditions.append("archived = 0")
@@ -837,7 +838,7 @@ END;
                     placeholders = ",".join("?" * len(board_ids))
 
                     list_conditions = [f"board_id IN ({placeholders})"]
-                    list_params: List[Any] = list(board_ids)
+                    list_params: list[Any] = list(board_ids)
                     if not include_archived:
                         list_conditions.append("archived = 0")
                     if not include_deleted:
@@ -855,7 +856,7 @@ END;
                     }
 
                     card_conditions = [f"board_id IN ({placeholders})"]
-                    card_params: List[Any] = list(board_ids)
+                    card_params: list[Any] = list(board_ids)
                     if not include_archived:
                         card_conditions.append("archived = 0")
                     if not include_deleted:
@@ -885,12 +886,12 @@ END;
     def update_board(
         self,
         board_id: int,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
-        activity_retention_days: Optional[int] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        expected_version: Optional[int] = None
-    ) -> Dict[str, Any]:
+        name: str | None = None,
+        description: str | None = None,
+        activity_retention_days: int | None = None,
+        metadata: dict[str, Any] | None = None,
+        expected_version: int | None = None
+    ) -> dict[str, Any]:
         """
         Update a board.
 
@@ -927,7 +928,7 @@ END;
 
                 # Build update
                 updates = []
-                params: List[Any] = []
+                params: list[Any] = []
 
                 if name is not None:
                     if not name.strip():
@@ -977,7 +978,7 @@ END;
             finally:
                 conn.close()
 
-    def archive_board(self, board_id: int, archive: bool = True) -> Dict[str, Any]:
+    def archive_board(self, board_id: int, archive: bool = True) -> dict[str, Any]:
         """
         Archive or unarchive a board.
 
@@ -988,8 +989,8 @@ END;
         Returns:
             The updated board.
         """
-        card_ids: List[int] = []
-        updated_board: Optional[Dict[str, Any]] = None
+        card_ids: list[int] = []
+        updated_board: dict[str, Any] | None = None
         with self._lock:
             conn = self._connect()
             try:
@@ -1092,7 +1093,7 @@ END;
         Returns:
             True if deleted, False if not found.
         """
-        card_ids: List[int] = []
+        card_ids: list[int] = []
         deleted = False
         with self._lock:
             conn = self._connect()
@@ -1185,7 +1186,7 @@ END;
             self._sync_vector_index_for_card_ids(card_ids)
         return deleted
 
-    def restore_board(self, board_id: int) -> Dict[str, Any]:
+    def restore_board(self, board_id: int) -> dict[str, Any]:
         """
         Restore a soft-deleted board.
 
@@ -1198,8 +1199,8 @@ END;
         Raises:
             NotFoundError: If board not found or not deleted.
         """
-        card_ids: List[int] = []
-        restored_board: Optional[Dict[str, Any]] = None
+        card_ids: list[int] = []
+        restored_board: dict[str, Any] | None = None
         with self._lock:
             conn = self._connect()
             try:
@@ -1297,8 +1298,8 @@ END;
         board_id: int,
         name: str,
         client_id: str,
-        position: Optional[int] = None
-    ) -> Dict[str, Any]:
+        position: int | None = None
+    ) -> dict[str, Any]:
         """
         Create a new list in a board.
 
@@ -1380,7 +1381,7 @@ END;
             finally:
                 conn.close()
 
-    def get_list(self, list_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_list(self, list_id: int, include_deleted: bool = False) -> dict[str, Any] | None:
         """Get a list by ID."""
         with self._lock:
             conn = self._connect()
@@ -1394,7 +1395,7 @@ END;
         conn: sqlite3.Connection,
         list_id: int,
         include_deleted: bool = False
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Internal method to get a list by ID."""
         sql = """
             SELECT l.id, l.uuid, l.board_id, l.client_id, l.name, l.position,
@@ -1404,7 +1405,7 @@ END;
             JOIN kanban_boards b ON l.board_id = b.id
             WHERE l.id = ? AND b.user_id = ?
         """
-        params: List[Any] = [list_id, self.user_id]
+        params: list[Any] = [list_id, self.user_id]
 
         if not include_deleted:
             sql += " AND l.deleted = 0"
@@ -1417,7 +1418,7 @@ END;
 
         return self._row_to_list_dict(row)
 
-    def _row_to_list_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_list_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         """Convert a list row to a dictionary."""
         return {
             "id": row["id"],
@@ -1440,7 +1441,7 @@ END;
         board_id: int,
         include_archived: bool = False,
         include_deleted: bool = False
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get all lists for a board, ordered by position.
 
@@ -1463,7 +1464,7 @@ END;
                     return []
 
                 conditions = ["l.board_id = ?"]
-                params: List[Any] = [board_id]
+                params: list[Any] = [board_id]
 
                 if not include_archived:
                     conditions.append("l.archived = 0")
@@ -1490,9 +1491,9 @@ END;
     def update_list(
         self,
         list_id: int,
-        name: Optional[str] = None,
-        expected_version: Optional[int] = None
-    ) -> Dict[str, Any]:
+        name: str | None = None,
+        expected_version: int | None = None
+    ) -> dict[str, Any]:
         """Update a list."""
         with self._lock:
             conn = self._connect()
@@ -1513,7 +1514,7 @@ END;
                     )
 
                 updates = []
-                params: List[Any] = []
+                params: list[Any] = []
 
                 if name is not None:
                     if not name.strip():
@@ -1551,7 +1552,7 @@ END;
             finally:
                 conn.close()
 
-    def reorder_lists(self, board_id: int, list_ids: List[int]) -> List[Dict[str, Any]]:
+    def reorder_lists(self, board_id: int, list_ids: list[int]) -> list[dict[str, Any]]:
         """
         Reorder lists in a board.
 
@@ -1602,10 +1603,10 @@ END;
             finally:
                 conn.close()
 
-    def archive_list(self, list_id: int, archive: bool = True) -> Dict[str, Any]:
+    def archive_list(self, list_id: int, archive: bool = True) -> dict[str, Any]:
         """Archive or unarchive a list."""
-        card_ids: List[int] = []
-        updated_list: Optional[Dict[str, Any]] = None
+        card_ids: list[int] = []
+        updated_list: dict[str, Any] | None = None
         with self._lock:
             conn = self._connect()
             try:
@@ -1671,7 +1672,7 @@ END;
 
     def delete_list(self, list_id: int, hard_delete: bool = False) -> bool:
         """Delete a list (soft delete by default)."""
-        card_ids: List[int] = []
+        card_ids: list[int] = []
         deleted = False
         with self._lock:
             conn = self._connect()
@@ -1739,10 +1740,10 @@ END;
             self._sync_vector_index_for_card_ids(card_ids)
         return deleted
 
-    def restore_list(self, list_id: int) -> Dict[str, Any]:
+    def restore_list(self, list_id: int) -> dict[str, Any]:
         """Restore a soft-deleted list."""
-        card_ids: List[int] = []
-        restored_list: Optional[Dict[str, Any]] = None
+        card_ids: list[int] = []
+        restored_list: dict[str, Any] | None = None
         with self._lock:
             conn = self._connect()
             try:
@@ -1815,13 +1816,13 @@ END;
         list_id: int,
         title: str,
         client_id: str,
-        description: Optional[str] = None,
-        position: Optional[int] = None,
-        due_date: Optional[str] = None,
-        start_date: Optional[str] = None,
-        priority: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        description: str | None = None,
+        position: int | None = None,
+        due_date: str | None = None,
+        start_date: str | None = None,
+        priority: str | None = None,
+        metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """
         Create a new card in a list.
 
@@ -1854,7 +1855,7 @@ END;
         card_uuid = _generate_uuid()
         now = _utcnow_iso()
         metadata_json = json.dumps(metadata) if metadata else None
-        card: Optional[Dict[str, Any]] = None
+        card: dict[str, Any] | None = None
 
         with self._lock:
             conn = self._connect()
@@ -1930,7 +1931,7 @@ END;
             self._sync_vector_index_for_card_id(card["id"])
         return card
 
-    def get_card(self, card_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_card(self, card_id: int, include_deleted: bool = False) -> dict[str, Any] | None:
         """Get a card by ID."""
         with self._lock:
             conn = self._connect()
@@ -1943,7 +1944,7 @@ END;
         self,
         card_id: int,
         include_deleted: bool = False
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Get a card with labels, checklists (including items), and comment count.
 
@@ -1973,7 +1974,7 @@ END;
                     (card_id,),
                 ).fetchall()
 
-                checklists: List[Dict[str, Any]] = []
+                checklists: list[dict[str, Any]] = []
                 for row in checklist_rows:
                     checklist = self._row_to_checklist_dict(row)
                     item_rows = conn.execute(
@@ -2009,10 +2010,10 @@ END;
 
     def get_cards_by_ids(
         self,
-        card_ids: List[int],
+        card_ids: list[int],
         include_deleted: bool = False,
         include_archived: bool = True
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get multiple cards by IDs in a single query (batch fetch).
 
@@ -2044,7 +2045,7 @@ END;
                     JOIN kanban_lists l ON c.list_id = l.id
                     WHERE c.id IN ({placeholders}) AND b.user_id = ?
                 """
-                params: List[Any] = list(card_ids) + [self.user_id]
+                params: list[Any] = list(card_ids) + [self.user_id]
 
                 if not include_deleted:
                     sql += " AND c.deleted = 0"
@@ -2072,7 +2073,7 @@ END;
         conn: sqlite3.Connection,
         card_id: int,
         include_deleted: bool = False
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Internal method to get a card by ID."""
         sql = """
             SELECT c.id, c.uuid, c.board_id, c.list_id, c.client_id, c.title, c.description,
@@ -2083,7 +2084,7 @@ END;
             JOIN kanban_boards b ON c.board_id = b.id
             WHERE c.id = ? AND b.user_id = ?
         """
-        params: List[Any] = [card_id, self.user_id]
+        params: list[Any] = [card_id, self.user_id]
 
         if not include_deleted:
             sql += " AND c.deleted = 0"
@@ -2096,7 +2097,7 @@ END;
 
         return self._row_to_card_dict(row)
 
-    def _row_to_card_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_card_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         """Convert a card row to a dictionary."""
         return {
             "id": row["id"],
@@ -2121,7 +2122,7 @@ END;
             "metadata": json.loads(row["metadata"]) if row["metadata"] else None
         }
 
-    def _get_vector_search(self) -> Optional[Any]:
+    def _get_vector_search(self) -> Any | None:
         """Return a cached KanbanVectorSearch instance when available."""
         with self._lock:
             if self._vector_search_initialized:
@@ -2134,11 +2135,11 @@ END;
             self._vector_search_initialized = True
             return self._vector_search
 
-    def get_vector_search(self) -> Optional[Any]:
+    def get_vector_search(self) -> Any | None:
         """Expose vector search for API use."""
         return self._get_vector_search()
 
-    def _get_card_labels_for_index(self, conn: sqlite3.Connection, card_id: int) -> List[Dict[str, Any]]:
+    def _get_card_labels_for_index(self, conn: sqlite3.Connection, card_id: int) -> list[dict[str, Any]]:
         """Fetch labels for a card using an existing connection."""
         cur = conn.execute(
             """
@@ -2152,7 +2153,7 @@ END;
         )
         return [self._row_to_label_dict(row) for row in cur.fetchall()]
 
-    def _get_checklist_item_names(self, conn: sqlite3.Connection, card_id: int) -> List[str]:
+    def _get_checklist_item_names(self, conn: sqlite3.Connection, card_id: int) -> list[str]:
         """Fetch checklist item names for a card in display order."""
         cur = conn.execute(
             """
@@ -2170,7 +2171,7 @@ END;
         self,
         conn: sqlite3.Connection,
         card_id: int,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Fetch a card with labels and checklist items for vector indexing."""
         card = self._get_card_by_id(conn, card_id, include_deleted=True)
         if not card:
@@ -2214,7 +2215,7 @@ END;
     def _sync_vector_index_for_card_id(
         self,
         card_id: int,
-        search: Optional[Any] = None,
+        search: Any | None = None,
         *,
         retry_attempt: int = 0,
     ) -> None:
@@ -2297,7 +2298,7 @@ END;
                 retry_attempt=retry_attempt,
             )
 
-    def _sync_vector_index_for_card_ids(self, card_ids: List[int]) -> None:
+    def _sync_vector_index_for_card_ids(self, card_ids: list[int]) -> None:
         """Sync vector index for multiple cards."""
         if not card_ids:
             return
@@ -2312,7 +2313,7 @@ END;
         list_id: int,
         include_archived: bool = False,
         include_deleted: bool = False
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get all cards in a list, ordered by position.
 
@@ -2341,7 +2342,7 @@ END;
                         return []
 
                 conditions = ["c.list_id = ?"]
-                params: List[Any] = [list_id]
+                params: list[Any] = [list_id]
 
                 if not include_archived:
                     conditions.append("c.archived = 0")
@@ -2373,14 +2374,14 @@ END;
         *,
         include_archived: bool,
         include_deleted: bool,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get cards in a list with label and checklist/comment summaries.
 
         Uses an existing connection to avoid extra round-trips inside nested board views.
         """
         conditions = ["c.list_id = ?"]
-        params: List[Any] = [list_id]
+        params: list[Any] = [list_id]
 
         if not include_archived:
             conditions.append("c.archived = 0")
@@ -2410,8 +2411,8 @@ END;
         cur = conn.execute(sql, params)
         rows = cur.fetchall()
 
-        cards: List[Dict[str, Any]] = []
-        card_ids: List[int] = []
+        cards: list[dict[str, Any]] = []
+        card_ids: list[int] = []
         for row in rows:
             card = self._row_to_card_dict(row)
             card["checklist_count"] = int(row["checklist_count"] or 0)
@@ -2433,7 +2434,7 @@ END;
             ORDER BY l.name ASC
         """
         label_rows = conn.execute(label_sql, card_ids).fetchall()
-        labels_by_card: Dict[int, List[Dict[str, Any]]] = {}
+        labels_by_card: dict[int, list[dict[str, Any]]] = {}
         for row in label_rows:
             card_id = row["card_id"]
             label = self._row_to_label_dict(row)
@@ -2447,17 +2448,17 @@ END;
     def update_card(
         self,
         card_id: int,
-        title: Optional[str] = None,
-        description: Optional[str] = None,
-        due_date: Optional[str] = None,
-        due_complete: Optional[bool] = None,
-        start_date: Optional[str] = None,
-        priority: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        expected_version: Optional[int] = None
-    ) -> Dict[str, Any]:
+        title: str | None = None,
+        description: str | None = None,
+        due_date: str | None = None,
+        due_complete: bool | None = None,
+        start_date: str | None = None,
+        priority: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        expected_version: int | None = None
+    ) -> dict[str, Any]:
         """Update a card."""
-        card: Optional[Dict[str, Any]] = None
+        card: dict[str, Any] | None = None
         with self._lock:
             conn = self._connect()
             try:
@@ -2473,7 +2474,7 @@ END;
                     )
 
                 updates = []
-                params: List[Any] = []
+                params: list[Any] = []
 
                 if title is not None:
                     if not title.strip():
@@ -2560,8 +2561,8 @@ END;
         self,
         card_id: int,
         target_list_id: int,
-        position: Optional[int] = None
-    ) -> Dict[str, Any]:
+        position: int | None = None
+    ) -> dict[str, Any]:
         """
         Move a card to a different list.
 
@@ -2573,7 +2574,7 @@ END;
         Returns:
             The updated card.
         """
-        moved_card: Optional[Dict[str, Any]] = None
+        moved_card: dict[str, Any] | None = None
         with self._lock:
             conn = self._connect()
             try:
@@ -2635,9 +2636,9 @@ END;
         card_id: int,
         target_list_id: int,
         new_client_id: str,
-        position: Optional[int] = None,
-        new_title: Optional[str] = None
-    ) -> Dict[str, Any]:
+        position: int | None = None,
+        new_title: str | None = None
+    ) -> dict[str, Any]:
         """
         Copy a card to a list.
 
@@ -2651,7 +2652,7 @@ END;
         Returns:
             The copied card.
         """
-        copied_card: Optional[Dict[str, Any]] = None
+        copied_card: dict[str, Any] | None = None
         with self._lock:
             conn = self._connect()
             try:
@@ -2754,7 +2755,7 @@ END;
             self._sync_vector_index_for_card_id(copied_card["id"])
         return copied_card
 
-    def reorder_cards(self, list_id: int, card_ids: List[int]) -> List[Dict[str, Any]]:
+    def reorder_cards(self, list_id: int, card_ids: list[int]) -> list[dict[str, Any]]:
         """
         Reorder cards in a list.
 
@@ -2805,9 +2806,9 @@ END;
             finally:
                 conn.close()
 
-    def archive_card(self, card_id: int, archive: bool = True) -> Dict[str, Any]:
+    def archive_card(self, card_id: int, archive: bool = True) -> dict[str, Any]:
         """Archive or unarchive a card."""
-        updated_card: Optional[Dict[str, Any]] = None
+        updated_card: dict[str, Any] | None = None
         with self._lock:
             conn = self._connect()
             try:
@@ -2881,9 +2882,9 @@ END;
             self._sync_vector_index_for_card_id(card_id)
         return deleted
 
-    def restore_card(self, card_id: int) -> Dict[str, Any]:
+    def restore_card(self, card_id: int) -> dict[str, Any]:
         """Restore a soft-deleted card."""
-        restored_card: Optional[Dict[str, Any]] = None
+        restored_card: dict[str, Any] | None = None
         with self._lock:
             conn = self._connect()
             try:
@@ -2927,13 +2928,13 @@ END;
     def search_cards(
         self,
         query: str,
-        board_id: Optional[int] = None,
-        label_ids: Optional[List[int]] = None,
-        priority: Optional[str] = None,
+        board_id: int | None = None,
+        label_ids: list[int] | None = None,
+        priority: str | None = None,
         include_archived: bool = False,
         limit: int = 50,
         offset: int = 0
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         Search cards using FTS5.
 
@@ -2970,7 +2971,7 @@ END;
 
                 # Build label filter subquery if needed
                 label_filter_sql = ""
-                label_params: List[Any] = []
+                label_params: list[Any] = []
                 if label_ids and len(label_ids) > 0:
                     label_filter_sql = f"""
                         AND c.id IN (
@@ -3018,7 +3019,7 @@ END;
                         )
                     """
                     # Build params: FTS part + archived LIKE part
-                    count_params: List[Any] = [self.user_id]
+                    count_params: list[Any] = [self.user_id]
                     if board_id:
                         count_params.append(board_id)
                     if priority:
@@ -3072,7 +3073,7 @@ END;
                         ORDER BY search_rank, updated_at DESC
                         LIMIT ? OFFSET ?
                     """
-                    search_params: List[Any] = [self.user_id]
+                    search_params: list[Any] = [self.user_id]
                     if board_id:
                         search_params.append(board_id)
                     if priority:
@@ -3162,11 +3163,11 @@ END;
         board_id: int,
         action_type: str,
         entity_type: str,
-        entity_id: Optional[int] = None,
-        list_id: Optional[int] = None,
-        card_id: Optional[int] = None,
-        details: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        entity_id: int | None = None,
+        list_id: int | None = None,
+        card_id: int | None = None,
+        details: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """
         Log an activity event.
 
@@ -3231,10 +3232,10 @@ END;
         board_id: int,
         action_type: str,
         entity_type: str,
-        entity_id: Optional[int] = None,
-        list_id: Optional[int] = None,
-        card_id: Optional[int] = None,
-        details: Optional[Dict[str, Any]] = None
+        entity_id: int | None = None,
+        list_id: int | None = None,
+        card_id: int | None = None,
+        details: dict[str, Any] | None = None
     ) -> None:
         """
         Internal helper to log activity while already holding a connection.
@@ -3260,19 +3261,19 @@ END;
         self,
         conn: sqlite3.Connection,
         board_id: int,
-        list_id: Optional[int] = None,
-        card_id: Optional[int] = None,
-        created_after: Optional[str] = None,
-        created_before: Optional[str] = None,
-        action_type: Optional[str] = None,
-        entity_type: Optional[str] = None,
+        list_id: int | None = None,
+        card_id: int | None = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
+        action_type: str | None = None,
+        entity_type: str | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         if limit < 1 or offset < 0:
             raise InputError("limit must be positive and offset must be non-negative")
         conditions = ["board_id = ?"]
-        params: List[Any] = [board_id]
+        params: list[Any] = [board_id]
 
         if list_id is not None:
             conditions.append("list_id = ?")
@@ -3335,15 +3336,15 @@ END;
     def get_board_activities(
         self,
         board_id: int,
-        list_id: Optional[int] = None,
-        card_id: Optional[int] = None,
-        created_after: Optional[str] = None,
-        created_before: Optional[str] = None,
-        action_type: Optional[str] = None,
-        entity_type: Optional[str] = None,
+        list_id: int | None = None,
+        card_id: int | None = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
+        action_type: str | None = None,
+        entity_type: str | None = None,
         limit: int = 50,
         offset: int = 0
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         Get activities for a board.
 
@@ -3398,13 +3399,13 @@ END;
     def get_list_activities(
         self,
         list_id: int,
-        created_after: Optional[str] = None,
-        created_before: Optional[str] = None,
-        action_type: Optional[str] = None,
-        entity_type: Optional[str] = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
+        action_type: str | None = None,
+        entity_type: str | None = None,
         limit: int = 50,
         offset: int = 0
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         Get activities for a list.
 
@@ -3444,13 +3445,13 @@ END;
     def get_card_activities(
         self,
         card_id: int,
-        created_after: Optional[str] = None,
-        created_before: Optional[str] = None,
-        action_type: Optional[str] = None,
-        entity_type: Optional[str] = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
+        action_type: str | None = None,
+        entity_type: str | None = None,
         limit: int = 50,
         offset: int = 0
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         Get activities for a card.
 
@@ -3487,7 +3488,7 @@ END;
             finally:
                 conn.close()
 
-    def cleanup_old_activities(self, board_id: Optional[int] = None) -> int:
+    def cleanup_old_activities(self, board_id: int | None = None) -> int:
         """
         Remove activities older than retention period.
 
@@ -3555,7 +3556,7 @@ END;
         self,
         board_id: int,
         include_archived: bool = False
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Get a board with all its lists and cards nested.
 
@@ -3622,7 +3623,7 @@ END;
             finally:
                 conn.close()
 
-    def purge_deleted_items(self, days_old: int = 30) -> Dict[str, int]:
+    def purge_deleted_items(self, days_old: int = 30) -> dict[str, int]:
         """
         Permanently delete items that have been soft-deleted for more than N days.
 
@@ -3680,7 +3681,7 @@ END;
         board_id: int,
         name: str,
         color: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new label for a board.
 
@@ -3750,7 +3751,7 @@ END;
             finally:
                 conn.close()
 
-    def get_label(self, label_id: int) -> Optional[Dict[str, Any]]:
+    def get_label(self, label_id: int) -> dict[str, Any] | None:
         """Get a label by ID."""
         with self._lock:
             conn = self._connect()
@@ -3759,7 +3760,7 @@ END;
             finally:
                 conn.close()
 
-    def _get_label_by_id(self, conn: sqlite3.Connection, label_id: int) -> Optional[Dict[str, Any]]:
+    def _get_label_by_id(self, conn: sqlite3.Connection, label_id: int) -> dict[str, Any] | None:
         """Internal method to get a label by ID."""
         sql = """
             SELECT l.id, l.uuid, l.board_id, l.name, l.color, l.created_at, l.updated_at
@@ -3775,7 +3776,7 @@ END;
 
         return self._row_to_label_dict(row)
 
-    def _row_to_label_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_label_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         """Convert a label row to a dictionary."""
         return {
             "id": row["id"],
@@ -3787,7 +3788,7 @@ END;
             "updated_at": row["updated_at"]
         }
 
-    def _list_labels_for_board(self, conn: sqlite3.Connection, board_id: int) -> List[Dict[str, Any]]:
+    def _list_labels_for_board(self, conn: sqlite3.Connection, board_id: int) -> list[dict[str, Any]]:
         """Fetch labels for a board using an existing connection."""
         cur = conn.execute(
             """
@@ -3800,7 +3801,7 @@ END;
         )
         return [self._row_to_label_dict(row) for row in cur.fetchall()]
 
-    def list_labels(self, board_id: int) -> List[Dict[str, Any]]:
+    def list_labels(self, board_id: int) -> list[dict[str, Any]]:
         """
         Get all labels for a board.
 
@@ -3834,12 +3835,12 @@ END;
     def update_label(
         self,
         label_id: int,
-        name: Optional[str] = None,
-        color: Optional[str] = None
-    ) -> Dict[str, Any]:
+        name: str | None = None,
+        color: str | None = None
+    ) -> dict[str, Any]:
         """Update a label."""
-        updated_label: Optional[Dict[str, Any]] = None
-        affected_card_ids: List[int] = []
+        updated_label: dict[str, Any] | None = None
+        affected_card_ids: list[int] = []
         with self._lock:
             conn = self._connect()
             try:
@@ -3848,7 +3849,7 @@ END;
                     raise NotFoundError("Label not found", entity="label", entity_id=label_id)
 
                 updates = []
-                params: List[Any] = []
+                params: list[Any] = []
 
                 if name is not None:
                     if not name.strip():
@@ -3911,7 +3912,7 @@ END;
         This also removes all card_label associations.
         """
         deleted = False
-        affected_card_ids: List[int] = []
+        affected_card_ids: list[int] = []
         with self._lock:
             conn = self._connect()
             try:
@@ -4050,7 +4051,7 @@ END;
             self._sync_vector_index_for_card_id(card_id)
         return removed
 
-    def get_card_labels(self, card_id: int) -> List[Dict[str, Any]]:
+    def get_card_labels(self, card_id: int) -> list[dict[str, Any]]:
         """Get all labels assigned to a card."""
         with self._lock:
             conn = self._connect()
@@ -4081,8 +4082,8 @@ END;
         self,
         card_id: int,
         name: str,
-        position: Optional[int] = None
-    ) -> Dict[str, Any]:
+        position: int | None = None
+    ) -> dict[str, Any]:
         """
         Create a new checklist for a card.
 
@@ -4103,7 +4104,7 @@ END;
 
         checklist_uuid = _generate_uuid()
         now = _utcnow_iso()
-        checklist: Optional[Dict[str, Any]] = None
+        checklist: dict[str, Any] | None = None
 
         with self._lock:
             conn = self._connect()
@@ -4158,7 +4159,7 @@ END;
             self._sync_vector_index_for_card_id(card_id)
         return checklist
 
-    def get_checklist(self, checklist_id: int) -> Optional[Dict[str, Any]]:
+    def get_checklist(self, checklist_id: int) -> dict[str, Any] | None:
         """Get a checklist by ID."""
         with self._lock:
             conn = self._connect()
@@ -4167,7 +4168,7 @@ END;
             finally:
                 conn.close()
 
-    def _get_checklist_by_id(self, conn: sqlite3.Connection, checklist_id: int) -> Optional[Dict[str, Any]]:
+    def _get_checklist_by_id(self, conn: sqlite3.Connection, checklist_id: int) -> dict[str, Any] | None:
         """Internal method to get a checklist by ID."""
         sql = """
             SELECT ch.id, ch.uuid, ch.card_id, ch.name, ch.position, ch.created_at, ch.updated_at
@@ -4184,7 +4185,7 @@ END;
 
         return self._row_to_checklist_dict(row)
 
-    def _row_to_checklist_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_checklist_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         """Convert a checklist row to a dictionary."""
         return {
             "id": row["id"],
@@ -4196,7 +4197,7 @@ END;
             "updated_at": row["updated_at"]
         }
 
-    def list_checklists(self, card_id: int) -> List[Dict[str, Any]]:
+    def list_checklists(self, card_id: int) -> list[dict[str, Any]]:
         """
         Get all checklists for a card, ordered by position.
 
@@ -4230,11 +4231,11 @@ END;
     def update_checklist(
         self,
         checklist_id: int,
-        name: Optional[str] = None
-    ) -> Dict[str, Any]:
+        name: str | None = None
+    ) -> dict[str, Any]:
         """Update a checklist."""
-        updated_checklist: Optional[Dict[str, Any]] = None
-        card_id: Optional[int] = None
+        updated_checklist: dict[str, Any] | None = None
+        card_id: int | None = None
         changed = False
         with self._lock:
             conn = self._connect()
@@ -4247,7 +4248,7 @@ END;
                 card = self._get_card_by_id(conn, checklist["card_id"])
 
                 updates = []
-                params: List[Any] = []
+                params: list[Any] = []
 
                 if name is not None:
                     if not name.strip():
@@ -4291,7 +4292,7 @@ END;
             self._sync_vector_index_for_card_id(card_id)
         return updated_checklist
 
-    def reorder_checklists(self, card_id: int, checklist_ids: List[int]) -> List[Dict[str, Any]]:
+    def reorder_checklists(self, card_id: int, checklist_ids: list[int]) -> list[dict[str, Any]]:
         """
         Reorder checklists on a card.
 
@@ -4350,7 +4351,7 @@ END;
         This also cascades to delete all checklist items.
         """
         deleted = False
-        card_id: Optional[int] = None
+        card_id: int | None = None
         with self._lock:
             conn = self._connect()
             try:
@@ -4390,9 +4391,9 @@ END;
         self,
         checklist_id: int,
         name: str,
-        position: Optional[int] = None,
+        position: int | None = None,
         checked: bool = False
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new checklist item.
 
@@ -4415,8 +4416,8 @@ END;
         item_uuid = _generate_uuid()
         now = _utcnow_iso()
 
-        created_item: Optional[Dict[str, Any]] = None
-        card_id: Optional[int] = None
+        created_item: dict[str, Any] | None = None
+        card_id: int | None = None
         with self._lock:
             conn = self._connect()
             try:
@@ -4476,7 +4477,7 @@ END;
             self._sync_vector_index_for_card_id(card_id)
         return created_item
 
-    def get_checklist_item(self, item_id: int) -> Optional[Dict[str, Any]]:
+    def get_checklist_item(self, item_id: int) -> dict[str, Any] | None:
         """Get a checklist item by ID."""
         with self._lock:
             conn = self._connect()
@@ -4485,7 +4486,7 @@ END;
             finally:
                 conn.close()
 
-    def _get_checklist_item_by_id(self, conn: sqlite3.Connection, item_id: int) -> Optional[Dict[str, Any]]:
+    def _get_checklist_item_by_id(self, conn: sqlite3.Connection, item_id: int) -> dict[str, Any] | None:
         """Internal method to get a checklist item by ID."""
         sql = """
             SELECT ci.id, ci.uuid, ci.checklist_id, ci.name, ci.position, ci.checked, ci.checked_at, ci.created_at, ci.updated_at
@@ -4503,7 +4504,7 @@ END;
 
         return self._row_to_checklist_item_dict(row)
 
-    def _row_to_checklist_item_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_checklist_item_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         """Convert a checklist item row to a dictionary."""
         return {
             "id": row["id"],
@@ -4517,7 +4518,7 @@ END;
             "updated_at": row["updated_at"]
         }
 
-    def list_checklist_items(self, checklist_id: int) -> List[Dict[str, Any]]:
+    def list_checklist_items(self, checklist_id: int) -> list[dict[str, Any]]:
         """
         Get all items for a checklist, ordered by position.
 
@@ -4551,12 +4552,12 @@ END;
     def update_checklist_item(
         self,
         item_id: int,
-        name: Optional[str] = None,
-        checked: Optional[bool] = None
-    ) -> Dict[str, Any]:
+        name: str | None = None,
+        checked: bool | None = None
+    ) -> dict[str, Any]:
         """Update a checklist item."""
-        updated_item: Optional[Dict[str, Any]] = None
-        card_id: Optional[int] = None
+        updated_item: dict[str, Any] | None = None
+        card_id: int | None = None
         should_reindex = name is not None
         with self._lock:
             conn = self._connect()
@@ -4566,7 +4567,7 @@ END;
                     raise NotFoundError("Checklist item not found", entity="checklist_item", entity_id=item_id)
 
                 updates = []
-                params: List[Any] = []
+                params: list[Any] = []
                 now = _utcnow_iso()
 
                 if name is not None:
@@ -4628,7 +4629,7 @@ END;
             self._sync_vector_index_for_card_id(card_id)
         return updated_item
 
-    def reorder_checklist_items(self, checklist_id: int, item_ids: List[int]) -> List[Dict[str, Any]]:
+    def reorder_checklist_items(self, checklist_id: int, item_ids: list[int]) -> list[dict[str, Any]]:
         """
         Reorder items in a checklist.
 
@@ -4676,7 +4677,7 @@ END;
     def delete_checklist_item(self, item_id: int) -> bool:
         """Delete a checklist item (hard delete)."""
         deleted = False
-        card_id: Optional[int] = None
+        card_id: int | None = None
         with self._lock:
             conn = self._connect()
             try:
@@ -4707,7 +4708,7 @@ END;
             self._sync_vector_index_for_card_id(card_id)
         return deleted
 
-    def get_checklist_with_items(self, checklist_id: int) -> Optional[Dict[str, Any]]:
+    def get_checklist_with_items(self, checklist_id: int) -> dict[str, Any] | None:
         """Get a checklist with all its items included."""
         with self._lock:
             conn = self._connect()
@@ -4737,7 +4738,7 @@ END;
         self,
         card_id: int,
         content: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new comment on a card.
 
@@ -4799,7 +4800,7 @@ END;
             finally:
                 conn.close()
 
-    def get_comment(self, comment_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_comment(self, comment_id: int, include_deleted: bool = False) -> dict[str, Any] | None:
         """Get a comment by ID."""
         with self._lock:
             conn = self._connect()
@@ -4813,7 +4814,7 @@ END;
         conn: sqlite3.Connection,
         comment_id: int,
         include_deleted: bool = False
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Internal method to get a comment by ID."""
         sql = """
             SELECT cm.id, cm.uuid, cm.card_id, cm.user_id, cm.content, cm.created_at, cm.updated_at, cm.deleted
@@ -4822,7 +4823,7 @@ END;
             JOIN kanban_boards b ON c.board_id = b.id
             WHERE cm.id = ? AND b.user_id = ?
         """
-        params: List[Any] = [comment_id, self.user_id]
+        params: list[Any] = [comment_id, self.user_id]
 
         if not include_deleted:
             sql += " AND cm.deleted = 0"
@@ -4835,7 +4836,7 @@ END;
 
         return self._row_to_comment_dict(row)
 
-    def _row_to_comment_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_comment_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         """Convert a comment row to a dictionary."""
         return {
             "id": row["id"],
@@ -4854,7 +4855,7 @@ END;
         include_deleted: bool = False,
         limit: int = 50,
         offset: int = 0
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         Get comments for a card with pagination.
 
@@ -4878,7 +4879,7 @@ END;
                     raise NotFoundError("Card not found", entity="card", entity_id=card_id)
 
                 conditions = ["cm.card_id = ?"]
-                params: List[Any] = [card_id]
+                params: list[Any] = [card_id]
 
                 if not include_deleted:
                     conditions.append("cm.deleted = 0")
@@ -4912,7 +4913,7 @@ END;
         self,
         comment_id: int,
         content: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Update a comment."""
         # Validate inputs
         if not content or not content.strip():
@@ -4999,7 +5000,7 @@ END;
         board_id: int,
         include_archived: bool = False,
         include_deleted: bool = False
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Export a board with all its data as a JSON-serializable dictionary.
 
@@ -5138,10 +5139,10 @@ END;
 
     def import_board(
         self,
-        data: Dict[str, Any],
-        board_name: Optional[str] = None,
-        board_client_id: Optional[str] = None
-    ) -> Dict[str, Any]:
+        data: dict[str, Any],
+        board_name: str | None = None,
+        board_client_id: str | None = None
+    ) -> dict[str, Any]:
         """
         Import a board from exported JSON data.
 
@@ -5204,10 +5205,10 @@ END;
 
     def _import_tldw_format(
         self,
-        data: Dict[str, Any],
-        board_name: Optional[str] = None,
-        board_client_id: Optional[str] = None
-    ) -> Dict[str, Any]:
+        data: dict[str, Any],
+        board_name: str | None = None,
+        board_client_id: str | None = None
+    ) -> dict[str, Any]:
         """Import from tldw_kanban_v1 format."""
         board_data = data.get("board", {})
         if not board_data:
@@ -5234,7 +5235,7 @@ END;
         }
 
         # Import labels and track UUID mapping
-        label_uuid_to_id: Dict[str, int] = {}
+        label_uuid_to_id: dict[str, int] = {}
         for label_data in data.get("labels", []):
             try:
                 label = self.create_label(
@@ -5340,10 +5341,10 @@ END;
 
     def _import_trello_format(
         self,
-        data: Dict[str, Any],
-        board_name: Optional[str] = None,
-        board_client_id: Optional[str] = None
-    ) -> Dict[str, Any]:
+        data: dict[str, Any],
+        board_name: str | None = None,
+        board_client_id: str | None = None
+    ) -> dict[str, Any]:
         """Import from Trello JSON export format."""
         # Create the board
         new_board = self.create_board(
@@ -5381,7 +5382,7 @@ END;
         }
 
         # Import labels (Trello stores these at board level)
-        label_id_map: Dict[str, int] = {}  # Trello ID -> our ID
+        label_id_map: dict[str, int] = {}  # Trello ID -> our ID
         for label_data in data.get("labels", []):
             trello_color = label_data.get("color", "")
             our_color = color_map.get(trello_color, "gray")
@@ -5398,7 +5399,7 @@ END;
                 logger.warning(f"Failed to import Trello label: {e}")
 
         # Build list ID map (Trello ID -> our ID)
-        list_id_map: Dict[str, int] = {}
+        list_id_map: dict[str, int] = {}
         trello_lists = data.get("lists", [])
 
         # Sort lists by position (Trello uses 'pos' field)
@@ -5421,7 +5422,7 @@ END;
                 logger.warning(f"Failed to import Trello list: {e}")
 
         # Build checklist map (Trello ID -> checklist data)
-        checklist_map: Dict[str, Dict] = {}
+        checklist_map: dict[str, dict] = {}
         for checklist in data.get("checklists", []):
             checklist_map[checklist.get("id", "")] = checklist
 
@@ -5430,7 +5431,7 @@ END;
         # Sort cards by position within their list
         trello_cards.sort(key=lambda x: (x.get("idList", ""), x.get("pos", 0)))
 
-        card_positions: Dict[str, int] = {}  # Track position per list
+        card_positions: dict[str, int] = {}  # Track position per list
 
         for card_data in trello_cards:
             if card_data.get("closed", False):
@@ -5519,10 +5520,10 @@ END;
 
     def bulk_move_cards(
         self,
-        card_ids: List[int],
+        card_ids: list[int],
         target_list_id: int,
-        start_position: Optional[int] = None
-    ) -> Dict[str, Any]:
+        start_position: int | None = None
+    ) -> dict[str, Any]:
         """
         Move multiple cards to a target list.
 
@@ -5537,7 +5538,7 @@ END;
         if not card_ids:
             return {"success": True, "moved_count": 0, "cards": []}
 
-        moved_cards: List[Dict[str, Any]] = []
+        moved_cards: list[dict[str, Any]] = []
         with self._lock:
             conn = self._connect()
             try:
@@ -5617,7 +5618,7 @@ END;
             "cards": moved_cards,
         }
 
-    def bulk_archive_cards(self, card_ids: List[int], archive: bool = True) -> Dict[str, Any]:
+    def bulk_archive_cards(self, card_ids: list[int], archive: bool = True) -> dict[str, Any]:
         """
         Archive or unarchive multiple cards.
 
@@ -5688,7 +5689,7 @@ END;
         self._sync_vector_index_for_card_ids(card_ids)
         return result
 
-    def bulk_delete_cards(self, card_ids: List[int], hard_delete: bool = False) -> Dict[str, Any]:
+    def bulk_delete_cards(self, card_ids: list[int], hard_delete: bool = False) -> dict[str, Any]:
         """
         Soft or hard delete multiple cards.
 
@@ -5766,10 +5767,10 @@ END;
 
     def bulk_label_cards(
         self,
-        card_ids: List[int],
-        add_label_ids: Optional[List[int]] = None,
-        remove_label_ids: Optional[List[int]] = None
-    ) -> Dict[str, Any]:
+        card_ids: list[int],
+        add_label_ids: list[int] | None = None,
+        remove_label_ids: list[int] | None = None
+    ) -> dict[str, Any]:
         """
         Add and/or remove labels from multiple cards.
 
@@ -5790,7 +5791,7 @@ END;
         if not add_label_ids and not remove_label_ids:
             return {"success": True, "updated_count": 0}
 
-        result: Dict[str, Any] = {}
+        result: dict[str, Any] = {}
         with self._lock:
             conn = self._connect()
             try:
@@ -5896,19 +5897,19 @@ END;
     def get_board_cards_filtered(
         self,
         board_id: int,
-        label_ids: Optional[List[int]] = None,
-        priority: Optional[str] = None,
-        due_before: Optional[str] = None,
-        due_after: Optional[str] = None,
-        overdue: Optional[bool] = None,
-        has_due_date: Optional[bool] = None,
-        has_checklist: Optional[bool] = None,
-        is_complete: Optional[bool] = None,
+        label_ids: list[int] | None = None,
+        priority: str | None = None,
+        due_before: str | None = None,
+        due_after: str | None = None,
+        overdue: bool | None = None,
+        has_due_date: bool | None = None,
+        has_checklist: bool | None = None,
+        is_complete: bool | None = None,
         include_archived: bool = False,
         include_deleted: bool = False,
         limit: int = 50,
         offset: int = 0
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         Get filtered cards for a board.
 
@@ -5942,7 +5943,7 @@ END;
 
                 # Build query
                 conditions = ["c.board_id = ?"]
-                params: List[Any] = [board_id]
+                params: list[Any] = [board_id]
 
                 if not include_deleted:
                     conditions.append("c.deleted = 0")
@@ -6043,7 +6044,7 @@ END;
     # Phase 3: Toggle All Checklist Items
     # =========================================================================
 
-    def toggle_all_checklist_items(self, checklist_id: int, checked: bool) -> Dict[str, Any]:
+    def toggle_all_checklist_items(self, checklist_id: int, checked: bool) -> dict[str, Any]:
         """
         Check or uncheck all items in a checklist.
 
@@ -6114,11 +6115,11 @@ END;
         card_id: int,
         target_list_id: int,
         new_client_id: str,
-        position: Optional[int] = None,
-        new_title: Optional[str] = None,
+        position: int | None = None,
+        new_title: str | None = None,
         copy_checklists: bool = True,
         copy_labels: bool = True
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Copy a card to a list, optionally including checklists.
 
@@ -6134,7 +6135,7 @@ END;
         Returns:
             The copied card with checklists if copied.
         """
-        copied_card: Optional[Dict[str, Any]] = None
+        copied_card: dict[str, Any] | None = None
         with self._lock:
             conn = self._connect()
             try:
@@ -6292,7 +6293,7 @@ END;
         card_id: int,
         linked_type: str,
         linked_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Add a link from a card to a media item or note.
 
@@ -6362,8 +6363,8 @@ END;
     def get_card_links(
         self,
         card_id: int,
-        linked_type: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        linked_type: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         Get all links for a card.
 
@@ -6411,7 +6412,7 @@ END;
             finally:
                 conn.close()
 
-    def get_linked_content_counts(self, card_id: int) -> Dict[str, int]:
+    def get_linked_content_counts(self, card_id: int) -> dict[str, int]:
         """
         Get counts of linked content by type for a card.
 
@@ -6590,8 +6591,8 @@ END;
     def bulk_add_card_links(
         self,
         card_id: int,
-        links: List[Dict[str, str]]
-    ) -> Dict[str, Any]:
+        links: list[dict[str, str]]
+    ) -> dict[str, Any]:
         """
         Add multiple links to a card at once.
 
@@ -6672,8 +6673,8 @@ END;
     def bulk_remove_card_links(
         self,
         card_id: int,
-        links: List[Dict[str, str]]
-    ) -> Dict[str, Any]:
+        links: list[dict[str, str]]
+    ) -> dict[str, Any]:
         """
         Remove multiple links from a card at once.
 
@@ -6730,7 +6731,7 @@ END;
         linked_id: str,
         include_archived: bool = False,
         include_deleted: bool = False
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Find all cards that link to a specific media item or note.
 
@@ -6772,7 +6773,7 @@ END;
                       AND b.user_id = ?
                 """
 
-                params: List[Any] = [linked_type, linked_id, self.user_id]
+                params: list[Any] = [linked_type, linked_id, self.user_id]
 
                 if not include_archived:
                     query += " AND c.archived = 0"
@@ -6788,7 +6789,7 @@ END;
             finally:
                 conn.close()
 
-    def get_card_counts_for_lists(self, list_ids: List[int]) -> Dict[int, int]:
+    def get_card_counts_for_lists(self, list_ids: list[int]) -> dict[int, int]:
         """
         Get card counts for multiple lists in a single query.
 

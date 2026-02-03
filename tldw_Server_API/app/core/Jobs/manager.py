@@ -1,45 +1,50 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import sqlite3
 import time
 import uuid as _uuid
-from datetime import datetime, timedelta, timezone as _tz
+from contextvars import ContextVar
+from datetime import datetime
+from datetime import timezone as _tz
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Iterable, List, Optional, Tuple, Union
-import re
-import hashlib
+from typing import Any, ClassVar
 
 from loguru import logger
-from contextvars import ContextVar
 
-from .migrations import ensure_jobs_tables
-from .pg_migrations import ensure_jobs_tables_pg
-from .pg_migrations import ensure_job_counters_pg
+from tldw_Server_API.app.core.exceptions import BadRequestError
+from tldw_Server_API.app.core.Security.crypto import (
+    decrypt_json_blob,
+    decrypt_json_blob_with_key,
+    encrypt_json_blob,
+    encrypt_json_blob_with_key,
+)
+
+from .audit_bridge import submit_job_audit_event
+from .event_stream import emit_job_event
 from .metrics import (
     ensure_jobs_metrics_registered,
-    observe_queue_latency,
-    observe_duration,
-    increment_retries,
-    increment_failures,
-    set_queue_gauges,
-    increment_created,
-    increment_completed,
     increment_cancelled,
+    increment_completed,
+    increment_created,
+    increment_failures,
     increment_json_truncated,
+    increment_retries,
     increment_sla_breach,
+    observe_duration,
+    observe_queue_latency,
     set_queue_flag,
+    set_queue_gauges,
 )
+from .migrations import ensure_jobs_tables
+from .pg_migrations import ensure_job_counters_pg, ensure_jobs_tables_pg
 from .tracing import job_span
-from .event_stream import emit_job_event
-from .audit_bridge import submit_job_audit_event
-from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob, decrypt_json_blob
-from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob_with_key, decrypt_json_blob_with_key
-from tldw_Server_API.app.core.exceptions import BadRequestError
 
 
-def _parse_dt(v: Any) -> Optional[datetime]:
+def _parse_dt(v: Any) -> datetime | None:
     """Parse a datetime from common storage formats."""
     if v is None:
         return None
@@ -84,30 +89,30 @@ class JobManager:
             return datetime.now(tz=_tz.utc)
 
     # In-process debounce map for gauge updates
-    _GAUGE_LAST_TS: Dict[Tuple[str, str, Optional[str]], float] = {}
+    _GAUGE_LAST_TS: dict[tuple[str, str, str | None], float] = {}
     # RLS context (per-task via contextvars). Defaults are non-admin, unset filters.
     _RLS_IS_ADMIN: ContextVar[bool] = ContextVar("jobs_rls_is_admin", default=False)
-    _RLS_DOMAIN_ALLOWLIST: ContextVar[Optional[str]] = ContextVar("jobs_rls_domain_allowlist", default=None)
-    _RLS_OWNER_USER_ID: ContextVar[Optional[str]] = ContextVar("jobs_rls_owner_user_id", default=None)
+    _RLS_DOMAIN_ALLOWLIST: ContextVar[str | None] = ContextVar("jobs_rls_domain_allowlist", default=None)
+    _RLS_OWNER_USER_ID: ContextVar[str | None] = ContextVar("jobs_rls_owner_user_id", default=None)
 
     _TRUTHY = {"1", "true", "yes", "y", "on"}
     # Test-mode only: remember last acquired job per (domain,queue) to stabilize duplicate acquires
-    _LAST_ACQUIRED_TEST: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    _LAST_ACQUIRED_TEST: dict[tuple[str, str], dict[str, Any]] = {}
 
     @staticmethod
-    def _is_truthy(val: Optional[str]) -> bool:
+    def _is_truthy(val: str | None) -> bool:
         if val is None:
             return False
         return str(val).strip().lower() in JobManager._TRUTHY
 
     def __init__(
         self,
-        db_path: Optional[Path] = None,
+        db_path: Path | None = None,
         *,
-        backend: Optional[str] = None,
-        db_url: Optional[str] = None,
-        clock: Optional["JobManager.Clock"] = None,
-        enforce_leases: Optional[bool] = None,
+        backend: str | None = None,
+        db_url: str | None = None,
+        clock: "JobManager.Clock" | None = None,
+        enforce_leases: bool | None = None,
     ):
         """Initialize JobManager.
 
@@ -168,7 +173,7 @@ class JobManager:
 
     # Standard queues across domains
     STANDARD_QUEUES = ("default", "high", "low")
-    DOMAIN_ALLOWED_QUEUES: ClassVar[Dict[str, Tuple[str, ...]]] = {
+    DOMAIN_ALLOWED_QUEUES: ClassVar[dict[str, tuple[str, ...]]] = {
         "reading": ("reading-digest",),
     }
 
@@ -180,7 +185,7 @@ class JobManager:
         """Globally gate new acquisitions during graceful shutdown."""
         cls._ACQUIRE_GATE_ENABLED = bool(enabled)
 
-    def _get_allowed_queues(self, domain: Optional[str] = None) -> List[str]:
+    def _get_allowed_queues(self, domain: str | None = None) -> list[str]:
         allowed = list(self.STANDARD_QUEUES)
         if domain:
             domain_key = str(domain).strip().lower()
@@ -194,7 +199,7 @@ class JobManager:
             if extra_d:
                 allowed.extend([q.strip() for q in extra_d.split(",") if q.strip()])
         # Deduplicate preserving order
-        dedup: List[str] = []
+        dedup: list[str] = []
         seen = set()
         for q in allowed:
             if q not in seen:
@@ -202,7 +207,7 @@ class JobManager:
                 seen.add(q)
         return dedup
 
-    def _assert_invariants(self, row: Dict[str, Any]) -> None:
+    def _assert_invariants(self, row: dict[str, Any]) -> None:
         try:
             status = str(row.get("status") or "")
             lease_id = row.get("lease_id")
@@ -305,7 +310,7 @@ class JobManager:
             is_admin = bool(JobManager._RLS_IS_ADMIN.get())
             cur.execute(_sql.SQL("SET app.is_admin = {}").format(_sql.Literal("true" if is_admin else "false")))
 
-            def _set_or_reset(name: str, value: Optional[str]) -> None:
+            def _set_or_reset(name: str, value: str | None) -> None:
                 if value:
                     cur.execute(
                         _sql.SQL("SET {} = {}").format(
@@ -364,7 +369,7 @@ class JobManager:
         return cur
 
     # --- Acquire ordering policy (env-driven overrides) ---
-    def _priority_dir_for(self, domain: Optional[str], backend: str) -> str:
+    def _priority_dir_for(self, domain: str | None, backend: str) -> str:
         """Return 'ASC' or 'DESC' for priority ordering based on env.
 
         Env (checked in order):
@@ -391,7 +396,7 @@ class JobManager:
         except Exception:
             return "ASC"
 
-    def _tie_break_for(self, domain: Optional[str], backend: str) -> Optional[str]:
+    def _tie_break_for(self, domain: str | None, backend: str) -> str | None:
         """Return 'fifo' or 'lifo' if explicitly configured, else None for default behavior.
 
         Env (checked in order):
@@ -404,7 +409,7 @@ class JobManager:
             dom = (domain or "").strip()
             b = (backend or "").strip().lower()
             # Build alias list mirroring _priority_dir_for semantics and adding common variants
-            aliases: List[str] = []
+            aliases: list[str] = []
             if b in {"pg", "postgres", "postgresql"}:
                 # Preserve caller's preferred token first
                 base_order = [b, "postgres", "postgresql", "pg"]
@@ -416,7 +421,7 @@ class JobManager:
             else:
                 aliases = [b]
 
-            cands: List[str] = []
+            cands: list[str] = []
             # Backend/alias-scoped overrides (domain-specific then general)
             for a in aliases:
                 cands.append(f"JOBS_{a.upper()}_ACQUIRE_TIE_BREAK_{dom.upper()}")
@@ -436,7 +441,7 @@ class JobManager:
             return None
 
     @classmethod
-    def set_rls_context(cls, *, is_admin: bool, domain_allowlist: Optional[str], owner_user_id: Optional[str]) -> None:
+    def set_rls_context(cls, *, is_admin: bool, domain_allowlist: str | None, owner_user_id: str | None) -> None:
         try:
             cls._RLS_IS_ADMIN.set(bool(is_admin))
             cls._RLS_DOMAIN_ALLOWLIST.set(domain_allowlist if (domain_allowlist or "").strip() else None)
@@ -468,7 +473,7 @@ class JobManager:
         return self._should_enforce_ack()
 
     # --- Queue controls (pause/drain) ---
-    def _get_queue_flags(self, domain: str, queue: str) -> Dict[str, bool]:
+    def _get_queue_flags(self, domain: str, queue: str) -> dict[str, bool]:
         conn = self._connect()
         try:
             if self.backend == "postgres":
@@ -491,7 +496,7 @@ class JobManager:
         finally:
             conn.close()
 
-    def set_queue_control(self, domain: str, queue: str, action: str) -> Dict[str, bool]:
+    def set_queue_control(self, domain: str, queue: str, action: str) -> dict[str, bool]:
         action = str(action or "").lower()
         paused = drain = None
         if action == "pause":
@@ -545,7 +550,7 @@ class JobManager:
         finally:
             conn.close()
 
-    def _update_gauges(self, *, domain: str, queue: str, job_type: Optional[str] = None) -> None:
+    def _update_gauges(self, *, domain: str, queue: str, job_type: str | None = None) -> None:
         # Optional lightweight debounce to reduce high-churn writes
         try:
             debounce_ms = int(os.getenv("JOBS_GAUGES_DEBOUNCE_MS", "0") or "0")
@@ -655,8 +660,8 @@ class JobManager:
         domain: str,
         queue: str,
         job_type: str,
-        max_queue_latency_seconds: Optional[int] = None,
-        max_duration_seconds: Optional[int] = None,
+        max_queue_latency_seconds: int | None = None,
+        max_duration_seconds: int | None = None,
         enabled: bool = True,
     ) -> None:
         conn = self._connect()
@@ -693,7 +698,7 @@ class JobManager:
         finally:
             conn.close()
 
-    def _get_sla_policy(self, domain: str, queue: str, job_type: str) -> Optional[Dict[str, Any]]:
+    def _get_sla_policy(self, domain: str, queue: str, job_type: str) -> dict[str, Any] | None:
         conn = self._connect()
         try:
             if self.backend == "postgres":
@@ -751,7 +756,7 @@ class JobManager:
             pass
 
     # --- Encryption helpers ---
-    def _should_encrypt(self, domain: Optional[str]) -> bool:
+    def _should_encrypt(self, domain: str | None) -> bool:
         try:
             if str(os.getenv("JOBS_ENCRYPT", "")).lower() in {"1", "true", "yes", "y", "on"}:
                 return True
@@ -762,7 +767,7 @@ class JobManager:
             pass
         return False
 
-    def _maybe_encrypt_json(self, obj: Optional[Dict[str, Any]], domain: Optional[str]) -> Optional[Dict[str, Any]]:
+    def _maybe_encrypt_json(self, obj: dict[str, Any] | None, domain: str | None) -> dict[str, Any] | None:
         if obj is None:
             return None
         try:
@@ -774,7 +779,7 @@ class JobManager:
             pass
         return obj
 
-    def _maybe_decrypt_json(self, obj: Optional[Any]) -> Optional[Any]:
+    def _maybe_decrypt_json(self, obj: Any | None) -> Any | None:
         try:
             if isinstance(obj, dict):
                 env = None
@@ -838,7 +843,7 @@ class JobManager:
         return JobManager._parse_json_value(value)
 
     # --- Secret hygiene helpers ---
-    def _secret_patterns(self) -> Tuple[List[re.Pattern], List[str]]:
+    def _secret_patterns(self) -> tuple[list[re.Pattern], list[str]]:
         """Return compiled regex patterns and sensitive keys for secret detection."""
         # Default key denylist (lowercased)
         default_keys = [
@@ -878,14 +883,14 @@ class JobManager:
             compiled = [re.compile(p) for p in defaults if p]
         return compiled, default_keys
 
-    def _scan_and_redact_secrets(self, obj: Any) -> Tuple[Any, bool, List[str]]:
+    def _scan_and_redact_secrets(self, obj: Any) -> tuple[Any, bool, list[str]]:
         """Scan object for secrets. Optionally redact based on env flags.
 
         Returns (possibly-redacted-object, found_any, findings).
         """
         redact = str(os.getenv("JOBS_SECRET_REDACT", "")).lower() in {"1", "true", "yes", "y", "on"}
         patterns, deny_keys = self._secret_patterns()
-        findings: List[str] = []
+        findings: list[str] = []
 
         def _is_secret_str(s: str) -> bool:
             try:
@@ -900,7 +905,7 @@ class JobManager:
             nonlocal findings
             try:
                 if isinstance(x, dict):
-                    out: Dict[str, Any] = {}
+                    out: dict[str, Any] = {}
                     for k, v in x.items():
                         lk = str(k).lower()
                         kp = f"{key_path}.{k}" if key_path else str(k)
@@ -925,8 +930,8 @@ class JobManager:
         return new_obj, bool(findings), findings
 
     # --- Quotas helpers ---
-    def _quota_get(self, base: str, domain: Optional[str], user_id: Optional[str]) -> int:
-        def _parse(v: Optional[str]) -> int:
+    def _quota_get(self, base: str, domain: str | None, user_id: str | None) -> int:
+        def _parse(v: str | None) -> int:
             try:
                 return int(str(v or "").strip() or 0)
             except Exception:
@@ -997,17 +1002,17 @@ class JobManager:
         domain: str,
         queue: str,
         job_type: str,
-        payload: Dict[str, Any],
-        owner_user_id: Optional[str],
-        project_id: Optional[int] = None,
-        batch_group: Optional[str] = None,
+        payload: dict[str, Any],
+        owner_user_id: str | None,
+        project_id: int | None = None,
+        batch_group: str | None = None,
         priority: int = 5,
         max_retries: int = 3,
-        available_at: Optional[datetime] = None,
-        idempotency_key: Optional[str] = None,
-        request_id: Optional[str] = None,
-        trace_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        available_at: datetime | None = None,
+        idempotency_key: str | None = None,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> dict[str, Any]:
         """Create a new job.
 
         Args:
@@ -1084,7 +1089,7 @@ class JobManager:
             if avail_param is not None and getattr(avail_param, "tzinfo", None) is None:
                 avail_param = avail_param.replace(tzinfo=_tz.utc)
             # Optional job_type allowlist
-            allowed_job_types: List[str] = []
+            allowed_job_types: list[str] = []
             env_all = os.getenv("JOBS_ALLOWED_JOB_TYPES", "").strip()
             if env_all:
                 allowed_job_types.extend([x.strip() for x in env_all.split(",") if x.strip()])
@@ -1595,7 +1600,7 @@ class JobManager:
         finally:
             conn.close()
 
-    def _get_dependency_uuids(self, job_uuid: str) -> List[str]:
+    def _get_dependency_uuids(self, job_uuid: str) -> list[str]:
         if not job_uuid:
             return []
         conn = self._connect()
@@ -1676,7 +1681,7 @@ class JobManager:
         finally:
             conn.close()
 
-    def _cancel_dependent_jobs(self, job_uuid: Optional[str], *, reason: str) -> None:
+    def _cancel_dependent_jobs(self, job_uuid: str | None, *, reason: str) -> None:
         if not job_uuid:
             return
         conn = self._connect()
@@ -1713,7 +1718,7 @@ class JobManager:
             except Exception:
                 continue
 
-    def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
+    def get_job(self, job_id: int) -> dict[str, Any] | None:
         """Fetch a job by numeric id.
 
         Returns None if not found. JSON payload/result are normalized to dicts
@@ -1753,7 +1758,7 @@ class JobManager:
         finally:
             conn.close()
 
-    def get_job_by_uuid(self, job_uuid: str) -> Optional[Dict[str, Any]]:
+    def get_job_by_uuid(self, job_uuid: str) -> dict[str, Any] | None:
         """Fetch a job by UUID string.
 
         Returns None if not found. JSON payload/result are normalized to dicts
@@ -1795,8 +1800,8 @@ class JobManager:
     def get_job_or_archived(
         self,
         job_id: int,
-        domain: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        domain: str | None = None,
+    ) -> dict[str, Any] | None:
         """Fetch a job from the active table or the archive table.
 
         Returns a job dict with normalized payload/result and an "archived" flag.
@@ -1848,18 +1853,18 @@ class JobManager:
     def list_jobs(
         self,
         *,
-        domain: Optional[str] = None,
-        queue: Optional[str] = None,
-        status: Optional[str] = None,
-        owner_user_id: Optional[str] = None,
-        job_type: Optional[str] = None,
-        created_after: Optional[datetime] = None,
-        created_before: Optional[datetime] = None,
-        before_id: Optional[int] = None,
+        domain: str | None = None,
+        queue: str | None = None,
+        status: str | None = None,
+        owner_user_id: str | None = None,
+        job_type: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        before_id: int | None = None,
         limit: int = 100,
         sort_by: str = "created_at",
         sort_order: str = "desc",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """List jobs with optional filters.
 
         Args:
@@ -1880,7 +1885,7 @@ class JobManager:
         try:
             if self.backend == "postgres":
                 query = "SELECT * FROM jobs WHERE 1=1"
-                params: List[Any] = []
+                params: list[Any] = []
                 if domain:
                     query += " AND domain = %s"
                     params.append(domain)
@@ -1925,7 +1930,7 @@ class JobManager:
                 return out
             else:
                 query = "SELECT * FROM jobs WHERE 1=1"
-                params: List[Any] = []
+                params: list[Any] = []
                 if domain:
                     query += " AND domain = ?"
                     params.append(domain)
@@ -1964,7 +1969,7 @@ class JobManager:
                     query += f" ORDER BY {sort_col} {sort_ord} LIMIT ?"
                 params.append(limit)
                 rows = conn.execute(query, params).fetchall()
-                out: List[Dict[str, Any]] = []
+                out: list[dict[str, Any]] = []
                 for r in rows:
                     d = dict(r)
                     try:
@@ -1984,9 +1989,9 @@ class JobManager:
     def count_jobs(
         self,
         *,
-        domain: Optional[str] = None,
-        status: Optional[str] = None,
-        owner_user_id: Optional[str] = None,
+        domain: str | None = None,
+        status: str | None = None,
+        owner_user_id: str | None = None,
     ) -> int:
         """
         Return the number of jobs matching the provided filters.
@@ -1995,7 +2000,7 @@ class JobManager:
         try:
             if self.backend == "postgres":
                 query = "SELECT COUNT(*) AS c FROM jobs WHERE 1=1"
-                params: List[Any] = []
+                params: list[Any] = []
                 if domain:
                     query += " AND domain = %s"
                     params.append(domain)
@@ -2016,7 +2021,7 @@ class JobManager:
                     return 0
             else:
                 query = "SELECT COUNT(*) FROM jobs WHERE 1=1"
-                params: List[Any] = []
+                params: list[Any] = []
                 if domain:
                     query += " AND domain = ?"
                     params.append(domain)
@@ -2039,9 +2044,9 @@ class JobManager:
     def summarize_by_status(
         self,
         *,
-        domain: Optional[str] = None,
-        owner_user_id: Optional[str] = None,
-    ) -> Dict[str, int]:
+        domain: str | None = None,
+        owner_user_id: str | None = None,
+    ) -> dict[str, int]:
         """
         Return a mapping of job status → count for the given filters.
         """
@@ -2049,7 +2054,7 @@ class JobManager:
         try:
             if self.backend == "postgres":
                 query = "SELECT status, COUNT(*) AS c FROM jobs WHERE 1=1"
-                params: List[Any] = []
+                params: list[Any] = []
                 if domain:
                     query += " AND domain = %s"
                     params.append(domain)
@@ -2060,7 +2065,7 @@ class JobManager:
                 with self._pg_cursor(conn) as cur:
                     cur.execute(query, params)
                     rows = cur.fetchall() or []
-                out: Dict[str, int] = {}
+                out: dict[str, int] = {}
                 for r in rows:
                     try:
                         status_val = str(r["status"])
@@ -2072,7 +2077,7 @@ class JobManager:
                 return out
             else:
                 query = "SELECT status, COUNT(*) FROM jobs WHERE 1=1"
-                params: List[Any] = []
+                params: list[Any] = []
                 if domain:
                     query += " AND domain = ?"
                     params.append(domain)
@@ -2081,7 +2086,7 @@ class JobManager:
                     params.append(owner_user_id)
                 query += " GROUP BY status"
                 rows = conn.execute(query, params).fetchall() or []
-                out: Dict[str, int] = {}
+                out: dict[str, int] = {}
                 for r in rows:
                     try:
                         status_val = str(r[0])
@@ -2097,8 +2102,8 @@ class JobManager:
     def summarize_by_owner_and_status(
         self,
         *,
-        domain: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        domain: str | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Summarize jobs grouped by (owner_user_id, status).
         """
@@ -2106,7 +2111,7 @@ class JobManager:
         try:
             if self.backend == "postgres":
                 query = "SELECT owner_user_id, status, COUNT(*) AS c FROM jobs WHERE 1=1"
-                params: List[Any] = []
+                params: list[Any] = []
                 if domain:
                     query += " AND domain = %s"
                     params.append(domain)
@@ -2114,7 +2119,7 @@ class JobManager:
                 with self._pg_cursor(conn) as cur:
                     cur.execute(query, params)
                     rows = cur.fetchall() or []
-                out: List[Dict[str, Any]] = []
+                out: list[dict[str, Any]] = []
                 for r in rows:
                     try:
                         owner = r["owner_user_id"]
@@ -2132,13 +2137,13 @@ class JobManager:
                 return out
             else:
                 query = "SELECT owner_user_id, status, COUNT(*) FROM jobs WHERE 1=1"
-                params: List[Any] = []
+                params: list[Any] = []
                 if domain:
                     query += " AND domain = ?"
                     params.append(domain)
                 query += " GROUP BY owner_user_id, status"
                 rows = conn.execute(query, params).fetchall() or []
-                out: List[Dict[str, Any]] = []
+                out: list[dict[str, Any]] = []
                 for row in rows:
                     try:
                         owner, status_val, count_val = row
@@ -2162,8 +2167,8 @@ class JobManager:
         queue: str,
         lease_seconds: int,
         worker_id: str,
-        owner_user_id: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        owner_user_id: str | None = None,
+    ) -> dict[str, Any] | None:
         """Atomically acquire the next eligible job and start a lease.
 
         Selection order (both SQLite and Postgres): priority ASC (lower numeric is higher priority),
@@ -2308,7 +2313,7 @@ class JobManager:
                                 ")"
                             )
                             base += dep_cond
-                            params: List[Any] = [domain, queue]
+                            params: list[Any] = [domain, queue]
                             if owner_user_id:
                                 base += " AND owner_user_id = %s"
                                 params.append(owner_user_id)
@@ -2450,7 +2455,7 @@ class JobManager:
                             ")"
                         )
                         sub += dep_cond
-                        params_sub: List[Any] = [domain, queue]
+                        params_sub: list[Any] = [domain, queue]
                         if owner_user_id:
                             sub += " AND owner_user_id = ?"
                             params_sub.append(owner_user_id)
@@ -2475,7 +2480,7 @@ class JobManager:
                             "leased_until = DATETIME('now', ?), worker_id = ?, lease_id = ? "
                             f"WHERE id IN ({sub})"
                         )
-                        params_upd: List[Any] = [f"+{lease_seconds} seconds", worker_id, lease_id] + params_sub
+                        params_upd: list[Any] = [f"+{lease_seconds} seconds", worker_id, lease_id] + params_sub
                         conn.execute(sql, tuple(params_upd))
                         try:
                             conn.commit()
@@ -2547,7 +2552,7 @@ class JobManager:
                             ")"
                         )
                         base += dep_cond
-                        params: List[Any] = [domain, queue]
+                        params: list[Any] = [domain, queue]
                         if owner_user_id:
                             base += " AND owner_user_id = ?"
                             params.append(owner_user_id)
@@ -2726,11 +2731,11 @@ class JobManager:
         job_id: int,
         *,
         seconds: int,
-        worker_id: Optional[str] = None,
-        lease_id: Optional[str] = None,
-        progress_percent: Optional[float] = None,
-        progress_message: Optional[str] = None,
-        enforce: Optional[bool] = None,
+        worker_id: str | None = None,
+        lease_id: str | None = None,
+        progress_percent: float | None = None,
+        progress_message: str | None = None,
+        enforce: bool | None = None,
     ) -> bool:
         """Extend the lease on a processing job.
 
@@ -2752,7 +2757,7 @@ class JobManager:
                             sets = [
                                 "leased_until = GREATEST(COALESCE(leased_until, %s), %s + (%s || ' seconds')::interval)"
                             ]
-                            params: List[Any] = [now_ts, now_ts, int(seconds)]
+                            params: list[Any] = [now_ts, now_ts, int(seconds)]
                             if progress_percent is not None:
                                 sets.append("progress_percent = %s")
                                 params.append(float(progress_percent))
@@ -2777,7 +2782,7 @@ class JobManager:
                             sets = [
                                 "leased_until = GREATEST(COALESCE(leased_until, %s), %s + (%s || ' seconds')::interval)"
                             ]
-                            params2: List[Any] = [now_ts, now_ts, int(seconds)]
+                            params2: list[Any] = [now_ts, now_ts, int(seconds)]
                             if progress_percent is not None:
                                 sets.append("progress_percent = %s")
                                 params2.append(float(progress_percent))
@@ -2806,7 +2811,7 @@ class JobManager:
                         sql = (
                             "UPDATE jobs SET " "leased_until = MAX(COALESCE(leased_until, DATETIME(?)), DATETIME(?, ?))"
                         )
-                        params3: List[Any] = [now_str, now_str, interval]
+                        params3: list[Any] = [now_str, now_str, interval]
                         if progress_percent is not None:
                             sql += ", progress_percent = ?"
                             params3.append(float(progress_percent))
@@ -2829,7 +2834,7 @@ class JobManager:
                         sql = (
                             "UPDATE jobs SET " "leased_until = MAX(COALESCE(leased_until, DATETIME(?)), DATETIME(?, ?))"
                         )
-                        params4: List[Any] = [now_str, now_str, interval]
+                        params4: list[Any] = [now_str, now_str, interval]
                         if progress_percent is not None:
                             sql += ", progress_percent = ?"
                             params4.append(float(progress_percent))
@@ -2855,8 +2860,8 @@ class JobManager:
         self,
         job_id: int,
         *,
-        progress_percent: Optional[float] = None,
-        progress_message: Optional[str] = None,
+        progress_percent: float | None = None,
+        progress_message: str | None = None,
     ) -> bool:
         """Update progress fields on a job without touching lease state."""
         if progress_percent is None and progress_message is None:
@@ -2868,8 +2873,8 @@ class JobManager:
             if self.backend == "postgres":
                 with conn:
                     with self._pg_cursor(conn) as cur:
-                        sets: List[str] = []
-                        params: List[Any] = []
+                        sets: list[str] = []
+                        params: list[Any] = []
                         if progress_percent is not None:
                             sets.append("progress_percent = %s")
                             params.append(float(progress_percent))
@@ -2886,8 +2891,8 @@ class JobManager:
                         return cur.rowcount > 0
             else:
                 with conn:
-                    sets2: List[str] = []
-                    params2: List[Any] = []
+                    sets2: list[str] = []
+                    params2: list[Any] = []
                     if progress_percent is not None:
                         sets2.append("progress_percent = ?")
                         params2.append(float(progress_percent))
@@ -2907,7 +2912,7 @@ class JobManager:
         self,
         job_id: int,
         *,
-        result: Dict[str, Any],
+        result: dict[str, Any],
         merge: bool = True,
     ) -> bool:
         """Update the result payload on a job without changing status."""
@@ -2918,7 +2923,7 @@ class JobManager:
             return False
         existing = job.get("result")
         if merge and isinstance(existing, dict) and isinstance(result, dict):
-            res_obj: Dict[str, Any] = dict(existing)
+            res_obj: dict[str, Any] = dict(existing)
             res_obj.update(result)
         else:
             res_obj = result
@@ -2965,11 +2970,11 @@ class JobManager:
         self,
         job_id: int,
         *,
-        result: Optional[Dict[str, Any]] = None,
-        worker_id: Optional[str] = None,
-        lease_id: Optional[str] = None,
-        completion_token: Optional[str] = None,
-        enforce: Optional[bool] = None,
+        result: dict[str, Any] | None = None,
+        worker_id: str | None = None,
+        lease_id: str | None = None,
+        completion_token: str | None = None,
+        enforce: bool | None = None,
     ) -> bool:
         """Mark a job as completed and clear the lease.
 
@@ -3521,7 +3526,7 @@ class JobManager:
             conn.close()
         return bool(res_ok)
 
-    def _adaptive_lease_seconds(self, domain: str, queue: str, job_type: Optional[str]) -> int:
+    def _adaptive_lease_seconds(self, domain: str, queue: str, job_type: str | None) -> int:
         """Compute adaptive lease seconds based on recent P95 durations with headroom.
 
         Works for both backends; uses percentile_cont on PG and a simple
@@ -3531,7 +3536,7 @@ class JobManager:
         window_h = int(os.getenv("JOBS_ADAPTIVE_LEASE_WINDOW_HOURS", "6") or "6")
         min_s = int(os.getenv("JOBS_ADAPTIVE_LEASE_MIN_SECONDS", "15") or "15")
         max_s = int(os.getenv("JOBS_LEASE_MAX_SECONDS", "3600") or "3600")
-        value: Optional[float] = None
+        value: float | None = None
         conn = self._connect()
         try:
             if self.backend == "postgres":
@@ -3540,7 +3545,7 @@ class JobManager:
                         "SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (completed_at - COALESCE(started_at, acquired_at)))) AS p95 "
                         "FROM jobs WHERE completed_at IS NOT NULL AND created_at >= NOW() - (%s || ' hours')::interval AND domain=%s AND queue=%s"
                     )
-                    params: List[Any] = [int(window_h), domain, queue]
+                    params: list[Any] = [int(window_h), domain, queue]
                     if job_type:
                         q += " AND job_type=%s"
                         params.append(job_type)
@@ -3553,7 +3558,7 @@ class JobManager:
                     "SELECT (julianday(completed_at) - julianday(COALESCE(started_at, acquired_at))) * 86400.0 AS dur "
                     "FROM jobs WHERE completed_at IS NOT NULL AND created_at >= DATETIME('now', ?) AND domain=? AND queue=?"
                 )
-                params2: List[Any] = [f"-{int(window_h)} hours", domain, queue]
+                params2: list[Any] = [f"-{int(window_h)} hours", domain, queue]
                 if job_type:
                     query += " AND job_type=?"
                     params2.append(job_type)
@@ -3571,7 +3576,7 @@ class JobManager:
             return max(min_s, 30)
         return max(min_s, min(max_s, int(value * headroom)))
 
-    def batch_renew_leases(self, items: List[Dict[str, Any]], *, enforce: Optional[bool] = None) -> int:
+    def batch_renew_leases(self, items: list[dict[str, Any]], *, enforce: bool | None = None) -> int:
         if enforce is None:
             enforce = self._should_enforce_ack()
         conn = self._connect()
@@ -3655,7 +3660,7 @@ class JobManager:
             except Exception:
                 pass
 
-    def batch_complete_jobs(self, items: List[Dict[str, Any]], *, enforce: Optional[bool] = None) -> int:
+    def batch_complete_jobs(self, items: list[dict[str, Any]], *, enforce: bool | None = None) -> int:
         if enforce is None:
             enforce = self._should_enforce_ack()
         conn = self._connect()
@@ -3747,7 +3752,7 @@ class JobManager:
             except Exception:
                 pass
 
-    def batch_fail_jobs(self, items: List[Dict[str, Any]], *, enforce: Optional[bool] = None) -> int:
+    def batch_fail_jobs(self, items: list[dict[str, Any]], *, enforce: bool | None = None) -> int:
         if str(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "")).lower() in {"1", "true", "yes", "y", "on"}:
             for it in items:
                 if not it.get("completion_token"):
@@ -3833,13 +3838,13 @@ class JobManager:
         error: str,
         retryable: bool = True,
         backoff_seconds: int = 1,
-        worker_id: Optional[str] = None,
-        lease_id: Optional[str] = None,
-        enforce: Optional[bool] = None,
-        error_code: Optional[str] = None,
-        error_class: Optional[str] = None,
-        error_stack: Optional[Dict[str, Any]] = None,
-        completion_token: Optional[str] = None,
+        worker_id: str | None = None,
+        lease_id: str | None = None,
+        enforce: bool | None = None,
+        error_code: str | None = None,
+        error_class: str | None = None,
+        error_stack: dict[str, Any] | None = None,
+        completion_token: str | None = None,
     ) -> bool:
         """Mark a job as failed; optionally reschedule with backoff if retryable.
 
@@ -4730,7 +4735,7 @@ class JobManager:
         finally:
             conn.close()
 
-    def cancel_job(self, job_id: int, *, reason: Optional[str] = None) -> bool:
+    def cancel_job(self, job_id: int, *, reason: str | None = None) -> bool:
         """Request cancellation or cancel queued jobs immediately.
 
         Emits gauge updates on successful cancellation for the job's domain/queue/job_type.
@@ -5068,10 +5073,10 @@ class JobManager:
         self,
         job_id: int,
         *,
-        worker_id: Optional[str] = None,
-        lease_id: Optional[str] = None,
-        reason: Optional[str] = None,
-        enforce: Optional[bool] = None,
+        worker_id: str | None = None,
+        lease_id: str | None = None,
+        reason: str | None = None,
+        enforce: bool | None = None,
     ) -> bool:
         """Release a processing job back to queued without retry penalties."""
         if enforce is None:
@@ -5245,11 +5250,11 @@ class JobManager:
     def prune_jobs(
         self,
         *,
-        statuses: Optional[List[str]] = None,
+        statuses: list[str] | None = None,
         older_than_days: int = 30,
-        domain: Optional[str] = None,
-        queue: Optional[str] = None,
-        job_type: Optional[str] = None,
+        domain: str | None = None,
+        queue: str | None = None,
+        job_type: str | None = None,
         dry_run: bool = False,
         detail_top_k: int = 0,
     ) -> int:
@@ -5268,8 +5273,8 @@ class JobManager:
             if self.backend == "postgres":
                 with conn:
                     with self._pg_cursor(conn) as cur:
-                        where_parts: List[str] = []
-                        params: List[Any] = []
+                        where_parts: list[str] = []
+                        params: list[Any] = []
                         # statuses
                         placeholders = ",".join(["%s"] * len(statuses))
                         where_parts.append(f"status IN ({placeholders})")
@@ -5451,8 +5456,8 @@ class JobManager:
                             )
                         except Exception:
                             pass
-                    where_parts: List[str] = []
-                    params: List[Any] = []
+                    where_parts: list[str] = []
+                    params: list[Any] = []
                     placeholders = ",".join(["?"] * len(statuses))
                     where_parts.append(f"status IN ({placeholders})")
                     params.extend(statuses)
@@ -5523,7 +5528,8 @@ class JobManager:
                         # Optional compression for archived payload/result (SQLite: base64-gz prefix)
                         try:
                             if str(os.getenv("JOBS_ARCHIVE_COMPRESS", "")).lower() in {"1", "true", "yes", "y", "on"}:
-                                import gzip, base64
+                                import base64
+                                import gzip
 
                                 drop_json = str(os.getenv("JOBS_ARCHIVE_COMPRESS_DROP_JSON", "")).lower() in {
                                     "1",
@@ -5646,13 +5652,13 @@ class JobManager:
     def apply_ttl_policies(
         self,
         *,
-        age_seconds: Optional[int] = None,
-        runtime_seconds: Optional[int] = None,
+        age_seconds: int | None = None,
+        runtime_seconds: int | None = None,
         action: str = "cancel",
-        domain: Optional[str] = None,
-        queue: Optional[str] = None,
-        job_type: Optional[str] = None,
-        reference_time: Optional[datetime] = None,
+        domain: str | None = None,
+        queue: str | None = None,
+        job_type: str | None = None,
+        reference_time: datetime | None = None,
     ) -> int:
         """Apply TTL policies for queued/scheduled (age) and processing (runtime).
 
@@ -5677,7 +5683,7 @@ class JobManager:
                         if age_seconds is not None:
                             now_ts = reference_time or self._clock.now_utc()
                             where = ["status='queued'", "created_at <= (%s - (%s || ' seconds')::interval)"]
-                            params: List[Any] = [now_ts, int(age_seconds)]
+                            params: list[Any] = [now_ts, int(age_seconds)]
                             if domain:
                                 where.append("domain = %s")
                                 params.append(domain)
@@ -5774,7 +5780,7 @@ class JobManager:
                                 "status='processing'",
                                 "COALESCE(started_at, acquired_at) <= (%s - (%s || ' seconds')::interval)",
                             ]
-                            params2: List[Any] = [now_ts2, int(runtime_seconds)]
+                            params2: list[Any] = [now_ts2, int(runtime_seconds)]
                             if domain:
                                 where.append("domain = %s")
                                 params2.append(domain)
@@ -5869,7 +5875,7 @@ class JobManager:
                     now_str = ref_dt.astimezone(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
                     if age_seconds is not None:
                         where = ["status='queued'", "created_at <= DATETIME(?, ?)"]
-                        params3: List[Any] = [now_str, f"-{int(age_seconds)} seconds"]
+                        params3: list[Any] = [now_str, f"-{int(age_seconds)} seconds"]
                         if domain:
                             where.append("domain = ?")
                             params3.append(domain)
@@ -5960,7 +5966,7 @@ class JobManager:
                         affected2 += affected2_age
                     if runtime_seconds is not None:
                         where = ["status='processing'", "COALESCE(started_at, acquired_at) <= DATETIME(?, ?)"]
-                        params4: List[Any] = [now_str, f"-{int(runtime_seconds)} seconds"]
+                        params4: list[Any] = [now_str, f"-{int(runtime_seconds)} seconds"]
                         if domain:
                             where.append("domain = ?")
                             params4.append(domain)
@@ -6055,12 +6061,12 @@ class JobManager:
         queue: str,
         lease_seconds: int,
         worker_id: str,
-        owner_user_id: Optional[str] = None,
+        owner_user_id: str | None = None,
         limit: int = 1,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Acquire up to `limit` jobs. Simple loop over acquire_next_job for now."""
         limit = max(1, int(limit))
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for _ in range(limit):
             j = self.acquire_next_job(
                 domain=domain,
@@ -6078,12 +6084,12 @@ class JobManager:
     def reschedule_jobs(
         self,
         *,
-        domain: Optional[str] = None,
-        queue: Optional[str] = None,
-        job_type: Optional[str] = None,
-        status: Optional[str] = None,
+        domain: str | None = None,
+        queue: str | None = None,
+        job_type: str | None = None,
+        status: str | None = None,
         set_now: bool = True,
-        delta_seconds: Optional[int] = None,
+        delta_seconds: int | None = None,
         dry_run: bool = False,
     ) -> int:
         """Reschedule jobs by adjusting available_at.
@@ -6098,7 +6104,7 @@ class JobManager:
             if self.backend == "postgres":
                 with self._pg_cursor(conn) as cur:
                     where = ["1=1"]
-                    params: List[Any] = []
+                    params: list[Any] = []
                     if domain:
                         where.append("domain=%s")
                         params.append(domain)
@@ -6151,7 +6157,7 @@ class JobManager:
                     return count
             else:
                 where = ["1=1"]
-                params: List[Any] = []
+                params: list[Any] = []
                 if domain:
                     where.append("domain=?")
                     params.append(domain)
@@ -6213,10 +6219,10 @@ class JobManager:
     def retry_now_jobs(
         self,
         *,
-        job_id: Optional[int] = None,
-        domain: Optional[str] = None,
-        queue: Optional[str] = None,
-        job_type: Optional[str] = None,
+        job_id: int | None = None,
+        domain: str | None = None,
+        queue: str | None = None,
+        job_type: str | None = None,
         only_failed: bool = True,
         dry_run: bool = False,
     ) -> int:
@@ -6230,7 +6236,7 @@ class JobManager:
             if self.backend == "postgres":
                 with self._pg_cursor(conn) as cur:
                     where = ["1=1"]
-                    params: List[Any] = []
+                    params: list[Any] = []
                     if domain:
                         where.append("domain=%s")
                         params.append(domain)
@@ -6294,7 +6300,7 @@ class JobManager:
                     return count
             else:
                 where = ["1=1"]
-                params: List[Any] = []
+                params: list[Any] = []
                 if domain:
                     where.append("domain=?")
                     params.append(domain)
@@ -6356,10 +6362,10 @@ class JobManager:
     def get_queue_stats(
         self,
         *,
-        domain: Optional[str] = None,
-        queue: Optional[str] = None,
-        job_type: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        domain: str | None = None,
+        queue: str | None = None,
+        job_type: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Return counts grouped by domain/queue/job_type.
 
         Provides queued (ready), scheduled, and processing counts per group.
@@ -6368,7 +6374,7 @@ class JobManager:
         try:
             if self.backend == "postgres":
                 where = ["1=1"]
-                params: List[Any] = []
+                params: list[Any] = []
                 if domain:
                     where.append("domain = %s")
                     params.append(domain)
@@ -6403,7 +6409,7 @@ class JobManager:
                 ]
             else:
                 where = ["1=1"]
-                params2: List[Any] = []
+                params2: list[Any] = []
                 if domain:
                     where.append("domain = ?")
                     params2.append(domain)
@@ -6441,13 +6447,13 @@ class JobManager:
             except Exception:
                 pass
 
-    def count_active_processing(self, *, domain: Optional[str] = None, queue: Optional[str] = None) -> int:
+    def count_active_processing(self, *, domain: str | None = None, queue: str | None = None) -> int:
         """Count jobs currently in processing state (optionally filtered)."""
         conn = self._connect()
         try:
             if self.backend == "postgres":
                 where = ["status='processing'"]
-                params: List[Any] = []
+                params: list[Any] = []
                 if domain:
                     where.append("domain = %s")
                     params.append(domain)
@@ -6460,7 +6466,7 @@ class JobManager:
                     return int(row["c"]) if row is not None else 0
             else:
                 where = ["status='processing'"]
-                params2: List[Any] = []
+                params2: list[Any] = []
                 if domain:
                     where.append("domain = ?")
                     params2.append(domain)
@@ -6476,7 +6482,7 @@ class JobManager:
                 pass
 
     def add_job_attachment(
-        self, job_id: int, *, kind: str, content_text: Optional[str] = None, url: Optional[str] = None
+        self, job_id: int, *, kind: str, content_text: str | None = None, url: str | None = None
     ) -> int:
         kind = str(kind or "").strip().lower()
         if kind not in {"log", "artifact", "tag"}:
@@ -6529,7 +6535,7 @@ class JobManager:
         finally:
             conn.close()
 
-    def list_job_attachments(self, job_id: int, *, limit: int = 100) -> List[Dict[str, Any]]:
+    def list_job_attachments(self, job_id: int, *, limit: int = 100) -> list[dict[str, Any]]:
         limit = max(1, min(1000, int(limit)))
         conn = self._connect()
         try:
@@ -6558,12 +6564,12 @@ class JobManager:
     def rotate_encryption_keys(
         self,
         *,
-        domain: Optional[str] = None,
-        queue: Optional[str] = None,
-        job_type: Optional[str] = None,
+        domain: str | None = None,
+        queue: str | None = None,
+        job_type: str | None = None,
         old_key_b64: str,
         new_key_b64: str,
-        fields: List[str],
+        fields: list[str],
         limit: int = 1000,
         dry_run: bool = False,
     ) -> int:
@@ -6582,7 +6588,7 @@ class JobManager:
             if self.backend == "postgres":
                 with self._pg_cursor(conn) as cur:
                     where = ["1=1"]
-                    params: List[Any] = []
+                    params: list[Any] = []
                     if domain:
                         where.append("domain=%s")
                         params.append(domain)
@@ -6623,7 +6629,7 @@ class JobManager:
                                         upd[fld] = {"_encrypted": env}
                             if upd:
                                 sets = []
-                                params_upd: List[Any] = []
+                                params_upd: list[Any] = []
                                 for k, v in upd.items():
                                     sets.append(f"{k}=%s::jsonb")
                                     params_upd.append(json.dumps(v))
@@ -6633,7 +6639,7 @@ class JobManager:
                 return affected
             else:
                 where = ["1=1"]
-                params2: List[Any] = []
+                params2: list[Any] = []
                 if domain:
                     where.append("domain=?")
                     params2.append(domain)
@@ -6667,7 +6673,7 @@ class JobManager:
                     return affected
                 with conn:
                     for rid, pl, rs, *_ in rows:
-                        upd: Dict[str, Any] = {}
+                        upd: dict[str, Any] = {}
                         for fld, val in (("payload", pl), ("result", rs)):
                             if fld not in fields:
                                 continue
@@ -6691,7 +6697,7 @@ class JobManager:
                                     upd[fld] = json.dumps({"_encrypted": env})
                         if upd:
                             sets = []
-                            params_upd: List[Any] = []
+                            params_upd: list[Any] = []
                             for k, v in upd.items():
                                 sets.append(f"{k} = ?")
                                 params_upd.append(v)
@@ -6705,7 +6711,7 @@ class JobManager:
             except Exception:
                 pass
 
-    def finalize_cancelled(self, job_id: int, *, reason: Optional[str] = None) -> bool:
+    def finalize_cancelled(self, job_id: int, *, reason: str | None = None) -> bool:
         """Mark a job as cancelled terminally, regardless of prior cancel request.
 
         Intended to be called by workers when they observe a cancel requested during processing.
@@ -6734,10 +6740,10 @@ class JobManager:
         self,
         *,
         fix: bool = False,
-        domain: Optional[str] = None,
-        queue: Optional[str] = None,
-        job_type: Optional[str] = None,
-    ) -> Dict[str, int]:
+        domain: str | None = None,
+        queue: str | None = None,
+        job_type: str | None = None,
+    ) -> dict[str, int]:
         """Validate and optionally repair impossible states.
 
         - non_processing_with_lease: status != processing but lease_id/worker_id/leased_until set
@@ -6755,8 +6761,8 @@ class JobManager:
                             "(lease_id IS NOT NULL OR worker_id IS NOT NULL OR leased_until IS NOT NULL)",
                         ]
                         where_pr = ["status = 'processing'", "(leased_until IS NULL OR leased_until <= NOW())"]
-                        params_np: List[Any] = []
-                        params_pr: List[Any] = []
+                        params_np: list[Any] = []
+                        params_pr: list[Any] = []
                         if domain:
                             where_np.append("domain = %s")
                             params_np.append(domain)
@@ -6797,8 +6803,8 @@ class JobManager:
                     "(lease_id IS NOT NULL OR worker_id IS NOT NULL OR leased_until IS NOT NULL)",
                 ]
                 where_pr = ["status = 'processing'", "(leased_until IS NULL OR leased_until <= DATETIME('now'))"]
-                params_np: List[Any] = []
-                params_pr: List[Any] = []
+                params_np: list[Any] = []
+                params_pr: list[Any] = []
                 if domain:
                     where_np.append("domain = ?")
                     params_np.append(domain)

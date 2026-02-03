@@ -4,6 +4,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path as PathlibPath
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
 from loguru import logger
 from starlette.background import BackgroundTask
@@ -23,7 +24,6 @@ from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDat
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import FileArtifactsError, file_artifacts_http_status
 from tldw_Server_API.app.core.File_Artifacts.file_artifacts_service import FileArtifactsService
-
 
 router = APIRouter(prefix="/files", tags=["files"])
 

@@ -67,7 +67,8 @@ def test_mediawiki_process_dump_ephemeral_stream(monkeypatch, tmp_path: Path):
 
     app = FastAPI()
     app.include_router(media_router, prefix="/api/v1/media")
-    async def _override_user():
+
+    async def _override_user() -> User:
         return User(id=1, username="tester", email=None, is_active=True, is_admin=True)
 
     app.dependency_overrides[get_request_user] = _override_user

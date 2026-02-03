@@ -26,6 +26,33 @@ modules:
     department: demo
     settings: {}
 
+  - id: mcp_discovery
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.mcp_discovery_module:MCPDiscoveryModule
+    enabled: true
+    name: MCP Discovery
+    version: "1.0.0"
+    department: system
+    max_concurrent: 8
+    settings: {}
+
+  - id: notes
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.notes_module:NotesModule
+    enabled: true
+    name: Notes
+    version: "1.0.0"
+    department: knowledge
+    max_concurrent: 10
+    settings: {}
+
+  - id: kanban
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.kanban_module:KanbanModule
+    enabled: true
+    name: Kanban
+    version: "1.0.0"
+    department: planning
+    max_concurrent: 10
+    settings: {}
+
   - id: quizzes
     class: tldw_Server_API.app.core.MCP_unified.modules.implementations.quizzes_module:QuizzesModule
     enabled: true

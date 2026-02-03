@@ -5,22 +5,20 @@ This module provides a unified interface for all metric operations,
 supporting both OpenTelemetry and fallback implementations.
 """
 
-import time
-import asyncio
 import os
 import re
+import statistics
 import threading
-from typing import Dict, Any, Optional, List, Callable, Union, Tuple
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from enum import Enum
+import time
 from collections import defaultdict, deque
 from contextlib import contextmanager
-import statistics
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Callable, Optional
 
 from loguru import logger
 
-from .telemetry import get_telemetry_manager, OTEL_AVAILABLE
+from .telemetry import OTEL_AVAILABLE, get_telemetry_manager
 
 if OTEL_AVAILABLE:
     from opentelemetry.metrics import CallbackOptions, Observation
@@ -41,8 +39,8 @@ class MetricDefinition:
     type: MetricType
     description: str
     unit: str = ""
-    labels: List[str] = field(default_factory=list)
-    buckets: Optional[List[float]] = None  # For histograms
+    labels: list[str] = field(default_factory=list)
+    buckets: Optional[list[float]] = None  # For histograms
 
 
 @dataclass
@@ -50,7 +48,7 @@ class MetricValue:
     """A metric value with metadata."""
     value: float
     timestamp: float = field(default_factory=time.time)
-    labels: Dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
 
 
 class MetricsRegistry:
@@ -76,14 +74,14 @@ class MetricsRegistry:
             buffer_maxlen = None
 
         self._lock = threading.RLock()
-        self.metrics: Dict[str, MetricDefinition] = {}
-        self.instruments: Dict[str, Any] = {}
+        self.metrics: dict[str, MetricDefinition] = {}
+        self.instruments: dict[str, Any] = {}
         # Rolling window of metric samples; size configurable via METRICS_RING_BUFFER_MAXLEN_OR_UNBOUNDED.
-        self.values: Dict[str, deque] = defaultdict(lambda: deque(maxlen=buffer_maxlen))
+        self.values: dict[str, deque] = defaultdict(lambda: deque(maxlen=buffer_maxlen))
         # Cumulative aggregates for Prometheus export (monotonic counters, full histograms).
-        self._cumulative_counters: Dict[str, Dict[Tuple[Tuple[str, str], ...], float]] = defaultdict(dict)
-        self._cumulative_histograms: Dict[str, Dict[Tuple[Tuple[str, str], ...], Dict[str, Any]]] = defaultdict(dict)
-        self.callbacks: Dict[str, List[Callable]] = defaultdict(list)
+        self._cumulative_counters: dict[str, dict[tuple[tuple[str, str], ...], float]] = defaultdict(dict)
+        self._cumulative_histograms: dict[str, dict[tuple[tuple[str, str], ...], dict[str, Any]]] = defaultdict(dict)
+        self.callbacks: dict[str, list[Callable]] = defaultdict(list)
         self._legacy_cb_alias_metrics = {
             "circuit_breaker_state",
             "circuit_breaker_failures_total",
@@ -132,11 +130,11 @@ class MetricsRegistry:
         return normalized
 
     @classmethod
-    def _normalize_labels(cls, labels: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    def _normalize_labels(cls, labels: Optional[dict[str, Any]]) -> dict[str, str]:
         """Normalize label keys and coerce values to strings."""
         if not labels:
             return {}
-        normalized: Dict[str, str] = {}
+        normalized: dict[str, str] = {}
         for key, value in labels.items():
             normalized_key = cls._normalize_label_name(str(key))
             normalized_value = "" if value is None else str(value)
@@ -146,7 +144,7 @@ class MetricsRegistry:
         return normalized
 
     @classmethod
-    def _normalize_label_key(cls, labels: Dict[str, Any]) -> Tuple[Tuple[str, str], ...]:
+    def _normalize_label_key(cls, labels: dict[str, Any]) -> tuple[tuple[str, str], ...]:
         """Return a stable, sortable label key from the label dict."""
         if not labels:
             return tuple()
@@ -159,7 +157,7 @@ class MetricsRegistry:
         return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
 
     @classmethod
-    def _format_label_str(cls, labels: Dict[str, Any]) -> str:
+    def _format_label_str(cls, labels: dict[str, Any]) -> str:
         """Format labels for Prometheus exposition with proper escaping."""
         if not labels:
             return ""
@@ -293,7 +291,7 @@ class MetricsRegistry:
                 name="llm_tokens_used_total",
                 type=MetricType.COUNTER,
                 description="Total number of tokens used",
-                labels=["provider", "model", "type"]  # type: prompt/completion
+                labels=["provider", "model", "type"]  # label type: prompt/completion
             )
         )
 
@@ -1461,7 +1459,7 @@ class MetricsRegistry:
 
         try:
             # Group latest value by label set
-            latest_by_labels: Dict[Tuple[Tuple[str, str], ...], MetricValue] = {}
+            latest_by_labels: dict[tuple[tuple[str, str], ...], MetricValue] = {}
             with self._lock:
                 if metric_name in self.values:
                     for mv in self.values[metric_name]:
@@ -1480,7 +1478,7 @@ class MetricsRegistry:
         self,
         metric_name: str,
         value: float,
-        labels: Optional[Dict[str, str]] = None,
+        labels: Optional[dict[str, str]] = None,
         _emit_legacy_alias: bool = True,
     ):
         """
@@ -1495,7 +1493,7 @@ class MetricsRegistry:
         metric_name = self._normalize_metric_name(metric_name)
         labels = self._normalize_labels(labels)
         instrument = None
-        callbacks: List[Callable] = []
+        callbacks: list[Callable] = []
 
         with self._lock:
             if metric_name not in self.metrics:
@@ -1557,7 +1555,7 @@ class MetricsRegistry:
         if _emit_legacy_alias:
             self._emit_circuit_breaker_alias(metric_name, value, labels)
 
-    def _emit_circuit_breaker_alias(self, metric_name: str, value: float, labels: Dict[str, str]):
+    def _emit_circuit_breaker_alias(self, metric_name: str, value: float, labels: dict[str, str]):
         if metric_name not in self._legacy_cb_alias_metrics:
             return
         category = labels.get("category")
@@ -1570,7 +1568,7 @@ class MetricsRegistry:
         legacy_labels["service"] = f"{category}:{service}"
         self.record(metric_name, value, legacy_labels, _emit_legacy_alias=False)
 
-    def increment(self, metric_name: str, value: float = 1, labels: Optional[Dict[str, str]] = None):
+    def increment(self, metric_name: str, value: float = 1, labels: Optional[dict[str, str]] = None):
         """
         Increment a counter metric.
 
@@ -1581,7 +1579,7 @@ class MetricsRegistry:
         """
         self.record(metric_name, value, labels)
 
-    def set_gauge(self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None):
+    def set_gauge(self, metric_name: str, value: float, labels: Optional[dict[str, str]] = None):
         """
         Set a gauge metric value.
 
@@ -1592,7 +1590,7 @@ class MetricsRegistry:
         """
         self.record(metric_name, value, labels)
 
-    def observe(self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None):
+    def observe(self, metric_name: str, value: float, labels: Optional[dict[str, str]] = None):
         """
         Observe a value for histogram metric.
 
@@ -1604,7 +1602,7 @@ class MetricsRegistry:
         self.record(metric_name, value, labels)
 
     @contextmanager
-    def timer(self, metric_name: str, labels: Optional[Dict[str, str]] = None):
+    def timer(self, metric_name: str, labels: Optional[dict[str, str]] = None):
         """
         Context manager to time an operation.
 
@@ -1634,14 +1632,14 @@ class MetricsRegistry:
         with self._lock:
             self.callbacks[metric_name].append(callback)
 
-    def get_cumulative_counter(self, metric_name: str, labels: Optional[Dict[str, Any]] = None) -> float:
+    def get_cumulative_counter(self, metric_name: str, labels: Optional[dict[str, Any]] = None) -> float:
         """Get the cumulative counter value for a metric/label set."""
         metric_name = self._normalize_metric_name(metric_name)
         label_key = self._normalize_label_key(labels or {})
         with self._lock:
             return self._cumulative_counters.get(metric_name, {}).get(label_key, 0.0)
 
-    def get_metric_stats(self, metric_name: str, labels: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    def get_metric_stats(self, metric_name: str, labels: Optional[dict[str, str]] = None) -> dict[str, Any]:
         """
         Get statistics for a metric.
 
@@ -1681,7 +1679,7 @@ class MetricsRegistry:
             "latest_timestamp": values[-1].timestamp
         }
 
-    def get_all_metrics(self) -> Dict[str, Dict[str, Any]]:
+    def get_all_metrics(self) -> dict[str, dict[str, Any]]:
         """
         Get all current metric values and statistics.
 
@@ -1842,28 +1840,28 @@ def get_metrics_registry() -> MetricsRegistry:
 
 
 # Convenience functions for common operations
-def record_metric(metric_name: str, value: float, labels: Optional[Dict[str, str]] = None):
+def record_metric(metric_name: str, value: float, labels: Optional[dict[str, str]] = None):
     """Record a metric value."""
     get_metrics_registry().record(metric_name, value, labels)
 
 
-def increment_counter(metric_name: str, value: float = 1, labels: Optional[Dict[str, str]] = None):
+def increment_counter(metric_name: str, value: float = 1, labels: Optional[dict[str, str]] = None):
     """Increment a counter metric."""
     get_metrics_registry().increment(metric_name, value, labels)
 
 
-def set_gauge(metric_name: str, value: float, labels: Optional[Dict[str, str]] = None):
+def set_gauge(metric_name: str, value: float, labels: Optional[dict[str, str]] = None):
     """Set a gauge metric value."""
     get_metrics_registry().set_gauge(metric_name, value, labels)
 
 
-def observe_histogram(metric_name: str, value: float, labels: Optional[Dict[str, str]] = None):
+def observe_histogram(metric_name: str, value: float, labels: Optional[dict[str, str]] = None):
     """Observe a value for histogram metric."""
     get_metrics_registry().observe(metric_name, value, labels)
 
 
 @contextmanager
-def time_operation(metric_name: str, labels: Optional[Dict[str, str]] = None):
+def time_operation(metric_name: str, labels: Optional[dict[str, str]] = None):
     """Time an operation and record to histogram metric."""
     with get_metrics_registry().timer(metric_name, labels):
         yield

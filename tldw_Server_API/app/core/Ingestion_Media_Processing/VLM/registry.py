@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from typing import Dict, Optional, Type
-
 from .base import VLMBackend
 
 
-def _backend_map() -> Dict[str, Type[VLMBackend]]:
-    mapping: Dict[str, Type[VLMBackend]] = {}
+def _backend_map() -> dict[str, type[VLMBackend]]:
+    mapping: dict[str, type[VLMBackend]] = {}
     try:
         from .backends.hf_table_transformer import HFTableTransformerBackend
 
@@ -24,7 +22,7 @@ def _backend_map() -> Dict[str, Type[VLMBackend]]:
     return mapping
 
 
-def get_backend(name: Optional[str] = None) -> Optional[VLMBackend]:
+def get_backend(name: str | None = None) -> VLMBackend | None:
     """
     Resolve a VLM backend by name, or pick the first available when name=None.
     """
@@ -45,14 +43,14 @@ def get_backend(name: Optional[str] = None) -> Optional[VLMBackend]:
     return None
 
 
-def list_backends() -> Dict[str, Dict[str, bool]]:
+def list_backends() -> dict[str, dict[str, bool]]:
     """
     Return a lightweight summary of available backends.
     {
       "hf_table_transformer": {"available": true}
     }
     """
-    out: Dict[str, Dict[str, bool]] = {}
+    out: dict[str, dict[str, bool]] = {}
     mapping = _backend_map()
     for k, cls in mapping.items():
         ok = False

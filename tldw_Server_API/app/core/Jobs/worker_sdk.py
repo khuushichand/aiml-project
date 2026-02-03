@@ -3,16 +3,16 @@ from __future__ import annotations
 import asyncio
 import os
 import random
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Callable
 
 from loguru import logger
 
 from .manager import JobManager
 
-
-CancelCheck = Callable[[Dict[str, Any]], Awaitable[bool]]
-JobHandler = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any] | None]]
+CancelCheck = Callable[[dict[str, Any]], Awaitable[bool]]
+JobHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any] | None]]
 
 
 @dataclass
@@ -69,7 +69,7 @@ class WorkerSDK:
     def stop(self) -> None:
         self._stop.set()
 
-    async def _auto_renew(self, job: Dict[str, Any], progress_cb: Optional[Callable[[], Dict[str, Any]]] = None) -> None:
+    async def _auto_renew(self, job: dict[str, Any], progress_cb: Callable[[], dict[str, Any]] | None = None) -> None:
         lease = int(max(1, self.cfg.lease_seconds))
         jitter = max(0, int(self.cfg.renew_jitter_seconds))
         threshold = max(1, int(self.cfg.renew_threshold_seconds))
@@ -109,10 +109,10 @@ class WorkerSDK:
         self,
         *,
         handler: JobHandler,
-        cancel_check: Optional[CancelCheck] = None,
-        progress_cb: Optional[Callable[[], Dict[str, Any]]] = None,
-        acquire_guard: Optional[Callable[[Dict[str, Any]], Awaitable[bool]]] = None,
-        owner_user_id: Optional[str] = None,
+        cancel_check: CancelCheck | None = None,
+        progress_cb: Callable[[], dict[str, Any]] | None = None,
+        acquire_guard: Callable[[dict[str, Any]], Awaitable[bool]] | None = None,
+        owner_user_id: str | None = None,
     ) -> None:
         """Run the worker loop until stop() is called.
 

@@ -1,17 +1,18 @@
 # request_signing.py
 # Request signing for security - HMAC signatures for request validation
 
-import hmac
-import hashlib
-import time
-import json
 import base64
-from typing import Dict, Any, Optional, Tuple
-from datetime import datetime, timedelta
+import hashlib
+import hmac
+import json
 import secrets
 import threading
+import time
+from datetime import datetime, timedelta
+from typing import Any, Optional
 
 from loguru import logger
+
 from tldw_Server_API.app.core.Embeddings.audit_adapter import log_security_violation
 
 
@@ -62,9 +63,9 @@ class RequestSigner:
     def sign_request(
         self,
         user_id: str,
-        request_data: Dict[str, Any],
+        request_data: dict[str, Any],
         nonce: Optional[str] = None
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """
         Sign a request with HMAC.
 
@@ -101,11 +102,11 @@ class RequestSigner:
     def verify_request(
         self,
         user_id: str,
-        request_data: Dict[str, Any],
+        request_data: dict[str, Any],
         signature: str,
         timestamp: str,
         nonce: str
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> tuple[bool, Optional[str]]:
         """
         Verify a request signature.
 
@@ -159,7 +160,7 @@ class RequestSigner:
     def _create_payload(
         self,
         user_id: str,
-        request_data: Dict[str, Any],
+        request_data: dict[str, Any],
         timestamp: str,
         nonce: str
     ) -> bytes:
@@ -189,7 +190,7 @@ class RequestSigner:
         )
         return base64.b64encode(h.digest()).decode('utf-8')
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get signing statistics"""
         total = self.stats['verified'] + self.stats['failed']
         success_rate = (self.stats['verified'] / total * 100) if total > 0 else 0
@@ -216,7 +217,7 @@ class NonceManager:
             ttl_seconds: Time to live for nonces
         """
         self.ttl_seconds = ttl_seconds
-        self.used_nonces: Dict[str, datetime] = {}
+        self.used_nonces: dict[str, datetime] = {}
         self.last_cleanup = datetime.utcnow()
         self._lock = threading.Lock()
 
@@ -270,7 +271,7 @@ class APIKeyManager:
             keys_file: Path to file containing API keys
         """
         self.keys_file = keys_file
-        self.api_keys: Dict[str, Dict[str, Any]] = {}
+        self.api_keys: dict[str, dict[str, Any]] = {}
         self._load_keys()
 
     def _load_keys(self):
@@ -324,7 +325,7 @@ class APIKeyManager:
         logger.info(f"Generated new API key for '{name}'")
         return key
 
-    def validate_api_key(self, api_key: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    def validate_api_key(self, api_key: str) -> tuple[bool, Optional[dict[str, Any]]]:
         """
         Validate an API key.
 
@@ -414,9 +415,9 @@ def get_api_key_manager() -> APIKeyManager:
 # Middleware for request validation
 def validate_signed_request(
     user_id: str,
-    request_data: Dict[str, Any],
-    headers: Dict[str, str]
-) -> Tuple[bool, Optional[str]]:
+    request_data: dict[str, Any],
+    headers: dict[str, str]
+) -> tuple[bool, Optional[str]]:
     """
     Validate a signed request from headers.
 
@@ -457,8 +458,8 @@ def validate_signed_request(
 # Example usage
 def create_signed_headers(
     user_id: str,
-    request_data: Dict[str, Any]
-) -> Dict[str, str]:
+    request_data: dict[str, Any]
+) -> dict[str, str]:
     """
     Create headers with request signature.
 

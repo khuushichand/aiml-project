@@ -8,7 +8,6 @@ another server (e.g., a standalone Parakeet streaming API).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -36,7 +35,7 @@ class StreamingConfig:
     enable_partial: bool = True
     partial_interval: float = 0.5
     min_partial_duration: float = 0.5
-    language: Optional[str] = None
+    language: str | None = None
 
 
 __all__ = ["StreamingConfig"]

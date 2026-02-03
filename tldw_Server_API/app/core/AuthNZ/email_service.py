@@ -2,25 +2,26 @@
 # Description: Email service with mock provider for development and testing
 #
 # Imports
+import asyncio
+import json
 import os
 import smtplib
-import asyncio
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional, Dict, Any, List
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
 from email import encoders
-import json
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from pathlib import Path
+from typing import Any, Optional
+
 #
 # 3rd-party imports
 from jinja2 import Template
 from loguru import logger
+
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.AuthNZ.exceptions import ExternalServiceError
 
 #######################################################################################################################
 #
@@ -333,7 +334,7 @@ class EmailService:
         html_body: str,
         text_body: Optional[str] = None,
         from_email: Optional[str] = None,
-        attachments: Optional[List[Dict[str, Any]]] = None
+        attachments: Optional[list[dict[str, Any]]] = None
     ) -> bool:
         """
         Send an email
@@ -370,7 +371,7 @@ class EmailService:
         html_body: str,
         text_body: Optional[str],
         from_email: str,
-        attachments: Optional[List[Dict[str, Any]]]
+        attachments: Optional[list[dict[str, Any]]]
     ) -> bool:
         """Send mock email for development/testing"""
 
@@ -433,7 +434,7 @@ class EmailService:
         html_body: str,
         text_body: Optional[str],
         from_email: str,
-        attachments: Optional[List[Dict[str, Any]]]
+        attachments: Optional[list[dict[str, Any]]]
     ) -> bool:
         """Send email via SMTP (offloaded to a background thread)."""
         try:
@@ -586,7 +587,7 @@ class EmailService:
         self,
         to_email: str,
         username: str,
-        backup_codes: List[str],
+        backup_codes: list[str],
         ip_address: str = "Unknown"
     ) -> bool:
         """Send MFA enabled notification with backup codes"""

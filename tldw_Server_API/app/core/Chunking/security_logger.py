@@ -4,12 +4,13 @@ Security event logging for the Chunking module.
 Logs security-related events for audit and monitoring.
 """
 
-from typing import Dict, Any, Optional
-from datetime import datetime
-from enum import Enum
 import json
 import threading
+from datetime import datetime
+from enum import Enum
 from pathlib import Path
+from typing import Any, Optional
+
 from loguru import logger
 
 
@@ -55,7 +56,7 @@ class SecurityLogger:
     def log_event(self,
                   event_type: SecurityEventType,
                   message: str,
-                  details: Optional[Dict[str, Any]] = None,
+                  details: Optional[dict[str, Any]] = None,
                   severity: str = "WARNING") -> None:
         """
         Log a security event.

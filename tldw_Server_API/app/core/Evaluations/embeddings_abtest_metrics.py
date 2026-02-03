@@ -13,7 +13,6 @@ from tldw_Server_API.app.core.Metrics import (
     get_metrics_registry,
 )
 
-
 _METRICS_REGISTERED = False
 
 

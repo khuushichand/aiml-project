@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
-async def aggregate_usage_daily(db_pool: Optional[DatabasePool] = None, day: Optional[str] = None) -> None:
+async def aggregate_usage_daily(db_pool: DatabasePool | None = None, day: str | None = None) -> None:
     """
     Aggregate per-request usage from usage_log into usage_daily.
 
@@ -54,7 +53,7 @@ async def _aggregator_loop(stop_event: asyncio.Event):
         logger.warning(f"Usage aggregator loop exited: {e}")
 
 
-async def start_usage_aggregator() -> Optional[asyncio.Task]:
+async def start_usage_aggregator() -> asyncio.Task | None:
     """Start background aggregator if enabled; return task or None."""
     settings = get_settings()
     if not getattr(settings, "USAGE_LOG_ENABLED", False):
@@ -66,7 +65,7 @@ async def start_usage_aggregator() -> Optional[asyncio.Task]:
     return task
 
 
-async def stop_usage_aggregator(task: Optional[asyncio.Task]) -> None:
+async def stop_usage_aggregator(task: asyncio.Task | None) -> None:
     if not task:
         return
     try:

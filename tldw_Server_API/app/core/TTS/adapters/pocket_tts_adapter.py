@@ -6,22 +6,15 @@ import base64
 import importlib
 import sys
 import tempfile
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, Optional, Set
+from typing import Any, Optional
+
 #
 # Third-party Imports
 import numpy as np
 from loguru import logger
-#
-# Local Imports
-from .base import (
-    AudioFormat,
-    ProviderStatus,
-    TTSCapabilities,
-    TTSAdapter,
-    TTSRequest,
-    TTSResponse,
-)
+
 from ..streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
 from ..tts_exceptions import (
     TTSGenerationError,
@@ -35,6 +28,18 @@ from ..tts_exceptions import (
 )
 from ..tts_validation import validate_tts_request
 from ..utils import parse_bool
+
+#
+# Local Imports
+from .base import (
+    AudioFormat,
+    ProviderStatus,
+    TTSAdapter,
+    TTSCapabilities,
+    TTSRequest,
+    TTSResponse,
+)
+
 #
 #######################################################################################################################
 #
@@ -45,7 +50,7 @@ class PocketTTSOnnxAdapter(TTSAdapter):
     """Adapter for PocketTTS ONNX (voice-cloning, streaming-capable)."""
 
     PROVIDER_KEY = "pocket_tts"
-    SUPPORTED_FORMATS: Set[AudioFormat] = {
+    SUPPORTED_FORMATS: set[AudioFormat] = {
         AudioFormat.MP3,
         AudioFormat.WAV,
         AudioFormat.OPUS,
@@ -58,7 +63,7 @@ class PocketTTSOnnxAdapter(TTSAdapter):
     MAX_TEXT_LENGTH = 5000
     VALID_PRECISIONS = {"int8", "fp32"}
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config)
         cfg = config or {}
         extras = cfg.get("extra_params", {}) or {}
@@ -387,7 +392,7 @@ class PocketTTSOnnxAdapter(TTSAdapter):
             details={"type": type(voice_reference).__name__},
         )
 
-    async def _prepare_voice_reference(self, voice_bytes: bytes, extras: Dict[str, Any]) -> bytes:
+    async def _prepare_voice_reference(self, voice_bytes: bytes, extras: dict[str, Any]) -> bytes:
         validate_ref = self._resolve_bool_setting(
             extras,
             ("validate_reference", "validate_voice_reference"),
@@ -446,7 +451,7 @@ class PocketTTSOnnxAdapter(TTSAdapter):
                 details={"error": str(exc)},
             ) from exc
 
-    def _resolve_max_frames(self, extras: Dict[str, Any]) -> int:
+    def _resolve_max_frames(self, extras: dict[str, Any]) -> int:
         max_frames = extras.get("max_frames")
         if max_frames is None:
             return self.max_frames
@@ -459,7 +464,7 @@ class PocketTTSOnnxAdapter(TTSAdapter):
         self,
         request: TTSRequest,
         voice_path: str,
-        extras: Dict[str, Any],
+        extras: dict[str, Any],
     ) -> AsyncGenerator[bytes, None]:
         writer = StreamingAudioWriter(
             format=request.format.value,
@@ -564,7 +569,7 @@ class PocketTTSOnnxAdapter(TTSAdapter):
 
     def _resolve_bool_setting(
         self,
-        extras: Dict[str, Any],
+        extras: dict[str, Any],
         extra_keys: tuple[str, ...],
         config_keys: tuple[str, ...],
         default: bool,

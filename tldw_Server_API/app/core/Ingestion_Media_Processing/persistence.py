@@ -1,47 +1,43 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
-
 import asyncio
 import functools
-import logging
+import hashlib
 import json
+import logging
 import os
 import sqlite3
-import hashlib
 from pathlib import Path as FilePath
+from typing import Any, Callable
 
-import aiofiles
-from fastapi import BackgroundTasks, HTTPException, Path, UploadFile, status
+from fastapi import BackgroundTasks, HTTPException, UploadFile, status
 from loguru import logger
 from starlette.responses import JSONResponse
 
+from tldw_Server_API.app.core.Claims_Extraction.claims_utils import (
+    extract_claims_if_requested,
+    persist_claims_if_applicable,
+)
+from tldw_Server_API.app.core.config import loaded_config_data, settings
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     ConflictError,
     DatabaseError,
     InputError,
     MediaDatabase,
 )
-from tldw_Server_API.app.core.Metrics import get_metrics_registry
-from tldw_Server_API.app.core.config import settings, loaded_config_data
-from tldw_Server_API.app.core.exceptions import DownloadError, NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     prepare_chunking_options_dict,
     prepare_common_options,
-)
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
-    DEFAULT_MEDIA_TYPE_CONFIG,
-)
-from tldw_Server_API.app.core.Claims_Extraction.claims_utils import (
-    extract_claims_if_requested,
-    persist_claims_if_applicable,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
     open_safe_local_path,
     open_safe_local_path_async,
     resolve_safe_local_path,
 )
-
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
+    DEFAULT_MEDIA_TYPE_CONFIG,
+)
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 try:  # Align HTTP 413 compatibility with legacy endpoint module
     HTTP_413_TOO_LARGE = status.HTTP_413_CONTENT_TOO_LARGE
@@ -49,7 +45,7 @@ except AttributeError:  # Starlette < 0.27
     HTTP_413_TOO_LARGE = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
 
 
-def _ensure_warnings_list(result: Dict[str, Any]) -> List[str]:
+def _ensure_warnings_list(result: dict[str, Any]) -> list[str]:
     warnings = result.get("warnings")
     if not isinstance(warnings, list):
         warnings = []
@@ -91,7 +87,7 @@ def _document_like_concurrency_limit(default: int = 10) -> int:
     return max(1, int(default))
 
 
-def _classify_upload_error(file_save_errors: List[Dict[str, Any]]) -> Optional[tuple[int, str]]:
+def _classify_upload_error(file_save_errors: list[dict[str, Any]]) -> tuple[int, str] | None:
     if not file_save_errors:
         return None
     priority = {HTTP_413_TOO_LARGE: 3, status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: 2, status.HTTP_400_BAD_REQUEST: 1}
@@ -118,7 +114,7 @@ def _compute_source_hash_safe(
     base_dir: FilePath,
     *,
     chunk_size: int = 1024 * 1024,
-) -> tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     """
     Compute a hash only for a validated local path within ``base_dir``.
 
@@ -172,7 +168,7 @@ def _media_has_source_hash_column(db: MediaDatabase) -> bool:
     return False
 
 
-def _allowed_url_extensions(media_type: str, form_data: Any) -> Optional[set[str]]:
+def _allowed_url_extensions(media_type: str, form_data: Any) -> set[str] | None:
     media_key = str(media_type).lower()
     if media_key == "json":
         return {".json"}
@@ -195,8 +191,8 @@ def _allowed_url_extensions(media_type: str, form_data: Any) -> Optional[set[str
 
 def validate_add_media_inputs(
     media_type: Any,
-    urls: Optional[List[str]],
-    files: Optional[List[UploadFile]],
+    urls: list[str] | None,
+    files: list[UploadFile] | None,
 ) -> None:
     """
     Validate basic inputs for the `/media/add` endpoint.
@@ -215,7 +211,7 @@ def validate_add_media_inputs(
         )
 
 
-def determine_add_media_final_status(results: List[Dict[str, Any]]) -> int:
+def determine_add_media_final_status(results: list[dict[str, Any]]) -> int:
     """
     Determine the overall HTTP status code for `/media/add` responses.
 
@@ -241,7 +237,7 @@ def determine_add_media_final_status(results: List[Dict[str, Any]]) -> int:
 async def add_media_orchestrate(
     background_tasks: BackgroundTasks,
     form_data: Any,
-    files: Optional[List[UploadFile]],
+    files: list[UploadFile] | None,
     db: MediaDatabase,
     current_user: Any,
     usage_log: Any,
@@ -271,12 +267,14 @@ async def add_media_orchestrate(
     _prepare_common_options = prepare_common_options
     _determine_final_status = determine_add_media_final_status
 
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (  # type: ignore  # noqa: E501
-        TempDirManager as CoreTempDirManager,
-        save_uploaded_files as core_save_uploaded_files,
-    )
     from tldw_Server_API.app.api.v1.API_Deps.validations_deps import (  # type: ignore  # noqa: E501
         file_validator_instance as core_file_validator_instance,
+    )
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (  # type: ignore  # noqa: E501
+        TempDirManager as CoreTempDirManager,
+    )
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
+        save_uploaded_files as core_save_uploaded_files,
     )
 
     if media_mod is not None:
@@ -356,11 +354,11 @@ async def add_media_orchestrate(
             "Manually set missing client_id on DB instance to: %s", db.client_id
         )
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     temp_dir_manager = TempDirManagerCls(  # type: ignore[call-arg]
         cleanup=not form_data.keep_original_file,
     )
-    temp_dir_path: Optional[FilePath] = None
+    temp_dir_path: FilePath | None = None
     loop = asyncio.get_running_loop()
 
     try:
@@ -583,7 +581,7 @@ async def add_media_orchestrate(
             _prepare_common_options(form_data, chunking_options_dict)
 
             # Map input sources back to original refs (URL or original filename)
-            source_to_ref_map: Dict[str, str] = {src: src for src in url_list}
+            source_to_ref_map: dict[str, str] = {src: src for src in url_list}
             source_to_ref_map.update(
                 {
                     str(path): pf["original_filename"]
@@ -652,7 +650,7 @@ async def add_media_orchestrate(
                 doc_like_concurrency = _document_like_concurrency_limit()
                 semaphore = asyncio.Semaphore(doc_like_concurrency)
 
-                async def _run_doc_item(source: str) -> Dict[str, Any]:
+                async def _run_doc_item(source: str) -> dict[str, Any]:
                     async with semaphore:
                         return await _process_doc_item_fn(  # type: ignore[misc]
                             item_input_ref=source_to_ref_map.get(source, source),
@@ -1017,7 +1015,7 @@ async def add_media_orchestrate(
 async def add_media_persist(
     background_tasks: BackgroundTasks,
     form_data: Any,
-    files: Optional[List[UploadFile]],
+    files: list[UploadFile] | None,
     db: MediaDatabase,
     current_user: Any,
     usage_log: Any,
@@ -1043,15 +1041,15 @@ async def add_media_persist(
 
 async def persist_primary_av_item(
     *,
-    process_result: Dict[str, Any],
+    process_result: dict[str, Any],
     form_data: Any,
     media_type: Any,
     original_input_ref: str,
-    chunk_options: Optional[Dict[str, Any]],
+    chunk_options: dict[str, Any] | None,
     db_path: str,
     client_id: str,
     loop: Any,
-    claims_context: Optional[Dict[str, Any]],
+    claims_context: dict[str, Any] | None,
 ) -> None:
     """
     Persist a single audio/video item processed by the /add orchestration.
@@ -1120,7 +1118,7 @@ async def persist_primary_av_item(
         logger.info("Attempting DB persistence for item: %s", process_result.get("input_ref"))
 
         # Build a safe metadata subset for persistence.
-        safe_meta: Dict[str, Any] = {}
+        safe_meta: dict[str, Any] = {}
         try:
             allowed_keys = {
                 "title",
@@ -1159,7 +1157,7 @@ async def persist_primary_av_item(
         except Exception:
             safe_meta = {}
 
-        safe_metadata_json: Optional[str] = None
+        safe_metadata_json: str | None = None
         try:
             if safe_meta:
                 from tldw_Server_API.app.core.Utils.metadata_utils import (  # type: ignore
@@ -1184,7 +1182,7 @@ async def persist_primary_av_item(
             source_hash_for_db = raw_source_hash_str if raw_source_hash_str else None
 
         # Build plaintext chunks for chunk-level FTS if chunking is requested.
-        chunks_for_sql: Optional[List[Dict[str, Any]]] = None
+        chunks_for_sql: list[dict[str, Any]] | None = None
         try:
             _opts = chunk_options or {}
             if _opts:
@@ -1203,7 +1201,7 @@ async def persist_primary_av_item(
                 for _it in _flat:
                     _md = _it.get("metadata") or {}
                     _ctype = _ck.normalize_chunk_type(_md.get("chunk_type") or _md.get("paragraph_kind")) or "text"
-                    _small: Dict[str, Any] = {}
+                    _small: dict[str, Any] = {}
                     if _md.get("ancestry_titles"):
                         _small["ancestry_titles"] = _md.get("ancestry_titles")
                     if _md.get("section_path"):
@@ -1272,7 +1270,7 @@ async def persist_primary_av_item(
         )
 
         def _db_worker() -> Any:
-            worker_db: Optional[MediaDatabase] = None
+            worker_db: MediaDatabase | None = None
             try:
                 worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
                 return worker_db.add_media_with_keywords(**db_add_kwargs)
@@ -1298,15 +1296,17 @@ async def persist_primary_av_item(
                 and transcription_model_used
                 and content_for_db
             ):
+                from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (  # type: ignore
+                    MediaDatabase as _MediaDBForStt,
+                )
+                from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+                    upsert_transcript,
+                )
                 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
                     to_normalized_stt_artifact,
                 )
                 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (  # type: ignore
                     get_stt_provider_registry,
-                )
-                from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (  # type: ignore
-                    MediaDatabase as _MediaDBForStt,
-                    upsert_transcript,
                 )
 
                 registry = get_stt_provider_registry()
@@ -1447,17 +1447,17 @@ async def persist_primary_av_item(
 
 async def process_batch_media(
     media_type: Any,
-    urls: List[str],
-    uploaded_file_paths: List[str],
-    source_to_ref_map: Dict[str, Any],
+    urls: list[str],
+    uploaded_file_paths: list[str],
+    source_to_ref_map: dict[str, Any],
     form_data: Any,
-    chunk_options: Optional[Dict[str, Any]],
+    chunk_options: dict[str, Any] | None,
     loop: asyncio.AbstractEventLoop,
     db_path: str,
     client_id: str,
     temp_dir: FilePath,
-    cancel_check: Optional[Callable[[], bool]] = None,
-) -> List[Dict[str, Any]]:
+    cancel_check: Callable[[], bool] | None = None,
+) -> list[dict[str, Any]]:
     """
     Core implementation of the audio/video batch processing helper used by `/media/add`.
 
@@ -1465,12 +1465,12 @@ async def process_batch_media(
     in the core ingestion module so it can be reused independently of the legacy
     endpoint file.
     """
-    combined_results: List[Dict[str, Any]] = []
+    combined_results: list[dict[str, Any]] = []
     all_processing_sources = urls + uploaded_file_paths
-    items_to_process: List[str] = []
-    source_hash_by_ref: Dict[str, List[str]] = {}
-    source_hash_by_source: Dict[str, str] = {}
-    source_hash_column_available: Optional[bool] = None
+    items_to_process: list[str] = []
+    source_hash_by_ref: dict[str, list[str]] = {}
+    source_hash_by_source: dict[str, str] = {}
+    source_hash_column_available: bool | None = None
 
     def _is_cancelled() -> bool:
         if cancel_check is None:
@@ -1499,10 +1499,10 @@ async def process_batch_media(
 
         identifier_for_check = input_ref
         should_process = True
-        existing_id: Optional[int] = None
+        existing_id: int | None = None
         reason = "Ready for processing."
-        pre_check_warning: Optional[str] = None
-        source_hash: Optional[str] = None
+        pre_check_warning: str | None = None
+        source_hash: str | None = None
         is_url = isinstance(source_path_or_url, str) and source_path_or_url.startswith(
             ("http://", "https://")
         )
@@ -1513,7 +1513,7 @@ async def process_batch_media(
                     evaluate_url_policy,
                 )
 
-                block_override: Optional[bool] = None
+                block_override: bool | None = None
                 if (
                     os.getenv("PYTEST_CURRENT_TEST")
                     or os.getenv("TESTING")
@@ -1802,7 +1802,7 @@ async def process_batch_media(
             )
         return combined_results
 
-    processing_output: Optional[Dict[str, Any]] = None
+    processing_output: dict[str, Any] | None = None
     try:
         if str(media_type) == "video":
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import (  # type: ignore  # noqa: E501
@@ -1871,7 +1871,9 @@ async def process_batch_media(
             processing_output = await loop.run_in_executor(None, target_func)
 
         elif str(media_type) == "audio":
-            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import process_audio_files  # type: ignore  # noqa: E501
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (
+                process_audio_files,  # type: ignore  # noqa: E501
+            )
 
             audio_args = {
                 "inputs": items_to_process,
@@ -1974,8 +1976,8 @@ async def process_batch_media(
         combined_results.extend(failed_items_results)
         return combined_results
 
-    final_batch_results: List[Dict[str, Any]] = []
-    processing_results_list: List[Dict[str, Any]] = []
+    final_batch_results: list[dict[str, Any]] = []
+    processing_results_list: list[dict[str, Any]] = []
 
     if processing_output and isinstance(processing_output.get("results"), list):
         processing_results_list = processing_output["results"]
@@ -1994,7 +1996,7 @@ async def process_batch_media(
         return combined_results
 
     for process_result in processing_results_list:
-        if not isinstance(process_result, Dict):
+        if not isinstance(process_result, dict):
             logging.error("Processor returned non-dict item: %s", process_result)
             malformed_result = {
                 "status": "Error",
@@ -2078,7 +2080,7 @@ async def process_batch_media(
             final_batch_results.append(process_result)
             continue
 
-        claims_context: Optional[Dict[str, Any]] = None
+        claims_context: dict[str, Any] | None = None
         if process_result.get("status") in ("Success", "Warning"):
             try:
                 claims_context = await extract_claims_if_requested(
@@ -2109,7 +2111,7 @@ async def process_batch_media(
 
     combined_results.extend(final_batch_results)
 
-    final_standardized_results: List[Dict[str, Any]] = []
+    final_standardized_results: list[dict[str, Any]] = []
     processed_keys: set[tuple[str, str]] = set()
 
     for res in combined_results:
@@ -2157,14 +2159,14 @@ async def process_document_like_item(
     media_type: Any,
     is_url: bool,
     form_data: Any,
-    chunk_options: Optional[Dict[str, Any]],
+    chunk_options: dict[str, Any] | None,
     temp_dir: FilePath,
     loop: asyncio.AbstractEventLoop,
     db_path: str,
     client_id: str,
-    user_id: Optional[int] = None,
-    cancel_check: Optional[Callable[[], bool]] = None,
-) -> Dict[str, Any]:
+    user_id: int | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
     """
     Core helper that handles download/prep, processing, and DB persistence for
     document-like items (PDF, generic documents/JSON, ebooks, and emails)
@@ -2183,7 +2185,7 @@ async def process_document_like_item(
     except Exception:  # pragma: no cover - ultra-minimal profiles
         _media_mod = None  # type: ignore[assignment]
 
-    final_result: Dict[str, Any] = {
+    final_result: dict[str, Any] = {
         "status": "Pending",
         "input_ref": item_input_ref,
         "processing_source": processing_source,
@@ -2201,12 +2203,12 @@ async def process_document_like_item(
         "db_message": None,
         "message": None,
     }
-    claims_context: Optional[Dict[str, Any]] = None
+    claims_context: dict[str, Any] | None = None
 
     # --- 2. Download/Prepare File ---
-    file_bytes: Optional[bytes] = None
-    processing_filepath: Optional[FilePath] = None
-    processing_filename: Optional[str] = None
+    file_bytes: bytes | None = None
+    processing_filepath: FilePath | None = None
+    processing_filename: str | None = None
 
     try:
         if is_url:
@@ -2403,11 +2405,11 @@ async def process_document_like_item(
         return final_result
 
     # --- 3. Select and Call Processing Function ---
-    process_result_dict: Optional[Dict[str, Any]] = None
+    process_result_dict: dict[str, Any] | None = None
 
     try:
-        processing_func: Optional[Callable[..., Any]] = None
-        common_args: Dict[str, Any] = {
+        processing_func: Callable[..., Any] | None = None
+        common_args: dict[str, Any] = {
             "title_override": getattr(form_data, "title", None),
             "author_override": getattr(form_data, "author", None),
             "keywords": getattr(form_data, "keywords", None),
@@ -2424,7 +2426,7 @@ async def process_document_like_item(
                 False,
             ),
         }
-        specific_args: Dict[str, Any] = {}
+        specific_args: dict[str, Any] = {}
         run_in_executor = True
 
         media_type_str = str(media_type)
@@ -2665,7 +2667,7 @@ async def process_document_like_item(
                 )
                 try:
                     archive_name = processing_filename or item_input_ref
-                    archive_keyword: Optional[str] = None
+                    archive_keyword: str | None = None
                     if archive_name:
                         lower_name = str(archive_name).lower()
                         if lower_name.endswith(".zip"):
@@ -2683,7 +2685,7 @@ async def process_document_like_item(
                                 f"email_pst:{FilePath(archive_name).stem}"
                             )
                     if archive_keyword:
-                        base_keywords: List[str] = []
+                        base_keywords: list[str] = []
                         try:
                             keywords_from_form = getattr(
                                 form_data,
@@ -2723,12 +2725,12 @@ async def process_document_like_item(
                     else "Success",
                 )
 
-            proc_warnings: Optional[Any] = None
+            proc_warnings: Any | None = None
             if isinstance(process_result_dict, dict):
                 proc_warnings = process_result_dict.get("warnings")
             elif isinstance(process_result_dict, list):
                 try:
-                    aggregated: List[str] = []
+                    aggregated: list[str] = []
                     for child in process_result_dict:
                         if isinstance(child, dict):
                             warnings_value = child.get("warnings")
@@ -2848,16 +2850,16 @@ async def process_document_like_item(
 
 async def persist_doc_item_and_children(
     *,
-    final_result: Dict[str, Any],
+    final_result: dict[str, Any],
     form_data: Any,
     media_type: str,
     item_input_ref: str,
-    processing_filename: Optional[str],
-    chunk_options: Optional[Dict[str, Any]],
+    processing_filename: str | None,
+    chunk_options: dict[str, Any] | None,
     db_path: str,
     client_id: str,
     loop: Any,
-    claims_context: Optional[Dict[str, Any]],
+    claims_context: dict[str, Any] | None,
 ) -> None:
     """
     Persist a single document/email item (and any children) produced by the /add
@@ -2881,7 +2883,7 @@ async def persist_doc_item_and_children(
             children = final_result.get("children")
             if isinstance(children, list):
                 for child in children:
-                    if isinstance(child, Dict):
+                    if isinstance(child, dict):
                         child_keywords = child.get("keywords") or []
                         for kw in child_keywords:
                             if isinstance(kw, str) and kw.strip():
@@ -2961,7 +2963,7 @@ async def persist_doc_item_and_children(
                 "Attempting DB persistence for item: %s using user DB",
                 item_input_ref,
             )
-            safe_meta: Dict[str, Any] = {}
+            safe_meta: dict[str, Any] = {}
             try:
                 allowed_keys = {
                     "title",
@@ -3005,7 +3007,7 @@ async def persist_doc_item_and_children(
             except Exception:
                 safe_meta = {}
 
-            safe_metadata_json: Optional[str] = None
+            safe_metadata_json: str | None = None
             try:
                 if safe_meta:
                     from tldw_Server_API.app.core.Utils.metadata_utils import (  # type: ignore
@@ -3031,7 +3033,7 @@ async def persist_doc_item_and_children(
             except Exception:
                 source_hash_for_db = None
 
-            chunks_for_sql: Optional[List[Dict[str, Any]]] = None
+            chunks_for_sql: list[dict[str, Any]] | None = None
             try:
                 opts = chunk_options or {}
                 if opts:
@@ -3052,7 +3054,7 @@ async def persist_doc_item_and_children(
                         chunk_type = chunker.normalize_chunk_type(
                             meta.get("chunk_type") or meta.get("paragraph_kind")
                         ) or "text"
-                        small_meta: Dict[str, Any] = {}
+                        small_meta: dict[str, Any] = {}
                         if meta.get("ancestry_titles"):
                             small_meta["ancestry_titles"] = meta.get("ancestry_titles")
                         if meta.get("section_path"):
@@ -3087,7 +3089,7 @@ async def persist_doc_item_and_children(
             )
 
             def _db_worker() -> Any:
-                worker_db: Optional[MediaDatabase] = None
+                worker_db: MediaDatabase | None = None
                 try:
                     worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
                     return worker_db.add_media_with_keywords(**db_add_kwargs)
@@ -3124,7 +3126,7 @@ async def persist_doc_item_and_children(
                         ):
                             final_result["child_db_results"] = None
                         else:
-                            child_db_results: List[Dict[str, Any]] = []
+                            child_db_results: list[dict[str, Any]] = []
                             for child in children:
                                 try:
                                     child_content = child.get("content")
@@ -3177,9 +3179,7 @@ async def persist_doc_item_and_children(
                                     except Exception:
                                         safe_child_meta_json = None
 
-                                    child_chunks_for_sql: Optional[
-                                        List[Dict[str, Any]]
-                                    ] = None
+                                    child_chunks_for_sql: list[dict[str, Any]] | None = None
                                     try:
                                         opts_child = chunk_options or {}
                                         if opts_child:
@@ -3205,7 +3205,7 @@ async def persist_doc_item_and_children(
                                                 chunk_type = chunker_child.normalize_chunk_type(
                                                     meta.get("chunk_type") or meta.get("paragraph_kind")
                                                 ) or "text"
-                                                small_meta: Dict[str, Any] = {}
+                                                small_meta: dict[str, Any] = {}
                                                 if meta.get("ancestry_titles"):
                                                     small_meta["ancestry_titles"] = meta.get(
                                                         "ancestry_titles"
@@ -3248,22 +3248,18 @@ async def persist_doc_item_and_children(
                                         child_url: str = child_url,
                                         child_title: str = child_title,
                                         child_content: str = child_content,
-                                        final_keywords: List[str] = final_keywords_list,
-                                        safe_child_meta_json_local: Optional[str] = safe_child_meta_json,
-                                        model_used_local: Optional[str] = model_used,
+                                        final_keywords: list[str] = final_keywords_list,
+                                        safe_child_meta_json_local: str | None = safe_child_meta_json,
+                                        model_used_local: str | None = model_used,
                                         child_author_local: str = child_author,
-                                        child_chunks_for_sql_local: Optional[
-                                            List[Dict[str, Any]]
-                                        ] = child_chunks_for_sql,
-                                        chunk_options_local: Optional[
-                                            Dict[str, Any]
-                                        ] = chunk_options,
+                                        child_chunks_for_sql_local: list[dict[str, Any]] | None = child_chunks_for_sql,
+                                        chunk_options_local: dict[str, Any] | None = chunk_options,
                                         form_data_local: Any = form_data,
                                         media_type_local: str = media_type,
                                         client_id_local: str = client_id,
                                         db_path_local: str = db_path,
                                     ) -> Any:
-                                        worker_db: Optional[MediaDatabase] = None
+                                        worker_db: MediaDatabase | None = None
                                         try:
                                             worker_db = MediaDatabase(
                                                 db_path=db_path_local,
@@ -3402,7 +3398,7 @@ async def persist_doc_item_and_children(
                                         value, (str, int, float, bool, list)
                                     )
                                 }
-                                safe_child_meta_json: Optional[str] = None
+                                safe_child_meta_json: str | None = None
                                 try:
                                     from tldw_Server_API.app.core.Utils.metadata_utils import (  # type: ignore
                                         normalize_safe_metadata,
@@ -3417,9 +3413,7 @@ async def persist_doc_item_and_children(
                                 except Exception:
                                     pass
 
-                                child_chunks_for_sql: Optional[
-                                    List[Dict[str, Any]]
-                                ] = None
+                                child_chunks_for_sql: list[dict[str, Any]] | None = None
                                 try:
                                     opts_child = chunk_options or {}
                                     if opts_child:
@@ -3444,7 +3438,7 @@ async def persist_doc_item_and_children(
                                             chunk_type = chunker_child.normalize_chunk_type(
                                                 meta.get("chunk_type") or meta.get("paragraph_kind")
                                             ) or "text"
-                                            small_meta: Dict[str, Any] = {}
+                                            small_meta: dict[str, Any] = {}
                                             if meta.get("ancestry_titles"):
                                                 small_meta["ancestry_titles"] = meta.get(
                                                     "ancestry_titles"
@@ -3485,22 +3479,18 @@ async def persist_doc_item_and_children(
                                     child_url_local: str = child_url,
                                     child_title_local: str = child_title,
                                     child_content_local: str = child_content,
-                                    final_keywords_local: List[str] = final_keywords_list,
-                                    safe_child_meta_json_local: Optional[str] = safe_child_meta_json,
-                                    model_used_local: Optional[str] = model_used,
+                                    final_keywords_local: list[str] = final_keywords_list,
+                                    safe_child_meta_json_local: str | None = safe_child_meta_json,
+                                    model_used_local: str | None = model_used,
                                     child_author_local: str = child_author,
-                                    child_chunks_for_sql_local: Optional[
-                                        List[Dict[str, Any]]
-                                    ] = child_chunks_for_sql,
+                                    child_chunks_for_sql_local: list[dict[str, Any]] | None = child_chunks_for_sql,
                                     media_type_local: str = media_type,
                                     form_data_local: Any = form_data,
-                                    chunk_options_local: Optional[
-                                        Dict[str, Any]
-                                    ] = chunk_options,
+                                    chunk_options_local: dict[str, Any] | None = chunk_options,
                                     db_path_local: str = db_path,
                                     client_id_local: str = client_id,
                                 ) -> Any:
-                                    worker_db: Optional[MediaDatabase] = None
+                                    worker_db: MediaDatabase | None = None
                                     try:
                                         worker_db = MediaDatabase(
                                             db_path=db_path_local,

@@ -6,11 +6,12 @@ FTS-only search backed by ChaChaNotes DB.
 """
 
 import asyncio
-from typing import Dict, Any, List, Optional
+from typing import Any
+
 from loguru import logger
 
-from ..base import BaseModule, ModuleConfig, create_tool_definition
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from ..base import BaseModule, create_tool_definition
 
 
 class ChatsModule(BaseModule):
@@ -20,7 +21,7 @@ class ChatsModule(BaseModule):
     async def on_shutdown(self) -> None:
         logger.info(f"Shutting down Chats module: {self.name}")
 
-    async def check_health(self) -> Dict[str, bool]:
+    async def check_health(self) -> dict[str, bool]:
         checks = {"initialized": True, "driver_available": False, "disk_space": False}
         try:
             _ = CharactersRAGDB  # noqa: F401
@@ -55,7 +56,7 @@ class ChatsModule(BaseModule):
 
         return checks
 
-    async def get_tools(self) -> List[Dict[str, Any]]:
+    async def get_tools(self) -> list[dict[str, Any]]:
         return [
             create_tool_definition(
                 name="chats.search",
@@ -97,7 +98,7 @@ class ChatsModule(BaseModule):
             ),
         ]
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any | None = None) -> Any:
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
@@ -117,7 +118,7 @@ class ChatsModule(BaseModule):
             raise ValueError("ChaChaNotes DB path not available in context")
         return CharactersRAGDB(db_path=chacha_path, client_id=f"mcp_chats_{self.config.name}")
 
-    async def _search(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _search(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         query: str = args.get("query")
         by: str = args.get("by", "both")
         limit: int = int(args.get("limit", 10))
@@ -138,7 +139,7 @@ class ChatsModule(BaseModule):
             sender,
         )
 
-    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+    def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):
         if tool_name == "chats.search":
             q = arguments.get("query")
             if not isinstance(q, str) or not (1 <= len(q) <= 1000):
@@ -187,7 +188,7 @@ class ChatsModule(BaseModule):
                 if loc.get("message_id") is not None and not isinstance(loc.get("message_id"), str):
                     raise ValueError("retrieval.loc.message_id must be a string if provided")
 
-    async def _get(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _get(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         conversation_id: str = args.get("conversation_id")
         retrieval = args.get("retrieval") or {}
         mode = retrieval.get("mode", "snippet")
@@ -223,11 +224,11 @@ class ChatsModule(BaseModule):
         snippet_len: int,
         character_id: Any,
         sender: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             max_fetch = limit + offset
-            combined: List[Dict[str, Any]] = []
+            combined: list[dict[str, Any]] = []
             convs_raw_len = 0
             msgs_raw_len = 0
 
@@ -261,7 +262,7 @@ class ChatsModule(BaseModule):
             if by in {"both", "message"}:
                 msgs = db.search_messages_by_content(query, conversation_id=None, limit=max_fetch)
                 msgs_raw_len = len(msgs)
-                msg_results: List[Dict[str, Any]] = []
+                msg_results: list[dict[str, Any]] = []
                 for r in msgs:
                     if sender and (str(r.get("sender") or "").lower() != str(sender).lower()):
                         continue
@@ -313,8 +314,8 @@ class ChatsModule(BaseModule):
         snippet_len: int,
         max_tokens: Any,
         cpt: int,
-        loc: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        loc: dict[str, Any],
+    ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             conv = db.get_conversation_by_id(conversation_id)

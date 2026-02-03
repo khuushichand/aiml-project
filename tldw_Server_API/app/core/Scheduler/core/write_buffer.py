@@ -5,13 +5,13 @@ Guarantees no data loss even under concurrent load.
 
 import asyncio
 import json
-from typing import List, Optional, Any
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from loguru import logger
 
-from ..base import Task, BufferError, BufferClosedError, BufferFlushError
+from ..base import BufferClosedError, BufferFlushError, Task
 from ..base.queue_backend import QueueBackend
 from ..config import SchedulerConfig
 
@@ -44,7 +44,7 @@ class SafeWriteBuffer:
         self.flush_size = config.write_buffer_size
         self.flush_interval = config.write_buffer_flush_interval
 
-        self.buffer: List[Task] = []
+        self.buffer: list[Task] = []
         self.lock = asyncio.Lock()
         self._flush_task: Optional[asyncio.Task] = None
         self._closing = False

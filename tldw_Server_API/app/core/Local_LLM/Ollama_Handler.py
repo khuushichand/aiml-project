@@ -2,15 +2,12 @@
 # Description: Handler for Ollama LLM backend.
 #
 # Imports
-import platform
-import subprocess
-import os
-import signal
-import shutil
-from typing import List, Optional, Dict, Any
 #
 # Third-party Imports
 import asyncio
+import os
+import shutil
+from typing import Any, Optional
 
 try:
     import psutil
@@ -19,15 +16,10 @@ except ImportError:
     psutil = None  # type: ignore
     PSUTIL_AVAILABLE = False
 
+from tldw_Server_API.app.core.Local_LLM import handler_utils, http_utils
 from tldw_Server_API.app.core.Local_LLM.LLM_Base_Handler import BaseLLMHandler
-from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import (
-    ServerError,
-    ModelDownloadError,
-    InferenceError
-)
+from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import InferenceError, ModelDownloadError, ServerError
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import OllamaConfig
-from tldw_Server_API.app.core.Local_LLM import http_utils
-from tldw_Server_API.app.core.Local_LLM import handler_utils
 
 
 def create_async_client(*args, **kwargs):
@@ -55,7 +47,7 @@ async def wait_for_http_ready(base_url: str, timeout_total: float = 30.0, interv
 # Functions:
 
 class OllamaHandler(BaseLLMHandler):
-    def __init__(self, config: OllamaConfig, global_app_config: Dict[str, Any]):
+    def __init__(self, config: OllamaConfig, global_app_config: dict[str, Any]):
         super().__init__(config, global_app_config)
         self.config: OllamaConfig  # For type hinting
         self._serve_process: Optional[asyncio.subprocess.Process] = None
@@ -94,7 +86,7 @@ class OllamaHandler(BaseLLMHandler):
         if self._serve_process and (pid is None or self._serve_process.pid == pid):
             self._stop_stream_drainers()
             self._serve_process = None
-    def __init__(self, config: OllamaConfig, global_app_config: Dict[str, Any]):
+    def __init__(self, config: OllamaConfig, global_app_config: dict[str, Any]):
         super().__init__(config, global_app_config)
         self.config: OllamaConfig  # For type hinting
 
@@ -102,7 +94,7 @@ class OllamaHandler(BaseLLMHandler):
         """Checks if the 'ollama' executable is available."""
         return await asyncio.to_thread(shutil.which, 'ollama') is not None
 
-    async def list_models(self) -> List[str]:
+    async def list_models(self) -> list[str]:
         """Retrieves available Ollama models."""
         if not await self.is_ollama_installed():
             self.logger.error("Ollama executable not found.")
@@ -168,7 +160,7 @@ class OllamaHandler(BaseLLMHandler):
             self.logger.error(f"Unexpected error in pull_ollama_model: {e}")
             raise ModelDownloadError(f"Failed to pull model '{model_name}': {e}")
 
-    async def serve_model(self, model_name: str, port: Optional[int] = None, host: str = "127.0.0.1") -> Dict[str, Any]:
+    async def serve_model(self, model_name: str, port: Optional[int] = None, host: str = "127.0.0.1") -> dict[str, Any]:
         """
         Serves the specified Ollama model.
         Ollama's `ollama serve` command starts a general server, not specific to one model.
@@ -366,7 +358,7 @@ class OllamaHandler(BaseLLMHandler):
 
     async def inference(self, model_name: str, prompt: str, system_message: Optional[str] = None,
                         port: Optional[int] = None, host: str = "127.0.0.1",
-                        options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                        options: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         """
         Performs inference using a model served by Ollama.
         Assumes `ollama serve` is running or starts it.

@@ -7,10 +7,11 @@ Provides fault tolerance and prevents cascading failures when external services
 
 import asyncio
 import time
-from typing import Optional, Callable, Any, Dict
+from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from typing import Any, Callable, Optional
+
 from loguru import logger
 
 
@@ -216,7 +217,7 @@ class CircuitBreaker:
         self.stats.consecutive_successes = 0
         self.stats.consecutive_failures = 0
 
-    def get_state(self) -> Dict[str, Any]:
+    def get_state(self) -> dict[str, Any]:
         """Get current state and statistics."""
         return {
             "name": self.name,
@@ -329,7 +330,7 @@ class LLMCircuitBreaker:
         breaker = self.get_breaker(provider)
         return await breaker.call(func, *args, **kwargs)
 
-    def get_all_states(self) -> Dict[str, Dict[str, Any]]:
+    def get_all_states(self) -> dict[str, dict[str, Any]]:
         """Get states of all circuit breakers."""
         return {
             provider: breaker.get_state()

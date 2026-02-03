@@ -16,16 +16,15 @@ Security:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, Optional, Any, List, Tuple
-from urllib.parse import urlparse
-import re
 import os
+import re
+from dataclasses import dataclass, field
+from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
 from .ua_profiles import pick_ua_profile, profile_to_impersonate
-
 
 DEFAULT_HANDLER = (
     "tldw_Server_API.app.core.Web_Scraping.handlers:handle_generic_html"
@@ -43,19 +42,19 @@ class ScrapePlan:
     backend: str = "auto"  # auto|curl|httpx|playwright
     handler: str = DEFAULT_HANDLER
     ua_profile: str = "chrome_120_win"
-    impersonate: Optional[str] = None
-    extra_headers: Dict[str, str] = field(default_factory=dict)
-    cookies: Dict[str, str] = field(default_factory=dict)
+    impersonate: str | None = None
+    extra_headers: dict[str, str] = field(default_factory=dict)
+    cookies: dict[str, str] = field(default_factory=dict)
     respect_robots: bool = True
-    proxies: Dict[str, str] = field(default_factory=dict)  # e.g., {"http": "http://host:port", "https": "http://host:port"}
-    strategy_order: Optional[List[str]] = None
-    schema_rules: Optional[Dict[str, Any]] = None
-    llm_settings: Optional[Dict[str, Any]] = None
-    regex_settings: Optional[Dict[str, Any]] = None
-    cluster_settings: Optional[Dict[str, Any]] = None
+    proxies: dict[str, str] = field(default_factory=dict)  # e.g., {"http": "http://host:port", "https": "http://host:port"}
+    strategy_order: list[str] | None = None
+    schema_rules: dict[str, Any] | None = None
+    llm_settings: dict[str, Any] | None = None
+    regex_settings: dict[str, Any] | None = None
+    cluster_settings: dict[str, Any] | None = None
 
 
-def _validate_handler(handler: str, allowlist: List[str]) -> str:
+def _validate_handler(handler: str, allowlist: list[str]) -> str:
     if any(handler.startswith(prefix) for prefix in allowlist):
         return handler
     # Fallback to safe default
@@ -66,14 +65,14 @@ def _parse_domain(url: str) -> str:
     return urlparse(url).netloc.lower()
 
 
-def _match_domain_rule(domain: str, rules: Dict[str, Any]) -> Optional[Tuple[str, Dict[str, Any]]]:
+def _match_domain_rule(domain: str, rules: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     # 1) Exact
     dom_rules = rules.get("domains", {})
     if domain in dom_rules:
         return domain, dom_rules[domain]
 
     # 2) Wildcard (*.example.com)
-    best_match: Optional[Tuple[str, Dict[str, Any]]] = None
+    best_match: tuple[str, dict[str, Any]] | None = None
     best_suffix_len = -1
     for key, rule in dom_rules.items():
         if key.startswith("*."):
@@ -94,9 +93,9 @@ def _match_domain_rule(domain: str, rules: Dict[str, Any]) -> Optional[Tuple[str
 class ScraperRouter:
     def __init__(
         self,
-        rules: Optional[Dict[str, Any]] = None,
+        rules: dict[str, Any] | None = None,
         *,
-        handler_allowlist: Optional[List[str]] = None,
+        handler_allowlist: list[str] | None = None,
         ua_mode: str = "fixed",
         default_respect_robots: bool = True,
     ) -> None:
@@ -106,7 +105,7 @@ class ScraperRouter:
         self.default_respect_robots = bool(default_respect_robots)
 
     @staticmethod
-    def load_rules_from_yaml(path: str) -> Dict[str, Any]:
+    def load_rules_from_yaml(path: str) -> dict[str, Any]:
         if not os.path.exists(path):
             return {}
         with open(path, "r", encoding="utf-8") as f:
@@ -118,7 +117,7 @@ class ScraperRouter:
         return ScraperRouter.validate_rules(data)
 
     @staticmethod
-    def validate_rules(data: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_rules(data: dict[str, Any]) -> dict[str, Any]:
         """Validate and normalize rules loaded from YAML.
 
         - Ensure top-level 'domains' mapping
@@ -126,7 +125,7 @@ class ScraperRouter:
         - Validate backend and url_patterns
         - Normalize headers/cookies to string maps
         """
-        out: Dict[str, Any] = {"domains": {}}
+        out: dict[str, Any] = {"domains": {}}
         if not isinstance(data, dict):
             return out
         domains = data.get("domains", {}) or {}
@@ -162,7 +161,7 @@ class ScraperRouter:
             if not (dom.startswith("*.") or "." in dom):
                 continue
 
-            cleaned: Dict[str, Any] = {}
+            cleaned: dict[str, Any] = {}
             for k, v in rule.items():
                 if k not in allowed_keys:
                     continue
@@ -170,7 +169,7 @@ class ScraperRouter:
                     val = str(v).lower().strip()
                     cleaned[k] = val if val in allowed_backends else "auto"
                 elif k == "url_patterns":
-                    pats: List[str] = []
+                    pats: list[str] = []
                     if isinstance(v, list):
                         for p in v:
                             try:
@@ -189,7 +188,7 @@ class ScraperRouter:
                 elif k == "respect_robots":
                     cleaned[k] = bool(v)
                 elif k == "strategy_order":
-                    order: List[str] = []
+                    order: list[str] = []
                     if isinstance(v, list):
                         for item in v:
                             if isinstance(item, str):
@@ -235,7 +234,7 @@ class ScraperRouter:
         handler = _validate_handler(handler_raw, self.allowlist)
 
         # If url_patterns present, apply only if any matches
-        patterns: List[str] = list(rule.get("url_patterns", []) or [])
+        patterns: list[str] = list(rule.get("url_patterns", []) or [])
         if patterns:
             compiled = [re.compile(p) for p in patterns]
             if not any(r.search(url) for r in compiled):

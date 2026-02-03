@@ -11,18 +11,18 @@ Notes:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import List, Tuple, Optional
 from bisect import bisect_right
+from dataclasses import dataclass
+
 from loguru import logger
 
-from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
+from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
 
 
 @dataclass
 class _Header:
     kind: str
-    name: Optional[str]
+    name: str | None
     line_index: int
 
 
@@ -61,8 +61,8 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
             'c', 'cpp', 'csharp', 'java', 'go', 'rust', 'swift', 'kotlin', 'javascript', 'typescript', 'tsx', 'jsx',
         }
 
-    def _find_headers(self, lines: List[str], language: str) -> List[_Header]:
-        headers: List[_Header] = []
+    def _find_headers(self, lines: list[str], language: str) -> list[_Header]:
+        headers: list[_Header] = []
         lang = language.lower()
         for idx, line in enumerate(lines):
             m = None
@@ -135,10 +135,10 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
     def _indent(self, s: str) -> int:
         return len(s) - len(s.lstrip(' '))
 
-    def _block_end_indent(self, lines: List[str], start_idx: int) -> int:
+    def _block_end_indent(self, lines: list[str], start_idx: int) -> int:
         return self._indent(lines[start_idx])
 
-    def _find_block_for_header_indent(self, lines: List[str], header_idx: int) -> int:
+    def _find_block_for_header_indent(self, lines: list[str], header_idx: int) -> int:
         # For indentation-based (Python/Ruby). End before next header at same or shallower indent
         base_indent = self._indent(lines[header_idx])
         i = header_idx + 1
@@ -151,7 +151,7 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
             i += 1
         return len(lines)
 
-    def _find_block_for_header_braces(self, lines: List[str], header_idx: int) -> int:
+    def _find_block_for_header_braces(self, lines: list[str], header_idx: int) -> int:
         # For brace languages: find first '{' after header, then match braces
         i = header_idx
         # find start brace
@@ -182,7 +182,7 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
             i += 1
         return len(lines)
 
-    def _extract_import_block(self, lines: List[str]) -> Tuple[int, int]:
+    def _extract_import_block(self, lines: list[str]) -> tuple[int, int]:
         # From start of file to last consecutive import-like line (skipping comments and blanks)
         start = 0
         end = 0
@@ -205,9 +205,9 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
             break
         return (start, end)
 
-    def _pack_blocks(self, blocks: List[Tuple[int, int]], lines: List[str], max_chars: int, overlap_chars: int) -> List[str]:
+    def _pack_blocks(self, blocks: list[tuple[int, int]], lines: list[str], max_chars: int, overlap_chars: int) -> list[str]:
         # Greedy pack blocks into chunks respecting max_chars; use simple character overlap
-        chunks: List[str] = []
+        chunks: list[str] = []
         buf = ''
         for (s, e) in blocks:
             text = '\n'.join(lines[s:e]).rstrip()
@@ -238,7 +238,7 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
             chunks.append(buf)
         # Add overlap between consecutive chunks if requested
         if overlap_chars > 0 and len(chunks) > 1:
-            overlapped: List[str] = []
+            overlapped: list[str] = []
             prev = ''
             for i, ch in enumerate(chunks):
                 if i == 0:
@@ -254,7 +254,7 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
             return overlapped
         return chunks
 
-    def chunk(self, text: str, max_size: int, overlap: int = 0, **options) -> List[str]:
+    def chunk(self, text: str, max_size: int, overlap: int = 0, **options) -> list[str]:
         if not self.validate_parameters(text, max_size, overlap):
             return []
         language = str(options.get('language') or self.language or 'text')
@@ -265,7 +265,7 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
         try:
             # Identify headers per language
             headers = self._find_headers(lines, language)
-            blocks: List[Tuple[int, int]] = []
+            blocks: list[tuple[int, int]] = []
             # Add import/header block first if present
             imp_s, imp_e = self._extract_import_block(lines)
             if imp_e > imp_s:
@@ -294,7 +294,7 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
             logger.warning(f"Code chunking failed, falling back to whole text: {e}")
             return [text]
 
-    def chunk_with_metadata(self, text: str, max_size: int, overlap: int = 0, **options) -> List[ChunkResult]:
+    def chunk_with_metadata(self, text: str, max_size: int, overlap: int = 0, **options) -> list[ChunkResult]:
         if not self.validate_parameters(text, max_size, overlap):
             return []
         language = str(options.get('language') or self.language or 'text')
@@ -328,7 +328,7 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
         # Derive structured blocks (imports and headers)
         # Use non-keepends lines for regex detection
         lines = [ln.rstrip('\n').rstrip('\r') for ln in lines_ke]
-        blocks: List[Tuple[int, int, str, Optional[str]]] = []  # (s_line, e_line_excl, block_type, name)
+        blocks: list[tuple[int, int, str, str | None]] = []  # (s_line, e_line_excl, block_type, name)
         imp_s, imp_e = self._extract_import_block(lines)
         if imp_e > imp_s:
             blocks.append((imp_s, imp_e, 'imports', None))
@@ -355,10 +355,10 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
             blocks.append((0, len(lines), 'module', None))
 
         # Greedy pack blocks into chunks
-        results: List[ChunkResult] = []
+        results: list[ChunkResult] = []
         buf_start_char = None
         buf_end_char = None
-        buf_blocks: List[Tuple[int, int, str, Optional[str]]] = []
+        buf_blocks: list[tuple[int, int, str, str | None]] = []
 
         def flush_chunk():
             nonlocal buf_start_char, buf_end_char, buf_blocks

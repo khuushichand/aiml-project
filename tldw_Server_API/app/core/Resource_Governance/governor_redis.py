@@ -6,25 +6,23 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, Callable
+from typing import Any, Callable
 
 from loguru import logger
 
-from .governor import ResourceGovernor, RGRequest, RGDecision, MemoryResourceGovernor
-from .metrics_rg import ensure_rg_metrics_registered, _labels, rg_metrics_entity_label_enabled
-from .tenant import hash_entity
 from .daily_caps import check_daily_cap
+from .governor import MemoryResourceGovernor, ResourceGovernor, RGDecision, RGRequest
+from .metrics_rg import _labels, ensure_rg_metrics_registered, rg_metrics_entity_label_enabled
+from .tenant import hash_entity
+
 try:
     # Metrics are optional during early startup
     from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 except Exception:  # pragma: no cover - metrics optional
     get_metrics_registry = None  # type: ignore
-from .governor import _ReservationHandle  # reuse structure for handle hashing
-from .governor import _Lease  # type: ignore  # not directly used, kept for type parity
 
-from tldw_Server_API.app.core.Infrastructure.redis_factory import create_async_redis_client
 from tldw_Server_API.app.core.config import rg_redis_fail_mode
-
+from tldw_Server_API.app.core.Infrastructure.redis_factory import create_async_redis_client
 
 TimeSource = Callable[[], float]
 
@@ -85,19 +83,19 @@ class RedisResourceGovernor(ResourceGovernor):
         self._client = None
         self._client_lock = asyncio.Lock()
         self._fail_mode = rg_redis_fail_mode()
-        self._local_handles: Dict[str, Dict[str, Any]] = {}
-        self._tokens_lua_sha: Optional[str] = None
-        self._multi_lua_sha: Optional[str] = None
-        self._last_used_tokens_lua: Optional[bool] = None
-        self._last_used_multi_lua: Optional[bool] = None
+        self._local_handles: dict[str, dict[str, Any]] = {}
+        self._tokens_lua_sha: str | None = None
+        self._multi_lua_sha: str | None = None
+        self._last_used_tokens_lua: bool | None = None
+        self._last_used_multi_lua: bool | None = None
         # In-memory sliding-window store for stub client
-        self._stub_windows: Dict[str, list[float]] = {}
+        self._stub_windows: dict[str, list[float]] = {}
         # In-memory leases for concurrency in test/stub mode
         # key → {member_id: expires_at_epoch}
-        self._stub_leases: Dict[str, Dict[str, float]] = {}
+        self._stub_leases: dict[str, dict[str, float]] = {}
         # Backoff map for coarse Retry-After enforcement in stub mode
         # Keyed by (ns, policy_id, entity, category) to avoid cross-instance leakage
-        self._stub_backoff_until: Dict[Tuple[str, str, str, str], float] = {}
+        self._stub_backoff_until: dict[tuple[str, str, str, str], float] = {}
         # Test hardening: track keys we have cleared once when FakeTime is near 0
         # to avoid clearing freshly added entries repeatedly within a test case.
         self._test_cleared_keys: set[str] = set()
@@ -107,9 +105,9 @@ class RedisResourceGovernor(ResourceGovernor):
         self._test_leases_policy_cleared: set[str] = set()
         # Requests-specific deny-until floor to stabilize burst behavior
         # Keyed by (ns, policy_id, entity)
-        self._requests_deny_until: Dict[Tuple[str, str, str], float] = {}
+        self._requests_deny_until: dict[tuple[str, str, str], float] = {}
         # Requests acceptance tracker per (ns, policy, entity) to harden burst behavior
-        self._requests_accept_window: Dict[Tuple[str, str, str], Tuple[float, int, int]] = {}
+        self._requests_accept_window: dict[tuple[str, str, str], tuple[float, int, int]] = {}
         # Handles issued by fallback-to-memory reserve paths
         self._fallback_handles: set[str] = set()
         ensure_rg_metrics_registered()
@@ -333,14 +331,14 @@ class RedisResourceGovernor(ResourceGovernor):
                 self._client = await create_async_redis_client(context="resource_governor", fallback_to_fake=True)
         return self._client
 
-    def _get_policy(self, policy_id: str) -> Dict[str, Any]:
+    def _get_policy(self, policy_id: str) -> dict[str, Any]:
         try:
             pol = self._policy_loader.get_policy(policy_id)
             return pol or {}
         except Exception:
             return {}
 
-    def _effective_fail_mode(self, policy: Dict[str, Any], category: Optional[str] = None) -> str:
+    def _effective_fail_mode(self, policy: dict[str, Any], category: str | None = None) -> str:
         """Resolve fail_mode with per-category override, then policy, then global default."""
         try:
             if category:
@@ -355,7 +353,7 @@ class RedisResourceGovernor(ResourceGovernor):
             pass
         return self._fail_mode
 
-    def _fallback_allowed(self, policy: Dict[str, Any], categories: Dict[str, Any]) -> bool:
+    def _fallback_allowed(self, policy: dict[str, Any], categories: dict[str, Any]) -> bool:
         try:
             for category in categories.keys():
                 if self._effective_fail_mode(policy, category) == "fallback_memory":
@@ -365,13 +363,13 @@ class RedisResourceGovernor(ResourceGovernor):
         return False
 
     @staticmethod
-    def _parse_entity(entity: str) -> Tuple[str, str]:
+    def _parse_entity(entity: str) -> tuple[str, str]:
         if ":" in entity:
             s, v = entity.split(":", 1)
             return s.strip() or "entity", v.strip()
         return "entity", entity
 
-    def _scopes(self, policy: Dict[str, Any]) -> list[str]:
+    def _scopes(self, policy: dict[str, Any]) -> list[str]:
         s = policy.get("scopes")
         if isinstance(s, list) and s:
             return [str(x) for x in s]
@@ -417,7 +415,7 @@ class RedisResourceGovernor(ResourceGovernor):
             except Exception:
                 pass
 
-    async def _allow_requests_sliding_check_only(self, *, key: str, limit: int, window: int, units: int, now: float, fail_mode: str) -> Tuple[bool, int, int]:
+    async def _allow_requests_sliding_check_only(self, *, key: str, limit: int, window: int, units: int, now: float, fail_mode: str) -> tuple[bool, int, int]:
         """Non-mutating check: returns (allowed, retry_after, current_count)."""
         try:
             count = await self._purge_and_count(key=key, now=now, window=window)
@@ -478,7 +476,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 return True, 0, 0
             return False, window, 0
 
-    async def _ensure_tokens_lua(self) -> Optional[str]:
+    async def _ensure_tokens_lua(self) -> str | None:
         """Load a Lua sliding-window limiter script for tokens and cache SHA."""
         if self._tokens_lua_sha:
             return self._tokens_lua_sha
@@ -517,7 +515,7 @@ class RedisResourceGovernor(ResourceGovernor):
         except Exception:
             return None
 
-    async def _ensure_multi_reserve_lua(self) -> Optional[str]:
+    async def _ensure_multi_reserve_lua(self) -> str | None:
         """
         Load a Lua script that atomically checks and inserts members across multiple keys.
 
@@ -652,7 +650,7 @@ class RedisResourceGovernor(ResourceGovernor):
             self._stub_windows.pop(key, None)
         return removed
 
-    async def _allow_tokens_lua(self, *, key: str, limit: int, window: int, units: int, now: float, fail_mode: str) -> Tuple[bool, int]:
+    async def _allow_tokens_lua(self, *, key: str, limit: int, window: int, units: int, now: float, fail_mode: str) -> tuple[bool, int]:
         client = await self._client_get()
         sha = await self._ensure_tokens_lua()
         allow_all = True
@@ -721,7 +719,7 @@ class RedisResourceGovernor(ResourceGovernor):
             # Atomic multi-key reservations are only attempted on real Redis in reserve().
             overall_allowed = True
             retry_after_overall = 0
-            per_category: Dict[str, Any] = {}
+            per_category: dict[str, Any] = {}
 
             smoothing_any = False
             for category, cfg in req.categories.items():
@@ -852,7 +850,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         daily_cap = int((pol.get(category) or {}).get("daily_cap") or 0)
                     except Exception:
                         daily_cap = 0
-                    daily_details: Dict[str, Any] = {}
+                    daily_details: dict[str, Any] = {}
                     if daily_cap > 0:
                         daily_allowed, daily_ra, daily_details = await check_daily_cap(
                             entity_scope=entity_scope,
@@ -960,7 +958,7 @@ class RedisResourceGovernor(ResourceGovernor):
                             # Non-fatal: keep original decision
                             pass
                     # Optional durable daily caps (v1.1) for tokens via ResourceDailyLedger.
-                    daily_details: Dict[str, Any] = {}
+                    daily_details: dict[str, Any] = {}
                     try:
                         daily_cap = int((pol.get("tokens") or {}).get("daily_cap") or 0)
                     except Exception:
@@ -1038,7 +1036,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 else:
                     allowed = True
                     retry_after = 0
-                    details_other: Dict[str, Any] = {"allowed": True, "retry_after": 0}
+                    details_other: dict[str, Any] = {"allowed": True, "retry_after": 0}
                     try:
                         daily_cap = int((pol.get(category) or {}).get("daily_cap") or 0)
                     except Exception:
@@ -1108,7 +1106,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         pass
 
             # Record decision metric (summary per-category already emitted via caller ideally)
-            details: Dict[str, Any] = {"policy_id": policy_id, "categories": per_category}
+            details: dict[str, Any] = {"policy_id": policy_id, "categories": per_category}
             if smoothing_any:
                 details["smoothing_stub"] = True
             return RGDecision(allowed=overall_allowed, retry_after=(retry_after_overall or None), details=details)
@@ -1124,7 +1122,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 return dec
             return RGDecision(allowed=True, retry_after=None, details={"policy_id": policy_id, "categories": {}})
 
-    async def reserve(self, req: RGRequest, op_id: Optional[str] = None) -> Tuple[RGDecision, Optional[str]]:
+    async def reserve(self, req: RGRequest, op_id: str | None = None) -> tuple[RGDecision, str | None]:
         # Use native logic for both real Redis and in-memory stub.
         client = await self._client_get()
         policy_id = req.tags.get("policy_id") or "default"
@@ -1181,7 +1179,7 @@ class RedisResourceGovernor(ResourceGovernor):
                             # Set deny floor/backoff for stability
                             self._requests_deny_until[(self._keys.ns, policy_id_early, req.entity)] = floor_until
                             self._stub_backoff_until[(self._keys.ns, policy_id_early, req.entity, "requests")] = now_early + float(ra_e)
-                            per_category_e: Dict[str, Any] = {}
+                            per_category_e: dict[str, Any] = {}
                             per_category_e["requests"] = {"allowed": False, "limit": limit_e, "retry_after": ra_e}
                             decision_e = RGDecision(allowed=False, retry_after=ra_e, details={"policy_id": policy_id_early, "categories": per_category_e})
                             # Emit metrics for this early denial path to maintain consistency
@@ -1260,7 +1258,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 # Build a denial decision reflecting remaining backoff
                 pol_e = self._get_policy(policy_id_early)
                 ra_e = max(0, int(floor_until - now_early)) or 1
-                per_category_e: Dict[str, Any] = {}
+                per_category_e: dict[str, Any] = {}
                 for category, cfg in req.categories.items():
                     if category == "requests":
                         lim = int((pol_e.get("requests") or {}).get("rpm") or 0)
@@ -1473,7 +1471,7 @@ class RedisResourceGovernor(ResourceGovernor):
         handle_id = str(uuid.uuid4())
 
         # First, try to atomically add request/token units across scopes; track members for rollback/refund
-        added_members: Dict[str, Dict[Tuple[str, str], list[str]]] = {}
+        added_members: dict[str, dict[tuple[str, str], list[str]]] = {}
         add_failed = False
         denial_retry_after = 0
         used_lua = False
@@ -1487,7 +1485,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 # ARGV[1]=now, ARGV[2]=kcount; rest per-key quads
                 now_f = float(now)
                 # We'll build a temporary structure to also populate added_members on success
-                tmp_members: list[Tuple[str, str, str, str, list[str]]] = []  # (category, sc, ev, key, members)
+                tmp_members: list[tuple[str, str, str, str, list[str]]] = []  # (category, sc, ev, key, members)
                 for category, cfg in req.categories.items():
                     units = int(cfg.get("units") or 0)
                     if units <= 0:
@@ -1567,7 +1565,7 @@ class RedisResourceGovernor(ResourceGovernor):
                             break
                 if add_failed:
                     # Deny with rollback (nothing added yet)
-                    per_category: Dict[str, Any] = {}
+                    per_category: dict[str, Any] = {}
                     for category, cfg in req.categories.items():
                         if category in ("requests", "tokens"):
                             lim = int((pol.get(category) or {}).get("rpm") or 0) if category == "requests" else int((pol.get(category) or {}).get("per_min") or 0)
@@ -1681,7 +1679,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 base_cats = dict((dec.details or {}).get("categories") or {})
             except Exception:
                 base_cats = {}
-            per_category: Dict[str, Any] = {}
+            per_category: dict[str, Any] = {}
             # Populate categories from request, overriding requests/tokens to denied
             for category, cfg in req.categories.items():
                 if category in ("requests", "tokens"):
@@ -1731,7 +1729,7 @@ class RedisResourceGovernor(ResourceGovernor):
             return denial_decision, None
 
         # Concurrency: acquire leases (global and entity) after rate counters
-        concurrency_members: Dict[str, Dict[Tuple[str, str], list[str]]] = {}
+        concurrency_members: dict[str, dict[tuple[str, str], list[str]]] = {}
         for category, cfg in req.categories.items():
             if category in ("streams", "jobs"):
                 units = int((cfg or {}).get("units") or 0)
@@ -1775,7 +1773,7 @@ class RedisResourceGovernor(ResourceGovernor):
         # Persist handle
         try:
             # Persist actual reserved counts per category based on members added
-            reserved_by_cat: Dict[str, int] = {}
+            reserved_by_cat: dict[str, int] = {}
             for cat, scopes in added_members.items():
                 counts = [len(mems) for mems in scopes.values()]
                 reserved_by_cat[cat] = min(counts) if counts else int((req.categories.get(cat) or {}).get("units") or 0)
@@ -1867,7 +1865,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 pass
         return dec, handle_id
 
-    async def commit(self, handle_id: str, actuals: Optional[Dict[str, int]] = None, op_id: Optional[str] = None) -> None:
+    async def commit(self, handle_id: str, actuals: dict[str, int] | None = None, op_id: str | None = None) -> None:
         if handle_id in self._fallback_handles and self._stub_delegate is not None:
             await self._stub_delegate.commit(handle_id, actuals, op_id)
             self._fallback_handles.discard(handle_id)
@@ -2036,7 +2034,7 @@ class RedisResourceGovernor(ResourceGovernor):
             except Exception:
                 pass
 
-    async def refund(self, handle_id: str, deltas: Optional[Dict[str, int]] = None, op_id: Optional[str] = None) -> None:
+    async def refund(self, handle_id: str, deltas: dict[str, int] | None = None, op_id: str | None = None) -> None:
         if handle_id in self._fallback_handles and self._stub_delegate is not None:
             await self._stub_delegate.refund(handle_id, deltas, op_id)
             return
@@ -2203,7 +2201,7 @@ class RedisResourceGovernor(ResourceGovernor):
         # Use native logic for both real Redis and in-memory stub.
         await self.commit(handle_id, actuals=None)
 
-    async def peek(self, entity: str, categories: list[str]) -> Dict[str, Any]:
+    async def peek(self, entity: str, categories: list[str]) -> dict[str, Any]:
         # Without policy context, we cannot compute limits; return None placeholders
         # (Tests do not rely on this path.)
         if await self._is_stub_client():
@@ -2211,11 +2209,11 @@ class RedisResourceGovernor(ResourceGovernor):
             return {c: {"remaining": None, "reset": None} for c in categories}
         return {c: {"remaining": None, "reset": None} for c in categories}
 
-    async def peek_with_policy(self, entity: str, categories: list[str], policy_id: str) -> Dict[str, Any]:
+    async def peek_with_policy(self, entity: str, categories: list[str], policy_id: str) -> dict[str, Any]:
         pol = self._get_policy(policy_id)
         entity_scope, entity_value = self._parse_entity(entity)
         now = self._time()
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         is_stub = await self._is_stub_client()
         for category in categories:
             if category not in ("requests", "tokens"):
@@ -2252,14 +2250,14 @@ class RedisResourceGovernor(ResourceGovernor):
             out[category] = {"remaining": remaining, "reset": reset}
         return out
 
-    async def query(self, entity: str, category: str) -> Dict[str, Any]:
+    async def query(self, entity: str, category: str) -> dict[str, Any]:
         return {"detail": None}
 
-    async def reset(self, entity: str, category: Optional[str] = None) -> None:
+    async def reset(self, entity: str, category: str | None = None) -> None:
         # Not implemented in Redis backend for now
         return None
 
-    async def capabilities(self) -> Dict[str, Any]:
+    async def capabilities(self) -> dict[str, Any]:
         try:
             real = await self._is_real_redis()
         except Exception:
@@ -2273,7 +2271,7 @@ class RedisResourceGovernor(ResourceGovernor):
             "last_used_multi_lua": bool(self._last_used_multi_lua) if self._last_used_multi_lua is not None else None,
         }
 
-    async def test_force_clear_windows(self, policy_id: str, categories: Optional[list[str]] = None) -> None:
+    async def test_force_clear_windows(self, policy_id: str, categories: list[str] | None = None) -> None:
         """Test-only helper to force-clear window ZSETs for a policy.
 
         Intended to be called in property tests when using FakeTime≈0.0 to
@@ -2322,7 +2320,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 self._stub_windows.pop(k, None)
         except Exception:
             pass
-    async def _maybe_test_purge_windows_once(self, *, policy_id: str, categories: Dict[str, Any], now: float) -> None:
+    async def _maybe_test_purge_windows_once(self, *, policy_id: str, categories: dict[str, Any], now: float) -> None:
         """When FakeTime is near zero, clear any prior window keys for this policy
         exactly once to avoid cross-run contamination. Does nothing after the
         first call for the same policy_id.

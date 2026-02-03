@@ -1,52 +1,50 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-
 from pathlib import Path
+from typing import Any
 
 from fastapi import (
     APIRouter,
     BackgroundTasks,
     Depends,
     File,
-    UploadFile,
     HTTPException,
+    UploadFile,
     status,
 )
 from loguru import logger
 from starlette.responses import JSONResponse
 
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
     require_permissions,
+)
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
+    get_process_videos_form,
 )
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
     get_usage_event_logger,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
+from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessVideosForm
 from tldw_Server_API.app.core.AuthNZ.permissions import (
     MEDIA_CREATE,
 )
-from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
-    get_process_videos_form,
-)
-from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
-from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessVideosForm
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
+    apply_chunking_template_if_any,
+    prepare_chunking_options_dict,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
     save_uploaded_files,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.video_batch import (
     run_video_batch,
-)
-
-from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
-    prepare_chunking_options_dict,
-    apply_chunking_template_if_any,
 )
 
 router = APIRouter()
@@ -65,7 +63,7 @@ async def process_videos_endpoint(
     background_tasks: BackgroundTasks,
     db: MediaDatabase = Depends(get_media_db_for_user),
     form_data: ProcessVideosForm = Depends(get_process_videos_form),
-    files: Optional[List[UploadFile]] = File(
+    files: list[UploadFile] | None = File(
         None,
         description="Video file uploads",
     ),
@@ -104,17 +102,17 @@ async def process_videos_endpoint(
     # the legacy implementation (including "No valid media sources supplied").
     media_mod._validate_inputs("video", form_data.urls, files)  # type: ignore[arg-type]
 
-    batch_result: Dict[str, Any] = {
+    batch_result: dict[str, Any] = {
         "processed_count": 0,
         "errors_count": 0,
         "errors": [],
         "results": [],
         "confabulation_results": None,
     }
-    file_handling_errors_structured: List[Dict[str, Any]] = []
+    file_handling_errors_structured: list[dict[str, Any]] = []
     # Map temporary path -> original filename
-    temp_path_to_original_name: Dict[str, str] = {}
-    chunk_options_dict: Optional[Dict[str, Any]] = None
+    temp_path_to_original_name: dict[str, str] = {}
+    chunk_options_dict: dict[str, Any] | None = None
 
     # --- Use TempDirManager for reliable cleanup ---
     with TempDirManager(cleanup=True, prefix="process_video_") as temp_dir:

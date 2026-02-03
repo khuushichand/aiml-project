@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable
 
 import numpy as np
 import soundfile as sf  # type: ignore
@@ -32,13 +32,12 @@ from tldw_Server_API.app.core.config import get_stt_config
 from tldw_Server_API.app.core.exceptions import BadRequestError, CancelCheckError, TranscriptionCancelled
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 
-
 # Global cache for loaded models
-_MODEL_CACHE: Dict[str, Tuple[Any, Any, str]] = {}
+_MODEL_CACHE: dict[str, tuple[Any, Any, str]] = {}
 _MODEL_LOCK = threading.Lock()
 
 # Global cache for forced aligner
-_ALIGNER_CACHE: Dict[str, Tuple[Any, Any]] = {}
+_ALIGNER_CACHE: dict[str, tuple[Any, Any]] = {}
 _ALIGNER_LOCK = threading.Lock()
 
 
@@ -84,7 +83,7 @@ def _as_float(value: Any, default: float) -> float:
         return default
 
 
-def _check_cancel(cancel_check: Optional[Callable[[], bool]], *, label: str) -> None:
+def _check_cancel(cancel_check: Callable[[], bool] | None, *, label: str) -> None:
     """Check if cancellation was requested."""
     if cancel_check is None:
         return
@@ -96,7 +95,7 @@ def _check_cancel(cancel_check: Optional[Callable[[], bool]], *, label: str) -> 
         raise TranscriptionCancelled(f"Cancelled during {label}")
 
 
-def _resolve_settings() -> Dict[str, Any]:
+def _resolve_settings() -> dict[str, Any]:
     """Resolve Qwen3-ASR settings from config."""
     try:
         stt_cfg = get_stt_config() or {}
@@ -126,7 +125,7 @@ def _resolve_settings() -> Dict[str, Any]:
     return settings
 
 
-def _resolve_audio_path(audio_path: str, base_dir: Optional[Path]) -> Path:
+def _resolve_audio_path(audio_path: str, base_dir: Path | None) -> Path:
     """Resolve and validate audio path."""
     path_obj = Path(audio_path)
     base = Path(base_dir) if base_dir is not None else path_obj.parent
@@ -140,7 +139,7 @@ def _load_audio(
     audio_path: Path,
     *,
     target_sample_rate: int,
-) -> Tuple[np.ndarray, int, float]:
+) -> tuple[np.ndarray, int, float]:
     """Load audio file and resample if needed."""
     try:
         audio_np, sample_rate = sf.read(str(audio_path))
@@ -165,7 +164,7 @@ def _load_audio(
     return audio_np, int(sample_rate), duration_seconds
 
 
-def _maybe_resample(audio_np: np.ndarray, sample_rate: int, target_sample_rate: int) -> Tuple[np.ndarray, int]:
+def _maybe_resample(audio_np: np.ndarray, sample_rate: int, target_sample_rate: int) -> tuple[np.ndarray, int]:
     """Resample audio to target sample rate."""
     if sample_rate == target_sample_rate:
         return audio_np, sample_rate
@@ -229,7 +228,7 @@ def _validate_model_path(model_path: str, allow_download: bool) -> Path:
     return path
 
 
-def _load_qwen3_asr_model(settings: Dict[str, Any]) -> Tuple[Any, Any, str]:
+def _load_qwen3_asr_model(settings: dict[str, Any]) -> tuple[Any, Any, str]:
     """Load Qwen3-ASR model with caching."""
     model_path = str(settings["model_path"])
     device = _resolve_device(str(settings["device"]))
@@ -252,7 +251,6 @@ def _load_qwen3_asr_model(settings: Dict[str, Any]) -> Tuple[Any, Any, str]:
                 "transformers is required for Qwen3-ASR. Install with: pip install transformers"
             ) from exc
 
-        import torch
 
         torch_dtype = _get_torch_dtype(dtype_name)
         local_only = not allow_download
@@ -283,7 +281,7 @@ def _load_qwen3_asr_model(settings: Dict[str, Any]) -> Tuple[Any, Any, str]:
         return processor, model, device
 
 
-def _load_forced_aligner(settings: Dict[str, Any]) -> Tuple[Any, Any]:
+def _load_forced_aligner(settings: dict[str, Any]) -> tuple[Any, Any]:
     """Load Qwen3-ForcedAligner model with caching."""
     aligner_path = str(settings["aligner_path"])
     allow_download = bool(settings["allow_download"])
@@ -338,9 +336,9 @@ def _run_forced_alignment(
     text: str,
     audio_np: np.ndarray,
     sample_rate: int,
-    settings: Dict[str, Any],
-    language: Optional[str],
-) -> List[Dict[str, Any]]:
+    settings: dict[str, Any],
+    language: str | None,
+) -> list[dict[str, Any]]:
     """Run forced alignment to get word-level timestamps."""
     try:
         aligner_processor, aligner_model = _load_forced_aligner(settings)
@@ -377,7 +375,7 @@ def _run_forced_alignment(
             return []
 
     # Parse alignment outputs into word timestamps
-    words: List[Dict[str, Any]] = []
+    words: list[dict[str, Any]] = []
     if isinstance(outputs, dict) and "words" in outputs:
         for w in outputs["words"]:
             words.append({
@@ -402,11 +400,11 @@ def _transcribe_local(
     audio_np: np.ndarray,
     sample_rate: int,
     duration_seconds: float,
-    settings: Dict[str, Any],
-    language: Optional[str],
+    settings: dict[str, Any],
+    language: str | None,
     word_timestamps: bool,
-    cancel_check: Optional[Callable[[], bool]],
-) -> Dict[str, Any]:
+    cancel_check: Callable[[], bool] | None,
+) -> dict[str, Any]:
     """Perform local transcription using Qwen3-ASR model."""
     _check_cancel(cancel_check, label="model loading")
     processor, model, device = _load_qwen3_asr_model(settings)
@@ -456,7 +454,7 @@ def _transcribe_local(
             pass
 
     # Get word timestamps if requested
-    words: List[Dict[str, Any]] = []
+    words: list[dict[str, Any]] = []
     if word_timestamps and settings.get("aligner_enabled"):
         _check_cancel(cancel_check, label="forced alignment")
         words = _run_forced_alignment(text, audio_np, sample_rate, settings, language)
@@ -475,11 +473,11 @@ def _normalize_artifact(
     *,
     text: str,
     duration_seconds: float,
-    language_hint: Optional[str],
-    detected_language: Optional[str],
+    language_hint: str | None,
+    detected_language: str | None,
     model_path: str,
-    words: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
+    words: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Normalize transcription output to standard artifact format."""
     # Build segments from text
     segments = [
@@ -490,7 +488,7 @@ def _normalize_artifact(
         }
     ]
 
-    artifact: Dict[str, Any] = {
+    artifact: dict[str, Any] = {
         "text": text,
         "language": detected_language or language_hint,
         "segments": segments,
@@ -514,10 +512,10 @@ def _normalize_artifact(
 
 def _transcribe_vllm_http(
     audio_path: Path,
-    settings: Dict[str, Any],
-    language: Optional[str],
-    cancel_check: Optional[Callable[[], bool]],
-) -> Dict[str, Any]:
+    settings: dict[str, Any],
+    language: str | None,
+    cancel_check: Callable[[], bool] | None,
+) -> dict[str, Any]:
     """
     Transcribe audio via external vLLM server using OpenAI-compatible API.
 
@@ -572,7 +570,7 @@ def _transcribe_vllm_http(
             content_type = content_types.get(ext, "audio/wav")
 
             files = {"file": (audio_path.name, f, content_type)}
-            data: Dict[str, Any] = {"model": "qwen3-asr"}
+            data: dict[str, Any] = {"model": "qwen3-asr"}
             if language:
                 data["language"] = language
 
@@ -647,7 +645,7 @@ def is_qwen3_asr_aligner_available() -> bool:
     return True
 
 
-def get_qwen3_asr_capabilities() -> Dict[str, Any]:
+def get_qwen3_asr_capabilities() -> dict[str, Any]:
     """Return capability information for Qwen3-ASR."""
     settings = _resolve_settings()
     available = is_qwen3_asr_available()
@@ -673,12 +671,12 @@ def get_qwen3_asr_capabilities() -> Dict[str, Any]:
 def transcribe_with_qwen3_asr(
     audio_path: str,
     *,
-    model_path: Optional[str] = None,
-    language: Optional[str] = None,
+    model_path: str | None = None,
+    language: str | None = None,
     word_timestamps: bool = False,
-    base_dir: Optional[Path] = None,
-    cancel_check: Optional[Callable[[], bool]] = None,
-) -> Dict[str, Any]:
+    base_dir: Path | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
     """
     Transcribe audio using Qwen3-ASR.
 

@@ -74,10 +74,21 @@ class _FakeQuotaService:
         return True, {"current_usage_mb": 0, "new_size_mb": 0, "quota_mb": 1, "available_mb": 1}
 
 
+@pytest.fixture
+def fake_storage() -> _FakeStorage:
+    return _FakeStorage()
+
+
+@pytest.fixture
+def fake_db() -> _FakeDB:
+    return _FakeDB()
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
-async def test_original_storage_uses_processing_source(monkeypatch):
-    storage = _FakeStorage()
-    db = _FakeDB()
+async def test_original_storage_uses_processing_source(monkeypatch, fake_db, fake_storage):
+    storage = fake_storage
+    db = fake_db
 
     async def fake_save_uploaded_files(_files, temp_dir, **_kwargs):
         file_one = Path(temp_dir) / "stored_one.pdf"
@@ -143,9 +154,10 @@ async def test_original_storage_uses_processing_source(monkeypatch):
     assert len(db.insert_calls) == 2
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
-async def test_add_media_orchestrate_handles_document_exceptions(monkeypatch, tmp_path):
-    db = _FakeDB()
+async def test_add_media_orchestrate_handles_document_exceptions(monkeypatch, tmp_path, fake_db, fake_storage):
+    db = fake_db
 
     async def fake_save_uploaded_files(_files, temp_dir, **_kwargs):
         ok_path = Path(temp_dir) / "ok.txt"
@@ -213,9 +225,10 @@ async def test_add_media_orchestrate_handles_document_exceptions(monkeypatch, tm
     )
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
-async def test_add_media_orchestrate_partial_upload_errors_returns_multi_status(monkeypatch):
-    db = _FakeDB()
+async def test_add_media_orchestrate_partial_upload_errors_returns_multi_status(monkeypatch, fake_db, fake_storage):
+    db = fake_db
 
     async def fake_save_uploaded_files(_files, temp_dir, **_kwargs):
         ok_path = Path(temp_dir) / "ok.pdf"
@@ -283,9 +296,10 @@ async def test_add_media_orchestrate_partial_upload_errors_returns_multi_status(
     assert any(r.get("status") == "Success" and r.get("input_ref") == "ok.pdf" for r in results)
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
-async def test_add_media_orchestrate_document_concurrency_limit(monkeypatch):
-    db = _FakeDB()
+async def test_add_media_orchestrate_document_concurrency_limit(monkeypatch, fake_db, fake_storage):
+    db = fake_db
     monkeypatch.setenv("DOCUMENT_LIKE_CONCURRENCY", "2")
 
     async def fake_save_uploaded_files(_files, temp_dir, **_kwargs):

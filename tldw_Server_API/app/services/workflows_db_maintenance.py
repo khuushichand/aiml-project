@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_workflows_database,
     get_content_backend_instance,
 )
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
 
 def _env_bool(name: str, default: bool = False) -> bool:

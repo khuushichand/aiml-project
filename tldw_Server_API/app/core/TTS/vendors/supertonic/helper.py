@@ -9,7 +9,7 @@ import os
 import re
 import time
 from contextlib import contextmanager
-from typing import Optional, Tuple, List
+from typing import Optional
 from unicodedata import normalize
 
 import numpy as np
@@ -107,7 +107,7 @@ class UnicodeProcessor:
         unicode_values = np.array([ord(char) for char in text], dtype=np.uint16)
         return unicode_values
 
-    def __call__(self, text_list: List[str]) -> Tuple[np.ndarray, np.ndarray]:
+    def __call__(self, text_list: list[str]) -> tuple[np.ndarray, np.ndarray]:
         text_list = [self._preprocess_text(t) for t in text_list]
         text_ids_lengths = np.array([len(text) for text in text_list], dtype=np.int64)
         text_ids = np.zeros((len(text_list), text_ids_lengths.max()), dtype=np.int64)
@@ -149,7 +149,7 @@ class TextToSpeech:
 
     def sample_noisy_latent(
         self, duration: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         bsz = len(duration)
         wav_len_max = duration.max() * self.sample_rate
         wav_lengths = (duration * self.sample_rate).astype(np.int64)
@@ -164,8 +164,8 @@ class TextToSpeech:
         return noisy_latent, latent_mask
 
     def _infer(
-        self, text_list: List[str], style: Style, total_step: int, speed: float = 1.05
-    ) -> Tuple[np.ndarray, np.ndarray]:
+        self, text_list: list[str], style: Style, total_step: int, speed: float = 1.05
+    ) -> tuple[np.ndarray, np.ndarray]:
         assert len(text_list) == style.ttl.shape[0], "Number of texts must match number of style vectors"
         bsz = len(text_list)
         text_ids, text_mask = self.text_processor(text_list)
@@ -200,7 +200,7 @@ class TextToSpeech:
         total_step: int,
         speed: float = 1.05,
         silence_duration: float = 0.3,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         assert style.ttl.shape[0] == 1, "Single speaker text to speech only supports single style"
         text_list = chunk_text(text)
         wav_cat = None
@@ -217,8 +217,8 @@ class TextToSpeech:
         return wav_cat, dur_cat
 
     def batch(
-        self, text_list: List[str], style: Style, total_step: int, speed: float = 1.05
-    ) -> Tuple[np.ndarray, np.ndarray]:
+        self, text_list: list[str], style: Style, total_step: int, speed: float = 1.05
+    ) -> tuple[np.ndarray, np.ndarray]:
         return self._infer(text_list, style, total_step, speed)
 
 
@@ -238,13 +238,13 @@ def get_latent_mask(
     return latent_mask
 
 
-def load_onnx(onnx_path: str, opts: ort.SessionOptions, providers: List[str]) -> ort.InferenceSession:
+def load_onnx(onnx_path: str, opts: ort.SessionOptions, providers: list[str]) -> ort.InferenceSession:
     return ort.InferenceSession(onnx_path, sess_options=opts, providers=providers)
 
 
 def load_onnx_all(
-    onnx_dir: str, opts: ort.SessionOptions, providers: List[str]
-) -> Tuple[ort.InferenceSession, ort.InferenceSession, ort.InferenceSession, ort.InferenceSession]:
+    onnx_dir: str, opts: ort.SessionOptions, providers: list[str]
+) -> tuple[ort.InferenceSession, ort.InferenceSession, ort.InferenceSession, ort.InferenceSession]:
     dp_onnx_path = os.path.join(onnx_dir, "duration_predictor.onnx")
     text_enc_onnx_path = os.path.join(onnx_dir, "text_encoder.onnx")
     vector_est_onnx_path = os.path.join(onnx_dir, "vector_estimator.onnx")
@@ -280,7 +280,7 @@ def load_text_to_speech(onnx_dir: str, use_gpu: bool = False) -> TextToSpeech:
     return TextToSpeech(cfgs, text_processor, dp_ort, text_enc_ort, vector_est_ort, vocoder_ort)
 
 
-def load_voice_style(voice_style_paths: List[str], verbose: bool = False) -> Style:
+def load_voice_style(voice_style_paths: list[str], verbose: bool = False) -> Style:
     bsz = len(voice_style_paths)
 
     with open(voice_style_paths[0], "r") as f:
@@ -319,9 +319,9 @@ def sanitize_filename(text: str, max_len: int) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "_", prefix)
 
 
-def chunk_text(text: str, max_len: int = 300) -> List[str]:
+def chunk_text(text: str, max_len: int = 300) -> list[str]:
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", text.strip()) if p.strip()]
-    chunks: List[str] = []
+    chunks: list[str] = []
 
     for paragraph in paragraphs:
         paragraph = paragraph.strip()

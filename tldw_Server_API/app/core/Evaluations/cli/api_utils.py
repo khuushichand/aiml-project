@@ -5,10 +5,11 @@ This module provides helper functions to discover available LLM APIs
 and their configuration status from the tldw config.
 """
 
-from typing import Dict, Any, List, Tuple, Optional
-from tldw_Server_API.app.core.config import load_and_log_configs
+from typing import Any, Optional
+
 from loguru import logger
 
+from tldw_Server_API.app.core.config import load_and_log_configs
 
 # Mapping of config keys to friendly API names that match chat_api_call endpoints
 API_CONFIG_MAPPING = {
@@ -42,7 +43,7 @@ API_CATEGORIES = {
 }
 
 
-def get_available_apis() -> Dict[str, Dict[str, Any]]:
+def get_available_apis() -> dict[str, dict[str, Any]]:
     """
     Get all available APIs from configuration with their status.
 
@@ -107,7 +108,7 @@ def get_available_apis() -> Dict[str, Dict[str, Any]]:
         return {}
 
 
-def validate_api_config(api_name: str) -> Tuple[bool, str]:
+def validate_api_config(api_name: str) -> tuple[bool, str]:
     """
     Validate if an API is properly configured for use.
 
@@ -166,7 +167,7 @@ def get_api_model(api_name: str, model_override: Optional[str] = None) -> str:
     return api_defaults.get(api_name, 'default')
 
 
-def get_configured_apis() -> List[str]:
+def get_configured_apis() -> list[str]:
     """
     Get list of APIs that are properly configured and ready to use.
 

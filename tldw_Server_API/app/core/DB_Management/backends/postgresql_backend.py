@@ -11,31 +11,31 @@ Note: This implementation requires psycopg (v3) to be installed:
     pip install psycopg-pool
 """
 
-from loguru import logger
 import os
 import time
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Dict, List, Optional, Tuple, Union, Generator
-import json
+from typing import Any, Optional, Union
 
-from .base import (
-    DatabaseBackend,
-    DatabaseConfig,
-    BackendType,
-    BackendFeatures,
-    ConnectionPool,
-    QueryResult,
-    FTSQuery,
-    DatabaseError,
-    NotSupportedError
-)
+from loguru import logger
+
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
-from .query_utils import (
-    prepare_backend_statement,
-    prepare_backend_many_statement,
-)
 from tldw_Server_API.app.core.DB_Management.sql_utils import split_sql_statements
 
+from .base import (
+    BackendFeatures,
+    BackendType,
+    ConnectionPool,
+    DatabaseBackend,
+    DatabaseConfig,
+    DatabaseError,
+    FTSQuery,
+    QueryResult,
+)
+from .query_utils import (
+    prepare_backend_many_statement,
+    prepare_backend_statement,
+)
 
 # Try to import psycopg v3. Keep the legacy flag name for test compatibility.
 try:
@@ -88,8 +88,8 @@ class PostgreSQLConnectionPool(ConnectionPool):
 
         self.config = config
         self._closed = False
-        self._connections: List[Any] = []
-        self._free: List[Any] = []
+        self._connections: list[Any] = []
+        self._free: list[Any] = []
         self._max = max(1, int(config.pool_size or 10))
 
         # Prefer an explicit connection string when provided (e.g. DATABASE_URL)
@@ -223,7 +223,7 @@ class PostgreSQLConnectionPool(ConnectionPool):
         self._connections.clear()
         self._free.clear()
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         return {"closed": self._closed, "backend": "postgresql"}
 
 
@@ -232,9 +232,9 @@ class PostgreSQLBackend(DatabaseBackend):
 
     def __init__(self, config: DatabaseConfig):
         super().__init__(config)
-        self._managed_tx_depths: Dict[int, int] = {}
+        self._managed_tx_depths: dict[int, int] = {}
         # Track FTS table names to source tables/columns for Postgres.
-        self._fts_table_map: Dict[str, Dict[str, str]] = {}
+        self._fts_table_map: dict[str, dict[str, str]] = {}
 
     @property
     def backend_type(self) -> BackendType:
@@ -445,7 +445,7 @@ class PostgreSQLBackend(DatabaseBackend):
         return text
 
     @staticmethod
-    def _split_parenthesized_block(text: str) -> Tuple[str, str]:
+    def _split_parenthesized_block(text: str) -> tuple[str, str]:
         """Return the inner content and remainder after a balanced (...) block."""
         if not text.startswith("("):
             return "", text
@@ -710,8 +710,8 @@ class PostgreSQLBackend(DatabaseBackend):
     def _prepare_query(
         self,
         query: str,
-        params: Optional[Union[Tuple, Dict]]
-    ) -> Tuple[str, Optional[Union[Tuple, Dict]]]:
+        params: Optional[Union[tuple, dict]]
+    ) -> tuple[str, Optional[Union[tuple, dict]]]:
         """Prepare SQL and params for psycopg with robust placeholder handling.
 
         Delegates to shared query utils to safely convert SQLite-style
@@ -730,7 +730,7 @@ class PostgreSQLBackend(DatabaseBackend):
     def execute(
         self,
         query: str,
-        params: Optional[Union[Tuple, Dict]] = None,
+        params: Optional[Union[tuple, dict]] = None,
         connection: Optional[Any] = None
     ) -> QueryResult:
         """Execute a query and return results."""
@@ -816,7 +816,7 @@ class PostgreSQLBackend(DatabaseBackend):
     def execute_many(
         self,
         query: str,
-        params_list: List[Union[Tuple, Dict]],
+        params_list: list[Union[tuple, dict]],
         connection: Optional[Any] = None
     ) -> QueryResult:
         """Execute a query multiple times with different parameters."""
@@ -921,7 +921,7 @@ class PostgreSQLBackend(DatabaseBackend):
         self,
         table_name: str,
         connection: Optional[Any] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get information about a table's columns."""
         query = """
             SELECT
@@ -942,7 +942,7 @@ class PostgreSQLBackend(DatabaseBackend):
         self,
         table_name: str,
         source_table: str,
-        columns: List[str],
+        columns: list[str],
         connection: Optional[Any] = None
     ) -> None:
         """
@@ -1231,7 +1231,7 @@ class PostgreSQLBackend(DatabaseBackend):
         self,
         table_name: str,
         connection: Optional[Any] = None
-    ) -> Generator[Dict[str, Any], None, None]:
+    ) -> Generator[dict[str, Any], None, None]:
         """Export data from a table."""
         query = f"SELECT * FROM {self.escape_identifier(table_name)}"
 
@@ -1255,7 +1255,7 @@ class PostgreSQLBackend(DatabaseBackend):
     def import_data(
         self,
         table_name: str,
-        data: List[Dict[str, Any]],
+        data: list[dict[str, Any]],
         connection: Optional[Any] = None
     ) -> int:
         """Import data into a table."""

@@ -2,30 +2,29 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from datetime import datetime, timezone
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Collections.embedding_queue import enqueue_embeddings_job_for_item
+from tldw_Server_API.app.core.Collections.reading_importers import ReadingImportItem, normalize_import_items
 from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncate_text, word_count
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase, ContentItemRow
-from tldw_Server_API.app.core.Collections.reading_importers import ReadingImportItem, normalize_import_items
+from tldw_Server_API.app.core.http_client import afetch
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+    resolve_default_transcription_model,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
     _enforce_max_bytes_from_headers,
     _resolve_max_bytes,
     _resolve_media_type_from_content_type,
     _resolve_media_type_from_suffix,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
-    resolve_default_transcription_model,
-)
 from tldw_Server_API.app.core.Web_Scraping.url_utils import normalize_for_crawl
-from tldw_Server_API.app.core.http_client import afetch
-
 
 READING_DEFAULT_STATUS = "saved"
 
@@ -55,8 +54,8 @@ def _utcnow_iso() -> str:
 @dataclass
 class ReadingSaveResult:
     item: ContentItemRow
-    media_id: Optional[int]
-    media_uuid: Optional[str]
+    media_id: int | None
+    media_uuid: str | None
     created: bool
 
 
@@ -65,7 +64,7 @@ class ReadingImportResult:
     imported: int
     updated: int
     skipped: int
-    errors: List[str]
+    errors: list[str]
 
 
 class ReadingService:
@@ -104,7 +103,7 @@ class ReadingService:
                 return
 
     @staticmethod
-    def _sanitize_html_content(raw: str) -> tuple[str, Optional[str]]:
+    def _sanitize_html_content(raw: str) -> tuple[str, str | None]:
         """Sanitize HTML input and return (text, clean_html) when HTML is detected."""
         if not _contains_html_tag(raw):
             return raw, None
@@ -122,7 +121,7 @@ class ReadingService:
             return raw, None
 
     @staticmethod
-    def _map_media_type_key(media_type_key: Optional[str]) -> Optional[str]:
+    def _map_media_type_key(media_type_key: str | None) -> str | None:
         if not media_type_key:
             return None
         key = str(media_type_key).lower()
@@ -132,17 +131,17 @@ class ReadingService:
             return key
         return None
 
-    async def _probe_url_metadata(self, url: str) -> Dict[str, Any]:
+    async def _probe_url_metadata(self, url: str) -> dict[str, Any]:
         """Fetch headers to infer media type and enforce size limits."""
         parsed = urlparse(url)
         suffix = Path(parsed.path).suffix.lower()
         media_type_key = _resolve_media_type_from_suffix(suffix)
         resp = None
-        content_type: Optional[str] = None
-        content_length: Optional[str] = None
-        resolved_url: Optional[str] = None
-        error: Optional[str] = None
-        status_code: Optional[int] = None
+        content_type: str | None = None
+        content_length: str | None = None
+        resolved_url: str | None = None
+        error: str | None = None
+        status_code: int | None = None
         size_exceeded = False
 
         try:
@@ -190,9 +189,9 @@ class ReadingService:
         self,
         *,
         url: str,
-        media_type_key: Optional[str],
-        title_override: Optional[str],
-    ) -> Dict[str, Any]:
+        media_type_key: str | None,
+        title_override: str | None,
+    ) -> dict[str, Any]:
         """Route non-HTML URLs into the document ingestion pipeline."""
         media_type = self._map_media_type_key(media_type_key)
         if not media_type:
@@ -304,14 +303,14 @@ class ReadingService:
         self,
         *,
         url: str,
-        tags: Optional[List[str]] = None,
-        status: Optional[str] = None,
+        tags: list[str] | None = None,
+        status: str | None = None,
         favorite: bool = False,
-        title_override: Optional[str] = None,
-        summary_override: Optional[str] = None,
-        content_override: Optional[str] = None,
-        notes: Optional[str] = None,
-        metadata: Optional[Dict[str, object]] = None,
+        title_override: str | None = None,
+        summary_override: str | None = None,
+        content_override: str | None = None,
+        notes: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> ReadingSaveResult:
         """Fetch, dedupe, and persist a reading item."""
         normalized_status = (status or READING_DEFAULT_STATUS).lower()
@@ -350,7 +349,7 @@ class ReadingService:
         media_uuid = article.get("media_uuid")
         content_word_count = word_count(content)
 
-        metadata_payload: Dict[str, object] = {
+        metadata_payload: dict[str, object] = {
             "source": "reading_save",
             "tags": tags,
             "author": article.get("author"),
@@ -438,10 +437,10 @@ class ReadingService:
         self,
         *,
         url: str,
-        title_override: Optional[str],
-        content_override: Optional[str],
-        summary_override: Optional[str],
-    ) -> Dict[str, Any]:
+        title_override: str | None,
+        content_override: str | None,
+        summary_override: str | None,
+    ) -> dict[str, Any]:
         """Fetch, normalize, and sanitize content for reading list items."""
         if content_override is not None:
             content, clean_html = self._sanitize_html_content(content_override)
@@ -496,8 +495,8 @@ class ReadingService:
 
         try:
             from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
-                scrape_article,
                 ContentMetadataHandler,
+                scrape_article,
             )
         except Exception as exc:
             return {
@@ -580,19 +579,19 @@ class ReadingService:
     def list_items(
         self,
         *,
-        status: Optional[List[str]] = None,
-        tags: Optional[List[str]] = None,
-        favorite: Optional[bool] = None,
-        q: Optional[str] = None,
-        domain: Optional[str] = None,
-        date_from: Optional[str] = None,
-        date_to: Optional[str] = None,
+        status: list[str] | None = None,
+        tags: list[str] | None = None,
+        favorite: bool | None = None,
+        q: str | None = None,
+        domain: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
         page: int = 1,
         size: int = 20,
-        offset: Optional[int] = None,
-        limit: Optional[int] = None,
-        sort: Optional[str] = None,
-    ) -> tuple[List[ContentItemRow], int]:
+        offset: int | None = None,
+        limit: int | None = None,
+        sort: str | None = None,
+    ) -> tuple[list[ContentItemRow], int]:
         return self.collections.list_content_items(
             origin="reading",
             status=status,
@@ -616,16 +615,16 @@ class ReadingService:
         self,
         item_id: int,
         *,
-        status: Optional[str] = None,
-        favorite: Optional[bool] = None,
-        tags: Optional[List[str]] = None,
-        notes: Optional[str] = None,
-        title: Optional[str] = None,
-        metadata: Optional[Dict[str, object]] = None,
+        status: str | None = None,
+        favorite: bool | None = None,
+        tags: list[str] | None = None,
+        notes: str | None = None,
+        title: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> ContentItemRow:
         normalized_tags = tags if tags is None else [t for t in tags if t]
         metadata = metadata or {}
-        read_at: Optional[str] = None
+        read_at: str | None = None
         clear_read_at = False
         if status is not None:
             try:
@@ -658,7 +657,7 @@ class ReadingService:
     def import_items(
         self,
         *,
-        items: List[ReadingImportItem],
+        items: list[ReadingImportItem],
         merge_tags: bool = True,
         origin_type: str = "import",
     ) -> ReadingImportResult:
@@ -666,7 +665,7 @@ class ReadingService:
         imported = 0
         updated = 0
         skipped = 0
-        errors: List[str] = []
+        errors: list[str] = []
 
         for item in normalized:
             url = item.url.strip() if item.url else ""

@@ -9,8 +9,8 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, requ
 from tldw_Server_API.app.api.v1.schemas.mlx import MLXLoadRequest, MLXUnloadRequest
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError, ChatProviderError
 from tldw_Server_API.app.core.LLM_Calls.providers.mlx_provider import (
-    get_mlx_registry,
     _default_settings,
+    get_mlx_registry,
 )
 
 router = APIRouter()

@@ -14,38 +14,36 @@ Reference upstream: https://github.com/neuphonic/neutts-air
 """
 from __future__ import annotations
 
-import asyncio
-import base64
 import os
 import tempfile
-from typing import AsyncGenerator, Dict, Optional, Any
+from collections.abc import AsyncGenerator
+from typing import Any
 
 import numpy as np
 from loguru import logger
 
-from .base import (
-    TTSAdapter,
-    TTSCapabilities,
-    TTSResponse,
-    TTSRequest,
-    AudioFormat,
-    ProviderStatus,
-)
 from ..tts_exceptions import (
     TTSGenerationError,
     TTSModelLoadError,
-    TTSModelNotFoundError,
     TTSProviderNotConfiguredError,
     TTSValidationError,
 )
 from ..tts_validation import validate_tts_request
 from ..utils import parse_bool
+from .base import (
+    AudioFormat,
+    ProviderStatus,
+    TTSAdapter,
+    TTSCapabilities,
+    TTSRequest,
+    TTSResponse,
+)
 
 
 class NeuTTSAdapter(TTSAdapter):
     """Adapter for NeuTTS provider (Air/Nano)."""
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config=config)
         self.sample_rate: int = int(self.config.get("sample_rate", 24000))
 
@@ -357,7 +355,7 @@ class NeuTTSAdapter(TTSAdapter):
                 except Exception:
                     pass
 
-    def _maybe_override_engine(self, extras: Dict[str, Any]):
+    def _maybe_override_engine(self, extras: dict[str, Any]):
         """Allow per-request override of model repos/devices via extra_params."""
         # No hot-reload to different repos; only accept if same repos to avoid reinit
         bb = extras.get("backbone_repo")

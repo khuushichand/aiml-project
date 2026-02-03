@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import List
 
 
 def is_git_repo(base: Path) -> bool:
     return (base / ".git").exists()
 
 
-def changed_or_untracked_files(base: Path) -> List[str]:
+def changed_or_untracked_files(base: Path) -> list[str]:
     """Return a list of changed or untracked files (best-effort)."""
     if not is_git_repo(base):
         return []

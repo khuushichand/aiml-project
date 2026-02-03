@@ -1,12 +1,11 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 import socket
-import ipaddress
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Iterable, Sequence, Tuple
 from urllib.parse import urlparse
-
 
 DEFAULT_ALLOWED_SCHEMES = {"http", "https"}
 ALLOWLIST_ENV = "WORKFLOWS_EGRESS_ALLOWLIST"
@@ -149,7 +148,7 @@ def _is_private_ip(ip: str) -> bool:
         return True
 
 
-def _resolve_and_check_private(host: str) -> Tuple[bool, list[str]]:
+def _resolve_and_check_private(host: str) -> tuple[bool, list[str]]:
     ips: list[str] = []
     # If the host is already an IP address, check directly
     try:

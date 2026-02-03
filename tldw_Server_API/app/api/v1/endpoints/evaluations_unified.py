@@ -5,60 +5,60 @@ Unified evaluation API combining OpenAI-compatible and tldw-specific endpoints.
 This module provides a single, cohesive API for all evaluation functionality.
 """
 
-import os
-import json
 import asyncio
+import json
+import os
 import time
-from datetime import datetime
-from typing import List, Optional, Dict, Any, Annotated, Union
-from fastapi import APIRouter, HTTPException, Depends, status, Query, Request, Response, Header, UploadFile, File, Form
-from fastapi.responses import StreamingResponse
+from typing import Annotated, Any, Optional, Union
+
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.routing import APIRoute
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_roles
+
 # Import unified schemas
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
+    BatchEvaluationRequest,
+    BatchEvaluationResponse,
+    EvaluationHistoryRequest,
+    EvaluationHistoryResponse,
+    EvaluationMetric,
     # tldw-specific schemas
-    GEvalRequest, GEvalResponse,
-    RAGEvaluationRequest, RAGEvaluationResponse,
-    PropositionEvaluationRequest, PropositionEvaluationResponse,
-    ResponseQualityRequest, ResponseQualityResponse,
-    BatchEvaluationRequest, BatchEvaluationResponse,
-    CustomMetricRequest, CustomMetricResponse,
-    EvaluationComparisonRequest, EvaluationComparisonResponse,
-    EvaluationHistoryRequest, EvaluationHistoryResponse,
-
-    RateLimitStatusResponse,
-
+    GEvalRequest,
+    GEvalResponse,
     # Common schemas
     HealthCheckResponse,
-    EvaluationMetric,
+    PropositionEvaluationRequest,
+    PropositionEvaluationResponse,
+    RAGEvaluationRequest,
+    RAGEvaluationResponse,
+    RateLimitStatusResponse,
+    ResponseQualityRequest,
+    ResponseQualityResponse,
 )
-
-# Import unified service
-from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
-    get_unified_evaluation_service_for_user,
-    UnifiedEvaluationService
-)
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager, WebhookEvent
-
-# Import additional services
-from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
-from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
-from tldw_Server_API.app.core.Evaluations.webhook_identity import webhook_user_id_from_user
-from tldw_Server_API.app.core.Evaluations.audit_adapter import (
-    log_evaluation_deleted,
-    log_evaluation_exported,
-)
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_roles
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     ResolvedByokCredentials,
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Evaluations.audit_adapter import (
+    log_evaluation_deleted,
+    log_evaluation_exported,
+)
+
+# Import unified service
+from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
+    get_unified_evaluation_service_for_user,
+)
+
+# Import additional services
+from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
+from tldw_Server_API.app.core.Evaluations.webhook_identity import webhook_user_id_from_user
+from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent, WebhookManager
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 
 # Create router
@@ -67,17 +67,18 @@ router = APIRouter(prefix="/evaluations", tags=["evaluations"])
 _webhook_managers: dict = {}
 _wm_lock = None
 
-from .evaluations_auth import (
-    verify_api_key,
-    sanitize_error_message,
-    create_error_response,
-    check_evaluation_rate_limit,
-    _apply_rate_limit_headers,
-    enforce_heavy_evaluations_admin,
-    get_eval_request_user,
-)
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+
+from .evaluations_auth import (
+    _apply_rate_limit_headers,
+    check_evaluation_rate_limit,
+    enforce_heavy_evaluations_admin,
+    get_eval_request_user,
+    sanitize_error_message,
+    verify_api_key,
+)
+
 
 def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
     global _wm_lock
@@ -248,6 +249,7 @@ async def admin_cleanup_idempotency(
     enforce_heavy_evaluations_admin(principal)
     try:
         from pathlib import Path as _Path
+
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
         from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase as _EDB
 
@@ -373,6 +375,7 @@ def _estimate_tokens_from_texts(*texts: Optional[str], provider: Optional[str] =
 
 
 from .evaluations_embeddings_abtest import abtest_router
+
 router.include_router(abtest_router)
 
 
@@ -384,9 +387,10 @@ async def stream_embeddings_abtest_events(
     current_user: User = Depends(get_eval_request_user),
 ):
     """SSE stream of progress and updates for an A/B test, using SSEStream for heartbeats and metrics."""
-    from fastapi.responses import StreamingResponse
     import asyncio as _aio
     import json as _json
+
+    from fastapi.responses import StreamingResponse
 
     from tldw_Server_API.app.core.Streaming.streams import SSEStream
 
@@ -621,7 +625,7 @@ async def get_rate_limit_status(
         summary = await limiter.get_usage_summary(user_id)
 
         # Convert the nested structure to flat structure expected by RateLimitStatusResponse
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
         return RateLimitStatusResponse(
             tier=summary.get("tier", "free"),
             limits={
@@ -654,10 +658,11 @@ async def get_rate_limit_status(
         )
 
 
-from .evaluations_rag_pipeline import pipeline_router
-from .evaluations_datasets import datasets_router
-from .evaluations_webhooks import webhooks_router
 from .evaluations_crud import crud_router
+from .evaluations_datasets import datasets_router
+from .evaluations_rag_pipeline import pipeline_router
+from .evaluations_webhooks import webhooks_router
+
 router.include_router(pipeline_router)
 router.include_router(datasets_router)
 router.include_router(webhooks_router)
@@ -775,8 +780,8 @@ async def evaluate_geval(
         )
 
         # Send webhook: evaluation started (await in TEST_MODE)
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
         import time as _time
         wm = _get_webhook_manager_for_user(current_user.id)
         start_event_id = f"geval_{int(_time.time())}_{webhook_user_id[:8]}"
@@ -979,8 +984,8 @@ async def evaluate_rag(
         )
 
         # Send webhook: evaluation started (await in TEST_MODE)
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
         wm = _get_webhook_manager_for_user(current_user.id)
         import time as _time
         start_event_id = f"rag_{int(_time.time())}_{webhook_user_id[:8]}"
@@ -1146,8 +1151,8 @@ async def evaluate_response_quality(
         )
 
         # Send webhook: evaluation started (await in TEST_MODE)
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
         wm = _get_webhook_manager_for_user(current_user.id)
         import time as _time
         start_event_id = f"response_quality_{int(_time.time())}_{webhook_user_id[:8]}"
@@ -1368,7 +1373,7 @@ async def batch_evaluate(
     try:
         start_time = time.time()
         service = get_unified_evaluation_service_for_user(current_user.id)
-        byok_cache: Dict[str, ResolvedByokCredentials] = {}
+        byok_cache: dict[str, ResolvedByokCredentials] = {}
 
         async def _resolve_byok(provider_name: str) -> ResolvedByokCredentials:
             key = (provider_name or "openai").strip().lower()
@@ -1769,10 +1774,10 @@ async def evaluate_ocr_endpoint(
 @router.post("/ocr-pdf", response_model=OCREvaluationResponse, dependencies=[Depends(check_evaluation_rate_limit)])
 async def evaluate_ocr_pdf_endpoint(
     response: Response,
-    files: List[UploadFile] = File(..., description="PDF files to OCR and evaluate"),
-    ground_truths: Optional[List[str]] = Form(None, description="Ground-truth text per file (order aligned)"),
+    files: list[UploadFile] = File(..., description="PDF files to OCR and evaluate"),
+    ground_truths: Optional[list[str]] = Form(None, description="Ground-truth text per file (order aligned)"),
     ground_truths_json: Optional[str] = Form(None, description="JSON array of ground-truth texts aligned to files"),
-    metrics: Optional[List[str]] = Form(None, description="Metrics to compute (cer, wer, coverage, page_coverage)"),
+    metrics: Optional[list[str]] = Form(None, description="Metrics to compute (cer, wer, coverage, page_coverage)"),
     ground_truths_pages_json: Optional[str] = Form(None, description="JSON array of per-file page arrays of ground truth text (e.g., [[...],[...]])"),
     thresholds_json: Optional[str] = Form(None, description="JSON dict of thresholds (max_cer, max_wer, min_coverage, min_page_coverage)"),
     enable_ocr: bool = Form(True, description="Enable OCR"),
@@ -1806,7 +1811,7 @@ async def evaluate_ocr_pdf_endpoint(
         if ground_truths is not None and len(ground_truths) not in (0, len(files)):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ground_truths count must match files length or be omitted")
 
-        items: List[Dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         gt_list = ground_truths or []
         if ground_truths_json:
             try:

@@ -1,31 +1,32 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
 class WatchlistRule(BaseModel):
-    rule_id: Optional[str] = Field(None, description="Optional stable rule identifier")
+    rule_id: str | None = Field(None, description="Optional stable rule identifier")
     pattern: str = Field(..., description="Literal or /regex/ pattern")
-    category: Optional[str] = Field(None, description="Logical category, e.g., 'adult', 'violence', 'self_harm'")
-    severity: Optional[str] = Field("info", description="info | warning | critical")
-    note: Optional[str] = Field(None, description="Free-text note for admins")
-    tags: Optional[List[str]] = Field(default=None, description="Optional tags")
+    category: str | None = Field(None, description="Logical category, e.g., 'adult', 'violence', 'self_harm'")
+    severity: str | None = Field("info", description="info | warning | critical")
+    note: str | None = Field(None, description="Free-text note for admins")
+    tags: list[str] | None = Field(default=None, description="Optional tags")
 
 
 class Watchlist(BaseModel):
-    id: Optional[str] = Field(None, description="Watchlist ID (UUID). If absent on create, a new one is generated")
+    id: str | None = Field(None, description="Watchlist ID (UUID). If absent on create, a new one is generated")
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     enabled: bool = True
     scope_type: str = Field("user", description="global | user | team | org")
-    scope_id: Optional[str] = Field(None, description="The corresponding subject id (null for global)")
-    managed_by: Optional[str] = Field(None, description="config | api")
-    rules: List[WatchlistRule] = Field(default_factory=list)
+    scope_id: str | None = Field(None, description="The corresponding subject id (null for global)")
+    managed_by: str | None = Field(None, description="config | api")
+    rules: list[WatchlistRule] = Field(default_factory=list)
 
 
 class WatchlistListResponse(BaseModel):
-    watchlists: List[Watchlist]
+    watchlists: list[Watchlist]
 
 
 class WatchlistUpsertResponse(BaseModel):
@@ -45,27 +46,27 @@ class WatchlistsReloadResponse(BaseModel):
 class AlertItem(BaseModel):
     id: int
     created_at: str
-    user_id: Optional[str] = None
-    scope_type: Optional[str] = None
-    scope_id: Optional[str] = None
+    user_id: str | None = None
+    scope_type: str | None = None
+    scope_id: str | None = None
     source: str
-    watchlist_id: Optional[str] = None
-    rule_id: Optional[str] = None
-    rule_category: Optional[str] = None
-    rule_severity: Optional[str] = None
-    pattern: Optional[str] = None
-    source_id: Optional[str] = None
-    chunk_id: Optional[str] = None
-    chunk_seq: Optional[int] = None
-    text_snippet: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    watchlist_id: str | None = None
+    rule_id: str | None = None
+    rule_category: str | None = None
+    rule_severity: str | None = None
+    pattern: str | None = None
+    source_id: str | None = None
+    chunk_id: str | None = None
+    chunk_seq: int | None = None
+    text_snippet: str | None = None
+    metadata: dict[str, Any] | None = None
     is_read: bool = False
-    read_at: Optional[str] = None
+    read_at: str | None = None
 
 
 class AlertsListResponse(BaseModel):
-    items: List[AlertItem]
-    total: Optional[int] = None  # Optional future enhancement
+    items: list[AlertItem]
+    total: int | None = None  # Optional future enhancement
 
 
 class MarkReadResponse(BaseModel):
@@ -77,34 +78,34 @@ class NotificationSettings(BaseModel):
     enabled: bool
     min_severity: str
     file: str
-    webhook_url: Optional[str] = None
-    email_to: Optional[str] = None
+    webhook_url: str | None = None
+    email_to: str | None = None
     # Optional SMTP fields exposed for completeness
-    smtp_host: Optional[str] = None
-    smtp_port: Optional[int] = None
-    smtp_starttls: Optional[bool] = None
-    smtp_user: Optional[str] = None
-    email_from: Optional[str] = None
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+    smtp_starttls: bool | None = None
+    smtp_user: str | None = None
+    email_from: str | None = None
 
 
 class NotificationSettingsUpdate(BaseModel):
-    enabled: Optional[bool] = None
-    min_severity: Optional[str] = None
-    file: Optional[str] = None
-    webhook_url: Optional[str] = None
-    email_to: Optional[str] = None
-    smtp_host: Optional[str] = None
-    smtp_port: Optional[int] = None
-    smtp_starttls: Optional[bool] = None
-    smtp_user: Optional[str] = None
-    smtp_password: Optional[str] = None  # write-only
-    email_from: Optional[str] = None
+    enabled: bool | None = None
+    min_severity: str | None = None
+    file: str | None = None
+    webhook_url: str | None = None
+    email_to: str | None = None
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+    smtp_starttls: bool | None = None
+    smtp_user: str | None = None
+    smtp_password: str | None = None  # write-only
+    email_from: str | None = None
 
 
 class NotificationTestRequest(BaseModel):
     severity: str = Field("critical")
     message: str = Field("Test notification from admin panel")
-    user_id: Optional[str] = None
+    user_id: str | None = None
 
 
 class NotificationTestResponse(BaseModel):
@@ -112,7 +113,7 @@ class NotificationTestResponse(BaseModel):
 
 
 class RecentNotificationsResponse(BaseModel):
-    items: List[Dict[str, Any]] = Field(
+    items: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Recent notification events from the JSONL log",
     )

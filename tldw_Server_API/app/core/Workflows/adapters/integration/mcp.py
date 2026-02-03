@@ -8,20 +8,20 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
-from tldw_Server_API.app.core.Workflows.adapters._common import (
-    resolve_artifacts_dir,
-    normalize_str_list,
-    extract_mcp_policy,
-    tool_matches_allowlist,
-    extract_tool_scopes,
-)
-from tldw_Server_API.app.core.Workflows.adapters.integration._config import MCPToolConfig
 from tldw_Server_API.app.core.exceptions import AdapterError
+from tldw_Server_API.app.core.Workflows.adapters._common import (
+    extract_mcp_policy,
+    extract_tool_scopes,
+    normalize_str_list,
+    resolve_artifacts_dir,
+    tool_matches_allowlist,
+)
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
+from tldw_Server_API.app.core.Workflows.adapters.integration._config import MCPToolConfig
 
 
 @registry.register(
@@ -32,7 +32,7 @@ from tldw_Server_API.app.core.exceptions import AdapterError
     tags=["integration", "mcp"],
     config_model=MCPToolConfig,
 )
-async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_mcp_tool_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Execute an MCP tool via the unified server registry.
 
     Config:

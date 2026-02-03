@@ -8,11 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
-import shutil
+from collections.abc import AsyncIterator
 from io import BytesIO
 from pathlib import Path
-from typing import AsyncIterator, BinaryIO, Optional, Union
+from typing import BinaryIO, Union
 
 import aiofiles
 import aiofiles.os
@@ -108,7 +107,7 @@ class FileSystemStorage(StorageBackend):
         media_id: int,
         filename: str,
         data: Union[BinaryIO, bytes],
-        mime_type: Optional[str] = None,
+        mime_type: str | None = None,
     ) -> str:
         """
         Store a file in the filesystem.
@@ -312,7 +311,7 @@ class FileSystemStorage(StorageBackend):
             logger.error(f"Failed to get file size for {path}: {e}")
             raise StorageError(f"Failed to get file size: {e}", path=path)
 
-    def get_url(self, path: str) -> Optional[str]:
+    def get_url(self, path: str) -> str | None:
         """
         Get a public URL for the file.
 

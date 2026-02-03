@@ -57,6 +57,7 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
   const isValid = useWorkflowEditorStore((s) => s.isValid)
   const issues = useWorkflowEditorStore((s) => s.issues)
   const status = useWorkflowEditorStore((s) => s.status)
+  const stepTypesStatus = useWorkflowEditorStore((s) => s.stepTypesStatus)
 
   // Store actions
   const setWorkflowMeta = useWorkflowEditorStore((s) => s.setWorkflowMeta)
@@ -71,6 +72,7 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
   const canRedo = useWorkflowEditorStore((s) => s.canRedo)
   const validate = useWorkflowEditorStore((s) => s.validate)
   const clearCanvas = useWorkflowEditorStore((s) => s.clearCanvas)
+  const loadStepTypes = useWorkflowEditorStore((s) => s.loadStepTypes)
 
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(workflowName)
@@ -82,6 +84,13 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
       newWorkflow()
     }
   }, [newWorkflow])
+
+  // Load server-driven step types once
+  useEffect(() => {
+    if (stepTypesStatus === "idle") {
+      void loadStepTypes()
+    }
+  }, [stepTypesStatus, loadStepTypes])
 
   // Validate on changes
   useEffect(() => {

@@ -2,6 +2,8 @@
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 from tldw_Server_API.app.core.Chat import Workflows as workflows
 
 
@@ -11,7 +13,7 @@ def test_workflow_defaults_not_shared(monkeypatch):
 
     calls = []
 
-    def fake_chat(message, history, media_content, selected_parts, *args, **kwargs):
+    def fake_chat(_message, _history, media_content, selected_parts, *_args, **_kwargs):
         calls.append({"media": dict(media_content), "parts": list(selected_parts)})
         media_content["mutated"] = True
         selected_parts.append("mutated")
@@ -34,7 +36,7 @@ def test_workflow_defaults_not_shared(monkeypatch):
     )
     assert cont1 is True
 
-    history2, state2, cont2 = workflows.process_workflow_step(
+    _history2, _state2, cont2 = workflows.process_workflow_step(
         "hi2",
         history1,
         context,

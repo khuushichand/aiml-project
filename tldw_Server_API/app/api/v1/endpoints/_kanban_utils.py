@@ -5,10 +5,9 @@ Shared utilities for Kanban API endpoints.
 """
 
 from datetime import datetime, timezone
-from typing import Optional
 
 
-def to_db_timestamp(value: Optional[datetime]) -> Optional[str]:
+def to_db_timestamp(value: datetime | None) -> str | None:
     """Convert datetime to DB-friendly timestamp string."""
     if value is None:
         return None

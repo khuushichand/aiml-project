@@ -5,73 +5,73 @@ This is the new, simplified RAG API that uses the unified pipeline.
 All features are accessible through explicit parameters.
 """
 
-import time
 import hashlib
 import inspect
-from typing import Optional, Dict, Any, List
+import json
+import time
+import types
+from typing import Any, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks, Request, Response
-from loguru import logger
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
-import asyncio
-import json
-import types
+from loguru import logger
 
-# Dependencies
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     check_rate_limit,
+    get_auth_principal,
     rbac_rate_limit,
     require_permissions,
     require_token_scope,
-    get_auth_principal,
 )
 from tldw_Server_API.app.api.v1.API_Deps.billing_deps import require_within_limit
-from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_READ
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 
-# Unified Pipeline
-from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import (
-    unified_rag_pipeline,
-    unified_batch_pipeline,
-    simple_search,
-    advanced_search,
-    UnifiedSearchResult
+# Dependencies
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+
+# Schemas
+from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import (
+    ImplicitFeedbackEvent,
+    UnifiedBatchRequest,
+    UnifiedBatchResponse,
+    UnifiedRAGRequest,
+    UnifiedRAGResponse,
 )
+from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_READ
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import (
-    agentic_rag_pipeline,
     AgenticConfig,
+    agentic_rag_pipeline,
 )
-from tldw_Server_API.app.core.RAG.rag_service.generation import generate_streaming_response
-from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
 from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import (
     MultiDatabaseRetriever,
     RetrievalConfig,
 )
+from tldw_Server_API.app.core.RAG.rag_service.generation import generate_streaming_response
+from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
 
-# Schemas
-from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import (
-    UnifiedRAGRequest,
-    UnifiedRAGResponse,
-    UnifiedBatchRequest,
-    UnifiedBatchResponse,
-    ImplicitFeedbackEvent,
+# Unified Pipeline
+from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import (
+    UnifiedSearchResult,
+    advanced_search,
+    simple_search,
+    unified_batch_pipeline,
+    unified_rag_pipeline,
 )
 
 
 def _build_unified_pipeline_kwargs(
     request: UnifiedRAGRequest,
-    db_paths: Dict[str, Optional[str]],
+    db_paths: dict[str, Optional[str]],
     media_db: MediaDatabase,
     chacha_db: CharactersRAGDB,
     current_user: Optional[User],
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     payload = model_dump_compat(request)
     payload["media_db_path"] = db_paths.get("media_db_path")
     payload["notes_db_path"] = db_paths.get("notes_db_path")
@@ -145,8 +145,8 @@ def _resolve_kanban_db_path(current_user: Optional[User], request_user_id: Optio
         return None
 
 
-def _normalize_documents_for_generation(docs: List[Any]) -> List[Document]:
-    normalized: List[Document] = []
+def _normalize_documents_for_generation(docs: list[Any]) -> list[Document]:
+    normalized: list[Document] = []
     for doc in docs or []:
         if isinstance(doc, Document):
             normalized.append(doc)
@@ -170,9 +170,9 @@ def _normalize_documents_for_generation(docs: List[Any]) -> List[Document]:
                 )
             )
     return normalized
-from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
-from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UnifiedFeedbackSystem
 from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
+from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UnifiedFeedbackSystem
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 router = APIRouter(prefix="/api/v1/rag", tags=["rag-unified"])
 
@@ -229,6 +229,7 @@ async def _log_rag_queries_for_org(
 
         try:
             from datetime import datetime, timezone
+
             from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import (
                 LedgerEntry,
                 ResourceDailyLedger,
@@ -486,8 +487,8 @@ async def get_capabilities(request: Request):
     This endpoint is informational and does not require database access. It reflects
     the capabilities compiled into the service and basic configuration toggles.
     """
-    from tldw_Server_API.app.core.config import RAG_SERVICE_CONFIG
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+    from tldw_Server_API.app.core.config import RAG_SERVICE_CONFIG
 
     settings = get_settings()
 
@@ -1251,7 +1252,7 @@ async def simple_search_endpoint(
     request: Request,
     query: str,
     top_k: int = 10,
-    sources: Optional[List[str]] = None,
+    sources: Optional[list[str]] = None,
     current_user: User = Depends(get_request_user),
     media_db: MediaDatabase = Depends(get_media_db_for_user),
     chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user),

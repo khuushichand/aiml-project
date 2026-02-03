@@ -14,21 +14,22 @@ Implements:
 """
 
 import asyncio
+import hashlib
 import json
 import os
-import time
 import random
-import hashlib
-import ssl
+import re
 import socket
+import ssl
 import threading
-from dataclasses import dataclass
+import time
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional, Dict, Any, TypedDict, AsyncIterator, Tuple, Callable, Union, Iterable, Protocol
-from urllib.parse import urlparse, urljoin
-import re
+from typing import Any, Protocol, TypedDict, Union
+from urllib.parse import urljoin, urlparse
 
 try:
     # Python 3.8+/backport safe import
@@ -56,18 +57,17 @@ except Exception:  # pragma: no cover
     _otel_trace = None  # type: ignore
 
 from tldw_Server_API.app.core.exceptions import (
+    DownloadError,
     EgressPolicyError,
+    JSONDecodeError,
     NetworkError,
     RetryExhaustedError,
-    JSONDecodeError,
     StreamingProtocolError,
-    DownloadError,
 )
-
 from tldw_Server_API.app.core.Metrics import (
-    get_metrics_registry,
     MetricDefinition,
     MetricType,
+    get_metrics_registry,
 )
 from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
 
@@ -129,15 +129,15 @@ def _httpx_timeout_from_defaults() -> "httpx.Timeout":
 
 def build_limits(
     *,
-    max_connections: Optional[int] = None,
-    max_keepalive_connections: Optional[int] = None,
-    keepalive_expiry: Optional[float] = None,
-) -> Optional["httpx.Limits"]:
+    max_connections: int | None = None,
+    max_keepalive_connections: int | None = None,
+    keepalive_expiry: float | None = None,
+) -> "httpx.Limits" | None:
     """Create an httpx.Limits instance when httpx is available."""
     _hx = _resolve_httpx()
     if _hx is None or not hasattr(_hx, "Limits"):
         return None
-    kwargs: Dict[str, Any] = {}
+    kwargs: dict[str, Any] = {}
     if max_connections is not None:
         kwargs["max_connections"] = max_connections
     if max_keepalive_connections is not None:
@@ -152,7 +152,7 @@ def build_limits(
         return None
 
 
-_CACHED_VERSION: Optional[str] = None
+_CACHED_VERSION: str | None = None
 
 
 def _get_project_version() -> str:
@@ -283,7 +283,7 @@ except Exception:
 
 class HttpResponse(TypedDict):
     status: int
-    headers: Dict[str, str]
+    headers: dict[str, str]
     text: str
     url: str
     backend: str  # 'curl' or 'httpx'
@@ -294,8 +294,8 @@ class RetryPolicy:
     attempts: int = DEFAULT_ATTEMPTS
     backoff_base_ms: int = DEFAULT_BACKOFF_BASE_MS
     backoff_cap_s: int = DEFAULT_BACKOFF_CAP_S
-    retry_on_status: Tuple[int, ...] = (408, 429, 500, 502, 503, 504)
-    retry_on_methods: Tuple[str, ...] = ("GET", "HEAD", "OPTIONS")
+    retry_on_status: tuple[int, ...] = (408, 429, 500, 502, 503, 504)
+    retry_on_methods: tuple[str, ...] = ("GET", "HEAD", "OPTIONS")
     respect_retry_after: bool = True
     retry_on_unsafe: bool = False
 
@@ -308,8 +308,8 @@ class RetryPolicy:
 class SSEEvent:
     event: str = "message"
     data: str = ""
-    id: Optional[str] = None
-    retry: Optional[int] = None
+    id: str | None = None
+    retry: int | None = None
 
 
 class _AiohttpResponse:
@@ -371,7 +371,7 @@ class _AiohttpResponse:
 
 class SyncResponseLike(Protocol):
     status_code: int
-    headers: Dict[str, Any]
+    headers: dict[str, Any]
     url: str
     text: str
 
@@ -382,7 +382,7 @@ class SyncResponseLike(Protocol):
 
 class AsyncResponseLike(Protocol):
     status_code: int
-    headers: Dict[str, Any]
+    headers: dict[str, Any]
     url: str
     text: str
 
@@ -399,18 +399,18 @@ class TransportAdapter(Protocol):
         *,
         method: str,
         url: str,
-        client: Optional[Any] = None,
-        headers: Optional[Dict[str, str]] = None,
-        cookies: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Any] = None,
+        client: Any | None = None,
+        headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: Any | None = None,
         allow_redirects: bool = True,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
+        proxies: Union[str, dict[str, str]] | None = None,
+        retry: "RetryPolicy" | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
     ) -> SyncResponseLike: ...
 
     async def arequest(
@@ -418,19 +418,19 @@ class TransportAdapter(Protocol):
         *,
         method: str,
         url: str,
-        client: Optional[Any] = None,
-        headers: Optional[Dict[str, str]] = None,
-        cookies: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Any] = None,
+        client: Any | None = None,
+        headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: Any | None = None,
         allow_redirects: bool = True,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
-        verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
+        proxies: Union[str, dict[str, str]] | None = None,
+        retry: "RetryPolicy" | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
+        verify: Union[bool, str, ssl.SSLContext] | None = None,
     ) -> AsyncResponseLike: ...
 
     async def stream_bytes(
@@ -438,16 +438,16 @@ class TransportAdapter(Protocol):
         *,
         method: str,
         url: str,
-        client: Optional[Any] = None,
-        headers: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Any] = None,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
+        client: Any | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: Any | None = None,
+        proxies: Union[str, dict[str, str]] | None = None,
         chunk_size: int = 65536,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
+        cert_pinning: dict[str, set[str]] | None = None,
     ) -> AsyncIterator[bytes]: ...
 
     async def stream_sse(
@@ -455,15 +455,15 @@ class TransportAdapter(Protocol):
         *,
         url: str,
         method: str = "GET",
-        client: Optional[Any] = None,
-        headers: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        timeout: Optional[Any] = None,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
+        client: Any | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        timeout: Any | None = None,
+        proxies: Union[str, dict[str, str]] | None = None,
+        retry: "RetryPolicy" | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
     ) -> AsyncIterator["SSEEvent"]: ...
 
 
@@ -475,18 +475,18 @@ class HttpxAdapter:
         *,
         method: str,
         url: str,
-        client: Optional["httpx.Client"] = None,
-        headers: Optional[Dict[str, str]] = None,
-        cookies: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Union[float, "httpx.Timeout"]] = None,
+        client: "httpx.Client" | None = None,
+        headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: Union[float, "httpx.Timeout"] | None = None,
         allow_redirects: bool = True,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
+        proxies: Union[str, dict[str, str]] | None = None,
+        retry: "RetryPolicy" | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
     ) -> "httpx.Response":
         return _fetch_httpx_response(
             method=method,
@@ -510,19 +510,19 @@ class HttpxAdapter:
         *,
         method: str,
         url: str,
-        client: Optional["httpx.AsyncClient"] = None,
-        headers: Optional[Dict[str, str]] = None,
-        cookies: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Union[float, "httpx.Timeout"]] = None,
+        client: "httpx.AsyncClient" | None = None,
+        headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: Union[float, "httpx.Timeout"] | None = None,
         allow_redirects: bool = True,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
-        verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
+        proxies: Union[str, dict[str, str]] | None = None,
+        retry: "RetryPolicy" | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
+        verify: Union[bool, str, ssl.SSLContext] | None = None,
     ) -> "httpx.Response":
         return await _afetch_httpx(
             method=method,
@@ -547,16 +547,16 @@ class HttpxAdapter:
         *,
         method: str,
         url: str,
-        client: Optional["httpx.AsyncClient"] = None,
-        headers: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
+        client: "httpx.AsyncClient" | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: Union[float, "httpx.Timeout"] | None = None,
+        proxies: Union[str, dict[str, str]] | None = None,
         chunk_size: int = 65536,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
+        cert_pinning: dict[str, set[str]] | None = None,
     ) -> AsyncIterator[bytes]:
         async for chunk in _astream_bytes_httpx(
             method=method,
@@ -579,15 +579,15 @@ class HttpxAdapter:
         *,
         url: str,
         method: str = "GET",
-        client: Optional["httpx.AsyncClient"] = None,
-        headers: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
+        client: "httpx.AsyncClient" | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        timeout: Union[float, "httpx.Timeout"] | None = None,
+        proxies: Union[str, dict[str, str]] | None = None,
+        retry: "RetryPolicy" | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
     ) -> AsyncIterator["SSEEvent"]:
         async for event in _astream_sse_httpx(
             url=url,
@@ -616,19 +616,19 @@ class AiohttpAdapter:
         *,
         method: str,
         url: str,
-        client: Optional[Any] = None,
-        headers: Optional[Dict[str, str]] = None,
-        cookies: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Any] = None,
+        client: Any | None = None,
+        headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: Any | None = None,
         allow_redirects: bool = True,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
-        verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
+        proxies: Union[str, dict[str, str]] | None = None,
+        retry: "RetryPolicy" | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
+        verify: Union[bool, str, ssl.SSLContext] | None = None,
     ) -> AsyncResponseLike:
         return await _afetch_aiohttp(
             method=method,
@@ -653,16 +653,16 @@ class AiohttpAdapter:
         *,
         method: str,
         url: str,
-        client: Optional[Any] = None,
-        headers: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Any] = None,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
+        client: Any | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: Any | None = None,
+        proxies: Union[str, dict[str, str]] | None = None,
         chunk_size: int = 65536,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
+        cert_pinning: dict[str, set[str]] | None = None,
     ) -> AsyncIterator[bytes]:
         async for chunk in _astream_bytes_aiohttp(
             method=method,
@@ -685,15 +685,15 @@ class AiohttpAdapter:
         *,
         url: str,
         method: str = "GET",
-        client: Optional[Any] = None,
-        headers: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        timeout: Optional[Any] = None,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
+        client: Any | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        timeout: Any | None = None,
+        proxies: Union[str, dict[str, str]] | None = None,
+        retry: "RetryPolicy" | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
     ) -> AsyncIterator["SSEEvent"]:
         async for event in _astream_sse_aiohttp(
             url=url,
@@ -737,8 +737,8 @@ _SENSITIVE_HEADER_KEYS = {
 }
 
 
-def _redact_headers(h: Optional[Dict[str, str]]) -> Dict[str, str]:
-    safe: Dict[str, str] = {}
+def _redact_headers(h: dict[str, str] | None) -> dict[str, str]:
+    safe: dict[str, str] = {}
     if not h:
         return safe
     for k, v in h.items():
@@ -749,7 +749,7 @@ def _redact_headers(h: Optional[Dict[str, str]]) -> Dict[str, str]:
     return safe
 
 
-def _sanitize_accept_encoding_for_backend(headers: Optional[Dict[str, str]], backend: str) -> Dict[str, str]:
+def _sanitize_accept_encoding_for_backend(headers: dict[str, str] | None, backend: str) -> dict[str, str]:
     """Return a copy of headers with backend-specific Accept-Encoding tweaks.
 
     - Case-insensitively reads/removes existing Accept-Encoding headers.
@@ -758,7 +758,7 @@ def _sanitize_accept_encoding_for_backend(headers: Optional[Dict[str, str]], bac
     - Writes back a single canonical 'Accept-Encoding' header if tokens remain; otherwise removes it.
     - Best-effort: on any parsing error, leaves headers unchanged.
     """
-    hdrs: Dict[str, str] = dict(headers or {})
+    hdrs: dict[str, str] = dict(headers or {})
     backend_norm = str(backend).lower()
     if backend_norm not in {"httpx", "aiohttp", "requests", "urllib3"}:
         return hdrs
@@ -805,7 +805,7 @@ def _sanitize_accept_encoding_for_backend(headers: Optional[Dict[str, str]], bac
     return hdrs
 
 
-def _url_parts(u: Union[str, Any]) -> Tuple[str, str, str]:
+def _url_parts(u: Union[str, Any]) -> tuple[str, str, str]:
     """Return (scheme, host, path) for logging; redacts query by omission."""
     try:
         s = str(u)
@@ -863,7 +863,7 @@ def _parse_host_from_url(url: str) -> str:
         return ""
 
 
-def _inject_trace_headers(headers: Optional[Dict[str, str]]) -> Dict[str, str]:
+def _inject_trace_headers(headers: dict[str, str] | None) -> dict[str, str]:
     out = dict(headers or {})
     if _OTEL_AVAILABLE:
         try:  # best-effort injection
@@ -889,13 +889,14 @@ def _inject_trace_headers(headers: Optional[Dict[str, str]]) -> Dict[str, str]:
 
 def _validate_egress_or_raise(url: str) -> None:
     from urllib.parse import urlparse as _urlparse
+
     from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 
     # In test environments, avoid DNS-based private IP checks for hostnames
     # (they can hang or be environment-dependent). For literal IPs we still
     # enforce the default private IP policy so security-focused tests remain
     # accurate.
-    block_override: Optional[bool] = None
+    block_override: bool | None = None
     if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING"):
         try:
             parsed = _urlparse(url)
@@ -941,7 +942,7 @@ def _is_url_allowed(url: str) -> bool:
         return False
 
 
-def _validate_proxies_or_raise(proxies: Optional[Union[str, Dict[str, str]]]) -> None:
+def _validate_proxies_or_raise(proxies: Union[str, dict[str, str]] | None) -> None:
     if not proxies:
         return
     hosts: set[str] = set()
@@ -960,7 +961,7 @@ def _validate_proxies_or_raise(proxies: Optional[Union[str, Dict[str, str]]]) ->
             raise EgressPolicyError(f"Proxy host not in allowlist: {h}")
 
 
-def _resolve_proxy_for_url(url: str, proxies: Optional[Union[str, Dict[str, str]]]) -> Optional[str]:
+def _resolve_proxy_for_url(url: str, proxies: Union[str, dict[str, str]] | None) -> str | None:
     if not proxies:
         return None
     if isinstance(proxies, str):
@@ -974,7 +975,7 @@ def _resolve_proxy_for_url(url: str, proxies: Optional[Union[str, Dict[str, str]
     return proxies.get("http") or proxies.get("https")
 
 
-def _resolve_redirect_url(base_url: str, location: str) -> Optional[str]:
+def _resolve_redirect_url(base_url: str, location: str) -> str | None:
     try:
         if httpx is not None:
             try:
@@ -1026,7 +1027,7 @@ def _is_dns_resolution_error(exc: Exception) -> bool:
             "DNSResolutionError",
         )
         seen_ids: set[int] = set()
-        cur: Optional[BaseException] = exc
+        cur: BaseException | None = exc
         while cur is not None and id(cur) not in seen_ids:
             seen_ids.add(id(cur))
             if isinstance(cur, _socket.gaierror):
@@ -1061,7 +1062,7 @@ def _aiohttp_timeout_from_defaults() -> "aiohttp.ClientTimeout":
     )
 
 
-def _aiohttp_timeout_from_value(timeout: Optional[Any]) -> Optional["aiohttp.ClientTimeout"]:
+def _aiohttp_timeout_from_value(timeout: Any | None) -> "aiohttp.ClientTimeout" | None:
     if aiohttp is None:  # pragma: no cover
         return None
     if timeout is None:
@@ -1081,7 +1082,7 @@ def _aiohttp_timeout_from_value(timeout: Optional[Any]) -> Optional["aiohttp.Cli
     )
 
 
-def _aiohttp_ssl_from_verify(verify: Optional[Any]) -> Optional[Any]:
+def _aiohttp_ssl_from_verify(verify: Any | None) -> Any | None:
     if aiohttp is None:  # pragma: no cover
         return None
     if verify is None or verify is True:
@@ -1104,10 +1105,10 @@ def _aiohttp_ssl_from_verify(verify: Optional[Any]) -> Optional[Any]:
     return _build_ssl_context(ENFORCE_TLS_MIN, TLS_MIN_VERSION)
 
 
-_AIOHTTP_SESSION_CACHE: Dict[int, Any] = {}
+_AIOHTTP_SESSION_CACHE: dict[int, Any] = {}
 _AIOHTTP_SESSION_LOCK = threading.Lock()
-_HTTPX_ASYNC_CLIENT_CACHE: Dict[Tuple[int, Any], Any] = {}
-_HTTPX_CLIENT_CACHE: Dict[Any, Any] = {}
+_HTTPX_ASYNC_CLIENT_CACHE: dict[tuple[int, Any], Any] = {}
+_HTTPX_CLIENT_CACHE: dict[Any, Any] = {}
 _HTTPX_CLIENT_LOCK = threading.Lock()
 
 
@@ -1125,11 +1126,11 @@ def _normalize_httpx_cache_value(value: Any) -> Any:
 
 
 def _httpx_cache_key(
-    proxies: Optional[Any],
-    verify: Optional[Any],
+    proxies: Any | None,
+    verify: Any | None,
     *,
-    factory: Optional[Any] = None,
-) -> Tuple[Any, Any, Any]:
+    factory: Any | None = None,
+) -> tuple[Any, Any, Any]:
     factory_key: Any = factory
     if factory is not None:
         try:
@@ -1145,8 +1146,8 @@ def _httpx_cache_key(
 
 def _get_httpx_async_client(
     *,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
+    proxies: Union[str, dict[str, str]] | None = None,
+    verify: Union[bool, str, ssl.SSLContext] | None = None,
 ) -> "httpx.AsyncClient":
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
@@ -1163,8 +1164,8 @@ def _get_httpx_async_client(
 
 def _get_httpx_client(
     *,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
+    proxies: Union[str, dict[str, str]] | None = None,
+    verify: Union[bool, str, ssl.SSLContext] | None = None,
 ) -> "httpx.Client":
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
@@ -1245,7 +1246,7 @@ async def shutdown_http_client() -> None:
             pass
 
 
-def _iter_file_items(files: Any) -> Iterable[Tuple[str, Any]]:
+def _iter_file_items(files: Any) -> Iterable[tuple[str, Any]]:
     if files is None:
         return []
     if isinstance(files, dict):
@@ -1266,7 +1267,7 @@ def _rewind_files(files: Any) -> None:
             continue
 
 
-def _validate_retry_files_seekable(files: Any, retry: Optional["RetryPolicy"]) -> None:
+def _validate_retry_files_seekable(files: Any, retry: "RetryPolicy" | None) -> None:
     if files is None or retry is None:
         return
     if not retry.enabled:
@@ -1291,7 +1292,7 @@ def _validate_retry_files_seekable(files: Any, retry: Optional["RetryPolicy"]) -
                 )
 
 
-def _build_aiohttp_form(data: Optional[Any], files: Optional[Any]) -> Optional["aiohttp.FormData"]:
+def _build_aiohttp_form(data: Any | None, files: Any | None) -> "aiohttp.FormData" | None:
     if aiohttp is None:  # pragma: no cover
         return None
     if files is None:
@@ -1339,7 +1340,7 @@ def _decorrelated_jitter_sleep(prev: float, base_ms: int, cap_s: int) -> float:
     return sleep
 
 
-def _should_retry(method: str, status: Optional[int], exc: Optional[Exception], policy: RetryPolicy) -> Tuple[bool, str]:
+def _should_retry(method: str, status: int | None, exc: Exception | None, policy: RetryPolicy) -> tuple[bool, str]:
     m = method.upper()
     if exc is not None:
         # Treat DNS resolution / unknown-host failures as permanent.
@@ -1358,7 +1359,7 @@ def _should_retry(method: str, status: Optional[int], exc: Optional[Exception], 
     return False, "status_not_retriable"
 
 
-def _build_default_headers(component: Optional[str] = None) -> Dict[str, str]:
+def _build_default_headers(component: str | None = None) -> dict[str, str]:
     # Standardize UA: tldw_server/<version> (<component>)
     version = _get_project_version()
     if component:
@@ -1389,7 +1390,7 @@ def _httpx_limits_default():  # Optional["httpx.Limits"]
     return None
 
 
-def _tls_min_version_from_str(ver: Optional[str]) -> ssl.TLSVersion:
+def _tls_min_version_from_str(ver: str | None) -> ssl.TLSVersion:
     try:
         v = (ver or "1.2").strip().lower()
         if v in {"1.3", "tls1.3", "tlsv1.3"}:
@@ -1399,7 +1400,7 @@ def _tls_min_version_from_str(ver: Optional[str]) -> ssl.TLSVersion:
     return ssl.TLSVersion.TLSv1_2
 
 
-def _build_ssl_context(enforce_min: bool, min_ver: Optional[str]) -> Optional[ssl.SSLContext]:
+def _build_ssl_context(enforce_min: bool, min_ver: str | None) -> ssl.SSLContext | None:
     if not enforce_min:
         return None
     ctx = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
@@ -1410,12 +1411,12 @@ def _build_ssl_context(enforce_min: bool, min_ver: Optional[str]) -> Optional[ss
     return ctx
 
 
-def _get_client_cert_pins(client: Any) -> Optional[Dict[str, set[str]]]:
+def _get_client_cert_pins(client: Any) -> dict[str, set[str]] | None:
     try:
         pins = getattr(client, "_tldw_cert_pinning", None)
         if pins is None:
             return None
-        out: Dict[str, set[str]] = {}
+        out: dict[str, set[str]] = {}
         for host, vals in pins.items():
             out[str(host).lower()] = {str(v).lower() for v in (vals or set())}
         return out
@@ -1423,7 +1424,7 @@ def _get_client_cert_pins(client: Any) -> Optional[Dict[str, set[str]]]:
         return None
 
 
-def _parse_pins_from_env() -> Optional[Dict[str, set[str]]]:
+def _parse_pins_from_env() -> dict[str, set[str]] | None:
     """Parse env-driven certificate pins: HTTP_CERT_PINS="hostA=pinA|pinB,hostB=pinC".
 
     Returns a mapping host -> set of lowercase sha256 hex pins.
@@ -1431,7 +1432,7 @@ def _parse_pins_from_env() -> Optional[Dict[str, set[str]]]:
     raw = os.getenv("HTTP_CERT_PINS", "").strip()
     if not raw:
         return None
-    out: Dict[str, set[str]] = {}
+    out: dict[str, set[str]] = {}
     try:
         parts = [p for p in re.split(r"[,;]", raw) if p]
         for part in parts:
@@ -1447,7 +1448,7 @@ def _parse_pins_from_env() -> Optional[Dict[str, set[str]]]:
     return out or None
 
 
-def _check_cert_pinning(host: str, port: int, pins: set[str], min_ver: Optional[str]) -> None:
+def _check_cert_pinning(host: str, port: int, pins: set[str], min_ver: str | None) -> None:
     if not host or not pins:
         return
     try:
@@ -1487,7 +1488,7 @@ def _check_cert_pinning(host: str, port: int, pins: set[str], min_ver: Optional[
 # Client factories
 # --------------------------------------------------------------------------------------
 
-def _instantiate_client(factory, kwargs: Dict[str, Any]):  # type: ignore[no-untyped-def]
+def _instantiate_client(factory, kwargs: dict[str, Any]):  # type: ignore[no-untyped-def]
     """Instantiate httpx client tolerating version differences in kwargs.
 
     On TypeError mentioning an unexpected keyword argument, remove that kwarg
@@ -1525,19 +1526,19 @@ def _instantiate_client(factory, kwargs: Dict[str, Any]):  # type: ignore[no-unt
 
 def create_async_client(
     *,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    limits: Optional["httpx.Limits"] = None,
-    base_url: Optional[str] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
+    timeout: Union[float, "httpx.Timeout"] | None = None,
+    limits: "httpx.Limits" | None = None,
+    base_url: str | None = None,
+    proxies: Union[str, dict[str, str]] | None = None,
     trust_env: bool = DEFAULT_TRUST_ENV,
     http2: bool = True,
     http3: bool = False,  # placeholder for future
-    headers: Optional[Dict[str, str]] = None,
-    transport: Optional["httpx.BaseTransport"] = None,
+    headers: dict[str, str] | None = None,
+    transport: "httpx.BaseTransport" | None = None,
     enforce_tls_min_version: bool = ENFORCE_TLS_MIN,
     tls_min_version: str = TLS_MIN_VERSION,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
-    verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
+    cert_pinning: dict[str, set[str]] | None = None,
+    verify: Union[bool, str, ssl.SSLContext] | None = None,
 ) -> "httpx.AsyncClient":
     _hx = _resolve_httpx()
     if _hx is None:  # pragma: no cover
@@ -1564,7 +1565,7 @@ def create_async_client(
     if headers:
         hdrs.update(headers)
     verify_ctx = _build_ssl_context(enforce_tls_min_version, tls_min_version)
-    kwargs: Dict[str, Any] = dict(
+    kwargs: dict[str, Any] = dict(
         timeout=to,
         trust_env=trust_env,
         http2=http2,
@@ -1597,19 +1598,19 @@ def create_async_client(
 
 def create_client(
     *,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    limits: Optional["httpx.Limits"] = None,
-    base_url: Optional[str] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
+    timeout: Union[float, "httpx.Timeout"] | None = None,
+    limits: "httpx.Limits" | None = None,
+    base_url: str | None = None,
+    proxies: Union[str, dict[str, str]] | None = None,
     trust_env: bool = DEFAULT_TRUST_ENV,
     http2: bool = True,
     http3: bool = False,  # placeholder for future
-    headers: Optional[Dict[str, str]] = None,
-    transport: Optional["httpx.BaseTransport"] = None,
+    headers: dict[str, str] | None = None,
+    transport: "httpx.BaseTransport" | None = None,
     enforce_tls_min_version: bool = ENFORCE_TLS_MIN,
     tls_min_version: str = TLS_MIN_VERSION,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
-    verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
+    cert_pinning: dict[str, set[str]] | None = None,
+    verify: Union[bool, str, ssl.SSLContext] | None = None,
 ) -> "httpx.Client":
     _hx = _resolve_httpx()
     if _hx is None:  # pragma: no cover
@@ -1636,7 +1637,7 @@ def create_client(
     if headers:
         hdrs.update(headers)
     verify_ctx = _build_ssl_context(enforce_tls_min_version, tls_min_version)
-    kwargs: Dict[str, Any] = dict(
+    kwargs: dict[str, Any] = dict(
         timeout=to,
         trust_env=trust_env,
         http2=http2,
@@ -1682,13 +1683,13 @@ def _httpx_request_io(
     client: "httpx.Client",
     method: str,
     url: str,
-    headers: Optional[Dict[str, str]] = None,
-    cookies: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Union[float, "httpx.Timeout"] | None = None,
     follow_redirects: bool = False,
 ) -> "httpx.Response":
     method_upper = str(method).upper()
@@ -1713,7 +1714,7 @@ def _httpx_request_io(
             timeout=timeout,
             follow_redirects=follow_redirects,
         )
-    req_kwargs: Dict[str, Any] = dict(
+    req_kwargs: dict[str, Any] = dict(
         headers=headers,
         cookies=cookies,
         params=params,
@@ -1731,15 +1732,15 @@ async def _httpx_arequest_io(
     client: "httpx.AsyncClient",
     method: str,
     url: str,
-    headers: Optional[Dict[str, str]] = None,
-    cookies: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Union[float, "httpx.Timeout"] | None = None,
     follow_redirects: bool = False,
-    verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
+    verify: Union[bool, str, ssl.SSLContext] | None = None,
 ) -> "httpx.Response":
     method_upper = str(method).upper()
     if method_upper == "POST" and hasattr(client, "post") and verify is None:
@@ -1775,7 +1776,7 @@ async def _httpx_arequest_io(
         logger.debug("afetch io: using AsyncClient.request")
     except Exception:
         pass
-    req_kwargs: Dict[str, Any] = dict(
+    req_kwargs: dict[str, Any] = dict(
         headers=headers,
         cookies=cookies,
         params=params,
@@ -1793,19 +1794,19 @@ async def _aiohttp_request_io(
     session: "aiohttp.ClientSession",
     method: str,
     url: str,
-    headers: Optional[Dict[str, str]] = None,
-    cookies: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Any] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    ssl_override: Optional[Any] = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Any | None = None,
+    proxies: Union[str, dict[str, str]] | None = None,
+    ssl_override: Any | None = None,
 ) -> _AiohttpResponse:
     req_timeout = _aiohttp_timeout_from_value(timeout)
     proxy = _resolve_proxy_for_url(url, proxies)
-    req_kwargs: Dict[str, Any] = dict(
+    req_kwargs: dict[str, Any] = dict(
         headers=headers,
         cookies=cookies,
         params=params,
@@ -1835,14 +1836,14 @@ async def _httpx_stream_io(
     client: "httpx.AsyncClient",
     method: str,
     url: str,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    chunk_size: Optional[int] = None,
-) -> AsyncIterator[Tuple["httpx.Response", AsyncIterator[bytes]]]:
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Union[float, "httpx.Timeout"] | None = None,
+    chunk_size: int | None = None,
+) -> AsyncIterator[tuple["httpx.Response", AsyncIterator[bytes]]]:
     async with client.stream(
         str(method).upper(),
         url,
@@ -1866,19 +1867,19 @@ async def _aiohttp_stream_io(
     session: "aiohttp.ClientSession",
     method: str,
     url: str,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Any] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    ssl_override: Optional[Any] = None,
-    chunk_size: Optional[int] = None,
-) -> AsyncIterator[Tuple[Any, AsyncIterator[bytes]]]:
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Any | None = None,
+    proxies: Union[str, dict[str, str]] | None = None,
+    ssl_override: Any | None = None,
+    chunk_size: int | None = None,
+) -> AsyncIterator[tuple[Any, AsyncIterator[bytes]]]:
     req_timeout = _aiohttp_timeout_from_value(timeout)
     proxy = _resolve_proxy_for_url(url, proxies)
-    req_kwargs: Dict[str, Any] = dict(
+    req_kwargs: dict[str, Any] = dict(
         headers=headers,
         params=params,
         timeout=req_timeout,
@@ -1923,7 +1924,7 @@ async def _iter_sse_events_from_bytes(byte_iter: AsyncIterator[bytes]) -> AsyncI
                 yield event
 
 
-def _stream_timeout_values(timeout: Optional[Any]) -> Tuple[float, float]:
+def _stream_timeout_values(timeout: Any | None) -> tuple[float, float]:
     first_byte_timeout = DEFAULT_CONNECT_TIMEOUT
     idle_timeout = DEFAULT_READ_TIMEOUT
     if timeout is None:
@@ -1952,7 +1953,7 @@ def _stream_timeout_values(timeout: Optional[Any]) -> Tuple[float, float]:
 
 async def _iter_bytes_with_timeouts(
     byte_iter: AsyncIterator[bytes],
-    timeout: Optional[Any],
+    timeout: Any | None,
 ) -> AsyncIterator[bytes]:
     first_timeout, idle_timeout = _stream_timeout_values(timeout)
     first_timeout = max(0.001, float(first_timeout))
@@ -1979,19 +1980,19 @@ async def _afetch_httpx(
     *,
     method: str,
     url: str,
-    client: Optional["httpx.AsyncClient"] = None,
-    headers: Optional[Dict[str, str]] = None,
-    cookies: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
+    client: "httpx.AsyncClient" | None = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Union[float, "httpx.Timeout"] | None = None,
     allow_redirects: bool = True,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
-    verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
+    proxies: Union[str, dict[str, str]] | None = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
+    verify: Union[bool, str, ssl.SSLContext] | None = None,
 ) -> "httpx.Response":
     """Async httpx request with retries and egress enforcement.
 
@@ -2009,14 +2010,14 @@ async def _afetch_httpx(
     attempts = max(1, retry.attempts)
     sleep_s = 0.0
     t0 = time.time()
-    last_exc: Optional[Exception] = None
+    last_exc: Exception | None = None
     tm = get_tracing_manager()
     host_attr = _parse_host_from_url(url)
     method_upper = str(method).upper()
     _head_disable_h2_tried = False
     _head_get_range_tried = False
 
-    async def _do_once(ac: "httpx.AsyncClient", target_url: str) -> Tuple[Optional["httpx.Response"], str]:
+    async def _do_once(ac: "httpx.AsyncClient", target_url: str) -> tuple["httpx.Response" | None, str]:
         req_headers = _inject_trace_headers(headers)
         # Parity with other paths: drop 'zstd' from Accept-Encoding for httpx
         try:
@@ -2327,19 +2328,19 @@ async def _afetch_aiohttp(
     *,
     method: str,
     url: str,
-    client: Optional[Any] = None,
-    headers: Optional[Dict[str, str]] = None,
-    cookies: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Any] = None,
+    client: Any | None = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Any | None = None,
     allow_redirects: bool = True,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
-    verify: Optional[Any] = None,
+    proxies: Union[str, dict[str, str]] | None = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
+    verify: Any | None = None,
 ) -> _AiohttpResponse:
     """Async aiohttp request with retries and egress enforcement.
 
@@ -2357,7 +2358,7 @@ async def _afetch_aiohttp(
     attempts = max(1, retry.attempts)
     sleep_s = 0.0
     t0 = time.time()
-    last_exc: Optional[Exception] = None
+    last_exc: Exception | None = None
     tm = get_tracing_manager()
     host_attr = _parse_host_from_url(url)
     method_upper = str(method).upper()
@@ -2365,7 +2366,7 @@ async def _afetch_aiohttp(
 
     ssl_override = _aiohttp_ssl_from_verify(verify)
 
-    async def _do_once(session: "aiohttp.ClientSession", target_url: str) -> Tuple[Optional[_AiohttpResponse], str]:
+    async def _do_once(session: "aiohttp.ClientSession", target_url: str) -> tuple[_AiohttpResponse | None, str]:
         req_headers = _inject_trace_headers(headers)
         try:
             req_headers = _sanitize_accept_encoding_for_backend(req_headers, "aiohttp")
@@ -2607,19 +2608,19 @@ async def afetch(
     *,
     method: str,
     url: str,
-    client: Optional[Any] = None,
-    headers: Optional[Dict[str, str]] = None,
-    cookies: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Any] = None,
+    client: Any | None = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Any | None = None,
     allow_redirects: bool = True,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
-    verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
+    proxies: Union[str, dict[str, str]] | None = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
+    verify: Union[bool, str, ssl.SSLContext] | None = None,
 ) -> Any:
     if client is not None:
         adapter_name = "aiohttp" if _is_aiohttp_client(client) else "httpx"
@@ -2648,14 +2649,14 @@ async def afetch(
 async def apost(
     *,
     url: str,
-    client: Optional["httpx.AsyncClient"] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
+    client: "httpx.AsyncClient" | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Union[float, "httpx.Timeout"] | None = None,
+    proxies: Union[str, dict[str, str]] | None = None,
 ) -> "httpx.Response":
     """
     Minimal async POST helper that enforces egress policy.
@@ -2698,18 +2699,18 @@ def _fetch_httpx_response(
     *,
     method: str,
     url: str,
-    client: Optional["httpx.Client"] = None,
-    headers: Optional[Dict[str, str]] = None,
-    cookies: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
+    client: "httpx.Client" | None = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Union[float, "httpx.Timeout"] | None = None,
     allow_redirects: bool = True,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
+    proxies: Union[str, dict[str, str]] | None = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
 ) -> "httpx.Response":
     """Sync httpx request with retries and egress enforcement.
 
@@ -2733,7 +2734,7 @@ def _fetch_httpx_response(
     _head_disable_h2_tried = False
     _head_get_range_tried = False
 
-    def _do_once(sc: "httpx.Client", target_url: str) -> Tuple[Optional["httpx.Response"], str]:
+    def _do_once(sc: "httpx.Client", target_url: str) -> tuple["httpx.Response" | None, str]:
         req_headers = _inject_trace_headers(headers)
         # Parity with simple fetch: drop 'zstd' from Accept-Encoding for httpx
         try:
@@ -2978,11 +2979,11 @@ def _fetch_httpx_response(
 def _fetch_curl_simple(
     *,
     url: str,
-    headers: Dict[str, str],
-    cookies: Optional[Dict[str, str]],
-    timeout: Optional[float],
-    impersonate: Optional[str],
-    proxies: Optional[Dict[str, str]],
+    headers: dict[str, str],
+    cookies: dict[str, str] | None,
+    timeout: float | None,
+    impersonate: str | None,
+    proxies: dict[str, str] | None,
     allow_redirects: bool,
 ) -> "HttpResponse":
     CurlSession = _resolve_curl_session()
@@ -2991,7 +2992,7 @@ def _fetch_curl_simple(
     if proxies:
         _validate_proxies_or_raise(proxies)
 
-    req_kwargs: Dict[str, Any] = {
+    req_kwargs: dict[str, Any] = {
         "headers": headers,
         "cookies": cookies,
         "allow_redirects": allow_redirects,
@@ -3102,7 +3103,7 @@ def fetch(*args, **kwargs):
         # Cross-host redirects configurable (default disabled)
         return bool(allow_cross_host)
 
-    client_kwargs: Dict[str, Any] = {}
+    client_kwargs: dict[str, Any] = {}
     if timeout is not None:
         client_kwargs["timeout"] = timeout
     if trust_env is not None:
@@ -3179,9 +3180,9 @@ async def afetch_json(
     *,
     method: str,
     url: str,
-    client: Optional["httpx.AsyncClient"] = None,
+    client: "httpx.AsyncClient" | None = None,
     require_json_ct: bool = True,
-    max_bytes: Optional[int] = None,
+    max_bytes: int | None = None,
     **kwargs: Any,
 ) -> Any:
     r = await afetch(method=method, url=url, client=client, **kwargs)
@@ -3206,9 +3207,9 @@ def fetch_json(
     *,
     method: str,
     url: str,
-    client: Optional["httpx.Client"] = None,
+    client: "httpx.Client" | None = None,
     require_json_ct: bool = True,
-    max_bytes: Optional[int] = None,
+    max_bytes: int | None = None,
     **kwargs: Any,
 ) -> Any:
     r = fetch(method=method, url=url, client=client, **kwargs)
@@ -3237,16 +3238,16 @@ async def _astream_bytes_httpx(
     *,
     method: str,
     url: str,
-    client: Optional["httpx.AsyncClient"] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
+    client: "httpx.AsyncClient" | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Union[float, "httpx.Timeout"] | None = None,
+    proxies: Union[str, dict[str, str]] | None = None,
     chunk_size: int = 65536,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
+    cert_pinning: dict[str, set[str]] | None = None,
 ) -> AsyncIterator[bytes]:
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
@@ -3346,16 +3347,16 @@ async def _astream_bytes_aiohttp(
     *,
     method: str,
     url: str,
-    client: Optional[Any] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Any] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
+    client: Any | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Any | None = None,
+    proxies: Union[str, dict[str, str]] | None = None,
     chunk_size: int = 65536,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
+    cert_pinning: dict[str, set[str]] | None = None,
 ) -> AsyncIterator[bytes]:
     if aiohttp is None:  # pragma: no cover
         raise RuntimeError("aiohttp is not available")
@@ -3443,16 +3444,16 @@ async def astream_bytes(
     *,
     method: str,
     url: str,
-    client: Optional[Any] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Any] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
+    client: Any | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Any | None = None,
+    proxies: Union[str, dict[str, str]] | None = None,
     chunk_size: int = 65536,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
+    cert_pinning: dict[str, set[str]] | None = None,
 ) -> AsyncIterator[bytes]:
     if client is not None:
         adapter_name = "aiohttp" if _is_aiohttp_client(client) else "httpx"
@@ -3480,15 +3481,15 @@ async def _astream_sse_httpx(
     *,
     url: str,
     method: str = "GET",
-    client: Optional["httpx.AsyncClient"] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
+    client: "httpx.AsyncClient" | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    timeout: Union[float, "httpx.Timeout"] | None = None,
+    proxies: Union[str, dict[str, str]] | None = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
 ) -> AsyncIterator[SSEEvent]:
     hdrs = {"Accept": "text/event-stream"}
     if headers:
@@ -3615,16 +3616,16 @@ async def _astream_sse_aiohttp(
     *,
     url: str,
     method: str = "GET",
-    client: Optional[Any] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Any] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
+    client: Any | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Any | None = None,
+    proxies: Union[str, dict[str, str]] | None = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
 ) -> AsyncIterator[SSEEvent]:
     if aiohttp is None:  # pragma: no cover
         raise RuntimeError("aiohttp is not available")
@@ -3739,15 +3740,15 @@ async def astream_sse(
     *,
     url: str,
     method: str = "GET",
-    client: Optional[Any] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    timeout: Optional[Any] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
+    client: Any | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    timeout: Any | None = None,
+    proxies: Union[str, dict[str, str]] | None = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
 ) -> AsyncIterator[SSEEvent]:
     if client is not None:
         adapter_name = "aiohttp" if _is_aiohttp_client(client) else "httpx"
@@ -3770,7 +3771,7 @@ async def astream_sse(
         yield event
 
 
-def _parse_sse_event(raw: str) -> Optional[SSEEvent]:
+def _parse_sse_event(raw: str) -> SSEEvent | None:
     event = SSEEvent()
     data_lines: list[str] = []
     saw_event = False
@@ -3812,19 +3813,19 @@ def download(
     *,
     url: str,
     dest: Union[str, Path],
-    client: Optional["httpx.Client"] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    checksum: Optional[str] = None,
+    client: "httpx.Client" | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    timeout: Union[float, "httpx.Timeout"] | None = None,
+    proxies: Union[str, dict[str, str]] | None = None,
+    checksum: str | None = None,
     checksum_alg: str = "sha256",
     resume: bool = False,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
     # Optional safety checks
-    max_bytes_total: Optional[int] = None,
-    require_content_type: Optional[str] = None,
+    max_bytes_total: int | None = None,
+    require_content_type: str | None = None,
 ) -> Path:
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
@@ -3863,7 +3864,7 @@ def download(
             if max_bytes_total is not None and existing > max_bytes_total:
                 raise DownloadError("Disk quota exceeded before download")
 
-            last_exc: Optional[Exception] = None
+            last_exc: Exception | None = None
             try:
                 # Optional cert pinning
                 try:
@@ -4008,18 +4009,18 @@ async def adownload(
     *,
     url: str,
     dest: Union[str, Path],
-    client: Optional["httpx.AsyncClient"] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    checksum: Optional[str] = None,
+    client: "httpx.AsyncClient" | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    timeout: Union[float, "httpx.Timeout"] | None = None,
+    proxies: Union[str, dict[str, str]] | None = None,
+    checksum: str | None = None,
     checksum_alg: str = "sha256",
     resume: bool = False,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
-    max_bytes_total: Optional[int] = None,
-    require_content_type: Optional[str] = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
+    max_bytes_total: int | None = None,
+    require_content_type: str | None = None,
 ) -> Path:
     # Reuse sync downloader in a thread to avoid blocking event loop on file I/O
     return await asyncio.to_thread(

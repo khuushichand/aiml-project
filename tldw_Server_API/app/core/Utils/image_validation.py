@@ -3,9 +3,10 @@
 #
 # Imports
 import base64
-import re
-from typing import Optional, Tuple, Set
 import os
+import re
+from typing import Optional
+
 from loguru import logger
 
 #######################################################################################################################
@@ -35,7 +36,7 @@ def get_max_base64_bytes() -> int:
     return 3 * 1024 * 1024
 
 
-def get_allowed_image_mime_types() -> Set[str]:
+def get_allowed_image_mime_types() -> set[str]:
     """Return allowed image MIME types (static set; hook for future config)."""
     # Optionally allow env override as comma-separated list
     try:
@@ -89,7 +90,7 @@ def estimate_decoded_size(base64_string: str) -> int:
     return int(len(base64_string) * 3 / 4)
 
 
-def validate_data_uri(data_uri: str) -> Tuple[bool, Optional[str], Optional[str]]:
+def validate_data_uri(data_uri: str) -> tuple[bool, Optional[str], Optional[str]]:
     """
     Validate a data URI and extract its components safely.
 
@@ -175,7 +176,7 @@ def safe_decode_base64_image(base64_data: str, mime_type: str) -> Optional[bytes
         return None
 
 
-def validate_image_url(url: str) -> Tuple[bool, Optional[str], Optional[bytes]]:
+def validate_image_url(url: str) -> tuple[bool, Optional[str], Optional[bytes]]:
     """
     Validate and process an image URL (data URI or HTTP URL).
 

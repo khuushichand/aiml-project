@@ -2,7 +2,7 @@
 Helpers for backfilling normalized chunk metadata in Chroma collections.
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 from tldw_Server_API.app.core.Chunking import Chunker
 
@@ -25,11 +25,11 @@ def _coerce_int(value: Any) -> Optional[int]:
 
 
 def normalize_chunk_metadata(
-    metadata: Optional[Dict[str, Any]],
+    metadata: Optional[dict[str, Any]],
     *,
     fill_offsets: bool = True,
     default_chunk_type: Optional[str] = None,
-) -> Tuple[Dict[str, Any], bool]:
+) -> tuple[dict[str, Any], bool]:
     """Normalize chunk metadata fields, returning (updated, changed)."""
     if not isinstance(metadata, dict):
         metadata = {}

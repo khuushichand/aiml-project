@@ -2,19 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
-from tldw_Server_API.app.core.Audit.unified_audit_service import (
-    UnifiedAuditService,
-    AuditEventType,
-    AuditEventCategory,
-)
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_permissions
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditEventCategory,
+    AuditEventType,
+    UnifiedAuditService,
+)
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings
@@ -43,7 +42,7 @@ except Exception:
     STREAM_AUTO_MAX_ROWS_THRESHOLD = _DEFAULT_STREAM_AUTO_THRESHOLD
 
 
-def _parse_dt(val: Optional[str], *, field_name: str) -> Optional[datetime]:
+def _parse_dt(val: str | None, *, field_name: str) -> datetime | None:
     """Parse an optional ISO8601 timestamp.
 
     Raises:
@@ -69,7 +68,7 @@ def _parse_dt(val: Optional[str], *, field_name: str) -> Optional[datetime]:
     return dt
 
 
-def _coerce_bool(value: Optional[object], default: bool = False) -> bool:
+def _coerce_bool(value: object | None, default: bool = False) -> bool:
     if value is None:
         return default
     if isinstance(value, bool):
@@ -84,7 +83,7 @@ def _shared_storage_enabled() -> bool:
     return mode == "shared"
 
 
-def _map_event_types(values: Optional[List[str]] | Optional[str]) -> Optional[List[AuditEventType]]:
+def _map_event_types(values: list[str] | None | str | None) -> list[AuditEventType] | None:
     if not values:
         return None
     # Accept comma-separated string or list of strings
@@ -92,8 +91,8 @@ def _map_event_types(values: Optional[List[str]] | Optional[str]) -> Optional[Li
         raw_vals = [s.strip() for s in values.split(',') if s.strip()]
     else:
         raw_vals = [v for v in values if v]
-    mapped: List[AuditEventType] = []
-    invalid: List[str] = []
+    mapped: list[AuditEventType] = []
+    invalid: list[str] = []
     for v in raw_vals:
         if not v:
             continue
@@ -116,15 +115,15 @@ def _map_event_types(values: Optional[List[str]] | Optional[str]) -> Optional[Li
     return mapped or None
 
 
-def _map_categories(values: Optional[List[str]] | Optional[str]) -> Optional[List[AuditEventCategory]]:
+def _map_categories(values: list[str] | None | str | None) -> list[AuditEventCategory] | None:
     if not values:
         return None
     if isinstance(values, str):
         raw_vals = [s.strip() for s in values.split(',') if s.strip()]
     else:
         raw_vals = [v for v in values if v]
-    mapped: List[AuditEventCategory] = []
-    invalid: List[str] = []
+    mapped: list[AuditEventCategory] = []
+    invalid: list[str] = []
     for v in raw_vals:
         if not v:
             continue
@@ -171,20 +170,20 @@ def _sanitize_filename(name: str, default_name: str) -> str:
 )
 async def export_audit_events(
     format: str = Query("json"),
-    start_time: Optional[str] = Query(None, description="ISO8601 start timestamp"),
-    end_time: Optional[str] = Query(None, description="ISO8601 end timestamp"),
-    event_type: Optional[str] = Query(None, description="Event types (enum name or value), comma-separated"),
-    category: Optional[str] = Query(None, description="Categories (enum name or value), comma-separated"),
-    min_risk_score: Optional[int] = Query(None, ge=0, le=100, description="Minimum risk score (0-100)"),
-    user_id: Optional[str] = Query(None),
-    request_id: Optional[str] = Query(None),
-    correlation_id: Optional[str] = Query(None),
-    ip_address: Optional[str] = Query(None, description="Filter by IP address"),
-    session_id: Optional[str] = Query(None, description="Filter by session id"),
-    endpoint: Optional[str] = Query(None, description="Filter by endpoint path"),
-    method: Optional[str] = Query(None, description="Filter by HTTP method"),
-    max_rows: Optional[int] = Query(None, description="Hard maximum rows to export"),
-    filename: Optional[str] = Query(None),
+    start_time: str | None = Query(None, description="ISO8601 start timestamp"),
+    end_time: str | None = Query(None, description="ISO8601 end timestamp"),
+    event_type: str | None = Query(None, description="Event types (enum name or value), comma-separated"),
+    category: str | None = Query(None, description="Categories (enum name or value), comma-separated"),
+    min_risk_score: int | None = Query(None, ge=0, le=100, description="Minimum risk score (0-100)"),
+    user_id: str | None = Query(None),
+    request_id: str | None = Query(None),
+    correlation_id: str | None = Query(None),
+    ip_address: str | None = Query(None, description="Filter by IP address"),
+    session_id: str | None = Query(None, description="Filter by session id"),
+    endpoint: str | None = Query(None, description="Filter by endpoint path"),
+    method: str | None = Query(None, description="Filter by HTTP method"),
+    max_rows: int | None = Query(None, description="Hard maximum rows to export"),
+    filename: str | None = Query(None),
     stream: bool = Query(False, description="Stream JSON/JSONL/CSV output incrementally"),
     current_user: User = Depends(get_request_user),
     audit_service: UnifiedAuditService = Depends(get_audit_service_for_user),
@@ -294,18 +293,18 @@ async def export_audit_events(
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
 async def count_audit_events(
-    start_time: Optional[str] = Query(None, description="ISO8601 start timestamp"),
-    end_time: Optional[str] = Query(None, description="ISO8601 end timestamp"),
-    event_type: Optional[str] = Query(None, description="Event types (enum name or value), comma-separated"),
-    category: Optional[str] = Query(None, description="Categories (enum name or value), comma-separated"),
-    min_risk_score: Optional[int] = Query(None, ge=0, le=100, description="Minimum risk score (0-100)"),
-    user_id: Optional[str] = Query(None),
-    request_id: Optional[str] = Query(None),
-    correlation_id: Optional[str] = Query(None),
-    ip_address: Optional[str] = Query(None, description="Filter by IP address"),
-    session_id: Optional[str] = Query(None, description="Filter by session id"),
-    endpoint: Optional[str] = Query(None, description="Filter by endpoint path"),
-    method: Optional[str] = Query(None, description="Filter by HTTP method"),
+    start_time: str | None = Query(None, description="ISO8601 start timestamp"),
+    end_time: str | None = Query(None, description="ISO8601 end timestamp"),
+    event_type: str | None = Query(None, description="Event types (enum name or value), comma-separated"),
+    category: str | None = Query(None, description="Categories (enum name or value), comma-separated"),
+    min_risk_score: int | None = Query(None, ge=0, le=100, description="Minimum risk score (0-100)"),
+    user_id: str | None = Query(None),
+    request_id: str | None = Query(None),
+    correlation_id: str | None = Query(None),
+    ip_address: str | None = Query(None, description="Filter by IP address"),
+    session_id: str | None = Query(None, description="Filter by session id"),
+    endpoint: str | None = Query(None, description="Filter by endpoint path"),
+    method: str | None = Query(None, description="Filter by HTTP method"),
     current_user: User = Depends(get_request_user),
     audit_service: UnifiedAuditService = Depends(get_audit_service_for_user),
 ):

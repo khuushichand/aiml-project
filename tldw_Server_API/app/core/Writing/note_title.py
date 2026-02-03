@@ -7,12 +7,13 @@ Phase 2: add LLM-backed strategy behind a flag via generate_note_title().
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Optional, Literal
+from datetime import datetime
+from typing import Literal
+
 from tldw_Server_API.app.core.config import settings as core_settings
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-import re
-from datetime import datetime
 
 # Public strategy type for future extension (Phase 2)
 TitleStrategy = Literal["heuristic", "llm", "llm_fallback"]
@@ -22,7 +23,7 @@ TitleStrategy = Literal["heuristic", "llm", "llm_fallback"]
 class TitleGenOptions:
     strategy: TitleStrategy = "heuristic"
     max_len: int = 250
-    language: Optional[str] = None
+    language: str | None = None
 
 
 def _normalize_text_for_title(text: str) -> str:
@@ -85,13 +86,13 @@ def _truncate_title(title: str, max_len: int) -> str:
     return truncated
 
 
-def _fallback_timestamp_title(language: Optional[str]) -> str:
+def _fallback_timestamp_title(language: str | None) -> str:
     # Keep language hint implicit; do not attempt translation locally
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     return f"Note from {ts}"
 
 
-def generate_note_title_heuristic(content: str, max_len: int = 250, *, language: Optional[str] = None) -> str:
+def generate_note_title_heuristic(content: str, max_len: int = 250, *, language: str | None = None) -> str:
     """Heuristic-only title generator.
 
     Best-effort extraction of a concise, descriptive title from content.
@@ -109,7 +110,7 @@ def generate_note_title_heuristic(content: str, max_len: int = 250, *, language:
     return _truncate_title(base, max_len)
 
 
-def generate_note_title(content: str, *, options: Optional[TitleGenOptions] = None) -> str:
+def generate_note_title(content: str, *, options: TitleGenOptions | None = None) -> str:
     """Entry point used by API code.
 
     MVP: always uses heuristic, ignoring strategy.
@@ -128,7 +129,7 @@ def generate_note_title(content: str, *, options: Optional[TitleGenOptions] = No
     return generate_note_title_heuristic(content, max_len=options.max_len, language=options.language)
 
 
-def _try_generate_title_llm(content: str, options: TitleGenOptions) -> Optional[str]:
+def _try_generate_title_llm(content: str, options: TitleGenOptions) -> str | None:
     """Best-effort LLM title generation. Returns None on failure.
 
     Keeps synchronous control path; relies on local/adapter-backed sync helpers.

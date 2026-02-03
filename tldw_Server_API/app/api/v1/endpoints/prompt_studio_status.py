@@ -5,19 +5,19 @@ Provides lightweight observability for the Prompt Studio job queue,
 including queue depth, processing counts, and lease health.
 """
 
-from typing import Dict, Any, Optional, List, Tuple
 import os
+from typing import Any, Optional
+
 from fastapi import APIRouter, Depends, Query
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import StandardResponse
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
     get_prompt_studio_user,
 )
+from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import StandardResponse
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics
-
 
 _PROMPT_STUDIO_DOMAIN = "prompt_studio"
 
@@ -41,17 +41,17 @@ def _build_job_filters(
     domain: str,
     queue: str,
     owner_user_id: Optional[str],
-) -> Tuple[str, List[Any]]:
+) -> tuple[str, list[Any]]:
     token = "%s" if backend == "postgres" else "?"
-    clauses: List[str] = [f"domain = {token}", f"queue = {token}"]
-    params: List[Any] = [domain, queue]
+    clauses: list[str] = [f"domain = {token}", f"queue = {token}"]
+    params: list[Any] = [domain, queue]
     if owner_user_id is not None:
         clauses.append(f"owner_user_id = {token}")
         params.append(owner_user_id)
     return " AND ".join(clauses), params
 
 
-def _fetch_all(jm: JobManager, sql: str, params: List[Any]) -> List[Any]:
+def _fetch_all(jm: JobManager, sql: str, params: list[Any]) -> list[Any]:
     conn = jm._connect()
     try:
         if jm.backend == "postgres":
@@ -66,7 +66,7 @@ def _fetch_all(jm: JobManager, sql: str, params: List[Any]) -> List[Any]:
             pass
 
 
-def _fetch_one(jm: JobManager, sql: str, params: List[Any]) -> Optional[Any]:
+def _fetch_one(jm: JobManager, sql: str, params: list[Any]) -> Optional[Any]:
     rows = _fetch_all(jm, sql, params)
     return rows[0] if rows else None
 
@@ -88,7 +88,7 @@ def _get_by_status(
     domain: str,
     queue: str,
     owner_user_id: Optional[str],
-) -> Dict[str, int]:
+) -> dict[str, int]:
     where_sql, params = _build_job_filters(
         backend=jm.backend,
         domain=domain,
@@ -97,7 +97,7 @@ def _get_by_status(
     )
     sql = f"SELECT status, COUNT(*) AS c FROM jobs WHERE {where_sql} GROUP BY status"
     rows = _fetch_all(jm, sql, params)
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for row in rows:
         status = _row_value(row, "status", 0)
         count = _row_value(row, "c", 1, 0)
@@ -115,7 +115,7 @@ def _get_by_type_and_status(
     domain: str,
     queue: str,
     owner_user_id: Optional[str],
-) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, int]]:
+) -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
     where_sql, params = _build_job_filters(
         backend=jm.backend,
         domain=domain,
@@ -129,9 +129,9 @@ def _get_by_type_and_status(
         GROUP BY job_type, status
     """
     rows = _fetch_all(jm, sql, params)
-    totals: Dict[str, int] = {}
-    queued: Dict[str, int] = {}
-    processing: Dict[str, int] = {}
+    totals: dict[str, int] = {}
+    queued: dict[str, int] = {}
+    processing: dict[str, int] = {}
     for row in rows:
         job_type = _row_value(row, "job_type", 0)
         status = _row_value(row, "status", 1)
@@ -221,7 +221,7 @@ def _get_lease_stats(
     queue: str,
     owner_user_id: Optional[str],
     warn_seconds: int,
-) -> Dict[str, int]:
+) -> dict[str, int]:
     where_sql, params = _build_job_filters(
         backend=jm.backend,
         domain=domain,
@@ -290,7 +290,7 @@ router = APIRouter(
 })
 async def get_prompt_studio_status(
     warn_seconds: int = Query(30, ge=1, le=3600, description="Threshold for expiring leases"),
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
 ) -> StandardResponse:
     """Return queue depth, processing count, and lease health stats."""
     try:

@@ -5,7 +5,7 @@ FastAPI dependencies for Watchlists database access (per-user Media DB).
 from fastapi import Depends, HTTPException, status
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 
 

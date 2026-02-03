@@ -16,11 +16,14 @@ the fields) and returns a bound logger for convenience.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator, Any, Optional
+from typing import Any
 
 from loguru import logger
+
 from tldw_Server_API.app.core.Security.request_id_middleware import _clean_request_id
+
 try:
     # Optional import for FastAPI Request type annotation
     from fastapi import Request  # type: ignore
@@ -96,15 +99,15 @@ def ensure_traceparent(request: Any) -> str:
 
 def get_ps_logger(
     *,
-    evaluation_id: Optional[int] = None,
-    prompt_id: Optional[int] = None,
-    optimization_id: Optional[int] = None,
-    project_id: Optional[int] = None,
-    request_id: Optional[str] = None,
-    job_id: Optional[int] = None,
-    ps_component: Optional[str] = None,
-    ps_job_kind: Optional[str] = None,
-    traceparent: Optional[str] = None,
+    evaluation_id: int | None = None,
+    prompt_id: int | None = None,
+    optimization_id: int | None = None,
+    project_id: int | None = None,
+    request_id: str | None = None,
+    job_id: int | None = None,
+    ps_component: str | None = None,
+    ps_job_kind: str | None = None,
+    traceparent: str | None = None,
 ):
     """Return a bound logger with common Prompt Studio fields.
 

@@ -14,284 +14,657 @@ Design Philosophy:
 """
 
 import asyncio
+import calendar
 import hashlib
+import re
 import time
 import uuid
-import re
-from datetime import datetime, timedelta
-import calendar
-from typing import Dict, List, Any, Optional, Union, Literal
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta
+from typing import Any, Literal, Optional, cast
+
 from loguru import logger
-import asyncio
-from functools import partial
+
+# Optional dependency placeholders (typed as Any to keep mypy tolerant for missing deps).
+_get_telemetry_manager: Any = None
+_spell_check_query: Any = None
+_highlight_results: Any = None
+_track_llm_cost: Any = None
+_QueryAnalyzer: Any = None
+_QueryIntent: Any = None
+_QueryRouter: Any = None
+_QueryRewriter: Any = None
+_generate_hypothetical_answer: Any = None
+_hyde_embed_text: Any = None
+_expand_acronyms: Any = None
+_expand_synonyms: Any = None
+_entity_recognition_expansion: Any = None
+_domain_specific_expansion: Any = None
+_multi_strategy_expansion: Any = None
+_SemanticCache: Any = None
+_AdaptiveCache: Any = None
+_get_shared_cache: Any = None
+_MultiDatabaseRetriever: Any = None
+_RetrievalConfig: Any = None
+_SecurityFilters: Any = None
+_SensitivityLevel: Any = None
+_TableProcessor: Any = None
+_enhanced_chunk_documents: Any = None
+_filter_chunks_by_type: Any = None
+_expand_with_parent_context: Any = None
+_prioritize_by_chunk_type: Any = None
+_create_reranker: Any = None
+_RerankingStrategy: Any = None
+_RerankingConfig: Any = None
+_apply_multi_vector_passages: Any = None
+_MultiVectorConfig: Any = None
+_PRFConfig: Any = None
+_apply_prf: Any = None
+_PrecomputedSpanConfig: Any = None
+_apply_precomputed_spans: Any = None
+_RewriteCache: Any = None
+_load_prompt: Any = None
+_Chunker: Any = None
+_ChunkerConfig: Any = None
+_CitationGenerator: Any = None
+_CitationStyle: Any = None
+_GranularityRouter: Any = None
+_GranularityDecision: Any = None
+_route_query_granularity: Any = None
+_QueryType: Any = None
+_Granularity: Any = None
+_EvidenceAccumulator: Any = None
+_AccumulationResult: Any = None
+_accumulate_evidence: Any = None
+_EvidenceChainBuilder: Any = None
+_ChainBuildResult: Any = None
+_build_evidence_chains: Any = None
+_DocumentGrader: Any = None
+_GradingConfig: Any = None
+_grade_and_filter_documents: Any = None
+_WebFallbackConfig: Any = None
+_web_search_fallback: Any = None
+_merge_web_results: Any = None
+_fallback_to_web_search: Any = None
+_KnowledgeStripsProcessor: Any = None
+_KnowledgeStripsResult: Any = None
+_process_knowledge_strips: Any = None
+_FastGroundednessGrader: Any = None
+_FastGroundednessResult: Any = None
+_UtilityGrader: Any = None
+_UtilityResult: Any = None
+_check_fast_groundedness: Any = None
+_grade_utility: Any = None
+_AnswerGenerator: Any = None
+_PostGenerationVerifier: Any = None
+_rag_low_conf: Any = None
+_rag_req_hc: Any = None
+_downweight_injection_docs: Any = None
+_detect_injection_score: Any = None
+_check_numeric_fidelity: Any = None
+_build_hard_citations: Any = None
+_build_quote_citations: Any = None
+_sanitize_html_allowlist: Any = None
+_apply_content_policy: Any = None
+_gate_docs_by_ocr_confidence: Any = None
+_UnifiedFeedbackSystem: Any = None
+_UserPersonalizationStore: Any = None
+_Tracer: Any = None
+_get_coordinator: Any = None
+_CircuitBreakerConfig: Any = None
+_RetryConfig: Any = None
+_RetryPolicy: Any = None
+_PerformanceMonitor: Any = None
+_ClaimsEngine: Any = None
+_ClaimsJobContext: Any = None
+_resolve_claims_job_budget: Any = None
 try:
     # OpenTelemetry telemetry manager (metrics + tracing)
-    from tldw_Server_API.app.core.Metrics.telemetry import get_telemetry_manager, OTEL_AVAILABLE  # type: ignore
+    from tldw_Server_API.app.core.Metrics.telemetry import (
+        OTEL_AVAILABLE as _OTEL_AVAILABLE,
+    )
+    from tldw_Server_API.app.core.Metrics.telemetry import (
+        get_telemetry_manager as _get_telemetry_manager,
+    )
 except Exception:  # pragma: no cover - optional dependency
-    get_telemetry_manager = None  # type: ignore
-    OTEL_AVAILABLE = False  # type: ignore
+    _get_telemetry_manager = None
+    _OTEL_AVAILABLE = False
+
+get_telemetry_manager = _get_telemetry_manager
+OTEL_AVAILABLE = _OTEL_AVAILABLE
+
+class _NoopSpan:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def otel_span(name: str, *args, **kwargs):
+    if get_telemetry_manager is not None and OTEL_AVAILABLE:
+        try:
+            tm = get_telemetry_manager()
+            tracer = tm.get_tracer("tldw.rag")
+            return tracer.start_as_current_span(name, *args, **kwargs)
+        except Exception:
+            pass
+    return _NoopSpan()
 
 # Core types
-from .types import Document, SearchResult, DataSource
 from .metrics_collector import MetricsCollector, QueryMetrics
+from .types import DataSource, Document
 
 # Import all modules at module level to avoid 500ms overhead
 try:
-    from .quick_wins import spell_check_query, highlight_results as highlight_func, track_llm_cost
+    from .quick_wins import (
+        highlight_results as _highlight_results,
+    )
+    from .quick_wins import (
+        spell_check_query as _spell_check_query,
+    )
+    from .quick_wins import (
+        track_llm_cost as _track_llm_cost,
+    )
 except ImportError:
-    spell_check_query = None
-    highlight_func = None
-    track_llm_cost = None
+    _spell_check_query = None
+    _highlight_results = None
+    _track_llm_cost = None
+
+spell_check_query = _spell_check_query
+highlight_func = _highlight_results
+track_llm_cost = _track_llm_cost
 
 # Query intent analysis / routing
 try:
-    from .query_features import QueryAnalyzer, QueryIntent, QueryRouter, QueryRewriter
+    from .query_features import (
+        QueryAnalyzer as _QueryAnalyzer,
+    )
+    from .query_features import (
+        QueryIntent as _QueryIntent,
+    )
+    from .query_features import (
+        QueryRewriter as _QueryRewriter,
+    )
+    from .query_features import (
+        QueryRouter as _QueryRouter,
+    )
 except ImportError:
-    QueryAnalyzer = None
-    QueryIntent = None
-    QueryRouter = None
-    QueryRewriter = None
+    _QueryAnalyzer = None
+    _QueryIntent = None
+    _QueryRouter = None
+    _QueryRewriter = None
+
+QueryAnalyzer = _QueryAnalyzer
+QueryIntent = _QueryIntent
+QueryRouter = _QueryRouter
+QueryRewriter = _QueryRewriter
 
 # HyDE utilities
 try:
-    from .hyde import generate_hypothetical_answer, embed_text as hyde_embed_text
+    from .hyde import (
+        embed_text as _hyde_embed_text,
+    )
+    from .hyde import (
+        generate_hypothetical_answer as _generate_hypothetical_answer,
+    )
 except ImportError:
-    generate_hypothetical_answer = None
-    hyde_embed_text = None
+    _generate_hypothetical_answer = None
+    _hyde_embed_text = None
+
+generate_hypothetical_answer = _generate_hypothetical_answer
+hyde_embed_text = _hyde_embed_text
 
 try:
     from .query_expansion import (
-        expand_acronyms,
-        expand_synonyms,
-        entity_recognition_expansion,
-        domain_specific_expansion,
-        multi_strategy_expansion
+        domain_specific_expansion as _domain_specific_expansion,
+    )
+    from .query_expansion import (
+        entity_recognition_expansion as _entity_recognition_expansion,
+    )
+    from .query_expansion import (
+        expand_acronyms as _expand_acronyms,
+    )
+    from .query_expansion import (
+        expand_synonyms as _expand_synonyms,
+    )
+    from .query_expansion import (
+        multi_strategy_expansion as _multi_strategy_expansion,
     )
 except ImportError:
-    expand_acronyms = None
-    expand_synonyms = None
-    entity_recognition_expansion = None
-    domain_specific_expansion = None
-    multi_strategy_expansion = None
+    _expand_acronyms = None
+    _expand_synonyms = None
+    _entity_recognition_expansion = None
+    _domain_specific_expansion = None
+    _multi_strategy_expansion = None
+
+expand_acronyms = _expand_acronyms
+expand_synonyms = _expand_synonyms
+entity_recognition_expansion = _entity_recognition_expansion
+domain_specific_expansion = _domain_specific_expansion
+multi_strategy_expansion = _multi_strategy_expansion
 
 try:
-    from .semantic_cache import SemanticCache, AdaptiveCache, get_shared_cache
+    from .semantic_cache import (
+        AdaptiveCache as _AdaptiveCache,
+    )
+    from .semantic_cache import (
+        SemanticCache as _SemanticCache,
+    )
+    from .semantic_cache import (
+        get_shared_cache as _get_shared_cache,
+    )
 except ImportError:
-    SemanticCache = None
-    AdaptiveCache = None
-    get_shared_cache = None  # type: ignore
+    _SemanticCache = None
+    _AdaptiveCache = None
+    _get_shared_cache = None
+
+SemanticCache = _SemanticCache
+AdaptiveCache = _AdaptiveCache
+get_shared_cache = _get_shared_cache
 
 try:
-    from .database_retrievers import MultiDatabaseRetriever, RetrievalConfig
+    from .database_retrievers import (
+        MultiDatabaseRetriever as _MultiDatabaseRetriever,
+    )
+    from .database_retrievers import (
+        RetrievalConfig as _RetrievalConfig,
+    )
 except ImportError:
-    MultiDatabaseRetriever = None
-    RetrievalConfig = None
+    _MultiDatabaseRetriever = None
+    _RetrievalConfig = None
+
+MultiDatabaseRetriever = _MultiDatabaseRetriever
+RetrievalConfig = _RetrievalConfig
 
 try:
-    from .security_filters import SecurityFilter, SensitivityLevel
+    from .security_filters import SecurityFilters as _SecurityFilters
+    from .security_filters import SensitivityLevel as _SensitivityLevel
 except ImportError:
-    SecurityFilter = None
-    SensitivityLevel = None
+    _SecurityFilters = None
+    _SensitivityLevel = None
+
+SecurityFilter = _SecurityFilters
+SensitivityLevel = _SensitivityLevel
 
 try:
-    from .table_serialization import TableProcessor
+    from .table_serialization import TableProcessor as _TableProcessor
 except ImportError:
-    TableProcessor = None
+    _TableProcessor = None
+
+TableProcessor = _TableProcessor
 
 try:
     from .enhanced_chunking_integration import (
-        ChunkTypeFilter,
-        ParentChunkExpander,
-        SiblingChunkRetriever,
-        HierarchicalChunkProcessor
+        enhanced_chunk_documents as _enhanced_chunk_documents,
+    )
+    from .enhanced_chunking_integration import (
+        expand_with_parent_context as _expand_with_parent_context,
+    )
+    from .enhanced_chunking_integration import (
+        filter_chunks_by_type as _filter_chunks_by_type,
+    )
+    from .enhanced_chunking_integration import (
+        prioritize_by_chunk_type as _prioritize_by_chunk_type,
     )
 except ImportError:
-    ChunkTypeFilter = None
-    ParentChunkExpander = None
-    SiblingChunkRetriever = None
-    HierarchicalChunkProcessor = None
+    _enhanced_chunk_documents = None
+    _filter_chunks_by_type = None
+    _expand_with_parent_context = None
+    _prioritize_by_chunk_type = None
+
+enhanced_chunk_documents = _enhanced_chunk_documents
+filter_chunks_by_type = _filter_chunks_by_type
+expand_with_parent_context = _expand_with_parent_context
+prioritize_by_chunk_type = _prioritize_by_chunk_type
 
 try:
-    from .advanced_reranking import create_reranker, RerankingStrategy, RerankingConfig
+    from .advanced_reranking import (
+        RerankingConfig as _RerankingConfig,
+    )
+    from .advanced_reranking import (
+        RerankingStrategy as _RerankingStrategy,
+    )
+    from .advanced_reranking import (
+        create_reranker as _create_reranker,
+    )
 except ImportError:
-    create_reranker = None
-    RerankingStrategy = None
-    RerankingConfig = None
+    _create_reranker = None
+    _RerankingStrategy = None
+    _RerankingConfig = None
+
+create_reranker = _create_reranker
+RerankingStrategy = _RerankingStrategy
+RerankingConfig = _RerankingConfig
 
 # Advanced retrieval (multi-vector passages)
 try:
-    from .advanced_retrieval import apply_multi_vector_passages, MultiVectorConfig
+    from .advanced_retrieval import (
+        MultiVectorConfig as _MultiVectorConfig,
+    )
+    from .advanced_retrieval import (
+        apply_multi_vector_passages as _apply_multi_vector_passages,
+    )
 except ImportError:
-    apply_multi_vector_passages = None  # type: ignore
-    MultiVectorConfig = None  # type: ignore
+    _apply_multi_vector_passages = None
+    _MultiVectorConfig = None
+
+apply_multi_vector_passages = _apply_multi_vector_passages
+MultiVectorConfig = _MultiVectorConfig
 
 # Pseudo-relevance feedback (PRF)
 try:
-    from .prf import PRFConfig, apply_prf
+    from .prf import PRFConfig as _PRFConfig
+    from .prf import apply_prf as _apply_prf
 except ImportError:
-    PRFConfig = None  # type: ignore
-    apply_prf = None  # type: ignore
+    _PRFConfig = None
+    _apply_prf = None
+
+PRFConfig = _PRFConfig
+apply_prf = _apply_prf
 
 # Precomputed span index (multi-vector helper)
 try:
-    from .precomputed_spans import PrecomputedSpanConfig, apply_precomputed_spans
+    from .precomputed_spans import (
+        PrecomputedSpanConfig as _PrecomputedSpanConfig,
+    )
+    from .precomputed_spans import (
+        apply_precomputed_spans as _apply_precomputed_spans,
+    )
 except ImportError:
-    PrecomputedSpanConfig = None  # type: ignore
-    apply_precomputed_spans = None  # type: ignore
+    _PrecomputedSpanConfig = None
+    _apply_precomputed_spans = None
+
+PrecomputedSpanConfig = _PrecomputedSpanConfig
+apply_precomputed_spans = _apply_precomputed_spans
 
 try:
-    from .rewrite_cache import RewriteCache
+    from .rewrite_cache import RewriteCache as _RewriteCache
 except ImportError:
-    RewriteCache = None
+    _RewriteCache = None
+
+RewriteCache = _RewriteCache
 
 try:
-    from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+    from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt as _load_prompt
 except ImportError:
-    def load_prompt(*args, **kwargs):  # type: ignore
+    _load_prompt = None
+
+def load_prompt(*args, **kwargs):
+    if _load_prompt is None:
         return None
+    return _load_prompt(*args, **kwargs)
 
 # Chunking support
 try:
-    from tldw_Server_API.app.core.Chunking import Chunker, ChunkerConfig
+    from tldw_Server_API.app.core.Chunking import Chunker as _Chunker
+    from tldw_Server_API.app.core.Chunking import ChunkerConfig as _ChunkerConfig
 except ImportError:
-    Chunker = None
-    ChunkerConfig = None
+    _Chunker = None
+    _ChunkerConfig = None
+
+Chunker = _Chunker
+ChunkerConfig = _ChunkerConfig
 try:
-    from .citations import CitationGenerator, CitationStyle
+    from .citations import CitationGenerator as _CitationGenerator
+    from .citations import CitationStyle as _CitationStyle
 except ImportError:
-    CitationGenerator = None
-    CitationStyle = None
+    _CitationGenerator = None
+    _CitationStyle = None
+
+CitationGenerator = _CitationGenerator
+CitationStyle = _CitationStyle
 
 # Dynamic granularity routing
 try:
-    from .granularity_router import GranularityRouter, GranularityDecision, route_query_granularity
-    from .types import QueryType, Granularity
+    from .granularity_router import (
+        GranularityDecision as _GranularityDecision,
+    )
+    from .granularity_router import (
+        GranularityRouter as _GranularityRouter,
+    )
+    from .granularity_router import (
+        route_query_granularity as _route_query_granularity,
+    )
+    from .types import Granularity as _Granularity
+    from .types import QueryType as _QueryType
 except ImportError:
-    GranularityRouter = None
-    GranularityDecision = None
-    route_query_granularity = None
-    QueryType = None
-    Granularity = None
+    _GranularityRouter = None
+    _GranularityDecision = None
+    _route_query_granularity = None
+    _QueryType = None
+    _Granularity = None
+
+GranularityRouter = _GranularityRouter
+GranularityDecision = _GranularityDecision
+route_query_granularity = _route_query_granularity
+QueryType = _QueryType
+Granularity = _Granularity
 
 # Progressive evidence accumulation
 try:
-    from .evidence_accumulator import EvidenceAccumulator, AccumulationResult, accumulate_evidence
+    from .evidence_accumulator import (
+        AccumulationResult as _AccumulationResult,
+    )
+    from .evidence_accumulator import (
+        EvidenceAccumulator as _EvidenceAccumulator,
+    )
+    from .evidence_accumulator import (
+        accumulate_evidence as _accumulate_evidence,
+    )
 except ImportError:
-    EvidenceAccumulator = None
-    AccumulationResult = None
-    accumulate_evidence = None
+    _EvidenceAccumulator = None
+    _AccumulationResult = None
+    _accumulate_evidence = None
+
+EvidenceAccumulator = _EvidenceAccumulator
+AccumulationResult = _AccumulationResult
+accumulate_evidence = _accumulate_evidence
 
 # Multi-hop evidence chains
 try:
-    from .evidence_chains import EvidenceChainBuilder, ChainBuildResult, build_evidence_chains
+    from .evidence_chains import (
+        ChainBuildResult as _ChainBuildResult,
+    )
+    from .evidence_chains import (
+        EvidenceChainBuilder as _EvidenceChainBuilder,
+    )
+    from .evidence_chains import (
+        build_evidence_chains as _build_evidence_chains,
+    )
 except ImportError:
-    EvidenceChainBuilder = None
-    ChainBuildResult = None
-    build_evidence_chains = None
+    _EvidenceChainBuilder = None
+    _ChainBuildResult = None
+    _build_evidence_chains = None
+
+EvidenceChainBuilder = _EvidenceChainBuilder
+ChainBuildResult = _ChainBuildResult
+build_evidence_chains = _build_evidence_chains
 
 # Self-Correcting RAG: Document Grading (Stage 1)
 try:
-    from .document_grader import DocumentGrader, GradingConfig, grade_and_filter_documents
+    from .document_grader import (
+        DocumentGrader as _DocumentGrader,
+    )
+    from .document_grader import (
+        GradingConfig as _GradingConfig,
+    )
+    from .document_grader import (
+        grade_and_filter_documents as _grade_and_filter_documents,
+    )
 except ImportError:
-    DocumentGrader = None
-    GradingConfig = None
-    grade_and_filter_documents = None
+    _DocumentGrader = None
+    _GradingConfig = None
+    _grade_and_filter_documents = None
+
+DocumentGrader = _DocumentGrader
+GradingConfig = _GradingConfig
+grade_and_filter_documents = _grade_and_filter_documents
 
 # Self-Correcting RAG: Web Fallback (Stage 3)
 try:
     from .web_fallback import (
-        WebFallbackConfig,
-        web_search_fallback,
-        merge_web_results,
-        fallback_to_web_search,
+        WebFallbackConfig as _WebFallbackConfig,
+    )
+    from .web_fallback import (
+        fallback_to_web_search as _fallback_to_web_search,
+    )
+    from .web_fallback import (
+        merge_web_results as _merge_web_results,
+    )
+    from .web_fallback import (
+        web_search_fallback as _web_search_fallback,
     )
 except ImportError:
-    WebFallbackConfig = None
-    web_search_fallback = None
-    merge_web_results = None
-    fallback_to_web_search = None
+    _WebFallbackConfig = None
+    _web_search_fallback = None
+    _merge_web_results = None
+    _fallback_to_web_search = None
+
+WebFallbackConfig = _WebFallbackConfig
+web_search_fallback = _web_search_fallback
+merge_web_results = _merge_web_results
+fallback_to_web_search = _fallback_to_web_search
 
 # Self-Correcting RAG: Knowledge Strips (Stage 4)
 try:
     from .knowledge_strips import (
-        KnowledgeStripsProcessor,
-        KnowledgeStripsResult,
-        process_knowledge_strips,
+        KnowledgeStripsProcessor as _KnowledgeStripsProcessor,
+    )
+    from .knowledge_strips import (
+        KnowledgeStripsResult as _KnowledgeStripsResult,
+    )
+    from .knowledge_strips import (
+        process_knowledge_strips as _process_knowledge_strips,
     )
 except ImportError:
-    KnowledgeStripsProcessor = None
-    KnowledgeStripsResult = None
-    process_knowledge_strips = None
+    _KnowledgeStripsProcessor = None
+    _KnowledgeStripsResult = None
+    _process_knowledge_strips = None
+
+KnowledgeStripsProcessor = _KnowledgeStripsProcessor
+KnowledgeStripsResult = _KnowledgeStripsResult
+process_knowledge_strips = _process_knowledge_strips
 
 # Self-Correcting RAG: Quality Graders (Stages 5-6)
 try:
     from .quality_graders import (
-        FastGroundednessGrader,
-        FastGroundednessResult,
-        UtilityGrader,
-        UtilityResult,
-        check_fast_groundedness,
-        grade_utility,
+        FastGroundednessGrader as _FastGroundednessGrader,
+    )
+    from .quality_graders import (
+        FastGroundednessResult as _FastGroundednessResult,
+    )
+    from .quality_graders import (
+        UtilityGrader as _UtilityGrader,
+    )
+    from .quality_graders import (
+        UtilityResult as _UtilityResult,
+    )
+    from .quality_graders import (
+        check_fast_groundedness as _check_fast_groundedness,
+    )
+    from .quality_graders import (
+        grade_utility as _grade_utility,
     )
 except ImportError:
-    FastGroundednessGrader = None
-    FastGroundednessResult = None
-    UtilityGrader = None
-    UtilityResult = None
-    check_fast_groundedness = None
-    grade_utility = None
+    _FastGroundednessGrader = None
+    _FastGroundednessResult = None
+    _UtilityGrader = None
+    _UtilityResult = None
+    _check_fast_groundedness = None
+    _grade_utility = None
+
+FastGroundednessGrader = _FastGroundednessGrader
+FastGroundednessResult = _FastGroundednessResult
+UtilityGrader = _UtilityGrader
+UtilityResult = _UtilityResult
+check_fast_groundedness = _check_fast_groundedness
+grade_utility = _grade_utility
 
 try:
-    from .generation import AnswerGenerator
+    from .generation import AnswerGenerator as _AnswerGenerator
 except ImportError:
-    AnswerGenerator = None
+    _AnswerGenerator = None
+
+AnswerGenerator = _AnswerGenerator
 
 try:
-    from .post_generation_verifier import PostGenerationVerifier
+    from .post_generation_verifier import PostGenerationVerifier as _PostGenerationVerifier
 except ImportError:
-    PostGenerationVerifier = None
+    _PostGenerationVerifier = None
+
+PostGenerationVerifier = _PostGenerationVerifier
 
 # RAG config helpers for consistent toggles/defaults
 try:
     from tldw_Server_API.app.core.config import (
         rag_low_confidence_behavior as _rag_low_conf,
+    )
+    from tldw_Server_API.app.core.config import (
         rag_require_hard_citations as _rag_req_hc,
     )
 except Exception:
-    _rag_low_conf = None  # type: ignore
-    _rag_req_hc = None  # type: ignore
+    _rag_low_conf = None
+    _rag_req_hc = None
 
 try:
     # Guardrails utilities: injection filtering, numeric fidelity, hard citations
     from .guardrails import (
-        downweight_injection_docs,
-        detect_injection_score,
-        check_numeric_fidelity,
-        build_hard_citations,
-        build_quote_citations,
-        sanitize_html_allowlist,
-        apply_content_policy,
-        gate_docs_by_ocr_confidence,
+        apply_content_policy as _apply_content_policy,
+    )
+    from .guardrails import (
+        build_hard_citations as _build_hard_citations,
+    )
+    from .guardrails import (
+        build_quote_citations as _build_quote_citations,
+    )
+    from .guardrails import (
+        check_numeric_fidelity as _check_numeric_fidelity,
+    )
+    from .guardrails import (
+        detect_injection_score as _detect_injection_score,
+    )
+    from .guardrails import (
+        downweight_injection_docs as _downweight_injection_docs,
+    )
+    from .guardrails import (
+        gate_docs_by_ocr_confidence as _gate_docs_by_ocr_confidence,
+    )
+    from .guardrails import (
+        sanitize_html_allowlist as _sanitize_html_allowlist,
     )
 except ImportError:
-    downweight_injection_docs = None  # type: ignore
-    detect_injection_score = None  # type: ignore
-    check_numeric_fidelity = None  # type: ignore
-    build_hard_citations = None  # type: ignore
-    build_quote_citations = None  # type: ignore
+    _downweight_injection_docs = None
+    _detect_injection_score = None
+    _check_numeric_fidelity = None
+    _build_hard_citations = None
+    _build_quote_citations = None
+    _sanitize_html_allowlist = None
+    _apply_content_policy = None
+    _gate_docs_by_ocr_confidence = None
+
+downweight_injection_docs = _downweight_injection_docs
+detect_injection_score = _detect_injection_score
+check_numeric_fidelity = _check_numeric_fidelity
+build_hard_citations = _build_hard_citations
+build_quote_citations = _build_quote_citations
+sanitize_html_allowlist = _sanitize_html_allowlist
+apply_content_policy = _apply_content_policy
+gate_docs_by_ocr_confidence = _gate_docs_by_ocr_confidence
 
 try:
-    from .analytics_system import UnifiedFeedbackSystem
+    from .analytics_system import UnifiedFeedbackSystem as _UnifiedFeedbackSystem
 except ImportError:
-    UnifiedFeedbackSystem = None
+    _UnifiedFeedbackSystem = None
+
+UnifiedFeedbackSystem = _UnifiedFeedbackSystem
 
 
 def _normalize_chunk_type_value(value: Any) -> Optional[str]:
     try:
         if Chunker is not None:
-            normalized = Chunker.normalize_chunk_type(value)  # type: ignore[attr-defined]
-            if normalized:
+            normalized = Chunker.normalize_chunk_type(value)
+            if isinstance(normalized, str) and normalized:
                 return normalized
     except Exception:
         pass
@@ -321,57 +694,92 @@ def _normalize_chunk_type_value(value: Any) -> Optional[str]:
     return raw
 
 try:
-    from .user_personalization_store import UserPersonalizationStore
+    from .user_personalization_store import UserPersonalizationStore as _UserPersonalizationStore
 except ImportError:
-    UserPersonalizationStore = None
+    _UserPersonalizationStore = None
+
+UserPersonalizationStore = _UserPersonalizationStore
 
 try:
-    from .observability import Tracer
+    from .observability import Tracer as _Tracer
 except ImportError:
-    Tracer = None
+    _Tracer = None
+
+Tracer = _Tracer
 
 # Resilience helpers
 try:
-    from .resilience import get_coordinator, CircuitBreakerConfig, RetryConfig, RetryPolicy
+    from .resilience import (
+        CircuitBreakerConfig as _CircuitBreakerConfig,
+    )
+    from .resilience import (
+        RetryConfig as _RetryConfig,
+    )
+    from .resilience import (
+        RetryPolicy as _RetryPolicy,
+    )
+    from .resilience import (
+        get_coordinator as _get_coordinator,
+    )
 except Exception:
-    get_coordinator = None  # type: ignore
-    CircuitBreakerConfig = None  # type: ignore
-    RetryConfig = None  # type: ignore
-    RetryPolicy = None  # type: ignore
+    _get_coordinator = None
+    _CircuitBreakerConfig = None
+    _RetryConfig = None
+    _RetryPolicy = None
+
+get_coordinator = _get_coordinator
+CircuitBreakerConfig = _CircuitBreakerConfig
+RetryConfig = _RetryConfig
+RetryPolicy = _RetryPolicy
 
 try:
-    from .performance_monitor import PerformanceMonitor
+    from .performance_monitor import PerformanceMonitor as _PerformanceMonitor
 except ImportError:
-    PerformanceMonitor = None
+    _PerformanceMonitor = None
+
+PerformanceMonitor = _PerformanceMonitor
 
 # Claims extraction/verification
 try:
-    from .claims import ClaimsEngine
     from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
-        ClaimsJobContext,
-        resolve_claims_job_budget,
+        ClaimsJobContext as _ClaimsJobContext,
     )
+    from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
+        resolve_claims_job_budget as _resolve_claims_job_budget,
+    )
+
+    from .claims import ClaimsEngine as _ClaimsEngine
 except ImportError:
-    ClaimsEngine = None
-    ClaimsJobContext = None  # type: ignore
-    resolve_claims_job_budget = None  # type: ignore
+    _ClaimsEngine = None
+    _ClaimsJobContext = None
+    _resolve_claims_job_budget = None
+
+ClaimsEngine = _ClaimsEngine
+ClaimsJobContext = _ClaimsJobContext
+resolve_claims_job_budget = _resolve_claims_job_budget
 
 
 @dataclass
 class UnifiedSearchResult:
     """Unified result structure for all RAG queries."""
-    documents: List[Document]
+    documents: list[Document]
     query: str
-    expanded_queries: List[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    timings: Dict[str, float] = field(default_factory=dict)
-    citations: List[Dict[str, Any]] = field(default_factory=list)
+    expanded_queries: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    timings: dict[str, float] = field(default_factory=dict)
+    citations: list[dict[str, Any]] = field(default_factory=list)
     feedback_id: Optional[str] = None
     generated_answer: Optional[str] = None
     cache_hit: bool = False
-    errors: List[str] = field(default_factory=list)
-    security_report: Optional[Dict[str, Any]] = None
+    errors: list[str] = field(default_factory=list)
+    security_report: Optional[dict[str, Any]] = None
     total_time: float = 0.0
+
+
+# Unified pipeline return type (schema response or internal result).
+# This pipeline returns mixed shapes (schema/model dicts or dataclasses),
+# so keep it permissive for now.
+UnifiedPipelineResult = Any
 
 
 async def unified_rag_pipeline(
@@ -379,7 +787,7 @@ async def unified_rag_pipeline(
     query: str,
 
     # ========== DATA SOURCES ==========
-    sources: List[str] = None,  # ["media_db", "notes", "characters", "chats"]
+    sources: Optional[list[str]] = None,  # ["media_db", "notes", "characters", "chats"]
     media_db_path: Optional[str] = None,
     notes_db_path: Optional[str] = None,
     character_db_path: Optional[str] = None,
@@ -396,14 +804,14 @@ async def unified_rag_pipeline(
     min_score: float = 0.0,
     # ========== QUERY EXPANSION ==========
     expand_query: bool = False,
-    expansion_strategies: List[str] = None,  # ["acronym", "synonym", "domain", "entity"]
+    expansion_strategies: Optional[list[str]] = None,  # ["acronym", "synonym", "domain", "entity"]
     spell_check: bool = False,
     max_query_variations: int = 3,
 
     # ========== PSEUDO-RELEVANCE FEEDBACK (PRF) ==========
     enable_prf: bool = False,
     prf_terms: int = 10,
-    prf_sources: List[str] = None,  # ["keywords", "entities", "numbers"]
+    prf_sources: Optional[list[str]] = None,  # ["keywords", "entities", "numbers"]
     prf_alpha: float = 0.3,
     prf_top_n: int = 8,
 
@@ -422,9 +830,9 @@ async def unified_rag_pipeline(
     adaptive_cache: bool = True,
 
     # ========== FILTERING ==========
-    keyword_filter: List[str] = None,  # Filter by these keywords
-    include_media_ids: Optional[List[int]] = None,
-    include_note_ids: Optional[List[str]] = None,
+    keyword_filter: Optional[list[str]] = None,  # Filter by these keywords
+    include_media_ids: Optional[list[int]] = None,
+    include_note_ids: Optional[list[str]] = None,
 
     # ========== SECURITY & PRIVACY ==========
     enable_security_filter: bool = False,
@@ -446,7 +854,7 @@ async def unified_rag_pipeline(
 
     # ========== CHUNKING & CONTEXT ==========
     enable_enhanced_chunking: bool = False,
-    chunk_type_filter: List[str] = None,  # ["text", "code", "table", "list"]
+    chunk_type_filter: Optional[list[str]] = None,  # ["text", "code", "table", "list"]
     enable_parent_expansion: bool = False,
     parent_context_size: int = 500,
     include_sibling_chunks: bool = False,
@@ -557,11 +965,11 @@ async def unified_rag_pipeline(
     injection_filter_strength: float = 0.5,
     # Content policy: lightweight PII/PHI filtering and sanitation
     enable_content_policy_filter: bool = False,
-    content_policy_types: List[str] = None,  # ["pii", "phi"]
+    content_policy_types: Optional[list[str]] = None,  # ["pii", "phi"]
     content_policy_mode: Literal["redact", "drop", "annotate"] = "redact",
     enable_html_sanitizer: bool = False,
-    html_allowed_tags: Optional[List[str]] = None,
-    html_allowed_attrs: Optional[List[str]] = None,
+    html_allowed_tags: Optional[list[str]] = None,
+    html_allowed_attrs: Optional[list[str]] = None,
     ocr_confidence_threshold: Optional[float] = None,
     # Post-generation: hard citations per sentence and numeric fidelity checks
     require_hard_citations: bool = False,
@@ -629,7 +1037,7 @@ async def unified_rag_pipeline(
 
     # ========== BATCH PROCESSING ==========
     enable_batch: bool = False,
-    batch_queries: List[str] = None,
+    batch_queries: Optional[list[str]] = None,
     batch_concurrent: int = 5,
 
     # ========== RESILIENCE ==========
@@ -642,8 +1050,8 @@ async def unified_rag_pipeline(
 
     # ========== FILTERING EXTRAS ==========
     enable_date_filter: bool = False,
-    date_range: Optional[Dict[str, str]] = None,
-    filter_media_types: Optional[List[str]] = None,
+    date_range: Optional[dict[str, str]] = None,
+    filter_media_types: Optional[list[str]] = None,
 
     # ========== ALT INPUTS ==========
     media_db: Any = None,
@@ -658,7 +1066,7 @@ async def unified_rag_pipeline(
 
     # ========== ADDITIONAL PARAMETERS ==========
     **kwargs: Any
-) -> UnifiedSearchResult:
+) -> UnifiedPipelineResult:
     """
     Unified RAG Pipeline - All features accessible via parameters.
 
@@ -755,8 +1163,9 @@ async def unified_rag_pipeline(
     cache_instance = None
     cache_max_size = 1000
     try:
-        from tldw_Server_API.app.core.config import RAG_SERVICE_CONFIG  # type: ignore
-        cache_max_size = int((RAG_SERVICE_CONFIG.get("cache") or {}).get("max_cache_size", cache_max_size))
+        from tldw_Server_API.app.core.config import RAG_SERVICE_CONFIG
+        cfg = cast(dict[str, Any], RAG_SERVICE_CONFIG) if isinstance(RAG_SERVICE_CONFIG, dict) else {}
+        cache_max_size = int((cfg.get("cache") or {}).get("max_cache_size", cache_max_size))
     except Exception:
         pass
     cache_namespace = index_namespace or (user_id or None)
@@ -835,8 +1244,12 @@ async def unified_rag_pipeline(
     # Initialize monitoring if requested
     metrics = None
     if enable_monitoring:
-        metrics = QueryMetrics(query=query)
-        metrics.start_time = start_time
+        metrics = QueryMetrics(
+            query_id=str(uuid.uuid4()),
+            query=query,
+            timestamp=start_time,
+            total_duration=0.0,
+        )
 
     def _apply_generation_gate(reason: str, *, coverage: Optional[float] = None, unsupported_ratio: Optional[float] = None, threshold: Optional[float] = None) -> None:
         """Record a gating event in metadata for downstream observability."""
@@ -917,22 +1330,23 @@ async def unified_rag_pipeline(
             if _rag_low_conf:
                 cfg_lcb = _rag_low_conf()
                 if (low_confidence_behavior or "continue") == "continue" and cfg_lcb != "continue":
-                    low_confidence_behavior = cfg_lcb  # type: ignore[assignment]
+                    low_confidence_behavior = cfg_lcb
             if _rag_req_hc and not bool(require_hard_citations):
                 if bool(_rag_req_hc(default=False)):
-                    require_hard_citations = True  # type: ignore[assignment]
+                    require_hard_citations = True
         except Exception:
             pass
 
         # Apply config-driven default for strict extractive generation
+        _rag_strict: Any = None
         try:
             from tldw_Server_API.app.core.config import rag_strict_extractive as _rag_strict
         except Exception:
-            _rag_strict = None  # type: ignore
+            pass
         try:
-            if _rag_strict and not bool(strict_extractive):
+            if _rag_strict is not None and not bool(strict_extractive):
                 if bool(_rag_strict(default=False)):
-                    strict_extractive = True  # type: ignore[assignment]
+                    strict_extractive = True
         except Exception:
             pass
 
@@ -962,7 +1376,7 @@ async def unified_rag_pipeline(
             expansion_start = time.time()
             try:
                 # Try rewrite cache first
-                cached_rewrites: List[str] = []
+                cached_rewrites: list[str] = []
                 intent_label = analysis_intent_val
                 if RewriteCache and user_id:
                     try:
@@ -975,7 +1389,7 @@ async def unified_rag_pipeline(
                     except Exception:
                         pass
                 strategies = (expansion_strategies or ["acronym", "synonym"]).copy()
-                expanded_variants: List[str] = []
+                expanded_variants: list[str] = []
                 if multi_strategy_expansion:
                     if index_namespace:
                         expanded = await multi_strategy_expansion(query, strategies=strategies, corpus=index_namespace)
@@ -986,7 +1400,7 @@ async def unified_rag_pipeline(
                         expanded_variants.extend([q for q in expanded if isinstance(q, str)])
                     elif isinstance(expanded, str) and expanded.strip():
                         expanded_variants.append(expanded)
-                rewriter_variants: List[str] = []
+                rewriter_variants: list[str] = []
                 if QueryRewriter and query:
                     try:
                         rewriter = QueryRewriter()
@@ -1002,7 +1416,7 @@ async def unified_rag_pipeline(
                         rewriter_variants = []
 
                 # Merge and dedupe all candidates while preserving order
-                candidate_queries: List[str] = [query]
+                candidate_queries: list[str] = [query]
                 candidate_queries.extend(cached_rewrites)
                 candidate_queries.extend(expanded_variants)
                 candidate_queries.extend(rewriter_variants)
@@ -1247,10 +1661,14 @@ async def unified_rag_pipeline(
                 hyde_start = time.time()
                 # Read defaults if present
                 try:
-                    from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
-                    cfg = load_and_log_configs() or {}
-                    hyde_provider = hyde_provider or (cfg.get("RAG_HYDE_PROVIDER") or None)
-                    hyde_model = hyde_model or (cfg.get("RAG_HYDE_MODEL") or None)
+                    from tldw_Server_API.app.core.config import load_and_log_configs
+                    cfg = load_and_log_configs()
+                    if not isinstance(cfg, dict):
+                        cfg = {}
+                    raw_provider = cfg.get("RAG_HYDE_PROVIDER")
+                    raw_model = cfg.get("RAG_HYDE_MODEL")
+                    hyde_provider = hyde_provider or (str(raw_provider).strip() if raw_provider else None)
+                    hyde_model = hyde_model or (str(raw_model).strip() if raw_model else None)
                 except Exception:
                     pass
                 hypo = generate_hypothetical_answer(query, hyde_provider, hyde_model)
@@ -1417,9 +1835,10 @@ async def unified_rag_pipeline(
                         if isinstance(tf, dict):
                             try:
                                 from datetime import datetime
-                                s = tf.get("start"); e = tf.get("end")
-                                if s and e:
-                                    config.date_filter = (datetime.fromisoformat(s), datetime.fromisoformat(e))
+                                start_val = tf.get("start")
+                                end_val = tf.get("end")
+                                if start_val and end_val:
+                                    config.date_filter = (datetime.fromisoformat(start_val), datetime.fromisoformat(end_val))
                             except Exception:
                                 pass
 
@@ -1469,7 +1888,8 @@ async def unified_rag_pipeline(
                     # to silently return an empty set even when media is present.
                     if (not documents) and media_db_path and search_mode in ("fts", "hybrid"):
                         try:
-                            from .database_retrievers import MediaDBRetriever as _MDBR, RetrievalConfig as _RCfg
+                            from .database_retrievers import MediaDBRetriever as _MDBR
+                            from .database_retrievers import RetrievalConfig as _RCfg
                             fb_cfg = _RCfg(
                                 max_results=top_k,
                                 min_score=min_score,
@@ -1507,7 +1927,7 @@ async def unified_rag_pipeline(
                                     index_namespace=index_namespace,
                                     query_vector=hyde_vector,
                                 )
-                                by_id: Dict[str, Document] = {d.id: d for d in documents}
+                                by_id: dict[str, Document] = {d.id: d for d in documents}
                                 for d in hyde_docs:
                                     cur = by_id.get(d.id)
                                     if cur is None or float(getattr(d, "score", 0.0)) > float(getattr(cur, "score", 0.0)):
@@ -1522,7 +1942,7 @@ async def unified_rag_pipeline(
                         exp_start = time.time()
                         try:
                             extra_queries = [q for q in expanded_queries if q != query]
-                            exp_docs: List[Document] = []
+                            exp_docs: list[Document] = []
                             for eq in extra_queries:
                                 try:
                                     if search_mode == "hybrid" and hybrid_supported and rh is not None:
@@ -1598,8 +2018,8 @@ async def unified_rag_pipeline(
 
                             # Only perform a second pass when PRF is enabled and query changed
                             if prf_meta.get("enabled") and prf_query and prf_query != query:
-                                remaining = max(0, top_k - len(result.documents))
-                                if remaining > 0:
+                                remaining_slots = max(0, top_k - len(result.documents))
+                                if remaining_slots > 0:
                                     # Use the same retrieval path as the primary call
                                     if search_mode == "hybrid" and hybrid_supported and rh is not None:
                                         prf_docs = await _resilient_call(
@@ -1647,7 +2067,7 @@ async def unified_rag_pipeline(
                             # the query appears complex/compound; otherwise fall back to a
                             # lightweight heuristic split.
                             q_norm = (query or "").strip()
-                            subqueries: List[str] = []
+                            subqueries: list[str] = []
                             used_agentic = False
 
                             # Use QueryAnalyzer (if available) to detect complex queries that
@@ -1659,8 +2079,10 @@ async def unified_rag_pipeline(
                             multi_intents = {"comparative", "causal", "analytical", "temporal"}
                             if intent_val in multi_intents and comp_val == "complex":
                                 try:
-                                    from .agentic_chunker import AgenticConfig as _ACfg, _decompose_query as _agentic_decompose  # type: ignore
-                                    acfg = _ACfg(enable_query_decomposition=True, subgoal_max=max_subqueries or None)
+                                    from .agentic_chunker import AgenticConfig as _ACfg
+                                    from .agentic_chunker import _decompose_query as _agentic_decompose
+                                    subgoal_max = max_subqueries if max_subqueries is not None else 3
+                                    acfg = _ACfg(enable_query_decomposition=True, subgoal_max=int(subgoal_max))
                                     subqueries = _agentic_decompose(q_norm, acfg) or []
                                     used_agentic = True
                                 except Exception:
@@ -1698,7 +2120,7 @@ async def unified_rag_pipeline(
                             if max_sub and len(subqueries) > max_sub:
                                 subqueries = subqueries[: max_sub]
 
-                            meta_decomp: Dict[str, Any] = {
+                            meta_decomp: dict[str, Any] = {
                                 "enabled": True,
                                 "subqueries": [],
                             }
@@ -1724,12 +2146,12 @@ async def unified_rag_pipeline(
                                 except Exception:
                                     subquery_max_results = max(1, int(top_k or 1))
 
-                                async def _fetch_subquery(sq: str) -> List[Document]:
+                                async def _fetch_subquery(sq: str) -> list[Document]:
                                     try:
                                         sq_cfg = replace(config, max_results=subquery_max_results)
                                     except Exception:
                                         sq_cfg = config
-                                    return await _resilient_call(
+                                    res = await _resilient_call(
                                         "retrieval_decomposition",
                                         retriever.retrieve,
                                         query=sq,
@@ -1739,8 +2161,9 @@ async def unified_rag_pipeline(
                                         allowed_media_ids=include_media_ids,
                                         allowed_note_ids=include_note_ids,
                                     )
+                                    return res if isinstance(res, list) else []
 
-                                subquery_results: Dict[str, Any] = {}
+                                subquery_results: dict[str, Any] = {}
                                 subqueries_to_run = list(subqueries[1:])
                                 try:
                                     max_workers = max(1, int(subquery_max_concurrency or 1))
@@ -1774,7 +2197,7 @@ async def unified_rag_pipeline(
                                     if doc_budget is not None and total_added >= doc_budget:
                                         break
                                     sq_docs = subquery_results.get(sq) or []
-                                    added_ids: List[str] = []
+                                    added_ids: list[str] = []
                                     for d in sq_docs:
                                         if d.id not in base_ids:
                                             result.documents.append(d)
@@ -1871,7 +2294,8 @@ async def unified_rag_pipeline(
                 # itself contains the uploaded content.
                 if (not result.documents) and media_db_path and search_mode in ("fts", "hybrid"):
                     try:
-                        from .database_retrievers import MediaDBRetriever as _MDBR, RetrievalConfig as _RCfg
+                        from .database_retrievers import MediaDBRetriever as _MDBR
+                        from .database_retrievers import RetrievalConfig as _RCfg
                         fb_cfg = _RCfg(
                             max_results=top_k,
                             min_score=min_score,
@@ -1987,9 +2411,9 @@ async def unified_rag_pipeline(
                             numbers = sum(1 for _ in _re.finditer(r"\d", text))
                             looks_table = (chunk_type == "table") or (text.count("|") >= 3) or ("\t" in text)
                             if looks_table or numbers >= 6:
-                                s = float(getattr(d, "score", 0.0) or 0.0)
+                                score_val = float(getattr(d, "score", 0.0) or 0.0)
                                 # modest boost within [0,1]
-                                d.score = min(1.0, s * 1.1 + 0.02)
+                                d.score = min(1.0, score_val * 1.1 + 0.02)
                                 md["numeric_table_boost"] = True
                                 d.metadata = md
                                 affected += 1
@@ -2002,13 +2426,13 @@ async def unified_rag_pipeline(
         if enable_gap_analysis and result.documents:
             try:
                 ga_start = time.time()
-                followups: List[str] = []
+                followups: list[str] = []
                 # Try a lightweight LLM to propose follow-ups
                 try:
-                    from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as llm_analyze  # type: ignore
+                    from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as llm_analyze
                     # Determine default provider/model from config if available
                     try:
-                        from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+                        from tldw_Server_API.app.core.config import load_and_log_configs
                         _cfg = load_and_log_configs() or {}
                         _prov = (_cfg.get("RAG_DEFAULT_LLM_PROVIDER") or "openai").strip()
                         _model = (_cfg.get("RAG_DEFAULT_LLM_MODEL") or "gpt-4o-mini").strip()
@@ -2110,14 +2534,14 @@ async def unified_rag_pipeline(
                     norm = _normalize_chunk_type_value(t)
                     if norm:
                         allowed.add(norm)
-                before = len(result.documents)
+                before_count = len(result.documents)
                 filtered_docs = []
                 for d in result.documents:
                     doc_type = _normalize_chunk_type_value((d.metadata or {}).get("chunk_type"))
                     if doc_type and doc_type in allowed:
                         filtered_docs.append(d)
                 result.documents = filtered_docs
-                result.metadata["chunk_type_filter_before"] = before
+                result.metadata["chunk_type_filter_before"] = before_count
                 result.metadata["chunk_type_filter_after"] = len(result.documents)
             except Exception:
                 pass
@@ -2247,7 +2671,7 @@ async def unified_rag_pipeline(
                         get_backend as _get_vlm_backend,
                     )
                 except Exception:
-                    _get_vlm_backend = lambda name=None: None  # type: ignore
+                    _get_vlm_backend = lambda name=None: None
 
                 # Pick backend
                 backend = _get_vlm_backend(vlm_backend if vlm_backend not in (None, "auto") else None)
@@ -2263,7 +2687,7 @@ async def unified_rag_pipeline(
                     ]
                     selected_docs = selected_docs[: max(1, int(vlm_late_chunk_top_k_docs or 1))]
 
-                    added: List[Document] = []
+                    vlm_added: list[Document] = []
                     for doc in selected_docs:
                         url = (doc.metadata or {}).get("url")
                         page_limit = vlm_max_pages
@@ -2274,9 +2698,9 @@ async def unified_rag_pipeline(
                         cleanup_tmp = False
                         try:
                             from pathlib import Path
-                            p = Path(str(url))
-                            if p.exists() and p.suffix.lower() == ".pdf":
-                                pdf_path = str(p)
+                            pdf_path_obj = Path(str(url))
+                            if pdf_path_obj.exists() and pdf_path_obj.suffix.lower() == ".pdf":
+                                pdf_path = str(pdf_path_obj)
                             else:
                                 # Unsupported: not a local PDF path
                                 continue
@@ -2288,7 +2712,7 @@ async def unified_rag_pipeline(
                             detections = []
                             if hasattr(backend, "process_pdf"):
                                 res = backend.process_pdf(pdf_path, max_pages=page_limit)
-                                by_page = []
+                                by_page: list[dict[str, Any]] = []
                                 if isinstance(getattr(res, "extra", None), dict):
                                     by_page = res.extra.get("by_page") or []
                                 if by_page:
@@ -2332,12 +2756,12 @@ async def unified_rag_pipeline(
 
                             # Convert detections into lightweight Documents for reranking/search
                             for idx, d in enumerate(detections[:100]):  # bound new docs per source
-                                label = d.get("label", "vlm")
+                                label = str(d.get("label", "vlm"))
                                 score = d.get("score", 0.0)
                                 bbox = d.get("bbox")
                                 page_no = d.get("page")
                                 chunk_text = f"Detected {label} ({score:.2f}) on page {page_no} at {bbox}"
-                                added.append(
+                                vlm_added.append(
                                     Document(
                                         id=f"vlm:{doc.id}:{idx}",
                                         content=chunk_text,
@@ -2355,9 +2779,9 @@ async def unified_rag_pipeline(
                         finally:
                             # No temp cleanup needed; remote URLs are not supported
                             pass
-                    if added:
+                    if vlm_added:
                         # Extend document list for downstream processing/reranking
-                        result.documents.extend(added)
+                        result.documents.extend(vlm_added)
                 result.timings["vlm_late_chunking"] = time.time() - vlm_start
             except Exception as e:
                 result.errors.append(f"VLM late-chunking failed: {e}")
@@ -2604,9 +3028,29 @@ async def unified_rag_pipeline(
                                 fts_level=fts_level,
                             )
 
+                            src_list = ["media_db"] if sources is None else sources
+                            source_map = {
+                                "media_db": DataSource.MEDIA_DB,
+                                "media": DataSource.MEDIA_DB,
+                                "notes_db": DataSource.NOTES,
+                                "notes": DataSource.NOTES,
+                                "character_cards_db": DataSource.CHARACTER_CARDS,
+                                "characters": DataSource.CHARACTER_CARDS,
+                                "chats": DataSource.CHARACTER_CARDS,
+                                "kanban": DataSource.KANBAN,
+                                "kanban_db": DataSource.KANBAN,
+                                "prompts": DataSource.PROMPTS,
+                            }
+                            data_sources = []
+                            for src in src_list:
+                                if isinstance(src, DataSource):
+                                    data_sources.append(src)
+                                else:
+                                    data_sources.append(source_map.get(str(src), DataSource.MEDIA_DB))
+
                             new_docs = await retriever.retrieve(
                                 query=rewritten_query,
-                                sources=[DataSource.MEDIA_DB] if "media_db" in (sources or ["media_db"]) else [],
+                                sources=data_sources,
                                 config=retrieval_config,
                                 index_namespace=index_namespace,
                             )
@@ -2718,9 +3162,11 @@ async def unified_rag_pipeline(
                     llm_client = None
                     if selected_strategy == RerankingStrategy.LLM_SCORING:
                         try:
-                            from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
-                            import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
-                            cfg = load_and_log_configs() or {}
+                            import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
+                            from tldw_Server_API.app.core.config import load_and_log_configs
+                            cfg = load_and_log_configs()
+                            if not isinstance(cfg, dict):
+                                cfg = {}
                             prov = (cfg.get('RAG_LLM_RERANKER_PROVIDER') or '').strip()
                             model = (cfg.get('RAG_LLM_RERANKER_MODEL') or '').strip()
                             if not model:
@@ -2750,16 +3196,20 @@ async def unified_rag_pipeline(
                     model_name_for_reranker = None
                     if selected_strategy == RerankingStrategy.LLAMA_CPP:
                         try:
-                            from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
-                            cfg = load_and_log_configs() or {}
+                            from tldw_Server_API.app.core.config import load_and_log_configs
+                            cfg = load_and_log_configs()
+                            if not isinstance(cfg, dict):
+                                cfg = {}
                         except Exception:
                             cfg = {}
                         # Precedence: explicit param -> env/config
                         model_name_for_reranker = reranking_model or cfg.get("RAG_LLAMA_RERANKER_MODEL")
                     elif selected_strategy == RerankingStrategy.CROSS_ENCODER:
                         try:
-                            from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
-                            cfg = load_and_log_configs() or {}
+                            from tldw_Server_API.app.core.config import load_and_log_configs
+                            cfg = load_and_log_configs()
+                            if not isinstance(cfg, dict):
+                                cfg = {}
                         except Exception:
                             cfg = {}
                         model_name_for_reranker = reranking_model or cfg.get("RAG_TRANSFORMERS_RERANKER_MODEL")
@@ -2812,13 +3262,10 @@ async def unified_rag_pipeline(
                     if enable_learned_fusion:
                         try:
                             if isinstance(result.metadata, dict) and "reranking_calibration" not in result.metadata:
-                                try:
-                                    top_doc = (result.documents or [None])[0]
-                                except Exception:
-                                    top_doc = None
+                                top_doc = result.documents[0] if result.documents else None
                                 if top_doc is not None:
-                                    import os as _os_lf
                                     import math as _math_lf
+                                    import os as _os_lf
                                     # Use shared env weights to stay consistent with Two-Tier,
                                     # but only CE-style weight is applied since we only have
                                     # a single rerank score available here.
@@ -3048,7 +3495,7 @@ async def unified_rag_pipeline(
             siblings_start = time.time()
             try:
                 # Index docs by parent and index
-                parents: Dict[str, Dict[int, Document]] = {}
+                parents: dict[str, dict[int, Document]] = {}
                 for d in result.documents:
                     pid = str(d.metadata.get("parent_id", ""))
                     cidx_md = d.metadata.get("chunk_index", -1)
@@ -3056,7 +3503,7 @@ async def unified_rag_pipeline(
                     if pid and cidx >= 0:
                         parents.setdefault(pid, {})[cidx] = d
 
-                added: List[Document] = []
+                sibling_added: list[Document] = []
                 seen_ids = {getattr(d, 'id', None) for d in result.documents}
 
                 for d in list(result.documents):
@@ -3071,12 +3518,12 @@ async def unified_rag_pipeline(
                         for adj in (cidx - w, cidx + w):
                             sdoc = siblings.get(adj)
                             if sdoc is not None and getattr(sdoc, 'id', None) not in seen_ids:
-                                added.append(sdoc)
+                                sibling_added.append(sdoc)
                                 seen_ids.add(getattr(sdoc, 'id', None))
 
-                if added:
-                    result.documents.extend(added)
-                result.metadata["siblings_added_count"] = len(added)
+                if sibling_added:
+                    result.documents.extend(sibling_added)
+                result.metadata["siblings_added_count"] = len(sibling_added)
                 result.timings["sibling_inclusion"] = time.time() - siblings_start
             except Exception as e:
                 result.errors.append(f"Sibling inclusion failed: {str(e)}")
@@ -3284,7 +3731,7 @@ async def unified_rag_pipeline(
                     try:
                         # Simple extractive assembly: pick top sentences from top documents
                         max_sents = 6
-                        chosen: List[str] = []
+                        chosen: list[str] = []
                         import re as _re
                         q_terms = [t.lower() for t in _re.findall(r"[A-Za-z0-9_-]{3,}", query or "")][:10]
                         for doc in (result.documents or [])[: min(5, len(result.documents or []))]:
@@ -3332,13 +3779,22 @@ async def unified_rag_pipeline(
                             max_tokens=draft_tokens,
                         )
                         d_ans = draft_out.get("answer") if isinstance(draft_out, dict) else draft_out
+                        if isinstance(d_ans, str):
+                            d_ans_text = d_ans
+                        elif d_ans is None:
+                            d_ans_text = ""
+                        else:
+                            try:
+                                d_ans_text = "".join(str(x) for x in d_ans)
+                            except Exception:
+                                d_ans_text = str(d_ans)
                         d_dt = time.time() - d_start
 
                         # Critique
                         c_text = None
                         c_dt = 0.0
                         try:
-                            import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
+                            import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
                             # Construct a compact critique prompt using small snippets
                             snippets = []
                             for d in context_docs[:3]:
@@ -3348,24 +3804,33 @@ async def unified_rag_pipeline(
                             crit_prompt = (
                                 "You are a careful reviewer.\n"
                                 "Given the user query, retrieved snippets, and the draft answer, list the top 3 issues (missing facts or unsupported claims).\n"
-                                f"Query: {query}\nSnippets:\n" + "\n".join(snippets) + f"\n\nDraft:\n{d_ans}\n\nIssues:"
+                                f"Query: {query}\nSnippets:\n" + "\n".join(snippets) + f"\n\nDraft:\n{d_ans_text}\n\nIssues:"
                             )
                             c_start = time.time()
                             c_text = sgl.analyze(api_name="openai", input_data="", custom_prompt_arg=crit_prompt, model_override=None)
                             c_dt = time.time() - c_start
                         except Exception:
                             c_text = "- Ensure claims are supported by provided snippets.\n- Add missing specifics.\n- Clarify ambiguous statements."
+                        if isinstance(c_text, str):
+                            c_text_val = c_text
+                        elif c_text is None:
+                            c_text_val = ""
+                        else:
+                            try:
+                                c_text_val = "".join(str(x) for x in c_text)
+                            except Exception:
+                                c_text_val = str(c_text)
 
                         # Check budget
                         if budget is not None and (time.time() - t0) >= budget:
                             aborted = True
-                            result.generated_answer = d_ans
+                            result.generated_answer = d_ans_text
                             result.metadata.setdefault("synthesis", {})
                             result.metadata["synthesis"].update({"enabled": True, "aborted": True, "durations": {"draft": d_dt, "critique": c_dt, "refine": 0.0}})
                         else:
                             # Refine
                             refine_tokens = int(synthesis_refine_tokens or max_generation_tokens)
-                            r_ctx = context + "\n\nCRITIQUE:\n" + (c_text or "")
+                            r_ctx = context + "\n\nCRITIQUE:\n" + c_text_val
                             r_start = time.time()
                             r_out = await generator.generate(
                                 query=query,
@@ -3583,7 +4048,7 @@ async def unified_rag_pipeline(
         if enable_claims and result.generated_answer and not skip_claims_due_to_groundedness:
             try:
                 # Import shared analyze function for LLM calls
-                import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
+                import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
 
                 def _analyze(api_name: str, input_data: Any, custom_prompt_arg: Optional[str] = None,
                              api_key: Optional[str] = None, system_message: Optional[str] = None,
@@ -3610,10 +4075,15 @@ async def unified_rag_pipeline(
                         )
                     job_budget = None
                     if resolve_claims_job_budget is not None:
+                        settings_obj = None
                         try:
-                            from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
+                            from tldw_Server_API.app.core.config import settings as _settings
+                            if isinstance(_settings, dict):
+                                settings_obj = _settings
+                            elif hasattr(_settings, "dict"):
+                                settings_obj = _settings.dict()
                         except Exception:
-                            _settings = {}
+                            settings_obj = None
                         budget_usd = kwargs.get("claims_budget_usd")
                         budget_tokens = kwargs.get("claims_budget_tokens")
                         budget_strict = kwargs.get("claims_budget_strict")
@@ -3628,7 +4098,7 @@ async def unified_rag_pipeline(
                         if isinstance(budget_strict, str):
                             budget_strict = budget_strict.strip().lower() in {"1", "true", "yes", "on"}
                         job_budget = resolve_claims_job_budget(
-                            settings=_settings,
+                            settings=settings_obj,
                             max_cost_usd=budget_usd,
                             max_tokens=budget_tokens,
                             strict=budget_strict if isinstance(budget_strict, bool) else None,
@@ -3675,7 +4145,7 @@ async def unified_rag_pipeline(
                                 ds = [source_map.get(s, DataSource.MEDIA_DB) for s in claim_sources]
 
                                 # For media_db, attempt hybrid; for others, simple retrieve
-                                docs: List[Any] = []
+                                docs: list[Any] = []
                                 # Media hybrid
                                 med = mdr.retrievers.get(DataSource.MEDIA_DB)
                                 if med is not None:
@@ -3706,13 +4176,13 @@ async def unified_rag_pipeline(
                     # Prefer pre-extracted claims if available for current documents
                     claims_out = None
                     try:
-                        pre_claims: List[str] = []
+                        pre_claims: list[str] = []
                         if media_db_path and (result.documents or []):
-                            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
                             from tldw_Server_API.app.core.config import settings as _settings
+                            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
                             db = MediaDatabase(db_path=media_db_path, client_id=str(_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")))
                             # Collect media IDs present in documents
-                            media_ids: List[int] = []
+                            media_ids: list[int] = []
                             for d in result.documents:
                                 try:
                                     mid = d.metadata.get("media_id") if isinstance(d.metadata, dict) else None
@@ -3881,22 +4351,22 @@ async def unified_rag_pipeline(
                                     if MultiDatabaseRetriever and RetrievalConfig and media_db_path:
                                         mdr = MultiDatabaseRetriever({"media_db": media_db_path}, user_id=user_id or "0")
                                         conf = RetrievalConfig(max_results=min(10, top_k), min_score=min_score, use_fts=True, use_vector=True, include_metadata=True, fts_level=fts_level)
-                                        added = []
+                                        numeric_added: list[Document] = []
                                         for tok in list(nf.missing)[:3]:
                                             try:
-                                                added.extend(await mdr.retrieve(query=f"{query} {tok}", sources=[DataSource.MEDIA_DB], config=conf, index_namespace=index_namespace))
+                                                numeric_added.extend(await mdr.retrieve(query=f"{query} {tok}", sources=[DataSource.MEDIA_DB], config=conf, index_namespace=index_namespace))
                                             except Exception:
                                                 continue
-                                        if added:
+                                        if numeric_added:
                                             # Merge with existing docs and optionally re-rerank in place
-                                            by_id: Dict[str, Document] = {getattr(d, 'id', ''): d for d in (result.documents or [])}
-                                            for d in added:
-                                                cur = by_id.get(getattr(d, 'id', ''))
+                                            by_id_numeric: dict[str, Document] = {getattr(d, 'id', ''): d for d in (result.documents or [])}
+                                            for d in numeric_added:
+                                                cur = by_id_numeric.get(getattr(d, 'id', ''))
                                                 if cur is None or float(getattr(d, 'score', 0.0)) > float(getattr(cur, 'score', 0.0)):
-                                                    by_id[getattr(d, 'id', '')] = d
-                                            result.documents = sorted(by_id.values(), key=lambda x: getattr(x, 'score', 0.0), reverse=True)[: max(top_k, 10)]
+                                                    by_id_numeric[getattr(d, 'id', '')] = d
+                                            result.documents = sorted(by_id_numeric.values(), key=lambda x: getattr(x, 'score', 0.0), reverse=True)[: max(top_k, 10)]
                                             result.metadata.setdefault("numeric_fidelity", {})
-                                            result.metadata["numeric_fidelity"]["retry_docs_added"] = len(added)
+                                            result.metadata["numeric_fidelity"]["retry_docs_added"] = len(numeric_added)
                                             # Attempt quick regeneration if generator is available
                                             if AnswerGenerator:
                                                 try:
@@ -4134,7 +4604,8 @@ async def unified_rag_pipeline(
                             old_cov = None
                             new_cov = None
                             try:
-                                old_cov = float((result.metadata.get("hard_citations") or {}).get("coverage")) if isinstance(result.metadata, dict) else None
+                                cov_raw = (result.metadata.get("hard_citations") or {}).get("coverage") if isinstance(result.metadata, dict) else None
+                                old_cov = float(cov_raw) if cov_raw is not None else None
                             except Exception:
                                 old_cov = None
                             if build_hard_citations and (new_result.generated_answer or "").strip():
@@ -4169,7 +4640,10 @@ async def unified_rag_pipeline(
                         })
                         # Metrics for rerun
                         try:
-                            from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter, observe_histogram
+                            from tldw_Server_API.app.core.Metrics.metrics_manager import (
+                                increment_counter,
+                                observe_histogram,
+                            )
                             increment_counter("rag_adaptive_rerun_performed_total", 1)
                             if adopt:
                                 increment_counter("rag_adaptive_rerun_adopted_total", 1)
@@ -4416,14 +4890,14 @@ async def unified_rag_pipeline(
 
         # Finalize metrics if monitoring
         if metrics:
-            metrics.total_time = result.total_time
+            metrics.total_duration = result.total_time
             metrics.cache_hit = result.cache_hit
             metrics.documents_retrieved = len(result.documents)
 
             if enable_monitoring:
                 try:
                     collector = MetricsCollector()
-                    await collector.record_query_metrics(metrics)
+                    collector.end_query(metrics)
                 except Exception as e:
                     logger.error(f"Metrics recording error: {e}")
 
@@ -4442,7 +4916,7 @@ async def unified_rag_pipeline(
     # Convert to Pydantic response
     try:
         from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
-        doc_dicts: List[Dict[str, Any]] = []
+        doc_dicts: list[dict[str, Any]] = []
         for d in result.documents or []:
             md = dict(d.metadata or {})
             try:
@@ -4499,10 +4973,10 @@ async def unified_rag_pipeline(
 
 # ========== BATCH PROCESSING WRAPPER ==========
 async def unified_batch_pipeline(
-    queries: List[str],
+    queries: list[str],
     max_concurrent: int = 5,
     **kwargs
-) -> List[UnifiedSearchResult]:
+) -> list[UnifiedPipelineResult]:
     """
     Process multiple queries concurrently using the unified pipeline.
 
@@ -4535,7 +5009,7 @@ async def unified_batch_pipeline(
             return q or ""
 
     # Group indices by normalized query (identicals)
-    normalized_map: Dict[str, List[int]] = {}
+    normalized_map: dict[str, list[int]] = {}
     for idx, q in enumerate(queries or []):
         normalized_map.setdefault(_normalize(q), []).append(idx)
 
@@ -4544,7 +5018,7 @@ async def unified_batch_pipeline(
     rep_texts = [queries[normalized_map[k][0]] for k in unique_keys]
 
     # Near-duplicate clustering via cosine similarity of embeddings (best-effort)
-    clusters: Dict[int, List[int]] = {}
+    clusters: dict[int, list[int]] = {}
     try:
         from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
             create_embeddings_batch,
@@ -4607,7 +5081,7 @@ async def unified_batch_pipeline(
     heads = list(clusters.keys())
     head_queries = [rep_texts[h] for h in heads]
 
-    async def process_with_semaphore(query: str) -> UnifiedSearchResult:
+    async def process_with_semaphore(query: str) -> UnifiedPipelineResult:
         async with semaphore:
             return await unified_rag_pipeline(query=query, **kwargs)
 
@@ -4616,12 +5090,12 @@ async def unified_batch_pipeline(
     head_results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # Build final results in original order, reusing unique results
-    final_results: List[UnifiedSearchResult] = [None] * len(queries)  # type: ignore
+    final_results: list[Optional[UnifiedPipelineResult]] = [None] * len(queries)
     reuse_count = 0
     # Build mapping from unique key index -> head result
     # unique_keys[i] corresponds to rep_texts[i]
     # Find which head each i belongs to
-    head_for: Dict[int, int] = {}
+    head_for: dict[int, int] = {}
     for h, members in clusters.items():
         for m in members:
             head_for[m] = h
@@ -4632,26 +5106,27 @@ async def unified_batch_pipeline(
         ures = head_results[heads.index(h)] if h in heads else head_results[0]
         indices = normalized_map.get(key, [])
         for pos, i in enumerate(indices):
-            if isinstance(ures, Exception):
+            if isinstance(ures, BaseException):
                 final_results[i] = UnifiedSearchResult(documents=[], query=queries[i], errors=[str(ures)])
             else:
                 reuse_count += 1 if pos > 0 else 0
+                ures_any = cast(Any, ures)
                 # Copy minimal fields for non-heads to preserve original query text
                 final_results[i] = (
-                    ures if pos == 0 and queries[i] == rep_texts[i_uq]
+                    ures_any if pos == 0 and queries[i] == rep_texts[i_uq]
                     else UnifiedSearchResult(
-                        documents=ures.documents,
+                        documents=ures_any.documents,
                         query=queries[i],
-                        expanded_queries=ures.expanded_queries,
-                        metadata=ures.metadata,
-                        timings=ures.timings,
-                        citations=ures.citations,
-                        feedback_id=ures.feedback_id,
-                        generated_answer=ures.generated_answer,
-                        cache_hit=ures.cache_hit,
-                        errors=ures.errors,
-                        security_report=ures.security_report,
-                        total_time=ures.total_time,
+                        expanded_queries=ures_any.expanded_queries,
+                        metadata=ures_any.metadata,
+                        timings=ures_any.timings,
+                        citations=ures_any.citations,
+                        feedback_id=ures_any.feedback_id,
+                        generated_answer=ures_any.generated_answer,
+                        cache_hit=ures_any.cache_hit,
+                        errors=ures_any.errors,
+                        security_report=ures_any.security_report,
+                        total_time=ures_any.total_time,
                     )
                 )
 
@@ -4663,7 +5138,14 @@ async def unified_batch_pipeline(
     except Exception:
         pass
 
-    return final_results
+    for i, res in enumerate(final_results):
+        if res is None:
+            final_results[i] = UnifiedSearchResult(
+                documents=[],
+                query=queries[i] if i < len(queries) else "",
+                errors=["Missing batch result"],
+            )
+    return cast(list[UnifiedPipelineResult], final_results)
 
 
 # ========== SIMPLE CONVENIENCE WRAPPERS ==========
@@ -4672,7 +5154,7 @@ async def simple_search(
     query: str,
     top_k: int = 10,
     *,
-    sources: Optional[List[str]] = None,
+    sources: Optional[list[str]] = None,
     media_db: Any = None,
     chacha_db: Any = None,
     media_db_path: Optional[str] = None,
@@ -4680,7 +5162,7 @@ async def simple_search(
     character_db_path: Optional[str] = None,
     kanban_db_path: Optional[str] = None,
     user_id: Optional[str] = None,
-) -> List[Document]:
+) -> list[Document]:
     """
     Simple search wrapper for basic use cases.
 
@@ -4706,7 +5188,12 @@ async def simple_search(
         kanban_db_path=kanban_db_path,
         user_id=user_id,
     )
-    return result.documents
+    if isinstance(result, UnifiedSearchResult):
+        return result.documents
+    docs = getattr(result, "documents", None)
+    if isinstance(docs, list) and all(isinstance(d, Document) for d in docs):
+        return docs
+    return []
 
 
 async def advanced_search(
@@ -4714,7 +5201,7 @@ async def advanced_search(
     with_citations: bool = True,
     with_answer: bool = True,
     **kwargs
-) -> UnifiedSearchResult:
+) -> UnifiedPipelineResult:
     """
     Advanced search with commonly used features enabled.
 
@@ -4740,7 +5227,7 @@ async def advanced_search(
         enable_performance_analysis=True,
         **kwargs
     )
-def compute_temporal_range_from_query(query: str) -> Optional[Dict[str, str]]:
+def compute_temporal_range_from_query(query: str) -> Optional[dict[str, str]]:
     """Compute an approximate temporal range from a natural language query.
 
     Returns dict with ISO start/end if a range can be inferred; otherwise None.
@@ -4781,6 +5268,8 @@ def compute_temporal_range_from_query(query: str) -> Optional[Dict[str, str]]:
             y = int(m_year.group(1)); start_dt = datetime(y,1,1); end_dt = datetime(y,12,31,23,59,59)
         if start_dt is None and end_dt is None:
             start_dt = now - timedelta(days=7); end_dt = now
+        if start_dt is None or end_dt is None:
+            return None
         return {"start": start_dt.isoformat(), "end": end_dt.isoformat()}
     except Exception:
         return None

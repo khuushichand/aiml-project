@@ -7,27 +7,29 @@ All endpoints require authentication and operate on per-user collections data.
 from __future__ import annotations
 
 import asyncio
-import json
 import hashlib
+import json
 import os
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path as PathlibPath
-from typing import Optional
 from uuid import uuid4
 
 from cachetools import LRUCache
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from fastapi.responses import PlainTextResponse
-from starlette import status
 from loguru import logger
+from starlette import status
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.audiobook_schemas import (
     AlignmentPayload,
     ArtifactInfo,
+    AudiobookArtifactsResponse,
     AudiobookChapterInfo,
     AudiobookChapterListResponse,
-    AudiobookArtifactsResponse,
     AudiobookJobCreateResponse,
     AudiobookJobRequest,
     AudiobookJobStatusResponse,
@@ -43,30 +45,27 @@ from tldw_Server_API.app.api.v1.schemas.audiobook_schemas import (
     VoiceProfileListResponse,
     VoiceProfileResponse,
 )
-from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.Chunking.strategies.ebook_chapters import EbookChapterChunkingStrategy
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib import (
-    extract_epub_metadata_from_text,
-    process_epub,
-)
-from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import (
-    extract_text_and_format_from_pdf,
-)
-from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Audiobooks.subtitle_generator import generate_subtitles
 from tldw_Server_API.app.core.Audiobooks.subtitle_parser import normalize_subtitle_source
 from tldw_Server_API.app.core.Audiobooks.tag_parser import (
     build_chapters_from_markers,
     parse_tagged_text,
 )
-from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Chunking.strategies.ebook_chapters import EbookChapterChunkingStrategy
 from tldw_Server_API.app.core.config import get_config_value
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib import (
+    extract_epub_metadata_from_text,
+    process_epub,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
+from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import (
+    extract_text_and_format_from_pdf,
+)
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 router = APIRouter(prefix="/audiobooks", tags=["audiobooks"])
 
@@ -87,7 +86,7 @@ def _normalize_subtitles(text: str, input_type: str) -> str:
     return normalize_subtitle_source(text, input_type)
 
 
-def _parse_bool(value: Optional[str | bool]) -> Optional[bool]:
+def _parse_bool(value: str | bool | None) -> bool | None:
     if value is None:
         return None
     if isinstance(value, bool):
@@ -105,7 +104,7 @@ def _resolve_subtitle_persist(request: SubtitleExportRequest) -> bool:
     return bool(resolved) if resolved is not None else False
 
 
-def _resolve_subtitle_ttl_hours(request: SubtitleExportRequest) -> Optional[int]:
+def _resolve_subtitle_ttl_hours(request: SubtitleExportRequest) -> int | None:
     if request.cache_ttl_hours is not None:
         return int(request.cache_ttl_hours)
     env_val = os.getenv("AUDIOBOOK_SUBTITLES_CACHE_TTL_HOURS")
@@ -123,7 +122,7 @@ def _resolve_subtitle_ttl_hours(request: SubtitleExportRequest) -> Optional[int]
 def _subtitle_cache_key(
     *,
     alignment: AlignmentPayload,
-    alignment_output_id: Optional[int],
+    alignment_output_id: int | None,
     request: SubtitleExportRequest,
 ) -> str:
     base: dict[str, object] = {
@@ -198,7 +197,7 @@ def _load_alignment_from_output(
     return alignment, meta, row.storage_path
 
 
-def _resolve_upload_path(upload_id: str, user_id: int) -> Optional[PathlibPath]:
+def _resolve_upload_path(upload_id: str, user_id: int) -> PathlibPath | None:
     if not upload_id:
         return None
     base_dir = DatabasePaths.get_user_temp_outputs_dir(user_id)
@@ -213,8 +212,8 @@ def _resolve_upload_path(upload_id: str, user_id: int) -> Optional[PathlibPath]:
 def _detect_chapters(
     text: str,
     *,
-    language: Optional[str] = None,
-    custom_pattern: Optional[str] = None,
+    language: str | None = None,
+    custom_pattern: str | None = None,
 ) -> list[ChapterPreview]:
     if not text or not text.strip():
         return []
@@ -268,7 +267,7 @@ def _get_job_manager() -> JobManager:
         return job_manager
 
 
-def _normalize_job_status(job_status: Optional[str]) -> str:
+def _normalize_job_status(job_status: str | None) -> str:
     if not job_status:
         return "queued"
     norm = job_status.lower()
@@ -288,7 +287,7 @@ def _job_project_id(job_row: dict) -> str:
     return f"abk_{job_row.get('id', 0)}"
 
 
-def _safe_json_loads(raw: Optional[str]) -> dict:
+def _safe_json_loads(raw: str | None) -> dict:
     if not raw:
         return {}
     try:
@@ -370,8 +369,8 @@ def _project_row_project_id(row, fallback: str) -> str:
 
 
 def _parse_progress_message(
-    message: Optional[str],
-) -> tuple[str, Optional[int], Optional[int], Optional[int], Optional[int]]:
+    message: str | None,
+) -> tuple[str, int | None, int | None, int | None, int | None]:
     if not message:
         return "audiobook_job", None, None, None, None
     raw = str(message).strip()
@@ -412,7 +411,7 @@ async def parse_audiobook_source(
 ) -> AudiobookParseResponse:
     source = request.source
     input_type = source.input_type
-    text: Optional[str] = None
+    text: str | None = None
     metadata: dict = {"source_type": input_type}
 
     if source.raw_text:

@@ -1,28 +1,27 @@
 # multi_tier_cache.py
 # Multi-tier caching system for embeddings with L1 (memory), L2 (disk), and L3 (remote) caches
 
-import time
-import json
-import pickle
-import hashlib
-import threading
-import builtins
-import io
-import os
-import tempfile
-from typing import Dict, Any, Optional, List, Tuple, Union, Callable
-from dataclasses import dataclass, asdict
-from pathlib import Path
-from collections import OrderedDict
-from datetime import datetime, timedelta
-import mmap
 import asyncio
+import builtins
 import functools
+import hashlib
+import io
+import json
+import os
+import pickle
+import tempfile
+import threading
+import time
+from collections import OrderedDict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Optional
 
 from loguru import logger
+
 from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
-from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
 @dataclass
@@ -213,7 +212,7 @@ class L1MemoryCache:
             self.cache.clear()
             self.current_size_bytes = 0
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get cache statistics"""
         hit_rate = (self.stats['hits'] /
                    (self.stats['hits'] + self.stats['misses']) * 100
@@ -249,7 +248,7 @@ class L2DiskCache:
 
         self.max_size_bytes = max_size_gb * 1024 * 1024 * 1024
         self.default_ttl = ttl_seconds
-        self.index: Dict[str, Dict[str, Any]] = {}
+        self.index: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
         self.metrics = get_metrics()
 
@@ -421,7 +420,7 @@ class L2DiskCache:
                     logger.debug("metrics increment failed for embeddings_cache l2_write_error")
                 return False
 
-    def _is_expired(self, entry_info: Dict[str, Any]) -> bool:
+    def _is_expired(self, entry_info: dict[str, Any]) -> bool:
         """Check if entry has expired"""
         if entry_info.get('ttl') is None:
             return False
@@ -515,7 +514,7 @@ class L2DiskCache:
             self.index.clear()
             self._save_index()
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get cache statistics"""
         hit_rate = (self.stats['hits'] /
                    (self.stats['hits'] + self.stats['misses']) * 100
@@ -679,7 +678,7 @@ class L3RemoteCache:
             except Exception:
                 logger.debug("metrics increment failed for embeddings_cache l3_clear_error")
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get cache statistics"""
         hit_rate = (self.stats['hits'] /
                    (self.stats['hits'] + self.stats['misses']) * 100
@@ -716,7 +715,7 @@ class MultiTierCache:
     Manages L1, L2, and L3 caches with automatic promotion/demotion.
     """
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         """
         Initialize multi-tier cache.
 
@@ -878,7 +877,7 @@ class MultiTierCache:
         self.l1.clear()
         self.l2.clear()
         self.l3.clear()
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get statistics for all tiers"""
         return {
             'l1': self.l1.get_stats(),

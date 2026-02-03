@@ -21,7 +21,8 @@ def test_invalid_env_values_do_not_crash(monkeypatch):
 
 
 @pytest.mark.unit
-def test_categories_enabled_list_parsed(monkeypatch):
+def test_categories_enabled_list_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Parses categories_enabled list from config into a normalized set."""
     monkeypatch.delenv("MODERATION_CATEGORIES_ENABLED", raising=False)
     monkeypatch.setattr(
         mod_service,

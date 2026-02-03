@@ -6,17 +6,18 @@ import asyncio
 import datetime
 import json
 import random
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
+
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import ChatCompletionRequest
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
-    InputError,
     ConflictError,
+    InputError,
 )
-from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import ChatCompletionRequest
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
 from tldw_Server_API.app.core.Utils.image_validation import estimate_decoded_size, get_max_base64_bytes
 
 #######################################################################################################################
@@ -69,7 +70,7 @@ async def validate_request_payload(
     *,
     enforce_image_max_bytes: bool = False,
     max_image_bytes: Optional[int] = None,
-) -> Tuple[bool, Optional[str]]:
+) -> tuple[bool, Optional[str]]:
     """
     Validate the chat completion request payload.
 
@@ -137,7 +138,7 @@ def _extract_image_url(part: Any) -> Optional[str]:
     return getattr(image_url, "url", None)
 
 
-def _validate_image_size(url_val: str, max_image_bytes: Optional[int]) -> Tuple[bool, str]:
+def _validate_image_size(url_val: str, max_image_bytes: Optional[int]) -> tuple[bool, str]:
     """Validate data URI size using decoded-byte estimate."""
     if not isinstance(url_val, str) or not url_val.startswith("data:image"):
         return False, "invalid data URI"
@@ -163,7 +164,7 @@ async def get_or_create_character_context(
     db: CharactersRAGDB,
     character_id: Optional[str],
     loop
-) -> Tuple[Optional[Dict[str, Any]], Optional[int]]:
+) -> tuple[Optional[dict[str, Any]], Optional[int]]:
     """
     Get or create character context for the chat.
 
@@ -206,7 +207,7 @@ async def get_or_create_character_context(
 async def _ensure_default_character(
     db: CharactersRAGDB,
     loop,
-) -> Tuple[Optional[Dict[str, Any]], Optional[int]]:
+) -> tuple[Optional[dict[str, Any]], Optional[int]]:
     """
     Ensure the default character exists for the current client.
 
@@ -214,7 +215,7 @@ async def _ensure_default_character(
         Tuple of (character_card, character_db_id)
     """
 
-    def _create_default() -> Tuple[Optional[Dict[str, Any]], Optional[int]]:
+    def _create_default() -> tuple[Optional[dict[str, Any]], Optional[int]]:
         try:
             existing = db.get_character_card_by_name(DEFAULT_CHARACTER_NAME)
             if existing:
@@ -271,7 +272,7 @@ async def get_or_create_conversation(
     character_name: str,
     client_id: str,
     loop
-) -> Tuple[str, bool]:
+) -> tuple[str, bool]:
     """
     Get existing conversation or create a new one with proper concurrency handling.
 
@@ -357,10 +358,10 @@ async def get_or_create_conversation(
 async def load_conversation_history(
     db: CharactersRAGDB,
     conversation_id: str,
-    character_card: Optional[Dict[str, Any]],
+    character_card: Optional[dict[str, Any]],
     limit: int = 20,
     loop = None
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Load conversation history from database.
 
@@ -443,7 +444,7 @@ async def load_conversation_history(
 
             # Create message entry
             if msg_parts:
-                hist_entry: Dict[str, Any] = {"role": role}
+                hist_entry: dict[str, Any] = {"role": role}
 
                 if len(msg_parts) == 1:
                     sole_part = msg_parts[0]
@@ -475,10 +476,10 @@ async def load_conversation_history(
 # Message Processing Functions:
 
 async def prepare_llm_messages(
-    request_messages: List[Any],
-    historical_messages: List[Dict[str, Any]],
-    character_card: Optional[Dict[str, Any]] = None
-) -> List[Dict[str, Any]]:
+    request_messages: list[Any],
+    historical_messages: list[dict[str, Any]],
+    character_card: Optional[dict[str, Any]] = None
+) -> list[dict[str, Any]]:
     """
     Prepare messages for LLM API call.
 
@@ -515,8 +516,8 @@ async def prepare_llm_messages(
 
 
 def extract_system_message(
-    request_messages: List[Any],
-    character_card: Optional[Dict[str, Any]] = None
+    request_messages: list[Any],
+    character_card: Optional[dict[str, Any]] = None
 ) -> Optional[str]:
     """
     Extract system message from request or character card.
@@ -572,8 +573,8 @@ def extract_response_content(llm_response: Any) -> Optional[str]:
 
 def validate_provider_configuration(
     provider: str,
-    api_keys: Dict[str, str]
-) -> Tuple[bool, Optional[str]]:
+    api_keys: dict[str, str]
+) -> tuple[bool, Optional[str]]:
     """
     Validate that a provider is properly configured.
 

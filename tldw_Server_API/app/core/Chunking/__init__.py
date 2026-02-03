@@ -5,31 +5,29 @@ Provides various strategies for splitting text into manageable chunks.
 """
 
 from .base import (
+    BaseChunkingStrategy,
+    ChunkerConfig,
     ChunkingMethod,
     ChunkMetadata,
     ChunkResult,
-    ChunkerConfig,
-    BaseChunkingStrategy,
 )
-
-from .exceptions import (
-    ChunkingError,
-    InvalidInputError,
-    InvalidChunkingMethodError,
-    TokenizerError,
-    TemplateError,
-    LanguageNotSupportedError,
-    ChunkSizeError,
-    ProcessingError,
-    ConfigurationError,
-    CacheError,
-)
-
 from .chunker import (
     Chunker,
     create_chunker,
 )
 from .constants import FRONTMATTER_SENTINEL_KEY
+from .exceptions import (
+    CacheError,
+    ChunkingError,
+    ChunkSizeError,
+    ConfigurationError,
+    InvalidChunkingMethodError,
+    InvalidInputError,
+    LanguageNotSupportedError,
+    ProcessingError,
+    TemplateError,
+    TokenizerError,
+)
 
 # Default chunking options for backward compatibility
 DEFAULT_CHUNK_OPTIONS = {
@@ -248,8 +246,8 @@ def flatten_hierarchical(tree: dict) -> list:
 
 # Enhanced chunk support for RAG integration
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
 from enum import Enum
+from typing import Any, Dict, Optional
 
 
 class ChunkType(Enum):
@@ -273,10 +271,10 @@ class EnhancedChunk:
     start_char: int  # Position in original document
     end_char: int    # Position in original document
     chunk_index: int
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     parent_id: Optional[str] = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "id": self.id,
@@ -290,7 +288,7 @@ class EnhancedChunk:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'EnhancedChunk':
+    def from_dict(cls, data: dict[str, Any]) -> 'EnhancedChunk':
         """Create from dictionary."""
         chunk_type = data.get("chunk_type", "text")
         if isinstance(chunk_type, str):

@@ -15,26 +15,22 @@ Security
 - Background execution via FastAPI BackgroundTasks or job queue
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Request, status
-from typing import List, Optional, Dict, Any
-import uuid
-import json
-from datetime import datetime
 import asyncio
+import json
 import os
+import uuid
+from datetime import datetime
+from typing import Any, Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from loguru import logger
 
-from ....core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
-from ....core.DB_Management.backends.base import BackendType
-from ....core.Prompt_Management.prompt_studio.test_runner import TestRunner
-from ....core.Prompt_Management.prompt_studio.evaluation_manager import EvaluationManager
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
-from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
@@ -42,12 +38,16 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_api_key_from_config,
     resolve_provider_model,
 )
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+
+from ....core.DB_Management.backends.base import BackendType
+from ....core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from ....core.Prompt_Management.prompt_studio.evaluation_manager import EvaluationManager
 from ..API_Deps.prompt_studio_deps import get_prompt_studio_db, get_prompt_studio_user
 from ..schemas.prompt_studio_schemas import (
     EvaluationCreate,
-    EvaluationResponse,
     EvaluationList,
-    EvaluationUpdate,
+    EvaluationResponse,
 )
 
 router = APIRouter(prefix="/api/v1/prompt-studio", tags=["prompt-studio"])
@@ -131,7 +131,7 @@ async def create_evaluation(
     background_tasks: BackgroundTasks,
     request: Request,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
 ) -> EvaluationResponse:
     """
     Create a new evaluation for a prompt.
@@ -155,7 +155,7 @@ async def create_evaluation(
             incoming_configs = None
 
         if incoming_configs and isinstance(incoming_configs, list):
-            configs_list: List[Dict[str, Any]] = incoming_configs
+            configs_list: list[dict[str, Any]] = incoming_configs
         else:
             single_cfg = getattr(evaluation, "config", None)
             if single_cfg is not None:
@@ -374,8 +374,8 @@ async def list_evaluations(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user),
-) -> List[EvaluationResponse]:
+    user_context: dict = Depends(get_prompt_studio_user),
+) -> list[EvaluationResponse]:
     """
     List evaluations for a project.
 
@@ -468,7 +468,7 @@ async def get_evaluation(
     evaluation_id: int,
     request: Request,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
 ) -> EvaluationResponse:
     """
     Get a specific evaluation.
@@ -567,8 +567,8 @@ async def delete_evaluation(
     evaluation_id: int,
     request: Request,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user),
-) -> Dict[str, str]:
+    user_context: dict = Depends(get_prompt_studio_user),
+) -> dict[str, str]:
     """
     Delete an evaluation (soft delete).
 
@@ -638,7 +638,7 @@ async def delete_evaluation(
 # Background Task Health
 
 # Minimal in-memory ping registry for background tasks health checks
-_BG_PINGS: Dict[str, Dict[str, Any]] = {}
+_BG_PINGS: dict[str, dict[str, Any]] = {}
 
 
 async def _complete_ping(ping_id: str):
@@ -654,7 +654,7 @@ async def _complete_ping(ping_id: str):
 @router.post("/background/ping", openapi_extra={
     "responses": {"200": {"description": "Ping scheduled", "content": {"application/json": {"examples": {"scheduled": {"value": {"id": "abc123", "status": "processing", "created_at": "2024-09-21T12:00:00"}}}}}}}
 })
-async def background_ping(background_tasks: BackgroundTasks) -> Dict[str, Any]:
+async def background_ping(background_tasks: BackgroundTasks) -> dict[str, Any]:
     """Schedule a trivial background task to verify background execution works."""
     pid = str(uuid.uuid4())
     _BG_PINGS[pid] = {"id": pid, "status": "processing", "created_at": datetime.now().isoformat()}
@@ -665,7 +665,7 @@ async def background_ping(background_tasks: BackgroundTasks) -> Dict[str, Any]:
 @router.get("/background/pings/{ping_id}", openapi_extra={
     "responses": {"200": {"description": "Ping status", "content": {"application/json": {"examples": {"done": {"value": {"id": "abc123", "status": "completed", "completed_at": "2024-09-21T12:00:01"}}}}}}, "404": {"description": "Not found"}}
 })
-async def get_ping_status(ping_id: str) -> Dict[str, Any]:
+async def get_ping_status(ping_id: str) -> dict[str, Any]:
     if ping_id not in _BG_PINGS:
         raise HTTPException(status_code=404, detail="Ping not found")
     return _BG_PINGS[ping_id]
@@ -685,7 +685,6 @@ async def run_evaluation_async(
     Best-effort: computes simple metrics; tolerates missing LLM credentials by
     marking failures while still completing the record.
     """
-    from tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager import EvaluationManager
     import json as _json
 
     conn = db.get_connection()
@@ -751,7 +750,9 @@ async def run_evaluation_async(
         _chat_call = None
         if use_llm and adapter is None:
             try:
-                from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call as _chat_call  # type: ignore
+                from tldw_Server_API.app.core.Chat.chat_service import (
+                    perform_chat_api_call as _chat_call,  # type: ignore
+                )
             except Exception:
                 _chat_call = None  # Fallback: no chat; mark errors per test case
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -31,12 +32,12 @@ class RotationStats:
 
 @dataclass
 class RotationSummary:
-    tables: Dict[str, RotationStats]
+    tables: dict[str, RotationStats]
     total: RotationStats
     dry_run: bool = False
 
 
-def _extract_row_fields(row: Any) -> tuple[int, Optional[str]]:
+def _extract_row_fields(row: Any) -> tuple[int, str | None]:
     if isinstance(row, dict):
         return int(row.get("id")), row.get("encrypted_blob")
     return int(row["id"]), row["encrypted_blob"]
@@ -159,7 +160,7 @@ async def rotate_byok_secrets(
     *,
     dry_run: bool = False,
     batch_size: int = 500,
-    pool: Optional[DatabasePool] = None,
+    pool: DatabasePool | None = None,
 ) -> RotationSummary:
     settings = get_settings()
     if not settings.BYOK_ENCRYPTION_KEY:

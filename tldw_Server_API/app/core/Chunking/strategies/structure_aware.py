@@ -5,13 +5,13 @@ Preserves document structure including tables, headers, code blocks, and lists.
 """
 
 import re
-import json
-from typing import List, Dict, Any, Optional, Tuple
-from enum import Enum
 from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Optional
+
 from loguru import logger
 
-from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
+from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
 
 
 class StructureType(Enum):
@@ -42,7 +42,7 @@ class DocumentElement:
     content: str
     level: Optional[int] = None  # For headers (h1=1, h2=2, etc.)
     language: Optional[str] = None  # For code blocks
-    metadata: Dict[str, Any] = None
+    metadata: dict[str, Any] = None
 
     def __post_init__(self):
         if self.metadata is None:
@@ -52,10 +52,10 @@ class DocumentElement:
 @dataclass
 class Table:
     """Represents a parsed table."""
-    headers: List[str]
-    rows: List[List[str]]
+    headers: list[str]
+    rows: list[list[str]]
     format: TableFormat
-    metadata: Dict[str, Any] = None
+    metadata: dict[str, Any] = None
 
     @property
     def num_columns(self) -> int:
@@ -188,7 +188,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
               text: str,
               max_size: int,
               overlap: int = 0,
-              **options) -> List[str]:
+              **options) -> list[str]:
         """
         Chunk text while preserving structure.
 
@@ -228,7 +228,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
         chunks = self._group_elements_into_chunks(elements, max_size, overlap, **options)
 
         # Prepare global header index for breadcrumb computation
-        global_headers: List[Tuple[int, int, str]] = []  # (start, level, text)
+        global_headers: list[tuple[int, int, str]] = []  # (start, level, text)
         for e in elements:
             if e.type == StructureType.HEADER and isinstance(e.level, int):
                 start_pos = e.metadata.get('start') if isinstance(e.metadata, dict) else None
@@ -264,7 +264,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
                             text: str,
                             max_size: int,
                             overlap: int = 0,
-                            **options) -> List[ChunkResult]:
+                            **options) -> list[ChunkResult]:
         """Chunk text and return metadata using source spans from structural elements."""
         if not self.validate_parameters(text, max_size, overlap):
             return []
@@ -279,7 +279,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
         chunks = self._group_elements_into_chunks(elements, max_size, overlap, **options)
 
         # Prepare global header index for breadcrumb computation (mirrors chunk())
-        global_headers: List[Tuple[int, int, str]] = []  # (start, level, text)
+        global_headers: list[tuple[int, int, str]] = []  # (start, level, text)
         for e in elements:
             if e.type == StructureType.HEADER and isinstance(e.level, int):
                 start_pos = e.metadata.get('start') if isinstance(e.metadata, dict) else None
@@ -287,7 +287,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
                     global_headers.append((start_pos, int(e.level), e.content.strip()))
         global_headers.sort(key=lambda t: t[0])
 
-        results: List[ChunkResult] = []
+        results: list[ChunkResult] = []
         total = len(chunks)
         for idx, chunk_elements in enumerate(chunks):
             chunk_start = None
@@ -343,7 +343,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
 
         return results
 
-    def _parse_document_structure(self, text: str, **options) -> List[DocumentElement]:
+    def _parse_document_structure(self, text: str, **options) -> list[DocumentElement]:
         """
         Parse document into structural elements.
 
@@ -457,7 +457,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
 
         return elements
 
-    def _extract_tables(self, text: str, processed_ranges: List[Tuple[int, int]]) -> List[DocumentElement]:
+    def _extract_tables(self, text: str, processed_ranges: list[tuple[int, int]]) -> list[DocumentElement]:
         """
         Extract tables from text.
 
@@ -473,7 +473,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
         # Look for markdown tables
         lines = text.split('\n')
         # Precompute character offsets for line starts
-        line_starts: List[int] = []
+        line_starts: list[int] = []
         pos = 0
         for idx, ln in enumerate(lines):
             line_starts.append(pos)
@@ -567,7 +567,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
 
         return None
 
-    def _in_processed_range(self, position: int, ranges: List[Tuple[int, int]]) -> bool:
+    def _in_processed_range(self, position: int, ranges: list[tuple[int, int]]) -> bool:
         """Check if position is in any processed range."""
         for start, end in ranges:
             if start <= position < end:
@@ -575,10 +575,10 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
         return False
 
     def _group_elements_into_chunks(self,
-                                   elements: List[DocumentElement],
+                                   elements: list[DocumentElement],
                                    max_size: int,
                                    overlap: int,
-                                   **options) -> List[List[DocumentElement]]:
+                                   **options) -> list[list[DocumentElement]]:
         """
         Group elements into chunks respecting structure.
 
@@ -635,7 +635,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
 
         return chunks
 
-    def _elements_to_text(self, elements: List[DocumentElement], **options) -> str:
+    def _elements_to_text(self, elements: list[DocumentElement], **options) -> str:
         """
         Convert elements back to text.
 
@@ -701,7 +701,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
 
         return '\n'.join(lines).strip()
 
-    def _build_contextual_header(self, elements: List[DocumentElement], options: Dict[str, Any]) -> str:
+    def _build_contextual_header(self, elements: list[DocumentElement], options: dict[str, Any]) -> str:
         """Build contextual breadcrumbs for a chunk.
 
         Strategy:
@@ -713,13 +713,13 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
         folder_path = options.get('folder_path')  # e.g., "Workspace/Team Docs/Project X"
         max_levels = int(options.get('max_breadcrumb_levels', 6))
         # Extract global headers and chunk start (provided by chunk())
-        global_headers: List[Tuple[int, int, str]] = options.get('_global_headers') or []
+        global_headers: list[tuple[int, int, str]] = options.get('_global_headers') or []
         chunk_start: int = options.get('_chunk_start') or 0
 
         # Compute header breadcrumb chain from global headers
-        breadcrumb_sections: List[str] = []
+        breadcrumb_sections: list[str] = []
         if global_headers:
-            stack: List[Tuple[int, str]] = []  # (level, text)
+            stack: list[tuple[int, str]] = []  # (level, text)
             for pos, lvl, text in global_headers:
                 if pos >= chunk_start:
                     break
@@ -743,7 +743,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
         if max_levels > 0 and len(breadcrumb_sections) > max_levels:
             breadcrumb_sections = breadcrumb_sections[-max_levels:]
 
-        parts: List[str] = []
+        parts: list[str] = []
         # Folder path first if available
         if isinstance(folder_path, str) and folder_path.strip():
             parts.append(folder_path.strip())

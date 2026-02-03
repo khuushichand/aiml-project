@@ -1,8 +1,7 @@
-from urllib.parse import urlparse, urlunparse, urljoin, parse_qsl, urlencode
-from typing import Iterable, Set
+from collections.abc import Iterable
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
-
-_TRACKING_PARAMS: Set[str] = {
+_TRACKING_PARAMS: set[str] = {
     # Common analytics params
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
     "gclid", "fbclid", "igshid", "mc_cid", "mc_eid",

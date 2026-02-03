@@ -20,9 +20,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Set
 
 from loguru import logger
 
@@ -36,10 +34,10 @@ CLEANUP_INTERVAL_SEC = int(os.environ.get("MEDIA_FILES_CLEANUP_INTERVAL_SEC", "8
 GRACE_PERIOD_DAYS = int(os.environ.get("MEDIA_FILES_CLEANUP_GRACE_DAYS", "7"))
 
 # Module-level task reference
-_cleanup_task: Optional[asyncio.Task] = None
+_cleanup_task: asyncio.Task | None = None
 
 
-def _get_storage_base_path() -> Optional[Path]:
+def _get_storage_base_path() -> Path | None:
     """Get the storage base path from config."""
     try:
         from tldw_Server_API.app.core.config import load_comprehensive_config
@@ -80,9 +78,9 @@ def _enumerate_user_ids() -> list[int]:
     return sorted(set(uids))
 
 
-def _collect_known_storage_paths(user_id: int) -> Set[str]:
+def _collect_known_storage_paths(user_id: int) -> set[str]:
     """Collect all storage_path values from a user's MediaFiles table."""
-    known_paths: Set[str] = set()
+    known_paths: set[str] = set()
     try:
         db_path = DatabasePaths.get_media_db_path(user_id)
         if not Path(db_path).exists():
@@ -105,7 +103,7 @@ def _collect_known_storage_paths(user_id: int) -> Set[str]:
     return known_paths
 
 
-def _find_orphaned_files(storage_base: Path, known_paths: Set[str], grace_days: int) -> list[Path]:
+def _find_orphaned_files(storage_base: Path, known_paths: set[str], grace_days: int) -> list[Path]:
     """
     Find files on disk that are not in the known paths set
     and are older than the grace period.
@@ -171,7 +169,7 @@ async def cleanup_orphaned_files() -> dict:
         return {"status": "skipped", "reason": "storage_path_not_found"}
 
     # Collect all known paths from all user databases
-    all_known_paths: Set[str] = set()
+    all_known_paths: set[str] = set()
     user_ids = _enumerate_user_ids()
 
     for user_id in user_ids:
@@ -280,7 +278,7 @@ async def _cleanup_loop():
         await asyncio.sleep(CLEANUP_INTERVAL_SEC)
 
 
-def start_cleanup_scheduler() -> Optional[asyncio.Task]:
+def start_cleanup_scheduler() -> asyncio.Task | None:
     """
     Start the background cleanup scheduler.
 

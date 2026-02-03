@@ -2,18 +2,20 @@
 #
 #
 # Imports
-from typing import Dict, Any, Optional, List, TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional
+
 #
 # Third-party imports
 from loguru import logger as logging
-from pathlib import Path
 
-from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import InferenceError
-from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LLMManagerConfig
 from tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler import LlamaCppHandler
+
 #
 # Local imports
 from tldw_Server_API.app.core.Local_LLM.Llamafile_Handler import LlamafileHandler
+from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import InferenceError
+from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LLMManagerConfig
 from tldw_Server_API.app.core.Local_LLM.Ollama_Handler import OllamaHandler
 
 if TYPE_CHECKING:
@@ -94,7 +96,7 @@ class LLMInferenceManager:
             self.logger.error(f"Backend '{backend_name}' not available or not enabled.")
             raise InferenceError(f"Backend '{backend_name}' not available.")
 
-    async def list_local_models(self, backend: str) -> List[str]:
+    async def list_local_models(self, backend: str) -> list[str]:
         handler = self.get_handler(backend)
         if hasattr(handler, "list_models"):
             return await handler.list_models()
@@ -120,7 +122,7 @@ class LLMInferenceManager:
             return str(model_path)
         raise InferenceError(f"Download not implemented for backend {backend} via this generic method or backend unknown.")
 
-    async def run_inference(self, backend: str, model_name_or_path: str, prompt: Any, **kwargs) -> Dict[str, Any]:
+    async def run_inference(self, backend: str, model_name_or_path: str, prompt: Any, **kwargs) -> dict[str, Any]:
         handler = self.get_handler(backend)
         self.logger.info(f"Running inference with {backend} for model {model_name_or_path}")
         if backend == "ollama":
@@ -183,7 +185,7 @@ class LLMInferenceManager:
             )
         raise InferenceError(f"Inference not implemented for backend {backend} via this generic method or backend unknown.")
 
-    async def start_server(self, backend: str, model_name: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    async def start_server(self, backend: str, model_name: Optional[str] = None, **kwargs) -> dict[str, Any]:
         handler = self.get_handler(backend)
         self.logger.info(f"Starting server for backend {backend} with model {model_name or 'default'}")
         if backend == "ollama":
@@ -222,7 +224,7 @@ class LLMInferenceManager:
             return await handler.stop_server(pid=kwargs.get("pid"), port=kwargs.get("port"))
         raise InferenceError(f"Server stop not applicable or implemented for backend {backend} via this method.")
 
-    async def get_server_status(self, backend: str) -> Dict[str, Any]:
+    async def get_server_status(self, backend: str) -> dict[str, Any]:
         """Return server status for a backend if supported by its handler."""
         handler = self.get_handler(backend)
         # Only some handlers implement status; delegate if available

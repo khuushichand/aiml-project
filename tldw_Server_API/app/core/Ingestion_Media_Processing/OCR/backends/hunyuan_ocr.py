@@ -7,7 +7,7 @@ import json
 import os
 import tempfile
 import threading
-from typing import Any, Dict, Optional
+from typing import Any
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import (
@@ -17,7 +17,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import (
     normalize_ocr_format,
 )
 from tldw_Server_API.app.core.Utils.Utils import logging
-
 
 _TF_MODEL = None
 _TF_PROCESSOR = None
@@ -31,7 +30,7 @@ def _resolve_mode() -> str:
     return mode
 
 
-_PROMPT_PRESETS: Dict[str, str] = {
+_PROMPT_PRESETS: dict[str, str] = {
     "general": "Extract all visible text from the image.",
     "doc": "Parse the document and return all text in Markdown. Render tables as HTML.",
     "table": "Extract tables as HTML. Return all other text in Markdown.",
@@ -80,7 +79,7 @@ class HunyuanOCRBackend(OCRBackend):
 
     def describe(self) -> dict:
         mode = _resolve_mode()
-        info: Dict[str, Any] = {
+        info: dict[str, Any] = {
             "mode": mode,
             "prompt": os.getenv("HUNYUAN_PROMPT"),
             "prompt_preset": os.getenv("HUNYUAN_PROMPT_PRESET"),
@@ -103,16 +102,16 @@ class HunyuanOCRBackend(OCRBackend):
             )
         return info
 
-    def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
+    def ocr_image(self, image_bytes: bytes, lang: str | None = None) -> str:
         result = self.ocr_image_structured(image_bytes, lang=lang, output_format="text")
         return result.text or ""
 
     def ocr_image_structured(
         self,
         image_bytes: bytes,
-        lang: Optional[str] = None,
-        output_format: Optional[str] = None,
-        prompt_preset: Optional[str] = None,
+        lang: str | None = None,
+        output_format: str | None = None,
+        prompt_preset: str | None = None,
     ) -> OCRResult:
         if not self.available():
             logging.warning("HunyuanOCRBackend not available: set HUNYUAN_VLLM_URL or install transformers+torch+Pillow.")
@@ -149,7 +148,7 @@ class HunyuanOCRBackend(OCRBackend):
         return _build_result_from_output(raw_text, output_format, prompt_preset, meta)
 
 
-def _resolve_prompt(prompt_preset: Optional[str], output_format: Optional[str]) -> str:
+def _resolve_prompt(prompt_preset: str | None, output_format: str | None) -> str:
     env_prompt = os.getenv("HUNYUAN_PROMPT")
     if env_prompt:
         return env_prompt
@@ -230,8 +229,8 @@ def _load_transformers():
         if _TF_MODEL is not None and _TF_PROCESSOR is not None:
             return _TF_MODEL, _TF_PROCESSOR
 
-        from transformers import AutoProcessor, HunYuanVLForConditionalGeneration
         import torch
+        from transformers import AutoProcessor, HunYuanVLForConditionalGeneration
 
         model_path = os.getenv("HUNYUAN_MODEL_PATH", "tencent/HunyuanOCR")
         device_env = os.getenv("HUNYUAN_DEVICE")
@@ -318,9 +317,9 @@ def _clean_repeated_substrings(text: str) -> str:
 
 def _build_result_from_output(
     raw_output: str,
-    output_format: Optional[str],
-    prompt_preset: Optional[str],
-    meta: Dict[str, Any],
+    output_format: str | None,
+    prompt_preset: str | None,
+    meta: dict[str, Any],
 ) -> OCRResult:
     fmt = normalize_ocr_format(output_format)
     if fmt == "unknown":
@@ -344,7 +343,7 @@ def _build_result_from_output(
     return OCRResult(text=raw_output or "", format=fmt, raw=raw_output, meta=meta)
 
 
-def _try_parse_json(raw_text: str) -> Optional[Any]:
+def _try_parse_json(raw_text: str) -> Any | None:
     if not raw_text:
         return None
     txt = raw_text.strip()

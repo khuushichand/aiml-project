@@ -2,14 +2,12 @@
 Interactive mode for tldw Evaluations CLI.
 """
 
-from typing import Dict, Any
 
-import click
 from rich.console import Console
-from rich.prompt import Prompt, Confirm
 from rich.panel import Panel
+from rich.prompt import Confirm, Prompt
 
-from tldw_Server_API.cli.utils.output import print_info, print_success, print_error
+from tldw_Server_API.cli.utils.output import print_info, print_success
 
 
 def run_interactive_mode(cli_context):

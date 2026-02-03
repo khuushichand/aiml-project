@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import uuid
+from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
-import uuid
+from typing import Any
 
 from sqlalchemy import (
     DateTime,
@@ -18,18 +19,18 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
-    select,
     func,
+    select,
 )
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker, selectinload
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, selectinload, sessionmaker
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _iso_or_none(value: Optional[datetime]) -> Optional[str]:
+def _iso_or_none(value: datetime | None) -> str | None:
     if value is None:
         return None
     if value.tzinfo is None:
@@ -46,20 +47,20 @@ class EmbeddingABTest(Base):
 
     test_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_by: Mapped[Optional[str]] = mapped_column(String(128))
+    created_by: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
     config_json: Mapped[str] = mapped_column(Text, nullable=False)
-    stats_json: Mapped[Optional[str]] = mapped_column(Text)
-    notes: Mapped[Optional[str]] = mapped_column(Text)
+    stats_json: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
 
-    arms: Mapped[List["EmbeddingABTestArm"]] = relationship(
+    arms: Mapped[list["EmbeddingABTestArm"]] = relationship(
         back_populates="test", cascade="all, delete-orphan", order_by="EmbeddingABTestArm.arm_index"
     )
-    queries: Mapped[List["EmbeddingABTestQuery"]] = relationship(
+    queries: Mapped[list["EmbeddingABTestQuery"]] = relationship(
         back_populates="test", cascade="all, delete-orphan", order_by="EmbeddingABTestQuery.created_at"
     )
-    results: Mapped[List["EmbeddingABTestResult"]] = relationship(
+    results: Mapped[list["EmbeddingABTestResult"]] = relationship(
         back_populates="test", cascade="all, delete-orphan"
     )
 
@@ -77,16 +78,16 @@ class EmbeddingABTestArm(Base):
     arm_index: Mapped[int] = mapped_column(Integer, nullable=False)
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     model_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    dimensions: Mapped[Optional[int]] = mapped_column(Integer)
-    collection_hash: Mapped[Optional[str]] = mapped_column(String(128))
-    pipeline_hash: Mapped[Optional[str]] = mapped_column(String(128))
-    collection_name: Mapped[Optional[str]] = mapped_column(String(255))
+    dimensions: Mapped[int | None] = mapped_column(Integer)
+    collection_hash: Mapped[str | None] = mapped_column(String(128))
+    pipeline_hash: Mapped[str | None] = mapped_column(String(128))
+    collection_name: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
-    stats_json: Mapped[Optional[str]] = mapped_column(Text)
-    metadata_json: Mapped[Optional[str]] = mapped_column(Text)
+    stats_json: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[str | None] = mapped_column(Text)
 
     test: Mapped[EmbeddingABTest] = relationship(back_populates="arms")
-    results: Mapped[List["EmbeddingABTestResult"]] = relationship(back_populates="arm", cascade="all, delete-orphan")
+    results: Mapped[list["EmbeddingABTestResult"]] = relationship(back_populates="arm", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_abtest_arms_test", "test_id"),
@@ -99,12 +100,12 @@ class EmbeddingABTestQuery(Base):
     query_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     test_id: Mapped[str] = mapped_column(ForeignKey("embedding_abtests.test_id"), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
-    ground_truth_ids: Mapped[Optional[str]] = mapped_column(Text)
-    metadata_json: Mapped[Optional[str]] = mapped_column(Text)
+    ground_truth_ids: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     test: Mapped[EmbeddingABTest] = relationship(back_populates="queries")
-    results: Mapped[List["EmbeddingABTestResult"]] = relationship(back_populates="query", cascade="all, delete-orphan")
+    results: Mapped[list["EmbeddingABTestResult"]] = relationship(back_populates="query", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_abtest_queries_test", "test_id"),
@@ -119,13 +120,13 @@ class EmbeddingABTestResult(Base):
     arm_id: Mapped[str] = mapped_column(ForeignKey("embedding_abtest_arms.arm_id"), nullable=False)
     query_id: Mapped[str] = mapped_column(ForeignKey("embedding_abtest_queries.query_id"), nullable=False)
     ranked_ids: Mapped[str] = mapped_column(Text, nullable=False)
-    scores: Mapped[Optional[str]] = mapped_column(Text)
-    metrics_json: Mapped[Optional[str]] = mapped_column(Text)
-    latency_ms: Mapped[Optional[float]] = mapped_column(Float)
-    ranked_distances: Mapped[Optional[str]] = mapped_column(Text)
-    ranked_metadatas: Mapped[Optional[str]] = mapped_column(Text)
-    ranked_documents: Mapped[Optional[str]] = mapped_column(Text)
-    rerank_scores: Mapped[Optional[str]] = mapped_column(Text)
+    scores: Mapped[str | None] = mapped_column(Text)
+    metrics_json: Mapped[str | None] = mapped_column(Text)
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+    ranked_distances: Mapped[str | None] = mapped_column(Text)
+    ranked_metadatas: Mapped[str | None] = mapped_column(Text)
+    ranked_documents: Mapped[str | None] = mapped_column(Text)
+    rerank_scores: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     test: Mapped[EmbeddingABTest] = relationship(back_populates="results")
@@ -176,10 +177,10 @@ class EmbeddingABTestRepository:
         *,
         test_id: str,
         name: str,
-        created_by: Optional[str],
-        config: Dict[str, Any],
+        created_by: str | None,
+        config: dict[str, Any],
         status: str = "pending",
-        notes: Optional[str] = None,
+        notes: str | None = None,
     ) -> EmbeddingABTest:
         with self.session_scope() as session:
             entity = EmbeddingABTest(
@@ -205,13 +206,13 @@ class EmbeddingABTestRepository:
         arm_index: int,
         provider: str,
         model_id: str,
-        dimensions: Optional[int] = None,
-        collection_hash: Optional[str] = None,
-        pipeline_hash: Optional[str] = None,
-        collection_name: Optional[str] = None,
+        dimensions: int | None = None,
+        collection_hash: str | None = None,
+        pipeline_hash: str | None = None,
+        collection_name: str | None = None,
         status: str = "pending",
-        stats: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        stats: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> EmbeddingABTestArm:
         with self.session_scope() as session:
             arm = session.get(EmbeddingABTestArm, arm_id)
@@ -255,8 +256,8 @@ class EmbeddingABTestRepository:
         query_id: str,
         test_id: str,
         text: str,
-        ground_truth_ids: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        ground_truth_ids: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> EmbeddingABTestQuery:
         with self.session_scope() as session:
             query = EmbeddingABTestQuery(
@@ -278,14 +279,14 @@ class EmbeddingABTestRepository:
         test_id: str,
         arm_id: str,
         query_id: str,
-        ranked_ids: List[str],
-        scores: Optional[List[float]] = None,
-        metrics: Optional[Dict[str, Any]] = None,
-        latency_ms: Optional[float] = None,
-        ranked_distances: Optional[List[float]] = None,
-        ranked_metadatas: Optional[List[Dict[str, Any]]] = None,
-        ranked_documents: Optional[List[str]] = None,
-        rerank_scores: Optional[List[float]] = None,
+        ranked_ids: list[str],
+        scores: list[float] | None = None,
+        metrics: dict[str, Any] | None = None,
+        latency_ms: float | None = None,
+        ranked_distances: list[float] | None = None,
+        ranked_metadatas: list[dict[str, Any]] | None = None,
+        ranked_documents: list[str] | None = None,
+        rerank_scores: list[float] | None = None,
     ) -> EmbeddingABTestResult:
         with self.session_scope() as session:
             result = EmbeddingABTestResult(
@@ -312,7 +313,7 @@ class EmbeddingABTestRepository:
         *,
         test_id: str,
         status: str,
-        stats: Optional[Dict[str, Any]] = None,
+        stats: dict[str, Any] | None = None,
     ) -> None:
         with self.session_scope() as session:
             stmt = select(EmbeddingABTest).where(EmbeddingABTest.test_id == test_id)
@@ -324,7 +325,7 @@ class EmbeddingABTestRepository:
                 entity.stats_json = json.dumps(stats, sort_keys=True)
             session.add(entity)
 
-    def get_test_with_children(self, test_id: str) -> Optional[EmbeddingABTest]:
+    def get_test_with_children(self, test_id: str) -> EmbeddingABTest | None:
         with self._session_factory() as session:
             stmt = (
                 select(EmbeddingABTest)
@@ -340,7 +341,7 @@ class EmbeddingABTestRepository:
                 session.expunge(result)
             return result
 
-    def get_test(self, test_id: str) -> Optional[EmbeddingABTest]:
+    def get_test(self, test_id: str) -> EmbeddingABTest | None:
         with self._session_factory() as session:
             stmt = select(EmbeddingABTest).where(EmbeddingABTest.test_id == test_id)
             result = session.execute(stmt).scalar_one_or_none()
@@ -348,7 +349,7 @@ class EmbeddingABTestRepository:
                 session.expunge(result)
             return result
 
-    def list_arms(self, test_id: str) -> List[EmbeddingABTestArm]:
+    def list_arms(self, test_id: str) -> list[EmbeddingABTestArm]:
         with self._session_factory() as session:
             stmt = (
                 select(EmbeddingABTestArm)
@@ -365,8 +366,8 @@ class EmbeddingABTestRepository:
         *,
         test_id: str,
         collection_hash: str,
-        created_by: Optional[str],
-    ) -> Optional[EmbeddingABTestArm]:
+        created_by: str | None,
+    ) -> EmbeddingABTestArm | None:
         if not collection_hash or not created_by:
             return None
         with self._session_factory() as session:
@@ -388,7 +389,7 @@ class EmbeddingABTestRepository:
                 session.expunge(row)
             return row
 
-    def list_queries(self, test_id: str) -> List[EmbeddingABTestQuery]:
+    def list_queries(self, test_id: str) -> list[EmbeddingABTestQuery]:
         with self._session_factory() as session:
             stmt = select(EmbeddingABTestQuery).where(EmbeddingABTestQuery.test_id == test_id)
             rows = session.execute(stmt).scalars().all()
@@ -396,7 +397,7 @@ class EmbeddingABTestRepository:
                 session.expunge(row)
             return rows
 
-    def list_results(self, test_id: str, limit: int, offset: int) -> Tuple[List[EmbeddingABTestResult], int]:
+    def list_results(self, test_id: str, limit: int, offset: int) -> tuple[list[EmbeddingABTestResult], int]:
         with self._session_factory() as session:
             count_stmt = (
                 select(func.count())
@@ -429,7 +430,7 @@ class EmbeddingABTestRepository:
             return 1
 
 
-def serialize_test(entity: EmbeddingABTest) -> Dict[str, Any]:
+def serialize_test(entity: EmbeddingABTest) -> dict[str, Any]:
     return {
         "test_id": entity.test_id,
         "name": entity.name,
@@ -442,7 +443,7 @@ def serialize_test(entity: EmbeddingABTest) -> Dict[str, Any]:
     }
 
 
-def serialize_arm(entity: EmbeddingABTestArm) -> Dict[str, Any]:
+def serialize_arm(entity: EmbeddingABTestArm) -> dict[str, Any]:
     return {
         "arm_id": entity.arm_id,
         "test_id": entity.test_id,
@@ -459,7 +460,7 @@ def serialize_arm(entity: EmbeddingABTestArm) -> Dict[str, Any]:
     }
 
 
-def serialize_query(entity: EmbeddingABTestQuery) -> Dict[str, Any]:
+def serialize_query(entity: EmbeddingABTestQuery) -> dict[str, Any]:
     return {
         "query_id": entity.query_id,
         "test_id": entity.test_id,
@@ -470,7 +471,7 @@ def serialize_query(entity: EmbeddingABTestQuery) -> Dict[str, Any]:
     }
 
 
-def serialize_result(entity: EmbeddingABTestResult) -> Dict[str, Any]:
+def serialize_result(entity: EmbeddingABTestResult) -> dict[str, Any]:
     return {
         "result_id": entity.result_id,
         "test_id": entity.test_id,
@@ -495,7 +496,7 @@ class EmbeddingsABTestStore:
         self._repo = repository
 
     @staticmethod
-    def _created_by_matches(entity_created_by: Optional[str], created_by: Optional[str]) -> bool:
+    def _created_by_matches(entity_created_by: str | None, created_by: str | None) -> bool:
         if not created_by:
             return True
         if not entity_created_by:
@@ -512,13 +513,13 @@ class EmbeddingsABTestStore:
             variants.add(f"user_{raw}")
         return entity_created_by in variants
 
-    def _authorized(self, test_id: str, created_by: Optional[str]) -> bool:
+    def _authorized(self, test_id: str, created_by: str | None) -> bool:
         if not created_by:
             return True
         entity = self._repo.get_test(test_id)
         return self._created_by_matches(getattr(entity, "created_by", None), created_by)
 
-    def create_abtest(self, name: str, config: Dict[str, Any], created_by: Optional[str] = None) -> str:
+    def create_abtest(self, name: str, config: dict[str, Any], created_by: str | None = None) -> str:
         test_id = f"abtest_{uuid.uuid4().hex[:12]}"
         self._repo.create_test(
             test_id=test_id,
@@ -535,13 +536,13 @@ class EmbeddingsABTestStore:
         arm_index: int,
         provider: str,
         model_id: str,
-        dimensions: Optional[int] = None,
-        collection_hash: Optional[str] = None,
-        pipeline_hash: Optional[str] = None,
-        collection_name: Optional[str] = None,
+        dimensions: int | None = None,
+        collection_hash: str | None = None,
+        pipeline_hash: str | None = None,
+        collection_name: str | None = None,
         status: str = "pending",
-        stats_json: Optional[Dict[str, Any]] = None,
-        metadata_json: Optional[Dict[str, Any]] = None,
+        stats_json: dict[str, Any] | None = None,
+        metadata_json: dict[str, Any] | None = None,
     ) -> str:
         arm_id = f"arm_{test_id}_{arm_index}"
         self._repo.add_arm(
@@ -560,8 +561,8 @@ class EmbeddingsABTestStore:
         )
         return arm_id
 
-    def insert_abtest_queries(self, test_id: str, queries: List[Dict[str, Any]]) -> List[str]:
-        ids: List[str] = []
+    def insert_abtest_queries(self, test_id: str, queries: list[dict[str, Any]]) -> list[str]:
+        ids: list[str] = []
         for payload in queries:
             qid = f"q_{uuid.uuid4().hex[:10]}"
             ids.append(qid)
@@ -577,7 +578,7 @@ class EmbeddingsABTestStore:
             )
         return ids
 
-    def set_abtest_status(self, test_id: str, status: str, stats_json: Optional[Dict[str, Any]] = None, *, created_by: Optional[str] = None) -> None:
+    def set_abtest_status(self, test_id: str, status: str, stats_json: dict[str, Any] | None = None, *, created_by: str | None = None) -> None:
         if not self._authorized(test_id, created_by):
             return
         self._repo.update_test_status(test_id=test_id, status=status, stats=stats_json)
@@ -587,14 +588,14 @@ class EmbeddingsABTestStore:
         test_id: str,
         arm_id: str,
         query_id: str,
-        ranked_ids: List[str],
-        scores: Optional[List[float]] = None,
-        metrics: Optional[Dict[str, Any]] = None,
-        latency_ms: Optional[float] = None,
-        ranked_distances: Optional[List[float]] = None,
-        ranked_metadatas: Optional[List[Dict[str, Any]]] = None,
-        ranked_documents: Optional[List[str]] = None,
-        rerank_scores: Optional[List[float]] = None,
+        ranked_ids: list[str],
+        scores: list[float] | None = None,
+        metrics: dict[str, Any] | None = None,
+        latency_ms: float | None = None,
+        ranked_distances: list[float] | None = None,
+        ranked_metadatas: list[dict[str, Any]] | None = None,
+        ranked_documents: list[str] | None = None,
+        rerank_scores: list[float] | None = None,
     ) -> str:
         rid = f"res_{uuid.uuid4().hex[:12]}"
         self._repo.record_result(
@@ -613,13 +614,13 @@ class EmbeddingsABTestStore:
         )
         return rid
 
-    def get_abtest(self, test_id: str, *, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_abtest(self, test_id: str, *, created_by: str | None = None) -> dict[str, Any] | None:
         entity = self._repo.get_test(test_id)
         if not entity or not self._created_by_matches(entity.created_by, created_by):
             return None
         return serialize_test(entity)
 
-    def get_abtest_arms(self, test_id: str, *, created_by: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_abtest_arms(self, test_id: str, *, created_by: str | None = None) -> list[dict[str, Any]]:
         if not self._authorized(test_id, created_by):
             return []
         return [serialize_arm(arm) for arm in self._repo.list_arms(test_id)]
@@ -629,8 +630,8 @@ class EmbeddingsABTestStore:
         *,
         test_id: str,
         collection_hash: str,
-        created_by: Optional[str],
-    ) -> Optional[Dict[str, Any]]:
+        created_by: str | None,
+    ) -> dict[str, Any] | None:
         arm = self._repo.find_reusable_arm(
             test_id=test_id,
             collection_hash=collection_hash,
@@ -640,18 +641,18 @@ class EmbeddingsABTestStore:
             return None
         return serialize_arm(arm)
 
-    def get_abtest_queries(self, test_id: str, *, created_by: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_abtest_queries(self, test_id: str, *, created_by: str | None = None) -> list[dict[str, Any]]:
         if not self._authorized(test_id, created_by):
             return []
         return [serialize_query(q) for q in self._repo.list_queries(test_id)]
 
-    def list_abtest_results(self, test_id: str, limit: int, offset: int, *, created_by: Optional[str] = None) -> Tuple[List[Dict[str, Any]], int]:
+    def list_abtest_results(self, test_id: str, limit: int, offset: int, *, created_by: str | None = None) -> tuple[list[dict[str, Any]], int]:
         if not self._authorized(test_id, created_by):
             return [], 0
         rows, total = self._repo.list_results(test_id, limit, offset)
         return [serialize_result(r) for r in rows], total
 
-    def delete_abtest(self, test_id: str, *, created_by: Optional[str] = None) -> int:
+    def delete_abtest(self, test_id: str, *, created_by: str | None = None) -> int:
         if not self._authorized(test_id, created_by):
             return 0
         return self._repo.delete_test(test_id)

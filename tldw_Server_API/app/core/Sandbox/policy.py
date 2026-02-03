@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional, List
-
-from loguru import logger
-
-from .models import RuntimeType, RunSpec, SessionSpec, TrustLevel
-from tldw_Server_API.app.core.config import settings as app_settings
-import json
 import hashlib
+import json
+from dataclasses import dataclass, field
 
+from tldw_Server_API.app.core.config import settings as app_settings
+
+from .models import RunSpec, RuntimeType, SessionSpec, TrustLevel
 
 # Trust-level presets define resource limits and security constraints
 # based on the trust level of the code being executed.
@@ -50,7 +47,7 @@ class SandboxPolicyConfig:
     network_default: str = "deny_all"  # deny_all | allowlist (allowlist controlled elsewhere)
     # Opt-in egress allowlist enforcement (runtime dependent; Docker only for now)
     egress_enforcement: bool = False
-    egress_allowlist: List[str] = field(default_factory=list)
+    egress_allowlist: list[str] = field(default_factory=list)
     artifact_ttl_hours: int = 24
     max_upload_mb: int = 64
     max_log_bytes: int = 10 * 1024 * 1024
@@ -58,7 +55,7 @@ class SandboxPolicyConfig:
     max_cpu: float = 4.0
     max_mem_mb: int = 8192
     workspace_cap_mb: int = 256
-    supported_spec_versions: List[str] = field(default_factory=lambda: ["1.0"])
+    supported_spec_versions: list[str] = field(default_factory=lambda: ["1.0"])
 
     @classmethod
     def from_settings(cls) -> "SandboxPolicyConfig":
@@ -81,7 +78,7 @@ class SandboxPolicyConfig:
                 return float(getattr(app_settings, key))  # type: ignore[arg-type]
             except Exception:
                 return dv
-        def _get_list(key: str, dv: List[str]) -> List[str]:
+        def _get_list(key: str, dv: list[str]) -> list[str]:
             try:
                 v = getattr(app_settings, key)
                 if isinstance(v, list):
@@ -123,7 +120,7 @@ class SandboxPolicy:
     and available.
     """
 
-    def __init__(self, cfg: Optional[SandboxPolicyConfig] = None) -> None:
+    def __init__(self, cfg: SandboxPolicyConfig | None = None) -> None:
         self.cfg = cfg or SandboxPolicyConfig.from_settings()
 
     class RuntimeUnavailable(Exception):
@@ -133,7 +130,7 @@ class SandboxPolicy:
 
     def select_runtime(
         self,
-        requested: Optional[RuntimeType],
+        requested: RuntimeType | None,
         firecracker_available: bool,
         lima_available: bool = False,
     ) -> RuntimeType:

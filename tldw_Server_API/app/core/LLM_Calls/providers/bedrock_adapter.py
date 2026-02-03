@@ -1,24 +1,25 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
 import asyncio
 import os
+from collections.abc import AsyncIterator, Iterable
+from typing import Any
 
-from .base import ChatProvider, apply_tool_choice
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
-from tldw_Server_API.app.core.LLM_Calls.sse import (
-    normalize_provider_line,
-    is_done_line,
-    sse_done,
-    finalize_stream,
-)
-from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
-from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
-from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    finalize_stream,
+    is_done_line,
+    normalize_provider_line,
+    sse_done,
+)
+from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 
+from .base import ChatProvider, apply_tool_choice
 
 # Patchable client factory (mirrors other adapters)
 http_client_factory = _hc_create_client
@@ -41,7 +42,7 @@ class BedrockAdapter(ChatProvider):
 
     name = "bedrock"
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "supports_streaming": True,
             "supports_tools": True,
@@ -56,7 +57,7 @@ class BedrockAdapter(ChatProvider):
             return False
         return True
 
-    def _base_url(self, request: Optional[Dict[str, Any]] = None) -> str:
+    def _base_url(self, request: dict[str, Any] | None = None) -> str:
         # Allow explicit base override; otherwise derive from runtime endpoint or region
         override = (request or {}).get("base_url")
         if isinstance(override, str) and override.strip():
@@ -75,14 +76,14 @@ class BedrockAdapter(ChatProvider):
         region = os.getenv("BEDROCK_REGION") or "us-west-2"
         return f"https://bedrock-runtime.{region}.amazonaws.com/openai"
 
-    def _headers(self, api_key: Optional[str]) -> Dict[str, str]:
+    def _headers(self, api_key: str | None) -> dict[str, str]:
         key = api_key or os.getenv("BEDROCK_API_KEY") or os.getenv("AWS_BEARER_TOKEN_BEDROCK")
         h = {"Content-Type": "application/json"}
         if key:
             h["Authorization"] = f"Bearer {key}"
         return h
 
-    def _normalize_model(self, model: Optional[str]) -> Optional[str]:
+    def _normalize_model(self, model: str | None) -> str | None:
         if model is None:
             return None
         normalized = model.strip()
@@ -111,15 +112,15 @@ class BedrockAdapter(ChatProvider):
             )
         return normalized
 
-    def _build_payload(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        messages: List[Dict[str, Any]] = request.get("messages") or []
+    def _build_payload(self, request: dict[str, Any]) -> dict[str, Any]:
+        messages: list[dict[str, Any]] = request.get("messages") or []
         system_message = request.get("system_message")
-        payload_messages: List[Dict[str, Any]] = []
+        payload_messages: list[dict[str, Any]] = []
         if system_message:
             payload_messages.append({"role": "system", "content": system_message})
         payload_messages.extend(messages)
         model = self._normalize_model(request.get("model"))
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "model": model,
             "messages": payload_messages,
         }
@@ -153,7 +154,7 @@ class BedrockAdapter(ChatProvider):
         apply_tool_choice(payload, tools, request.get("tool_choice"))
         return payload
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         request = validate_payload(self.name, request or {})
         if not self._use_native_http():
             raise RuntimeError("BedrockAdapter native HTTP disabled by configuration")
@@ -173,7 +174,7 @@ class BedrockAdapter(ChatProvider):
         except Exception as e:
             raise self.normalize_error(e)
 
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
         if not self._use_native_http():
             raise RuntimeError("BedrockAdapter native HTTP disabled by configuration")
@@ -213,28 +214,28 @@ class BedrockAdapter(ChatProvider):
         except Exception as e:
             raise self.normalize_error(e)
 
-    async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
-    async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
+    async def astream(self, request: dict[str, Any], *, timeout: float | None = None) -> AsyncIterator[str]:
         async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):
             yield item
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
         # Reuse Groq/OpenAI-style mapping which inspects httpx/requests error payloads
         from tldw_Server_API.app.core.LLM_Calls.error_utils import (
-            get_http_status_from_exception,
             get_http_error_text,
+            get_http_status_from_exception,
             is_http_status_error,
             log_http_400_body,
         )
         if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
-                ChatBadRequestError,
-                ChatAuthenticationError,
-                ChatRateLimitError,
-                ChatProviderError,
                 ChatAPIError,
+                ChatAuthenticationError,
+                ChatBadRequestError,
+                ChatProviderError,
+                ChatRateLimitError,
             )
             resp = getattr(exc, "response", None)
             status = get_http_status_from_exception(exc)

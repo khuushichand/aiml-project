@@ -2,36 +2,36 @@
 # Description: User registration service with transaction safety and directory management
 #
 # Imports
-import os
-import json
-import shutil
-import secrets
-import string
 import asyncio
-from pathlib import Path
+import json
+import os
+import secrets
+import shutil
+import string
 from datetime import datetime, timedelta
-from typing import Dict, Optional, List, Any
+from pathlib import Path
+from typing import Any, Optional
 from uuid import uuid4
+
 #
 # 3rd-party imports
 from loguru import logger
+
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
+from tldw_Server_API.app.core.AuthNZ.exceptions import (
+    DirectoryCreationError,
+    DuplicateUserError,
+    InvalidRegistrationCodeError,
+    RegistrationCodeExhaustedError,
+    RegistrationCodeExpiredError,
+    RegistrationDisabledError,
+    RegistrationError,
+)
+from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService, get_password_service
+
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
-from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService, get_password_service
-from tldw_Server_API.app.core.AuthNZ.exceptions import (
-    RegistrationError,
-    InvalidRegistrationCodeError,
-    RegistrationCodeExpiredError,
-    RegistrationCodeExhaustedError,
-    DuplicateUserError,
-    RegistrationDisabledError,
-    WeakPasswordError,
-    DirectoryCreationError,
-    TransactionError,
-    DatabaseError
-)
 
 #######################################################################################################################
 #
@@ -142,7 +142,7 @@ class RegistrationService:
         except Exception as e:
             logger.error(f"Error cleaning up directories for user {user_id}: {e}")
 
-    def _merge_org_scope_from_metadata(self, code_info: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_org_scope_from_metadata(self, code_info: dict[str, Any]) -> dict[str, Any]:
         metadata = code_info.get("metadata")
         if metadata:
             if isinstance(metadata, str):
@@ -247,7 +247,7 @@ class RegistrationService:
         is_active_override: Optional[bool] = None,
         is_verified_override: Optional[bool] = None,
         storage_quota_override: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Register a new user with full transaction safety
 
@@ -281,7 +281,7 @@ class RegistrationService:
 
         user_id = None
         directories_created = False
-        code_info: Optional[Dict[str, Any]] = None
+        code_info: Optional[dict[str, Any]] = None
 
         try:
             async with self.db_pool.transaction() as conn:
@@ -477,7 +477,7 @@ class RegistrationService:
         *,
         code: str,
         user_id: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Accept an org-scoped registration code for an existing user."""
         if not self.registration_enabled:
             raise RegistrationDisabledError()
@@ -528,7 +528,7 @@ class RegistrationService:
         conn,
         *,
         user_email: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Validate and consume a registration code
 
@@ -771,7 +771,7 @@ class RegistrationService:
         role_to_grant: str = "user",
         description: Optional[str] = None,
         allowed_email_domain: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new registration code
 
@@ -848,7 +848,7 @@ class RegistrationService:
         self,
         active_only: bool = True,
         created_by: Optional[int] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         List registration codes
 

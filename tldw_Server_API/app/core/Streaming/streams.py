@@ -1,7 +1,8 @@
 import asyncio
 import os
 import time
-from typing import Any, AsyncIterator, Callable, Dict, Optional, Tuple
+from collections.abc import AsyncIterator
+from typing import Any, Callable, Optional
 
 from loguru import logger
 
@@ -12,11 +13,10 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
 )
 from tldw_Server_API.app.core.Metrics.metrics_manager import (
-    get_metrics_registry,
     MetricDefinition,
     MetricType,
+    get_metrics_registry,
 )
-
 
 _STREAM_METRICS_REGISTERED = False
 
@@ -108,7 +108,7 @@ class SSEStream:
         max_duration_s: Optional[float] = None,
         provider_control_passthru: Optional[bool] = None,
         control_filter: Optional[Callable[[str, str], Optional[tuple[str, str]]]] = None,
-        labels: Optional[Dict[str, str]] = None,
+        labels: Optional[dict[str, str]] = None,
     ) -> None:
         self.heartbeat_interval_s = (
             heartbeat_interval_s
@@ -141,7 +141,7 @@ class SSEStream:
         self.labels = labels or {}
 
         _ensure_stream_metrics_registered()
-        self._queue: asyncio.Queue[Tuple[str, float]] = asyncio.Queue(maxsize=self.queue_maxsize)
+        self._queue: asyncio.Queue[tuple[str, float]] = asyncio.Queue(maxsize=self.queue_maxsize)
         self._closed = False
         self._done_enqueued = False
         self._high_watermark = 0
@@ -168,7 +168,7 @@ class SSEStream:
             # SSE requires a blank line to dispatch event
             await self._enqueue("\n")
 
-    async def send_json(self, payload: Dict[str, Any], *, force: bool = False) -> None:
+    async def send_json(self, payload: dict[str, Any], *, force: bool = False) -> None:
         await self._enqueue(sse_data(payload), force=force)
 
     async def send_raw_sse_line(self, line: str) -> None:
@@ -191,11 +191,11 @@ class SSEStream:
         code: str,
         message: str,
         *,
-        data: Optional[Dict[str, Any]] = None,
+        data: Optional[dict[str, Any]] = None,
         close: Optional[bool] = None,
         force: bool = False,
     ) -> None:
-        payload: Dict[str, Any] = {"error": {"code": code, "message": message}}
+        payload: dict[str, Any] = {"error": {"code": code, "message": message}}
         if data is not None:
             payload["error"]["data"] = data
         await self.send_json(payload, force=force)
@@ -350,7 +350,7 @@ class WebSocketStream:
         close_on_done: bool = True,
         compat_error_type: bool = False,
         idle_timeout_s: Optional[float] = None,
-        labels: Optional[Dict[str, str]] = None,
+        labels: Optional[dict[str, str]] = None,
     ) -> None:
         _ensure_stream_metrics_registered()
         self.ws = websocket
@@ -434,7 +434,7 @@ class WebSocketStream:
             payload["data"] = data
         await self._send_json_with_metrics(payload, kind="event")
 
-    async def send_json(self, payload: Dict[str, Any]) -> None:
+    async def send_json(self, payload: dict[str, Any]) -> None:
         await self._send_json_with_metrics(payload, kind="json")
 
     async def done(self, *, close_code: int = 1000) -> None:
@@ -445,8 +445,8 @@ class WebSocketStream:
             except Exception:
                 pass
 
-    async def error(self, code: str, message: str, *, data: Optional[Dict[str, Any]] = None) -> None:
-        payload: Dict[str, Any] = {"type": "error", "code": code, "message": message}
+    async def error(self, code: str, message: str, *, data: Optional[dict[str, Any]] = None) -> None:
+        payload: dict[str, Any] = {"type": "error", "code": code, "message": message}
         if data is not None:
             payload["data"] = data
         if self.compat_error_type:
@@ -464,7 +464,7 @@ class WebSocketStream:
         except Exception:
             pass
 
-    async def _send_json_with_metrics(self, payload: Dict[str, Any], *, kind: str) -> None:
+    async def _send_json_with_metrics(self, payload: dict[str, Any], *, kind: str) -> None:
         t0 = time.monotonic()
         sent = False
         try:

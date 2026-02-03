@@ -4,42 +4,21 @@
 # Imports
 from __future__ import annotations
 
-import os
-
-# ---------------------------------------------------------------------------
-# Imports
-# ---------------------------------------------------------------------------
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
-    get_request_user,
-    User,
-    resolve_user_id_for_request,
-)
-from tldw_Server_API.app.core.AuthNZ.byok_config import merge_app_config_overrides
-from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
-    validate_provider_override,
-    get_override_default_model,
-    get_override_credentials,
-    get_llm_provider_override,
-    get_llm_provider_overrides_snapshot,
-)
-from tldw_Server_API.app.core.Utils.image_validation import (
-    validate_image_url,
-    get_max_base64_bytes,
-)
 import asyncio
-import sys
-import math
 import json
+import math
+import os
+import re
+import sys
+import threading
 import time
 import uuid
-from functools import partial, lru_cache
 from collections import defaultdict, deque
-from typing import Any, Callable, Dict, List, Optional, Tuple, Literal
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache, partial
+from typing import Any, Callable, Literal
 from unittest.mock import Mock
 from weakref import WeakKeyDictionary
-import threading
-import re
 
 from fastapi import (
     APIRouter,
@@ -53,6 +32,27 @@ from fastapi import (
     status,
 )
 
+from tldw_Server_API.app.core.AuthNZ.byok_config import merge_app_config_overrides
+from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
+    get_llm_provider_override,
+    get_llm_provider_overrides_snapshot,
+    get_override_credentials,
+    get_override_default_model,
+    validate_provider_override,
+)
+
+# ---------------------------------------------------------------------------
+# Imports
+# ---------------------------------------------------------------------------
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    User,
+    get_request_user,
+    resolve_user_id_for_request,
+)
+from tldw_Server_API.app.core.Utils.image_validation import (
+    get_max_base64_bytes,
+    validate_image_url,
+)
 
 # Import new modules for integration
 
@@ -63,30 +63,82 @@ def is_authentication_required() -> bool:
     function on the chat module to simulate authentication-disabled scenarios.
     """
     return True
-from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
-from tldw_Server_API.app.core.Chat.rate_limiter import get_rate_limiter
-from tldw_Server_API.app.core.Chat.request_queue import get_request_queue, RequestPriority
-from tldw_Server_API.app.core.Audit.unified_audit_service import (
-    AuditEventType,
-    AuditContext,
-)
-from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
-from tldw_Server_API.app.core.Utils.chunked_image_processor import get_image_processor
 from loguru import logger
 from starlette.responses import JSONResponse
 
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
 )
+from tldw_Server_API.app.api.v1.schemas.chat_conversation_schemas import (
+    ChatAnalyticsBucket,
+    ChatAnalyticsPagination,
+    ChatAnalyticsResponse,
+    ConversationListItem,
+    ConversationListPagination,
+    ConversationListResponse,
+    ConversationMetadata,
+    ConversationTreeNode,
+    ConversationTreePagination,
+    ConversationTreeResponse,
+    ConversationUpdateRequest,
+)
+from tldw_Server_API.app.api.v1.schemas.chat_knowledge_schemas import (
+    KnowledgeSaveRequest,
+    KnowledgeSaveResponse,
+)
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
+    API_KEYS as SCHEMAS_API_KEYS,
+)
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
+    DEFAULT_LLM_PROVIDER,
     ChatCompletionRequest,
     ChatCompletionSystemMessageParam,
-    DEFAULT_LLM_PROVIDER,
-    API_KEYS as SCHEMAS_API_KEYS,
-    get_api_keys,
     RagContext,
-    RagContextDocument,
 )
+from tldw_Server_API.app.api.v1.schemas.chat_validators import (
+    validate_character_id,
+    validate_conversation_id,
+    validate_max_tokens,
+    validate_request_size,
+    validate_temperature,
+    validate_tool_definitions,
+)
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditContext,
+    AuditEventType,
+)
+from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
+    map_sender_to_role,
+)
+from tldw_Server_API.app.core.Chat.chat_exceptions import (
+    ChatDatabaseError,
+    ChatErrorCode,
+    ChatModuleException,
+    set_request_id,
+)
+
+# Note: streaming utilities are handled inside chat_service. No direct import needed here.
+from tldw_Server_API.app.core.Chat.chat_helpers import (
+    validate_request_payload,
+)
+from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
+from tldw_Server_API.app.core.Chat.chat_service import (
+    apply_prompt_templating,
+    build_call_params_from_request,
+    build_context_and_messages,
+    estimate_tokens_from_json,
+    execute_non_stream_call,
+    execute_streaming_call,
+    moderate_input_messages,
+    perform_chat_api_call,
+    queue_is_active,
+    resolve_provider_and_model,
+    resolve_provider_api_key,
+)
+from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
+from tldw_Server_API.app.core.Chat.rate_limiter import get_rate_limiter
+from tldw_Server_API.app.core.Chat.request_queue import RequestPriority, get_request_queue
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -96,105 +148,47 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 from tldw_Server_API.app.core.DB_Management.transaction_utils import (
     db_transaction,
 )
-from tldw_Server_API.app.api.v1.schemas.chat_knowledge_schemas import (
-    KnowledgeSaveRequest,
-    KnowledgeSaveResponse,
-)
-from tldw_Server_API.app.api.v1.schemas.chat_conversation_schemas import (
-    ConversationListResponse,
-    ConversationListItem,
-    ConversationListPagination,
-    ConversationUpdateRequest,
-    ConversationTreeResponse,
-    ConversationTreeNode,
-    ConversationTreePagination,
-    ConversationMetadata,
-    ChatAnalyticsResponse,
-    ChatAnalyticsBucket,
-    ChatAnalyticsPagination,
-)
-# Note: streaming utilities are handled inside chat_service. No direct import needed here.
-from tldw_Server_API.app.core.Chat.chat_helpers import (
-    validate_request_payload,
-)
-from tldw_Server_API.app.core.Chat.chat_exceptions import (
-    set_request_id,
-    ChatModuleException,
-    ChatDatabaseError,
-    ChatErrorCode,
-)
-from tldw_Server_API.app.api.v1.schemas.chat_validators import (
-    validate_conversation_id,
-    validate_character_id,
-    validate_tool_definitions,
-    validate_temperature,
-    validate_max_tokens,
-    validate_request_size,
-)
-from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
-from tldw_Server_API.app.core.Chat.chat_service import (
-    perform_chat_api_call,
-    resolve_provider_and_model,
-    resolve_provider_api_key,
-    build_call_params_from_request,
-    estimate_tokens_from_json,
-    moderate_input_messages,
-    build_context_and_messages,
-    apply_prompt_templating,
-    execute_streaming_call,
-    execute_non_stream_call,
-    queue_is_active,
-)
-from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
-    map_sender_to_role,
-)
+from tldw_Server_API.app.core.Utils.chunked_image_processor import get_image_processor
+
 _ORIGINAL_PERFORM_CHAT_API_CALL = perform_chat_api_call
-from tldw_Server_API.app.core.config import loaded_config_data
-from tldw_Server_API.app.core.Chat.prompt_template_manager import (
-    load_template,
-    apply_template_to_string,
-)
-from tldw_Server_API.app.core.Chat.document_generator import DocumentGeneratorService
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-    rbac_rate_limit,
-    require_token_scope,
-    require_permissions,
-    get_auth_principal,
-)
-from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
-from pydantic import BaseModel, Field, ConfigDict
-from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
-from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
-from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
-    ResolvedByokCredentials,
-    record_byok_missing_credentials,
-    resolve_byok_credentials,
-)
-from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
-from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
-from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
-    get_usage_event_logger,
-    UsageEventLogger,
-)
 from fastapi.encoders import jsonable_encoder
-from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
-from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
-from tldw_Server_API.app.core.Usage.usage_tracker import backfill_legacy_tokens_to_ledger
-from tldw_Server_API.app.core.Chat import command_router
-from tldw_Server_API.app.api.v1.schemas.chat_commands_schemas import ChatCommandsListResponse, ChatCommandInfo
+from pydantic import BaseModel, Field
+
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
+    rbac_rate_limit,
+    require_permissions,
+    require_token_scope,
+)
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    UsageEventLogger,
+    get_usage_event_logger,
+)
+from tldw_Server_API.app.api.v1.schemas.chat_commands_schemas import ChatCommandInfo, ChatCommandsListResponse
 from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
     ValidateDictionaryRequest,
     ValidateDictionaryResponse,
     ValidationIssue,
 )
-from tldw_Server_API.app.core.Chat.validate_dictionary import validate_dictionary as _validate_dictionary
-from . import chat_dictionaries, chat_documents
-from .chat_dictionaries import (
-    add_dictionary_entry,
-    get_chat_dictionary,
-    update_dictionary_entry,
-    list_chat_dictionaries,
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
+    ResolvedByokCredentials,
+    record_byok_missing_credentials,
+    resolve_byok_credentials,
 )
+from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
+from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
+from tldw_Server_API.app.core.Chat import command_router
+from tldw_Server_API.app.core.Chat.validate_dictionary import validate_dictionary as _validate_dictionary
+from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
+from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
+from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
+from tldw_Server_API.app.core.Usage.usage_tracker import backfill_legacy_tokens_to_ledger
+
+from . import chat_dictionaries, chat_documents
+
 #######################################################################################################################
 #
 # ---------------------------------------------------------------------------
@@ -221,7 +215,7 @@ def _chat_connectors_enabled() -> bool:
     )
 
 # Load configuration values from config
-from tldw_Server_API.app.core.config import load_comprehensive_config, load_and_log_configs
+from tldw_Server_API.app.core.config import load_and_log_configs, load_comprehensive_config
 
 _config = load_comprehensive_config()
 # ConfigParser uses sections, check if Chat-Module section exists
@@ -396,9 +390,9 @@ async def _decrement_active_request(user_id: str) -> None:
 
 
 async def _maybe_rg_shadow_chat_decision(
-    request: Optional[Request],
+    request: Request | None,
     limiter_user_id: str,
-    limiter_conversation_id: Optional[str],  # noqa: ARG001 - intentionally unused (reserved for future use)
+    limiter_conversation_id: str | None,  # noqa: ARG001 - intentionally unused (reserved for future use)
     estimated_tokens: int,
     legacy_allowed: bool,
 ) -> None:
@@ -457,7 +451,7 @@ async def _maybe_rg_shadow_chat_decision(
     path = request.url.path or "/api/v1/chat/completions"
 
     # Build RG request mirroring chat policy (requests + optional tokens)
-    cats: Dict[str, Dict[str, int]] = {"requests": {"units": 1}}
+    cats: dict[str, dict[str, int]] = {"requests": {"units": 1}}
     try:
         est_tokens = int(estimated_tokens or 0)
     except Exception as exc:  # noqa: BLE001 - defensive
@@ -653,13 +647,13 @@ async def validate_chat_dictionary(
 # --- Helper Functions ---
 
 @lru_cache(maxsize=1)
-def _config_default_llm_provider() -> Optional[str]:
+def _config_default_llm_provider() -> str | None:
     """Read default provider from config.txt (llm_api_settings/API sections)."""
     cfg = load_and_log_configs()
     if not isinstance(cfg, dict):
         return None
 
-    def _extract(section: str) -> Optional[str]:
+    def _extract(section: str) -> str | None:
         data = cfg.get(section)
         if isinstance(data, dict):
             default_api = data.get("default_api")
@@ -848,7 +842,7 @@ def _summarize_tool_calls(tool_calls: Any) -> str:
     except Exception:
         return "[tool_call]"
 
-def _normalize_message_timestamp(value: Any) -> Optional[str]:
+def _normalize_message_timestamp(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -882,10 +876,10 @@ def _normalize_message_timestamp(value: Any) -> Optional[str]:
 
 def _persist_message_sync(
     db: CharactersRAGDB,
-    payload: Dict[str, Any],
-    tool_calls: Optional[Any],
-    extra_metadata: Optional[Dict[str, Any]],
-) -> Optional[str]:
+    payload: dict[str, Any],
+    tool_calls: Any | None,
+    extra_metadata: dict[str, Any] | None,
+) -> str | None:
     """Persist a message and optional metadata synchronously."""
     message_id = db.add_message(payload)
     if tool_calls is not None or extra_metadata is not None:
@@ -899,9 +893,9 @@ def _persist_message_sync(
 async def _save_message_turn_to_db(
     db: CharactersRAGDB,
     conversation_id: str,
-    message_obj: Dict[str, Any],
+    message_obj: dict[str, Any],
     use_transaction: bool = False
-) -> Optional[str]:
+) -> str | None:
     """
     Persist a single user/assistant message.
     - Validates size/format.
@@ -950,7 +944,7 @@ async def _save_message_turn_to_db(
     tool_calls_raw = message_obj.get("tool_calls")
     function_call_raw = message_obj.get("function_call")
     serialized_tool_calls = _jsonify_metadata_payload(tool_calls_raw) if tool_calls_raw else None
-    serialized_extra: Optional[Dict[str, Any]] = None
+    serialized_extra: dict[str, Any] | None = None
     if function_call_raw is not None:
         serialized_extra = {"function_call": _jsonify_metadata_payload(function_call_raw)}
     tool_call_id_raw = message_obj.get("tool_call_id")
@@ -965,13 +959,13 @@ async def _save_message_turn_to_db(
                 serialized_extra = {}
             serialized_extra["tool_name"] = _jsonify_metadata_payload(tool_name)
     # Preserve sender role/name separately to avoid role misclassification when sender is custom.
-    sender_meta: Dict[str, Any] = {}
+    sender_meta: dict[str, Any] = {}
     if role in ("user", "assistant", "system", "tool"):
         sender_meta["sender_role"] = _jsonify_metadata_payload(role)
     sender_name_raw = message_obj.get("name")
     if role in ("user", "assistant", "system") and sender_name_raw:
         sender_meta["sender_name"] = _jsonify_metadata_payload(sender_name_raw)
-    placeholder_reason: Optional[str] = None
+    placeholder_reason: str | None = None
 
     if not text_parts and not images:
         if serialized_tool_calls is not None:
@@ -1007,8 +1001,8 @@ async def _save_message_turn_to_db(
         serialized_extra = None
 
     # Persist the primary image via the schema-supported columns.
-    primary_image_data: Optional[bytes] = None
-    primary_image_mime: Optional[str] = None
+    primary_image_data: bytes | None = None
+    primary_image_mime: str | None = None
     normalized_images: list[dict[str, Any]] = []
     if images:
         for img_bytes, img_mime in images:
@@ -1044,7 +1038,7 @@ async def _save_message_turn_to_db(
     try:
         async with metrics.track_database_operation("save_message"):
             if use_transaction:
-                def _persist_with_transaction() -> tuple[Optional[str], int]:
+                def _persist_with_transaction() -> tuple[str | None, int]:
                     retries = 0
                     max_retries = 3
                     while True:
@@ -1116,10 +1110,10 @@ async def _persist_system_message_if_needed(
     *,
     db: CharactersRAGDB,
     conversation_id: str,
-    system_message: Optional[str],
+    system_message: str | None,
     save_message_fn: Callable[..., Any],
     loop: asyncio.AbstractEventLoop,
-) -> Optional[str]:
+) -> str | None:
     if not system_message or not system_message.strip():
         return None
     async with _get_system_message_lock(conversation_id):
@@ -1147,7 +1141,7 @@ async def _persist_system_message_if_needed(
                     conv_created_at = conv.get("created_at")
             except (CharactersRAGDBError, RuntimeError):
                 conv_created_at = None
-            system_payload: Dict[str, Any] = {"role": "system", "content": system_message.strip()}
+            system_payload: dict[str, Any] = {"role": "system", "content": system_message.strip()}
             if conv_created_at:
                 system_payload["timestamp"] = conv_created_at
             return await save_message_fn(
@@ -1903,8 +1897,8 @@ async def create_chat_completion(
             f"Stream={request_data.stream}, ConvID={request_data.conversation_id}, CharID={request_data.character_id}"
         )
 
-        character_card_for_context: Optional[Dict[str, Any]] = None
-        final_conversation_id: Optional[str] = request_data.conversation_id
+        character_card_for_context: dict[str, Any] | None = None
+        final_conversation_id: str | None = request_data.conversation_id
 
         try:
             # In TEST_MODE or when explicitly enabled via config/env, allow
@@ -1926,9 +1920,9 @@ async def create_chat_completion(
                     provider = "openai"
 
             target_api_provider = provider  # Already determined (possibly adjusted above)
-            byok_cache: Dict[str, ResolvedByokCredentials] = {}
+            byok_cache: dict[str, ResolvedByokCredentials] = {}
 
-            def _fallback_resolver(name: str) -> Optional[str]:
+            def _fallback_resolver(name: str) -> str | None:
                 key_val, _ = resolve_provider_api_key(
                     name,
                     prefer_module_keys_in_tests=True,
@@ -2018,7 +2012,7 @@ async def create_chat_completion(
                 llm_payload_messages=llm_payload_messages,
             )
 
-            system_message_id: Optional[str] = None
+            system_message_id: str | None = None
             if should_persist and final_conversation_id:
                 system_message_id = await _persist_system_message_if_needed(
                     db=chat_db,
@@ -2039,7 +2033,7 @@ async def create_chat_completion(
             )
             cleaned_args["request"] = request
 
-            def _get_default_model_for_provider_name(target_provider: str) -> Optional[str]:
+            def _get_default_model_for_provider_name(target_provider: str) -> str | None:
                 override_default = get_override_default_model(target_provider)
                 if override_default:
                     return override_default
@@ -2081,7 +2075,7 @@ async def create_chat_completion(
             if override_error:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
 
-            async def rebuild_call_params_for_provider(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
+            async def rebuild_call_params_for_provider(target_provider: str) -> tuple[dict[str, Any], str | None]:
                 refreshed_resolution = await _resolve_byok(target_provider)
                 provider_api_key_new = refreshed_resolution.api_key
                 if provider_requires_api_key(target_provider) and not provider_api_key_new:
@@ -2207,7 +2201,9 @@ async def create_chat_completion(
                         or queue_module.startswith("pytest.")
                     )
                     try:
-                        from tldw_Server_API.app.core.Chat.request_queue import RequestQueue as _RequestQueue  # type: ignore
+                        from tldw_Server_API.app.core.Chat.request_queue import (
+                            RequestQueue as _RequestQueue,  # type: ignore
+                        )
                     except Exception:  # pragma: no cover
                         _RequestQueue = None
                     is_real_queue = bool(_RequestQueue) and isinstance(queue_candidate, _RequestQueue)
@@ -2302,7 +2298,7 @@ async def create_chat_completion(
                 and perform_chat_api_call is _ORIGINAL_PERFORM_CHAT_API_CALL
             )
 
-            def _build_mock_response(messages_payload: List[Dict[str, Any]]) -> str:
+            def _build_mock_response(messages_payload: list[dict[str, Any]]) -> str:
                 for msg in reversed(messages_payload):
                     if isinstance(msg, dict) and msg.get("role") == "user":
                         content = msg.get("content")
@@ -2796,7 +2792,7 @@ def _estimate_tokens_for_queue(request_json: str) -> int:
         return 1
 
 
-def _coerce_datetime(value: Any) -> Optional[datetime]:
+def _coerce_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -2830,14 +2826,14 @@ def _parse_iso_datetime(value: str, field_name: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def _normalize_weights(w_bm25: float, w_recency: float) -> Tuple[float, float]:
+def _normalize_weights(w_bm25: float, w_recency: float) -> tuple[float, float]:
     total = (w_bm25 or 0.0) + (w_recency or 0.0)
     if total <= 0:
         return 0.65, 0.35
     return (w_bm25 / total), (w_recency / total)
 
 
-def _calculate_recency(dt_value: Optional[datetime], half_life_days: float) -> float:
+def _calculate_recency(dt_value: datetime | None, half_life_days: float) -> float:
     if dt_value is None or half_life_days <= 0:
         return 0.0
     now = datetime.now(timezone.utc)
@@ -2849,7 +2845,7 @@ def _verify_conversation_ownership(
     db: CharactersRAGDB,
     conversation_id: str,
     current_user: User,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     conversation = db.get_conversation_by_id(conversation_id)
     if not conversation or conversation.get("deleted"):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
@@ -2869,7 +2865,7 @@ def _verify_conversation_ownership(
 def _replace_conversation_keywords(
     db: CharactersRAGDB,
     conversation_id: str,
-    keywords: List[str],
+    keywords: list[str],
 ) -> None:
     existing = db.get_keywords_for_conversation(conversation_id)
     existing_map = {str(k.get("keyword") or "").strip().lower(): int(k.get("id")) for k in existing if k.get("id")}
@@ -2941,7 +2937,7 @@ async def save_chat_knowledge(
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message is not in conversation")
 
         export_status = "not_requested"
-        export_job_id: Optional[str] = None
+        export_job_id: str | None = None
         if payload.export_to != "none":
             if _chat_connectors_enabled():
                 export_status = "queued"
@@ -2952,8 +2948,8 @@ async def save_chat_knowledge(
         safe_title = conv_title[:200]
         note_title = f"Snippet: {safe_title}" if not safe_title.lower().startswith("snippet") else safe_title
 
-        note_id: Optional[int] = None
-        flashcard_id: Optional[str] = None
+        note_id: int | None = None
+        flashcard_id: str | None = None
 
         # Ensure note, keyword links, and optional flashcard are created atomically.
         async with db_transaction(db):
@@ -3027,14 +3023,14 @@ async def save_chat_knowledge(
     include_in_schema=False,
 )
 async def list_chat_conversations(
-    query: Optional[str] = Query(None, description="Search term for conversation title"),
-    state: Optional[str] = Query(None, description="Conversation state"),
-    topic_label: Optional[str] = Query(None, description="Topic label filter (use * for prefix)"),
-    keywords: Optional[List[str]] = Query(None, description="Keyword filters (repeatable)"),
-    cluster_id: Optional[str] = Query(None, description="Cluster ID filter"),
-    character_id: Optional[int] = Query(None, description="Character ID filter"),
-    start_date: Optional[str] = Query(None, description="ISO-8601 start date"),
-    end_date: Optional[str] = Query(None, description="ISO-8601 end date"),
+    query: str | None = Query(None, description="Search term for conversation title"),
+    state: str | None = Query(None, description="Conversation state"),
+    topic_label: str | None = Query(None, description="Topic label filter (use * for prefix)"),
+    keywords: list[str] | None = Query(None, description="Keyword filters (repeatable)"),
+    cluster_id: str | None = Query(None, description="Cluster ID filter"),
+    character_id: int | None = Query(None, description="Character ID filter"),
+    start_date: str | None = Query(None, description="ISO-8601 start date"),
+    end_date: str | None = Query(None, description="ISO-8601 end date"),
     date_field: Literal["last_modified", "created_at"] = Query("last_modified", description="Date field for filtering"),
     order_by: Literal["bm25", "recency", "hybrid", "topic"] = Query("recency", description="Ranking mode"),
     limit: int = Query(50, ge=1, le=200, description="Items per page"),
@@ -3126,7 +3122,7 @@ async def list_chat_conversations(
         conv_ids = [row.get("id") for row in page_rows if row.get("id")]
         keyword_map = db.get_keywords_for_conversations(conv_ids) if conv_ids else {}
         message_counts = db.count_messages_for_conversations(conv_ids) if conv_ids else {}
-        items: List[ConversationListItem] = []
+        items: list[ConversationListItem] = []
         for row in page_rows:
             conv_id = row.get("id") or ""
             keyword_rows = keyword_map.get(conv_id, [])
@@ -3328,9 +3324,9 @@ async def get_conversation_tree(
             order_by_timestamp="ASC",
         )
 
-        nodes: Dict[str, ConversationTreeNode] = {}
-        roots: List[ConversationTreeNode] = []
-        node_depths: Dict[str, int] = {}
+        nodes: dict[str, ConversationTreeNode] = {}
+        roots: list[ConversationTreeNode] = []
+        node_depths: dict[str, int] = {}
 
         for msg in root_rows:
             msg_id = msg.get("id")
@@ -3360,7 +3356,7 @@ async def get_conversation_tree(
             )
             if not children:
                 break
-            next_parent_ids: List[str] = []
+            next_parent_ids: list[str] = []
             next_depth = current_depth + 1
             for child in children:
                 child_id = child.get("id")
@@ -3407,7 +3403,7 @@ async def get_conversation_tree(
         message_cap = min(max(TREE_MESSAGE_CAP_DEFAULT, 1), TREE_MESSAGE_CAP_MAX)
         count = 0
 
-        def prune_node(node: ConversationTreeNode, depth: int) -> Optional[ConversationTreeNode]:
+        def prune_node(node: ConversationTreeNode, depth: int) -> ConversationTreeNode | None:
             nonlocal count
             if count >= message_cap:
                 return None
@@ -3419,7 +3415,7 @@ async def get_conversation_tree(
                 elif node.truncated:
                     node.children = []
                 return node
-            pruned_children: List[ConversationTreeNode] = []
+            pruned_children: list[ConversationTreeNode] = []
             for child in node.children:
                 if count >= message_cap:
                     node.truncated = True
@@ -3435,7 +3431,7 @@ async def get_conversation_tree(
             node.children = pruned_children
             return node
 
-        pruned_roots: List[ConversationTreeNode] = []
+        pruned_roots: list[ConversationTreeNode] = []
         for root in root_page:
             if count >= message_cap:
                 break
@@ -3509,7 +3505,7 @@ async def get_chat_analytics(
             date_field="last_modified",
         )
 
-        buckets: Dict[Tuple[datetime, Optional[str], str], int] = {}
+        buckets: dict[tuple[datetime, str | None, str], int] = {}
         for row in rows:
             dt = _coerce_datetime(row.get("last_modified")) or _coerce_datetime(row.get("created_at"))
             if not dt:
@@ -3577,7 +3573,7 @@ class RagContextPersistResponse(BaseModel):
 
     success: bool = Field(..., description="Whether the operation succeeded")
     message_id: str = Field(..., description="The message ID that was updated")
-    error: Optional[str] = Field(None, description="Error message if operation failed")
+    error: str | None = Field(None, description="Error message if operation failed")
 
 
 class MessageWithRagContextResponse(BaseModel):
@@ -3586,16 +3582,16 @@ class MessageWithRagContextResponse(BaseModel):
     id: str
     conversation_id: str
     sender: str
-    content: Optional[str] = None
-    timestamp: Optional[str] = None
-    rag_context: Optional[Dict[str, Any]] = None
+    content: str | None = None
+    timestamp: str | None = None
+    rag_context: dict[str, Any] | None = None
 
 
 class ConversationCitationsResponse(BaseModel):
     """Response containing all citations from a conversation."""
 
     conversation_id: str
-    citations: List[Dict[str, Any]] = Field(
+    citations: list[dict[str, Any]] = Field(
         default_factory=list,
         description="All unique citations from the conversation"
     )
@@ -3675,7 +3671,7 @@ async def persist_rag_context(
 
 @router.get(
     "/messages/{message_id}/rag-context",
-    response_model=Dict[str, Any],
+    response_model=dict[str, Any],
     summary="Get RAG context for a message",
     description="Retrieve the RAG context stored with a message, including citations and search settings.",
     tags=["chat", "rag"],
@@ -3717,7 +3713,7 @@ async def get_rag_context(
 
 @router.get(
     "/conversations/{conversation_id}/messages-with-context",
-    response_model=List[Dict[str, Any]],
+    response_model=list[dict[str, Any]],
     summary="Get conversation messages with RAG context",
     description="""
     Retrieve messages from a conversation with their RAG context attached.

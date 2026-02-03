@@ -23,31 +23,30 @@ import asyncio
 import contextlib
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import FileCreateOptions
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+from tldw_Server_API.app.core.exceptions import FileArtifactsJobError
 from tldw_Server_API.app.core.File_Artifacts.file_artifacts_service import FileArtifactsService
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
 from tldw_Server_API.app.core.Jobs.worker_utils import coerce_int as _coerce_int
 from tldw_Server_API.app.core.Jobs.worker_utils import jobs_manager_from_env as _jobs_manager
-from tldw_Server_API.app.core.exceptions import FileArtifactsJobError
-
 
 FILES_DOMAIN = "files"
 FILES_JOB_TYPE = "file_artifact_export"
 
 
-def _resolve_user_id(job: Dict[str, Any], payload: Dict[str, Any]) -> str:
+def _resolve_user_id(job: dict[str, Any], payload: dict[str, Any]) -> str:
     candidate = payload.get("user_id") or job.get("owner_user_id")
     if candidate is None or str(candidate).strip() == "":
         raise FileArtifactsJobError("missing user_id", retryable=False)
     return str(candidate)
 
 
-async def _handle_export_job(job: Dict[str, Any]) -> Dict[str, Any]:
+async def _handle_export_job(job: dict[str, Any]) -> dict[str, Any]:
     payload = job.get("payload") or {}
     job_type = str(job.get("job_type") or payload.get("job_type") or "").strip().lower()
     if job_type and job_type != FILES_JOB_TYPE:
@@ -123,7 +122,7 @@ async def _handle_export_job(job: Dict[str, Any]) -> Dict[str, Any]:
             raise FileArtifactsJobError(str(exc), retryable=False) from exc
 
 
-async def run_file_artifacts_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_file_artifacts_jobs_worker(stop_event: asyncio.Event | None = None) -> None:
     """Run the file artifacts jobs worker until stopped."""
     worker_id = (os.getenv("FILES_JOBS_WORKER_ID") or f"files-jobs-{os.getpid()}").strip()
     queue = (os.getenv("FILES_JOBS_QUEUE") or "default").strip() or "default"
@@ -139,7 +138,7 @@ async def run_file_artifacts_jobs_worker(stop_event: Optional[asyncio.Event] = N
         renew_threshold_seconds=renew_threshold,
     )
     sdk = WorkerSDK(_jobs_manager(), cfg)
-    _stop_watcher_task: Optional[asyncio.Task[None]] = None
+    _stop_watcher_task: asyncio.Task[None] | None = None
 
     if stop_event is not None:
         async def _watch_stop() -> None:

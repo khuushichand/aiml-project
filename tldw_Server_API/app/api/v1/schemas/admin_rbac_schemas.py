@@ -1,10 +1,10 @@
 # admin_rbac_schemas.py
 # Description: Schemas for RBAC admin endpoints (roles, permissions, overrides, limits)
 
-from typing import Optional, List, Dict, Any
 from enum import Enum
+from typing import Optional
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RoleCreateRequest(BaseModel):
@@ -36,7 +36,7 @@ class PermissionResponse(BaseModel):
 
 class UserRoleListResponse(BaseModel):
     user_id: int
-    roles: List[RoleResponse]
+    roles: list[RoleResponse]
 
 
 class OverrideEffect(str, Enum):
@@ -65,12 +65,12 @@ class UserOverrideEntry(BaseModel):
 
 class UserOverridesResponse(BaseModel):
     user_id: int
-    overrides: List[UserOverrideEntry]
+    overrides: list[UserOverrideEntry]
 
 
 class EffectivePermissionsResponse(BaseModel):
     user_id: int
-    permissions: List[str]
+    permissions: list[str]
 
 
 class RateLimitUpsertRequest(BaseModel):
@@ -93,22 +93,22 @@ class RolePermissionGrant(BaseModel):
 
 
 class RolePermissionMatrixResponse(BaseModel):
-    roles: List[RoleResponse]
-    permissions: List[PermissionResponse]
-    grants: List[RolePermissionGrant]
+    roles: list[RoleResponse]
+    permissions: list[PermissionResponse]
+    grants: list[RolePermissionGrant]
     total_roles: int
 
 
 class RolePermissionBooleanMatrixResponse(BaseModel):
-    roles: List[RoleResponse]
-    permission_names: List[str]
-    matrix: List[List[bool]]
+    roles: list[RoleResponse]
+    permission_names: list[str]
+    matrix: list[list[bool]]
     total_roles: int
 
 
 class RoleEffectivePermissionsResponse(BaseModel):
     role_id: int
     role_name: str
-    permissions: List[str]
-    tool_permissions: List[str]
-    all_permissions: List[str]
+    permissions: list[str]
+    tool_permissions: list[str]
+    all_permissions: list[str]

@@ -1,4 +1,5 @@
-import { Popover, Radio, Switch, Tooltip, Upload } from "antd"
+import { Input, InputNumber, Popover, Radio, Select, Switch, Tooltip, Upload } from "antd"
+import { useQuery } from "@tanstack/react-query"
 import {
   Search,
   MoreHorizontal,
@@ -17,6 +18,8 @@ import { CharacterSelect } from "./CharacterSelect"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useMcpTools } from "@/hooks/useMcpTools"
 import { browser } from "wxt/browser"
+import { useStorage } from "@plasmohq/storage/hook"
+import { fetchChatModels } from "@/services/tldw-server"
 import type { ToolChoice } from "@/store/option"
 
 interface ControlRowProps {
@@ -66,8 +69,109 @@ export const ControlRow: React.FC<ControlRowProps> = ({
     hasMcp,
     healthState: mcpHealthState,
     tools: mcpTools,
-    toolsLoading: mcpToolsLoading
+    toolsLoading: mcpToolsLoading,
+    catalogs: mcpCatalogs,
+    catalogsLoading: mcpCatalogsLoading,
+    toolCatalog,
+    toolCatalogId,
+    toolModules,
+    moduleOptions,
+    moduleOptionsLoading,
+    toolCatalogStrict,
+    setToolCatalog,
+    setToolCatalogId,
+    setToolModules,
+    setToolCatalogStrict
   } = useMcpTools()
+
+  const [catalogDraft, setCatalogDraft] = React.useState(toolCatalog)
+
+  React.useEffect(() => {
+    setCatalogDraft(toolCatalog)
+  }, [toolCatalog])
+
+  const commitCatalog = React.useCallback(() => {
+    const next = catalogDraft.trim()
+    if (next !== toolCatalog) {
+      setToolCatalog(next)
+    }
+    if (toolCatalogId !== null && next !== toolCatalog) {
+      setToolCatalogId(null)
+    }
+  }, [catalogDraft, setToolCatalog, toolCatalog, toolCatalogId, setToolCatalogId])
+
+  const catalogGroups = React.useMemo(() => {
+    const global: typeof mcpCatalogs = []
+    const org: typeof mcpCatalogs = []
+    const team: typeof mcpCatalogs = []
+    for (const catalog of mcpCatalogs) {
+      if (!catalog) continue
+      if (catalog.team_id != null) {
+        team.push(catalog)
+      } else if (catalog.org_id != null) {
+        org.push(catalog)
+      } else {
+        global.push(catalog)
+      }
+    }
+    return { global, org, team }
+  }, [mcpCatalogs])
+
+  const catalogById = React.useMemo(() => {
+    const map = new Map<number, (typeof mcpCatalogs)[number]>()
+    for (const catalog of mcpCatalogs) {
+      if (catalog?.id == null) continue
+      map.set(catalog.id, catalog)
+    }
+    return map
+  }, [mcpCatalogs])
+
+  const handleCatalogSelect = React.useCallback(
+    (value?: number) => {
+      if (value === null || value === undefined) {
+        setToolCatalogId(null)
+        setToolCatalog("")
+        return
+      }
+      const catalog = catalogById.get(value)
+      setToolCatalogId(value)
+      if (catalog?.name) {
+        setToolCatalog(catalog.name)
+      }
+    },
+    [catalogById, setToolCatalog, setToolCatalogId]
+  )
+
+  const handleModuleSelect = React.useCallback(
+    (value?: string[]) => {
+      setToolModules(Array.isArray(value) ? value : [])
+    },
+    [setToolModules]
+  )
+
+  const [selectedModel] = useStorage<string | null>("selectedModel", null)
+  const { data: chatModels } = useQuery({
+    queryKey: ["mcp-small-models"],
+    queryFn: () => fetchChatModels({ returnEmpty: true })
+  })
+  const selectedModelMeta = React.useMemo(() => {
+    if (!selectedModel || !Array.isArray(chatModels)) return null
+    return chatModels.find((model) => model.model === selectedModel) || null
+  }, [chatModels, selectedModel])
+  const modelCapabilities = React.useMemo(() => {
+    const caps = selectedModelMeta?.details?.capabilities
+    return Array.isArray(caps) ? caps.map((cap) => String(cap).toLowerCase()) : []
+  }, [selectedModelMeta])
+  const modelContextLength = React.useMemo(() => {
+    const value =
+      selectedModelMeta?.context_length ??
+      selectedModelMeta?.contextLength ??
+      selectedModelMeta?.details?.context_length
+    return typeof value === "number" && Number.isFinite(value) ? value : null
+  }, [selectedModelMeta])
+  const isSmallModel =
+    modelCapabilities.includes("fast") ||
+    (typeof modelContextLength === "number" && modelContextLength <= 8192)
 
   // Track if hints have been seen
   const knowledgeHintSeen = useFeatureHintSeen("knowledge-search")
@@ -244,6 +348,143 @@ export const ControlRow: React.FC<ControlRowProps> = ({
           )}
         </div>
       )}
+
+      <div className="panel-divider my-1" />
+      <div className="text-caption text-text-muted font-medium">
+        {t("sidepanel:controlRow.mcpToolsFiltersLabel", "Tool filters")}
+      </div>
+      {isSmallModel && hasMcp && (
+        <div className="rounded-md border border-border bg-surface2/60 px-2 py-1 text-[11px] text-text-muted">
+          {t(
+            "sidepanel:controlRow.mcpSmallModelHint",
+            "Small/fast model: use catalog/module filters or the discovery tools (mcp.catalogs.list → mcp.modules.list → mcp.tools.list) to keep tool context light."
+          )}
+        </div>
+      )}
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-text-muted">
+            {t("sidepanel:controlRow.mcpCatalogLabel", "Catalog")}
+          </label>
+          <Select
+            size="small"
+            allowClear
+            showSearch
+            loading={mcpCatalogsLoading}
+            value={toolCatalogId ?? undefined}
+            placeholder={t("sidepanel:controlRow.mcpCatalogSelectPlaceholder", "Select a catalog")}
+            onChange={(value) => handleCatalogSelect(value as number | undefined)}
+            optionFilterProp="label"
+            className="w-full"
+          >
+            {catalogGroups.team.length > 0 && (
+              <Select.OptGroup label={t("sidepanel:controlRow.mcpCatalogTeam", "Team catalogs")}>
+                {catalogGroups.team.map((catalog) => (
+                  <Select.Option
+                    key={`team-${catalog.id}`}
+                    value={catalog.id}
+                    label={catalog.name}
+                  >
+                    <div className="flex flex-col">
+                      <span className="text-sm">{catalog.name}</span>
+                      <span className="text-[11px] text-text-muted">ID {catalog.id}</span>
+                    </div>
+                  </Select.Option>
+                ))}
+              </Select.OptGroup>
+            )}
+            {catalogGroups.org.length > 0 && (
+              <Select.OptGroup label={t("sidepanel:controlRow.mcpCatalogOrg", "Org catalogs")}>
+                {catalogGroups.org.map((catalog) => (
+                  <Select.Option
+                    key={`org-${catalog.id}`}
+                    value={catalog.id}
+                    label={catalog.name}
+                  >
+                    <div className="flex flex-col">
+                      <span className="text-sm">{catalog.name}</span>
+                      <span className="text-[11px] text-text-muted">ID {catalog.id}</span>
+                    </div>
+                  </Select.Option>
+                ))}
+              </Select.OptGroup>
+            )}
+            {catalogGroups.global.length > 0 && (
+              <Select.OptGroup label={t("sidepanel:controlRow.mcpCatalogGlobal", "Global catalogs")}>
+                {catalogGroups.global.map((catalog) => (
+                  <Select.Option
+                    key={`global-${catalog.id}`}
+                    value={catalog.id}
+                    label={catalog.name}
+                  >
+                    <div className="flex flex-col">
+                      <span className="text-sm">{catalog.name}</span>
+                      <span className="text-[11px] text-text-muted">ID {catalog.id}</span>
+                    </div>
+                  </Select.Option>
+                ))}
+              </Select.OptGroup>
+            )}
+          </Select>
+          <Input
+            size="small"
+            placeholder={t("sidepanel:controlRow.mcpCatalogPlaceholder", "catalog name")}
+            value={catalogDraft}
+            onChange={(e) => setCatalogDraft(e.target.value)}
+            onBlur={commitCatalog}
+            onPressEnter={commitCatalog}
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-text-muted">
+            {t("sidepanel:controlRow.mcpCatalogIdLabel", "Catalog ID")}
+          </label>
+          <InputNumber
+            size="small"
+            min={0}
+            value={toolCatalogId ?? undefined}
+            onChange={(value) =>
+              setToolCatalogId(typeof value === "number" && Number.isFinite(value) ? value : null)
+            }
+            placeholder={t("sidepanel:controlRow.mcpCatalogIdPlaceholder", "optional")}
+            className="w-full"
+          />
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-text-muted">
+            {t("sidepanel:controlRow.mcpCatalogStrictLabel", "Strict catalog filter")}
+          </span>
+          <Switch
+            size="small"
+            checked={toolCatalogStrict}
+            onChange={(checked) => setToolCatalogStrict(checked)}
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-text-muted">
+            {t("sidepanel:controlRow.mcpModuleLabel", "Module")}
+          </label>
+          <Select
+            size="small"
+            allowClear
+            showSearch
+            mode="multiple"
+            loading={moduleOptionsLoading}
+            disabled={moduleOptionsLoading || moduleOptions.length === 0}
+            value={toolModules.length > 0 ? toolModules : undefined}
+            placeholder={t("sidepanel:controlRow.mcpModuleSelectPlaceholder", "Select modules")}
+            onChange={(value) => handleModuleSelect(value as string[] | undefined)}
+            optionFilterProp="label"
+            className="w-full"
+          >
+            {moduleOptions.map((moduleId) => (
+              <Select.Option key={moduleId} value={moduleId} label={moduleId}>
+                <span className="text-sm">{moduleId}</span>
+              </Select.Option>
+            ))}
+          </Select>
+        </div>
+      </div>
 
       <div className="panel-divider my-1" />
 

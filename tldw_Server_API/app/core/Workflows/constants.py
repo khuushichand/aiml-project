@@ -12,13 +12,12 @@ parallelizable flag. Use get_parallelizable() from the adapters module:
 from __future__ import annotations
 
 import warnings
-from typing import Set
 
 # Re-export get_parallelizable for backward compatibility
 from tldw_Server_API.app.core.Workflows.adapters._registry import get_parallelizable
 
 
-def _get_map_substep_types() -> Set[str]:
+def _get_map_substep_types() -> set[str]:
     """Get parallelizable step types from registry (deprecated)."""
     warnings.warn(
         "MAP_SUBSTEP_TYPES is deprecated. Use get_parallelizable() from "
@@ -45,4 +44,4 @@ class _DeprecatedSet:
 
 
 # Deprecated: use get_parallelizable() instead
-MAP_SUBSTEP_TYPES: Set[str] = _DeprecatedSet()  # type: ignore[assignment]
+MAP_SUBSTEP_TYPES: set[str] = _DeprecatedSet()  # type: ignore[assignment]

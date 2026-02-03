@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 import time
 from contextlib import contextmanager
-from typing import Optional, Dict, Any
+from typing import Any
+
 from loguru import logger
 
 
@@ -12,7 +13,7 @@ def _enabled() -> bool:
 
 
 @contextmanager
-def job_span(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: Optional[Dict[str, Any]] = None):
+def job_span(event: str, *, job: dict[str, Any] | None = None, attrs: dict[str, Any] | None = None):
     if not _enabled():
         yield
         return

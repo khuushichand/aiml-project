@@ -3,19 +3,19 @@ from __future__ import annotations
 import asyncio
 import os
 import threading
-from queue import Queue, Empty
-from typing import Any, Dict, Optional, Tuple
+from queue import Empty, Queue
+from typing import Any
 from uuid import uuid4
 
 from loguru import logger
 
 try:
     from tldw_Server_API.app.core.Audit.unified_audit_service import (
-        UnifiedAuditService,
+        AuditContext,
         AuditEventCategory,
         AuditEventType,
         AuditSeverity,
-        AuditContext,
+        UnifiedAuditService,
     )
 except Exception as e:  # pragma: no cover - audit optional
     UnifiedAuditService = None  # type: ignore
@@ -43,7 +43,7 @@ def _audit_enabled() -> bool:
         return False
 
 
-def _parse_int_env(name: str, default: int, *, min_value: Optional[int] = None, max_value: Optional[int] = None) -> int:
+def _parse_int_env(name: str, default: int, *, min_value: int | None = None, max_value: int | None = None) -> int:
     raw = os.getenv(name)
     if raw is None:
         value = default
@@ -60,7 +60,7 @@ def _parse_int_env(name: str, default: int, *, min_value: Optional[int] = None, 
     return value
 
 
-def _parse_float_env(name: str, default: float, *, min_value: Optional[float] = None, max_value: Optional[float] = None) -> float:
+def _parse_float_env(name: str, default: float, *, min_value: float | None = None, max_value: float | None = None) -> float:
     raw = os.getenv(name)
     if raw is None:
         value = default
@@ -76,13 +76,13 @@ def _parse_float_env(name: str, default: float, *, min_value: Optional[float] = 
         value = min(max_value, value)
     return value
 
-_EVENT_QUEUE: "Queue[Tuple[str, Dict[str, Any] | None, Dict[str, Any] | None]]" = Queue()
-_WORKER_THREAD: Optional[threading.Thread] = None
+_EVENT_QUEUE: "Queue[tuple[str, dict[str, Any] | None, dict[str, Any] | None]]" = Queue()
+_WORKER_THREAD: threading.Thread | None = None
 _WORKER_LOCK = threading.Lock()
 _WORKER_READY = threading.Event()
 _SHUTDOWN_SENTINEL = ("__shutdown__", None, None)
 
-_AUDIT_EVENT_MAP: Dict[str, Tuple[AuditEventType, AuditEventCategory, AuditSeverity, str]] = {}
+_AUDIT_EVENT_MAP: dict[str, tuple[AuditEventType, AuditEventCategory, AuditSeverity, str]] = {}
 if UnifiedAuditService is not None:
     _AUDIT_EVENT_MAP = {
         "job.created": (AuditEventType.DATA_WRITE, AuditEventCategory.DATA_MODIFICATION, AuditSeverity.INFO, "created"),
@@ -96,7 +96,7 @@ if UnifiedAuditService is not None:
     }
 
 
-def submit_job_audit_event(event: str, *, job: Optional[Dict[str, Any]], attrs: Optional[Dict[str, Any]]) -> None:
+def submit_job_audit_event(event: str, *, job: dict[str, Any] | None, attrs: dict[str, Any] | None) -> None:
     """Queue a job lifecycle event for audit logging (best-effort)."""
     if not _audit_enabled():
         return
@@ -218,8 +218,8 @@ def _audit_worker_loop() -> None:
 async def _log_audit_event(
     service: UnifiedAuditService,
     event: str,
-    job: Dict[str, Any],
-    attrs: Dict[str, Any],
+    job: dict[str, Any],
+    attrs: dict[str, Any],
 ) -> None:
     meta = dict(job)
     meta.update(attrs)

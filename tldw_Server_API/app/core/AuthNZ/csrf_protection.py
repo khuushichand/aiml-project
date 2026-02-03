@@ -2,23 +2,25 @@
 # Description: CSRF protection middleware for FastAPI
 #
 # Imports
-import secrets
-import hashlib
-from typing import Optional, Set, Callable
-import hmac
 import base64
-from datetime import datetime, timedelta
+import hashlib
+import hmac
+import secrets
+from typing import Callable, Optional
+
 #
 # 3rd-party imports
-from fastapi import Request, Response, HTTPException, status
+from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from loguru import logger
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
+
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
-from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
 from tldw_Server_API.app.core.config import settings as global_settings
 
 #######################################################################################################################
@@ -485,7 +487,8 @@ def add_csrf_protection(app):
             logger.exception(f"Unexpected error parsing CSRF_ENABLED: {_e}")
     # In test mode, default to disabled unless explicitly enabled in settings
     try:
-        import os as _os, sys as _sys
+        import os as _os
+        import sys as _sys
         if csrf_enabled is None and (
             _os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes"}
             or "pytest" in _sys.modules

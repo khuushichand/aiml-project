@@ -10,25 +10,24 @@ import re
 import sqlite3
 import threading
 import time
+import urllib.parse as _url
 import weakref
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union, Generator
-import json
-import urllib.parse as _url
+from typing import Any, Optional, Union
+
 from loguru import logger as _loguru_logger
-from queue import Queue, Empty
 
 from .base import (
+    BackendFeatures,
+    BackendType,
+    ConnectionPool,
     DatabaseBackend,
     DatabaseConfig,
-    BackendType,
-    BackendFeatures,
-    ConnectionPool,
-    QueryResult,
-    FTSQuery,
     DatabaseError,
-    NotSupportedError
+    FTSQuery,
+    QueryResult,
 )
 
 logger = _loguru_logger
@@ -38,7 +37,7 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _QUOTED_IDENTIFIER_RE = re.compile(r'^"[^"]+"$')
 
 
-def _classify_sqlite_path(db_path: str) -> Tuple[bool, bool]:
+def _classify_sqlite_path(db_path: str) -> tuple[bool, bool]:
     """Return (is_memory, use_uri) for a SQLite path/URI."""
     raw = (db_path or "").strip()
     lowered = raw.lower()
@@ -92,15 +91,15 @@ class SQLiteConnectionPool(ConnectionPool):
             self.db_path = db_path
         self.config = config
         self._local = threading.local()
-        self._connections: Dict[int, sqlite3.Connection] = {}
-        self._thread_refs: Dict[int, weakref.ReferenceType[threading.Thread]] = {}
+        self._connections: dict[int, sqlite3.Connection] = {}
+        self._thread_refs: dict[int, weakref.ReferenceType[threading.Thread]] = {}
         self._lock = threading.RLock()
         self._closed = False
 
     def _prune_dead_threads(self) -> None:
         """Close connections owned by threads that have exited."""
         with self._lock:
-            stale_ids: List[int] = []
+            stale_ids: list[int] = []
             for tid, ref in self._thread_refs.items():
                 thread_obj = ref()
                 if thread_obj is None or not thread_obj.is_alive():
@@ -237,7 +236,7 @@ class SQLiteConnectionPool(ConnectionPool):
             self._connections.clear()
             self._thread_refs.clear()
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get pool statistics."""
         self._prune_dead_threads()
         with self._lock:
@@ -360,7 +359,7 @@ class SQLiteBackend(DatabaseBackend):
     def execute(
         self,
         query: str,
-        params: Optional[Union[Tuple, Dict]] = None,
+        params: Optional[Union[tuple, dict]] = None,
         connection: Optional[sqlite3.Connection] = None
     ) -> QueryResult:
         """Execute a query and return results."""
@@ -403,7 +402,7 @@ class SQLiteBackend(DatabaseBackend):
     def execute_many(
         self,
         query: str,
-        params_list: List[Union[Tuple, Dict]],
+        params_list: list[Union[tuple, dict]],
         connection: Optional[sqlite3.Connection] = None
     ) -> QueryResult:
         """Execute a query multiple times with different parameters."""
@@ -459,7 +458,7 @@ class SQLiteBackend(DatabaseBackend):
         self,
         table_name: str,
         connection: Optional[sqlite3.Connection] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get information about a table's columns."""
         query = f"PRAGMA table_info({self.escape_identifier(table_name)})"
         result = self.execute(query, connection=connection)
@@ -481,7 +480,7 @@ class SQLiteBackend(DatabaseBackend):
         self,
         table_name: str,
         source_table: str,
-        columns: List[str],
+        columns: list[str],
         connection: Optional[sqlite3.Connection] = None
     ) -> None:
         """Create a FTS5 virtual table."""
@@ -519,7 +518,7 @@ class SQLiteBackend(DatabaseBackend):
         *,
         table_name: str,
         source_table: str,
-        columns: List[str],
+        columns: list[str],
         connection: Optional[sqlite3.Connection] = None,
     ) -> None:
         """Create FTS sync triggers for external-content tables (SQLite)."""
@@ -647,7 +646,7 @@ class SQLiteBackend(DatabaseBackend):
         bm25_match = re.match(r"^bm25(?:\((.*)\))?$", expr_core, re.IGNORECASE)
         if bm25_match:
             inner = (bm25_match.group(1) or "").strip()
-            weights: List[str] = []
+            weights: list[str] = []
             if inner:
                 tokens = [token.strip() for token in inner.split(",") if token.strip()]
                 if tokens and (_IDENTIFIER_RE.match(tokens[0]) or _QUOTED_IDENTIFIER_RE.match(tokens[0])):
@@ -719,7 +718,7 @@ class SQLiteBackend(DatabaseBackend):
         self,
         table_name: str,
         connection: Optional[sqlite3.Connection] = None
-    ) -> Generator[Dict[str, Any], None, None]:
+    ) -> Generator[dict[str, Any], None, None]:
         """Export data from a table."""
         query = f"SELECT * FROM {self.escape_identifier(table_name)}"
 
@@ -741,7 +740,7 @@ class SQLiteBackend(DatabaseBackend):
     def import_data(
         self,
         table_name: str,
-        data: List[Dict[str, Any]],
+        data: list[dict[str, Any]],
         connection: Optional[sqlite3.Connection] = None
     ) -> int:
         """Import data into a table."""

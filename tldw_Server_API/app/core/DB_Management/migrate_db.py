@@ -11,18 +11,15 @@ Usage:
 """
 
 import argparse
-import sys
 import os
+import sys
 from pathlib import Path
-import json
 from typing import Optional
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-from tldw_Server_API.app.core.DB_Management.db_migration import (
-    DatabaseMigrator, MigrationError
-)
+from tldw_Server_API.app.core.DB_Management.db_migration import DatabaseMigrator, MigrationError
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 

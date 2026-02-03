@@ -15,15 +15,15 @@ Notes:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
-import hashlib
 import tempfile
 import threading
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple, Set, Iterator
 
 from loguru import logger
 
@@ -40,17 +40,17 @@ class ModerationPolicy:
     redact_replacement: str = "[REDACTED]"
     per_user_overrides: bool = True
     # Compiled rules; each rule includes the regex and optional per-pattern action/replacement
-    block_patterns: List["PatternRule"] = field(default_factory=list)
+    block_patterns: list["PatternRule"] = field(default_factory=list)
     # Enabled categories filter (None or empty means allow all)
-    categories_enabled: Optional[Set[str]] = None
+    categories_enabled: set[str] | None = None
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         """Return a JSON-serializable snapshot of the policy (without raw regex objects)."""
-        patterns: List[str] = []
+        patterns: list[str] = []
         try:
             if self.block_patterns:
                 # Backward-friendly: expose raw patterns as strings
-                tmp: List[str] = []
+                tmp: list[str] = []
                 for p in self.block_patterns:
                     pat = getattr(p, 'pattern', None)
                     if pat is None and isinstance(p, PatternRule):
@@ -60,7 +60,7 @@ class ModerationPolicy:
         except Exception:
             patterns = []
         # Provide richer rule view
-        rules: List[Dict[str, str]] = []
+        rules: list[dict[str, str]] = []
         try:
             if self.block_patterns:
                 for p in self.block_patterns:
@@ -94,9 +94,9 @@ class ModerationPolicy:
 @dataclass
 class PatternRule:
     regex: re.Pattern
-    action: Optional[str] = None  # block | redact | warn | None
-    replacement: Optional[str] = None  # only used when action=redact
-    categories: Optional[Set[str]] = None  # e.g., {"pii", "confidential"}
+    action: str | None = None  # block | redact | warn | None
+    replacement: str | None = None  # only used when action=redact
+    categories: set[str] | None = None  # e.g., {"pii", "confidential"}
 
 
 class ModerationService:
@@ -125,8 +125,8 @@ class ModerationService:
         # Optional debounce for blocklist writes (ms); default disabled
         self._write_debounce_ms = _read_int_env("MODERATION_BLOCKLIST_WRITE_DEBOUNCE_MS", 0)
         self._last_blocklist_write: float = 0.0
-        self._runtime_override: Dict[str, object] = {}
-        self._runtime_overrides_path: Optional[str] = None
+        self._runtime_override: dict[str, object] = {}
+        self._runtime_overrides_path: str | None = None
         self._pii_enabled: bool = False
         self._global_policy = self._load_global_policy()
         # Load runtime overrides file (if any) and re-apply policy
@@ -135,7 +135,7 @@ class ModerationService:
             self._global_policy = self._load_global_policy()
         except Exception:
             pass
-        self._user_overrides: Dict[str, Dict[str, object]] = self._load_user_overrides()
+        self._user_overrides: dict[str, dict[str, object]] = self._load_user_overrides()
 
     def _load_global_policy(self) -> ModerationPolicy:
         # Try modern dict config first
@@ -209,7 +209,7 @@ class ModerationService:
             cats_val = mod_cfg.get("categories_enabled")
         if cats_val is None:
             cats_val = os.getenv("MODERATION_CATEGORIES_ENABLED", "")
-        categories_enabled: Set[str] = set()
+        categories_enabled: set[str] = set()
         if isinstance(cats_val, (list, set, tuple)):
             categories_enabled = {str(c).strip().lower() for c in cats_val if str(c).strip()}
         elif isinstance(cats_val, str):
@@ -250,7 +250,7 @@ class ModerationService:
 
         return policy
 
-    def _parse_rule_line(self, s: str) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[Set[str]]]:
+    def _parse_rule_line(self, s: str) -> tuple[str | None, str | None, str | None, set[str] | None]:
         """Parse a single blocklist line into (pattern_expr, action, replacement).
         Supported formats:
           - literal
@@ -266,7 +266,7 @@ class ModerationService:
         text = s
         action = None
         repl = None
-        categories: Optional[Set[str]] = None
+        categories: set[str] | None = None
         # Extract categories suffix if present (requires preceding whitespace; '\#' escapes a literal '#')
         if '#' in text:
             cut_index = -1
@@ -308,7 +308,7 @@ class ModerationService:
         return text, action, repl, categories
 
     @staticmethod
-    def _split_action_directive(text: str) -> Tuple[str, Optional[str]]:
+    def _split_action_directive(text: str) -> tuple[str, str | None]:
         """Split text into (pattern, rhs) on the first unescaped '->' outside /regex/."""
         if '->' not in text:
             return text, None
@@ -343,7 +343,7 @@ class ModerationService:
         return text, None
 
     @classmethod
-    def _parse_regex_expr(cls, expr: str) -> Optional[Tuple[str, str]]:
+    def _parse_regex_expr(cls, expr: str) -> tuple[str, str] | None:
         """Return (pattern, flags) if expr is /pattern/flags with allowed flags; otherwise None."""
         if not expr or not expr.startswith("/"):
             return None
@@ -360,8 +360,8 @@ class ModerationService:
             return None
         return raw, flags_str
 
-    def _load_block_patterns(self, path: Optional[str]) -> List[PatternRule]:
-        patterns: List[PatternRule] = []
+    def _load_block_patterns(self, path: str | None) -> list[PatternRule]:
+        patterns: list[PatternRule] = []
         if not path:
             return patterns
         try:
@@ -409,7 +409,7 @@ class ModerationService:
             logger.error(f"Failed to load moderation blocklist: {e}")
         return patterns
 
-    def _build_block_patterns(self, path: Optional[str]) -> List[PatternRule]:
+    def _build_block_patterns(self, path: str | None) -> list[PatternRule]:
         """Load blocklist patterns and optionally append built-in PII rules."""
         patterns = self._load_block_patterns(path)
         if self._pii_enabled:
@@ -421,9 +421,9 @@ class ModerationService:
                 logger.warning(f"Failed to load builtin PII rules: {e}")
         return patterns
 
-    def _load_builtin_pii_rules(self) -> List[PatternRule]:
+    def _load_builtin_pii_rules(self) -> list[PatternRule]:
         """Create PatternRule list for common PII if available and enabled."""
-        rules: List[PatternRule] = []
+        rules: list[PatternRule] = []
         try:
             from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector
             for name, compiled in getattr(PIIDetector, 'PII_PATTERNS', {}).items():
@@ -472,8 +472,8 @@ class ModerationService:
             return True
         return False
 
-    def _load_user_overrides(self) -> Dict[str, Dict[str, object]]:
-        overrides: Dict[str, Dict[str, object]] = {}
+    def _load_user_overrides(self) -> dict[str, dict[str, object]]:
+        overrides: dict[str, dict[str, object]] = {}
         p = getattr(self, "_user_overrides_path", None)
         if not p:
             return overrides
@@ -484,7 +484,7 @@ class ModerationService:
             with open(p, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
-                    cleaned: Dict[str, Dict[str, object]] = {}
+                    cleaned: dict[str, dict[str, object]] = {}
                     for k, v in data.items():
                         if not isinstance(v, dict):
                             continue
@@ -508,7 +508,7 @@ class ModerationService:
             self._user_overrides = self._load_user_overrides()
 
     # --------------- Settings helpers (runtime) ---------------
-    def get_settings(self) -> Dict[str, object]:
+    def get_settings(self) -> dict[str, object]:
         pol = self._global_policy
         pii_effective = False
         try:
@@ -526,7 +526,7 @@ class ModerationService:
                     break
         except Exception:
             pii_effective = False
-        cats_override: Optional[List[str]] = None
+        cats_override: list[str] | None = None
         if "categories_enabled" in self._runtime_override:
             cats_val = self._runtime_override.get("categories_enabled") or []
             if isinstance(cats_val, (set, list, tuple)):
@@ -544,12 +544,12 @@ class ModerationService:
 
     def update_settings(
         self,
-        pii_enabled: Optional[bool] = None,
-        categories_enabled: Optional[List[str]] = None,
+        pii_enabled: bool | None = None,
+        categories_enabled: list[str] | None = None,
         persist: bool = False,
         clear_pii: bool = False,
         clear_categories: bool = False,
-    ) -> Dict[str, object]:
+    ) -> dict[str, object]:
         with self._lock:
             if clear_pii:
                 self._runtime_override.pop("pii_enabled", None)
@@ -574,7 +574,7 @@ class ModerationService:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
-                ro: Dict[str, object] = {}
+                ro: dict[str, object] = {}
                 if "pii_enabled" in data:
                     raw_val = data.get("pii_enabled")
                     parsed = self._parse_bool_value(raw_val)
@@ -600,7 +600,7 @@ class ModerationService:
             dirpath = os.path.dirname(path)
             if dirpath:
                 os.makedirs(dirpath, exist_ok=True)
-            out: Dict[str, object] = {}
+            out: dict[str, object] = {}
             if "pii_enabled" in self._runtime_override:
                 out["pii_enabled"] = bool(self._runtime_override.get("pii_enabled"))
             if "categories_enabled" in self._runtime_override:
@@ -614,7 +614,7 @@ class ModerationService:
         except Exception as e:
             logger.warning(f"Failed to save runtime overrides file: {e}")
 
-    def get_effective_policy(self, user_id: Optional[str]) -> ModerationPolicy:
+    def get_effective_policy(self, user_id: str | None) -> ModerationPolicy:
         """Return policy after applying per-user overrides if enabled."""
         p = self._global_policy
         if not p.per_user_overrides or not user_id:
@@ -638,16 +638,16 @@ class ModerationService:
 
     def _resolve_categories_override(
         self,
-        overrides: Dict[str, object],
-        default_categories: Optional[Set[str]],
-    ) -> Optional[Set[str]]:
+        overrides: dict[str, object],
+        default_categories: set[str] | None,
+    ) -> set[str] | None:
         if "categories_enabled" not in overrides:
             return default_categories
         parsed = self._parse_categories_override(overrides.get("categories_enabled"))
         return parsed if parsed is not None else default_categories
 
     @staticmethod
-    def _parse_categories_override(v: Optional[object]) -> Optional[Set[str]]:
+    def _parse_categories_override(v: object | None) -> set[str] | None:
         if v is None:
             return None
         try:
@@ -667,14 +667,14 @@ class ModerationService:
         return str(action).strip().lower() in cls._ALLOWED_ACTIONS
 
     @staticmethod
-    def _normalize_override_actions(override: Dict[str, object]) -> Dict[str, object]:
+    def _normalize_override_actions(override: dict[str, object]) -> dict[str, object]:
         out = dict(override or {})
         for key in ("input_action", "output_action"):
             if key in out and out[key] is not None:
                 out[key] = str(out[key]).strip().lower()
         return out
 
-    def _validate_override_actions(self, override: Dict[str, object]) -> Optional[str]:
+    def _validate_override_actions(self, override: dict[str, object]) -> str | None:
         for key in ("input_action", "output_action"):
             if key in (override or {}) and override.get(key) is not None:
                 val = str(override.get(key)).strip().lower()
@@ -682,7 +682,7 @@ class ModerationService:
                     return f"invalid {key}: {override.get(key)}"
         return None
 
-    def _sanitize_user_override(self, override: Dict[str, object]) -> Dict[str, object]:
+    def _sanitize_user_override(self, override: dict[str, object]) -> dict[str, object]:
         out = self._normalize_override_actions(override)
         for key in ("input_action", "output_action"):
             if key in out and out.get(key) is not None:
@@ -693,17 +693,17 @@ class ModerationService:
         return out
 
     @classmethod
-    def _effective_rule_categories(cls, rule: PatternRule) -> Set[str]:
+    def _effective_rule_categories(cls, rule: PatternRule) -> set[str]:
         cats = rule.categories or set()
         normalized = {str(c).strip().lower() for c in cats if str(c).strip()}
         return normalized if normalized else {cls._UNCATEGORIZED_CATEGORY}
 
-    def effective_policy_snapshot(self, user_id: Optional[str]) -> Dict[str, object]:
+    def effective_policy_snapshot(self, user_id: str | None) -> dict[str, object]:
         """Return a serializable dict of the effective policy for inspection."""
         return self.get_effective_policy(user_id).to_dict()
 
     @staticmethod
-    def _coalesce_bool(v: Optional[str | bool], default: bool) -> bool:
+    def _coalesce_bool(v: str | bool | None, default: bool) -> bool:
         if isinstance(v, bool):
             return v
         if v is None:
@@ -711,7 +711,7 @@ class ModerationService:
         return str(v).strip().lower() in {"1", "true", "yes", "y", "on"}
 
     @staticmethod
-    def _parse_bool_value(v: object) -> Optional[bool]:
+    def _parse_bool_value(v: object) -> bool | None:
         if isinstance(v, bool):
             return v
         if v is None:
@@ -728,7 +728,7 @@ class ModerationService:
         return None
 
     # --------------- Checking and transformations ---------------
-    def check_text(self, text: str, policy: ModerationPolicy, phase: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+    def check_text(self, text: str, policy: ModerationPolicy, phase: str | None = None) -> tuple[bool, str | None]:
         """Return (is_flagged, matched_sample)."""
         if not policy.enabled or not text:
             return False, None
@@ -744,9 +744,9 @@ class ModerationService:
         elif phase == "output":
             default_action = policy.output_action
         best_rank = 0
-        best_match_span: Optional[Tuple[int, int]] = None
-        best_match_pos: Optional[int] = None
-        best_replacement: Optional[str] = None
+        best_match_span: tuple[int, int] | None = None
+        best_match_pos: int | None = None
+        best_replacement: str | None = None
         for rule in policy.block_patterns:
             # Category gating mirrors evaluate_action() behavior
             if isinstance(rule, PatternRule) and policy.categories_enabled:
@@ -781,7 +781,7 @@ class ModerationService:
         return False, None
 
     @staticmethod
-    def _build_sanitized_snippet(text: str, match_span: Tuple[int, int], replacement: str) -> Optional[str]:
+    def _build_sanitized_snippet(text: str, match_span: tuple[int, int], replacement: str) -> str | None:
         if not text or not match_span:
             return None
         start, end = match_span
@@ -806,9 +806,9 @@ class ModerationService:
         self,
         text: str,
         policy: ModerationPolicy,
-        match_span: Optional[Tuple[int, int]],
-        pattern: Optional[str] = None,
-    ) -> Optional[str]:
+        match_span: tuple[int, int] | None,
+        pattern: str | None = None,
+    ) -> str | None:
         """Create a sanitized snippet for a known match span and pattern."""
         if not text or not match_span:
             return None
@@ -861,7 +861,7 @@ class ModerationService:
                 continue
         return redacted
 
-    def redact_text_with_count(self, text: str, policy: ModerationPolicy) -> Tuple[str, int]:
+    def redact_text_with_count(self, text: str, policy: ModerationPolicy) -> tuple[str, int]:
         """Redact text and return (redacted_text, replacement_count)."""
         if not text or not policy.block_patterns:
             return text, 0
@@ -906,7 +906,7 @@ class ModerationService:
         text: str,
         policy: ModerationPolicy,
         phase: str,
-    ) -> Tuple[str, Optional[str], Optional[str], Optional[str], Optional[Tuple[int, int]]]:
+    ) -> tuple[str, str | None, str | None, str | None, tuple[int, int] | None]:
         """Compute moderation action and match span (if any)."""
         if not text:
             return 'pass', None, None, None, None
@@ -921,7 +921,7 @@ class ModerationService:
         best_pattern = None
         best_category = None
         best_match_pos = None
-        best_match_span: Optional[Tuple[int, int]] = None
+        best_match_span: tuple[int, int] | None = None
         for rule in policy.block_patterns or []:
             pat = rule.regex if isinstance(rule, PatternRule) else rule
             # Category gating
@@ -975,7 +975,7 @@ class ModerationService:
             return "warn", None, best_pattern, best_category, best_match_span
         return "pass", None, None, None, None
 
-    def evaluate_action(self, text: str, policy: ModerationPolicy, phase: str) -> Tuple[str, Optional[str], Optional[str], Optional[str]]:
+    def evaluate_action(self, text: str, policy: ModerationPolicy, phase: str) -> tuple[str, str | None, str | None, str | None]:
         """Decide the action for a given text and phase."""
         action, redacted, pattern, category, _span = self._evaluate_action_internal(text, policy, phase)
         return action, redacted, pattern, category
@@ -985,11 +985,11 @@ class ModerationService:
         text: str,
         policy: ModerationPolicy,
         phase: str,
-    ) -> Tuple[str, Optional[str], Optional[str], Optional[str], Optional[Tuple[int, int]]]:
+    ) -> tuple[str, str | None, str | None, str | None, tuple[int, int] | None]:
         """Decide action and return the match span when available."""
         return self._evaluate_action_internal(text, policy, phase)
 
-    def _iter_scan_chunks(self, text: str) -> Iterator[Tuple[int, int]]:
+    def _iter_scan_chunks(self, text: str) -> Iterator[tuple[int, int]]:
         if not text:
             return
         chunk_size = max(1, int(self._max_scan_chars))
@@ -1009,7 +1009,7 @@ class ModerationService:
                 break
             start += step
 
-    def _find_match_span(self, pat: re.Pattern, text: str) -> Optional[Tuple[int, int]]:
+    def _find_match_span(self, pat: re.Pattern, text: str) -> tuple[int, int] | None:
         try:
             chunk_limit = max(1, int(self._max_scan_chars))
             if len(text) <= chunk_limit:
@@ -1030,14 +1030,14 @@ class ModerationService:
         except re.error:
             return None
 
-    def _collect_rule_matches(self, text: str, pat: re.Pattern) -> List[re.Match]:
+    def _collect_rule_matches(self, text: str, pat: re.Pattern) -> list[re.Match]:
         """Collect non-overlapping matches across scan chunks for soft-capped redaction."""
         if not text:
             return []
         limit = self._max_replacements_per_pattern
         if limit is not None and int(limit) <= 0:
             limit = None
-        matches: List[re.Match] = []
+        matches: list[re.Match] = []
         try:
             for m in pat.finditer(text):
                 span = m.span()
@@ -1051,11 +1051,11 @@ class ModerationService:
         return matches
 
     @staticmethod
-    def _apply_rule_redactions(text: str, matches: List[re.Match], replacement: str) -> str:
+    def _apply_rule_redactions(text: str, matches: list[re.Match], replacement: str) -> str:
         """Apply redactions using precomputed match objects."""
         if not matches:
             return text
-        out_parts: List[str] = []
+        out_parts: list[str] = []
         last = 0
         for m in matches:
             start, end = m.span()
@@ -1068,11 +1068,11 @@ class ModerationService:
         return "".join(out_parts)
 
     # --------------- Persistence helpers ---------------
-    def list_user_overrides(self) -> Dict[str, Dict[str, object]]:
+    def list_user_overrides(self) -> dict[str, dict[str, object]]:
         """Return a shallow copy of all user overrides."""
         return dict(self._user_overrides or {})
 
-    def set_user_override(self, user_id: str, override: Dict[str, object]) -> Dict[str, object]:
+    def set_user_override(self, user_id: str, override: dict[str, object]) -> dict[str, object]:
         """Create or update a user override and persist to file if configured.
 
         Returns a dict {ok: bool, persisted: bool, error?: str}
@@ -1101,7 +1101,7 @@ class ModerationService:
                 logger.error(f"Failed to save user overrides: {e}")
                 return {"ok": False, "persisted": False, "error": str(e)}
 
-    def delete_user_override(self, user_id: str) -> Dict[str, object]:
+    def delete_user_override(self, user_id: str) -> dict[str, object]:
         """Delete a user override and persist to file if configured.
 
         Returns a dict {ok: bool, persisted: bool, error?: str}
@@ -1122,7 +1122,7 @@ class ModerationService:
                     return {"ok": False, "persisted": False, "error": str(e)}
             return {"ok": False, "persisted": False, "error": "not found"}
 
-    def get_blocklist_lines(self) -> List[str]:
+    def get_blocklist_lines(self) -> list[str]:
         """Read current blocklist file lines (without trailing newlines)."""
         path = getattr(self, "_blocklist_path", None)
         if not path or not os.path.exists(path):
@@ -1135,7 +1135,7 @@ class ModerationService:
             logger.error(f"Failed to read blocklist: {e}")
             return []
 
-    def set_blocklist_lines(self, lines: List[str]) -> bool:
+    def set_blocklist_lines(self, lines: list[str]) -> bool:
         """Write blocklist lines to file and reload compiled patterns."""
         path = getattr(self, "_blocklist_path", None)
         if not path:
@@ -1191,24 +1191,24 @@ class ModerationService:
 
     # --------------- Managed blocklist with versioning ---------------
     @staticmethod
-    def _normalize_lines(lines: List[str]) -> List[str]:
+    def _normalize_lines(lines: list[str]) -> list[str]:
         return [str(ln).rstrip("\r\n") for ln in (lines or [])]
 
     @staticmethod
-    def _compute_version(lines: List[str]) -> str:
+    def _compute_version(lines: list[str]) -> str:
         """Compute a stable version string (ETag) for the blocklist content."""
         norm = ModerationService._normalize_lines(lines)
         payload = ("\n".join(norm) + "\n").encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
-    def get_blocklist_state(self) -> Dict[str, object]:
+    def get_blocklist_state(self) -> dict[str, object]:
         """Return current blocklist with a content hash version and indexed items."""
         lines = self.get_blocklist_lines()
         version = self._compute_version(lines)
         items = [{"id": i, "line": ln} for i, ln in enumerate(lines)]
         return {"version": version, "items": items}
 
-    def append_blocklist_line(self, expected_version: str, line: str) -> Tuple[bool, Dict[str, object]]:
+    def append_blocklist_line(self, expected_version: str, line: str) -> tuple[bool, dict[str, object]]:
         """Append a line with optimistic concurrency control. Returns (ok, state)."""
         if line is None:
             return False, {"error": "line required"}
@@ -1225,7 +1225,7 @@ class ModerationService:
             state = self.get_blocklist_state() if ok else {"error": "persist failed"}
             return ok, state
 
-    def delete_blocklist_index(self, expected_version: str, index: int) -> Tuple[bool, Dict[str, object]]:
+    def delete_blocklist_index(self, expected_version: str, index: int) -> tuple[bool, dict[str, object]]:
         """Delete a line by index with optimistic concurrency control. Returns (ok, state)."""
         with self._lock:
             current = self.get_blocklist_lines()
@@ -1240,18 +1240,18 @@ class ModerationService:
             return ok, state
 
     # --------------- Lint helpers ---------------
-    def lint_blocklist_lines(self, lines: List[str]) -> Dict[str, object]:
+    def lint_blocklist_lines(self, lines: list[str]) -> dict[str, object]:
         """Validate blocklist lines without persisting.
 
         Returns a dict with items [{index, line, ok, pattern_type, action, replacement, categories, error?, warning?, sample?}]
         and summary counts.
         """
-        results: List[Dict[str, object]] = []
+        results: list[dict[str, object]] = []
         valid_count = 0
         invalid_count = 0
         for idx, raw in enumerate(lines or []):
             line = str(raw).rstrip("\n")
-            item: Dict[str, object] = {"index": idx, "line": line, "ok": False}
+            item: dict[str, object] = {"index": idx, "line": line, "ok": False}
             try:
                 if not line or not line.strip():
                     item.update({"ok": True, "pattern_type": "empty", "warning": "blank line (ignored)"})
@@ -1333,7 +1333,7 @@ class ModerationService:
 
 
 # Singleton accessor
-_moderation_service: Optional[ModerationService] = None
+_moderation_service: ModerationService | None = None
 
 
 def get_moderation_service() -> ModerationService:

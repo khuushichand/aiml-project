@@ -132,7 +132,7 @@ MAX_JSON_DICT_KEYS = 100
 # =============================================================================
 # JSON Validation Helpers
 # =============================================================================
-from typing import Any, List, Dict
+from typing import Any
 
 
 def validate_json_list(
@@ -140,7 +140,7 @@ def validate_json_list(
     field_name: str,
     max_items: int = MAX_JSON_LIST_ITEMS,
     max_item_length: int = MAX_JSON_STRING_ITEM_LENGTH,
-) -> List[str]:
+) -> list[str]:
     """
     Validate that parsed JSON is a list of strings.
 
@@ -188,7 +188,7 @@ def validate_json_dict(
     data: Any,
     field_name: str,
     max_keys: int = MAX_JSON_DICT_KEYS,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Validate that parsed JSON is a dictionary.
 
@@ -218,8 +218,8 @@ def validate_json_dict(
 def safe_parse_json_list(
     data: Any,
     field_name: str,
-    default: List[str] = None,
-) -> List[str]:
+    default: list[str] = None,
+) -> list[str]:
     """
     Safely parse and validate a JSON list field, returning default on error.
 
@@ -237,6 +237,7 @@ def safe_parse_json_list(
         default = []
 
     import json
+
     from loguru import logger
 
     if data is None:
@@ -263,8 +264,8 @@ def safe_parse_json_list(
 def safe_parse_json_dict(
     data: Any,
     field_name: str,
-    default: Dict[str, Any] = None,
-) -> Dict[str, Any]:
+    default: dict[str, Any] = None,
+) -> dict[str, Any]:
     """
     Safely parse and validate a JSON dict field, returning default on error.
 
@@ -282,6 +283,7 @@ def safe_parse_json_dict(
         default = {}
 
     import json
+
     from loguru import logger
 
     if data is None:

@@ -2,19 +2,22 @@
 # Description: This file contains the API endpoints for managing Llama.cpp server operations in tldw_Server_API.
 #
 # Imports
-from typing import Optional, Dict, Any
+from typing import Any, Optional
+
 #
 # Thid-party Libraries
-from fastapi import APIRouter, HTTPException, Body, Depends, Request
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field
+
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler import LlamaCppHandler
+
 #
 # Local Imports
-from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ModelNotFoundError, ServerError, InferenceError
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import InferenceError, ModelNotFoundError, ServerError
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Manager import LLMInferenceManager
-from tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler import LlamaCppHandler
+
 #
 ########################################################################################################################
 #
@@ -91,7 +94,7 @@ def _resolve_llamacpp_target(llm_manager: LLMInferenceManager, required: tuple[s
 async def start_llamacpp_server_endpoint(
         model_filename: str = Body(..., embed=True,
                                    description="Filename of the GGUF model to load (e.g., 'mistral-7b-v0.1.Q4_K_M.gguf')"),
-        server_args: Optional[Dict[str, Any]] = Body({}, embed=True,
+        server_args: Optional[dict[str, Any]] = Body({}, embed=True,
                                                      description="Optional Llama.cpp server arguments (e.g., port, n_gpu_layers)"),
         llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager),
 ):
@@ -266,7 +269,7 @@ class LlamaCppRerankItem(BaseModel):
 
 class LlamaCppRerankRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Query to rank against passages")
-    passages: List[LlamaCppRerankItem] = Field(..., min_length=1, description="Candidate passages to rerank")
+    passages: list[LlamaCppRerankItem] = Field(..., min_length=1, description="Candidate passages to rerank")
     top_k: Optional[int] = Field(default=None, ge=1, le=100, description="Top-K results to return (defaults to len(passages))")
     # Optional overrides for llama.cpp and model selection
     model: Optional[str] = Field(default=None, description="GGUF model path (overrides config)")
@@ -307,7 +310,7 @@ class LlamaCppRerankResult(BaseModel):
 
 
 class LlamaCppRerankResponse(BaseModel):
-    results: List[LlamaCppRerankResult]
+    results: list[LlamaCppRerankResult]
 
 
 @router.post("/llamacpp/reranking", summary="Rerank passages with llama.cpp embeddings (GGUF)", response_model=LlamaCppRerankResponse, dependencies=[Depends(check_rate_limit)])
@@ -320,14 +323,16 @@ async def llamacpp_reranker_endpoint(payload: LlamaCppRerankRequest, current_use
     try:
         # Lazy imports to avoid extra startup cost
         from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import (
-            RerankingConfig, RerankingStrategy, create_reranker
+            RerankingConfig,
+            RerankingStrategy,
+            create_reranker,
         )
-        from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
+        from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Reranking modules unavailable: {e}")
 
     # Build documents from passages
-    documents: List[Document] = []
+    documents: list[Document] = []
     for i, item in enumerate(payload.passages):
         documents.append(Document(
             id=item.id or str(i),
@@ -378,7 +383,7 @@ async def llamacpp_reranker_endpoint(payload: LlamaCppRerankRequest, current_use
     # Convert results
     # Map back to original order indices
     id_to_index = { (p.id or str(i)): i for i, p in enumerate(payload.passages) }
-    results: List[LlamaCppRerankResult] = []
+    results: list[LlamaCppRerankResult] = []
     for sd in scored:
         pid = getattr(sd.document, 'id', None)
         idx = id_to_index.get(pid, 0)
@@ -399,7 +404,7 @@ public_router = APIRouter()
 class PublicRerankRequest(BaseModel):
     model: Optional[str] = Field(default=None, description="Reranker model id/path (GGUF for llama.cpp or HF id for transformers)")
     query: str = Field(..., min_length=1)
-    documents: List[str] = Field(..., min_length=1, description="Documents (plain text) to rank")
+    documents: list[str] = Field(..., min_length=1, description="Documents (plain text) to rank")
     top_n: Optional[int] = Field(default=None, ge=1, le=100)
     backend: Optional[str] = Field(default="auto", description="Reranker backend: auto|llamacpp|transformers")
     model_config = ConfigDict(json_schema_extra={
@@ -419,16 +424,18 @@ class PublicRerankRequest(BaseModel):
 
 
 class PublicRerankResponse(BaseModel):
-    results: List[LlamaCppRerankResult]
+    results: list[LlamaCppRerankResult]
 
 
-async def _run_public_rerank(query: str, docs: List[str], model_override: Optional[str], top_k: Optional[int], backend: str) -> List[LlamaCppRerankResult]:
+async def _run_public_rerank(query: str, docs: list[str], model_override: Optional[str], top_k: Optional[int], backend: str) -> list[LlamaCppRerankResult]:
     from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import (
-        RerankingConfig, RerankingStrategy, create_reranker
+        RerankingConfig,
+        RerankingStrategy,
+        create_reranker,
     )
-    from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
+    from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
 
-    documents: List[Document] = [
+    documents: list[Document] = [
         Document(id=str(i), content=txt, metadata={"source": "public_reranking"}, source=DataSource.MEDIA_DB)
         for i, txt in enumerate(docs)
     ]
@@ -463,7 +470,7 @@ async def _run_public_rerank(query: str, docs: List[str], model_override: Option
     # Enforce top_k even if underlying reranker returns more
     if isinstance(scored, list) and cfg.top_k:
         scored = scored[: cfg.top_k]
-    out: List[LlamaCppRerankResult] = []
+    out: list[LlamaCppRerankResult] = []
     for sd in scored:
         idx = int(getattr(sd.document, 'id', '0')) if str(getattr(sd.document, 'id', '0')).isdigit() else 0
         out.append(LlamaCppRerankResult(

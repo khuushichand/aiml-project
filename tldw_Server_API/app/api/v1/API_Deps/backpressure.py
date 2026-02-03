@@ -2,21 +2,19 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Optional, Tuple
 
-from fastapi import Depends, HTTPException
-from fastapi import Request, Response
+import redis.asyncio as aioredis
+from fastapi import Depends, HTTPException, Request, Response
 from loguru import logger
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Infrastructure.redis_factory import (
     create_async_redis_client,
     ensure_async_client_closed,
 )
-
-import redis.asyncio as aioredis
 
 
 async def _get_redis_client() -> aioredis.Redis:
@@ -55,14 +53,14 @@ def _cfg_float(name: str, default_val: float) -> float:
     return float(default_val)
 
 
-def _bp_limits() -> Tuple[int, float]:
+def _bp_limits() -> tuple[int, float]:
     """Return the current backpressure limits using latest config/env overrides."""
     max_depth = _cfg_int("EMB_BACKPRESSURE_MAX_DEPTH", 25000)
     max_age = _cfg_float("EMB_BACKPRESSURE_MAX_AGE_SECONDS", 300.0)
     return max_depth, max_age
 
 
-async def _orchestrator_depth_and_age(client: aioredis.Redis) -> Tuple[int, float]:
+async def _orchestrator_depth_and_age(client: aioredis.Redis) -> tuple[int, float]:
     queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage", "embeddings:content"]
     depths = []
     ages = []
@@ -97,7 +95,7 @@ def _should_enforce_ingest_tenant_rps(request: Request, current_user: User) -> b
     """
     try:
         ctx = getattr(request.state, "auth", None)
-        principal: Optional[AuthPrincipal] = ctx.principal if isinstance(ctx, AuthContext) else None
+        principal: AuthPrincipal | None = ctx.principal if isinstance(ctx, AuthContext) else None
     except Exception as exc:
         logger.debug("Failed to extract principal from request.state.auth: {}", exc)
         principal = None
@@ -137,7 +135,7 @@ async def guard_backpressure_and_quota(
     current_user: User = Depends(get_request_user),
 ):
     # Backpressure by orchestrator depth/age
-    client: Optional[aioredis.Redis] = None
+    client: aioredis.Redis | None = None
     try:
         try:
             client = await _get_redis_client()
@@ -161,7 +159,7 @@ async def guard_backpressure_and_quota(
     # Tenant quota (allow override key for ingestion; fallback to embeddings quota)
     rps = _cfg_int("INGEST_TENANT_RPS", 0) or _cfg_int("EMBEDDINGS_TENANT_RPS", 0)
     if rps > 0 and _should_enforce_ingest_tenant_rps(request, current_user):
-        client2: Optional[aioredis.Redis] = None
+        client2: aioredis.Redis | None = None
         try:
             client2 = await _get_redis_client()
             ts = int(time.time())

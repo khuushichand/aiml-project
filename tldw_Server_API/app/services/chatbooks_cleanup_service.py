@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Optional
 
 from loguru import logger
 
@@ -42,7 +41,7 @@ def _build_chacha_db_for_user(user_id: int) -> CharactersRAGDB:
     return CharactersRAGDB(db_path=str(db_path), client_id=str(user_id))
 
 
-async def run_chatbooks_cleanup_loop(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_chatbooks_cleanup_loop(stop_event: asyncio.Event | None = None) -> None:
     """Run scheduled cleanup of expired chatbook exports."""
     interval_sec = int(os.getenv("CHATBOOKS_CLEANUP_INTERVAL_SEC", "0") or "0")
     if interval_sec <= 0:

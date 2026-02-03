@@ -14,21 +14,24 @@
 # Import necessary libraries
 import asyncio
 import gc
-from datetime import datetime
 import re
-from typing import Dict, Any, Optional, List, Union
+from datetime import datetime
+from typing import Any, Optional, Union
+
 #
 # Import External Libs
 import pymupdf
 import pymupdf4llm
+
 #
 # Import Local
 from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import get_backend as _get_ocr_backend
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Utils.Utils import logging
-from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import get_backend as _get_ocr_backend
-from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
+
 try:
     # Optional VLM module (vision backends)
     from tldw_Server_API.app.core.Ingestion_Media_Processing.VLM.registry import (
@@ -192,11 +195,11 @@ def extract_metadata_from_pdf(pdf_path):
 
 # PDF_Ingestion_Lib.py
 # Add these imports at the top if not already present
-import tempfile
-import shutil
-import uuid
-import time
 import os
+import shutil
+import tempfile
+import time
+import uuid
 from pathlib import Path
 
 # ... other imports ...
@@ -207,9 +210,9 @@ def process_pdf(
     parser: str = "pymupdf4llm",
     title_override: Optional[str] = None,
     author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    keywords: Optional[list[str]] = None,
     perform_chunking: bool = True,
-    chunk_options: Optional[Dict[str, Any]] = None,
+    chunk_options: Optional[dict[str, Any]] = None,
     perform_analysis: bool = False,
     api_name: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -277,7 +280,7 @@ def process_pdf(
     start_time = datetime.now()
     # Initialize the result dictionary structure
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "status": "Pending",
         "input_ref": filename,
         "media_type": "pdf",
@@ -581,13 +584,13 @@ def process_pdf(
                 if backend is None:
                     result["warnings"].append("VLM requested but no backend available")
                 else:
-                    vlm_summary: Dict[str, Any] = {
+                    vlm_summary: dict[str, Any] = {
                         "backend": getattr(backend, "name", "unknown"),
                         "pages_scanned": 0,
                         "detections_total": 0,
                         "by_page": [],
                     }
-                    extra_chunks: List[Dict[str, Any]] = []
+                    extra_chunks: list[dict[str, Any]] = []
 
                     # Prefer document-level processing if backend exposes it (e.g., docling)
                     if hasattr(backend, "process_pdf"):
@@ -744,7 +747,7 @@ def process_pdf(
             # Iterate through each chunk generated earlier
             for i, chunk in enumerate(processed_chunks):
                 chunk_text = chunk.get('text', '') # Get the text content of the chunk
-                chunk_metadata: Dict[str, Any] = chunk.get('metadata', {}) # Get existing metadata
+                chunk_metadata: dict[str, Any] = chunk.get('metadata', {}) # Get existing metadata
 
                 # Only summarize if the chunk has actual text content
                 if chunk_text:
@@ -1028,7 +1031,7 @@ async def process_pdf_task(
     parser: str = "pymupdf4llm",
     title_override: Optional[str] = None,
     author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    keywords: Optional[list[str]] = None,
     perform_chunking: bool = True,
     chunk_method: Optional[str] = None,
     max_chunk_size: Optional[int] = 500,
@@ -1053,7 +1056,7 @@ async def process_pdf_task(
     vlm_backend: Optional[str] = None,
     vlm_detect_tables_only: bool = True,
     vlm_max_pages: Optional[int] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Async wrapper task to process a single PDF (provided as bytes)
     using the core `process_pdf` function. Returns its result dictionary.
@@ -1139,18 +1142,18 @@ def _ocr_pdf_pages(
     concurrency: int = 1,
     output_format: Optional[str] = None,
     prompt_preset: Optional[str] = None,
-) -> tuple[str, int, int, Optional[List[Dict[str, Any]]]]:
+) -> tuple[str, int, int, Optional[list[dict[str, Any]]]]:
     """
     Render PDF pages to images and run OCR.
 
     Returns: (markdown_text, total_pages, ocr_pages_count, structured_pages)
     """
-    text_by_index: List[str] = []
+    text_by_index: list[str] = []
     ocr_pages = 0
     with pymupdf.open(pdf_path) as doc:
         page_count = len(doc)
         text_by_index = [""] * page_count
-        structured_pages: Optional[List[Dict[str, Any]]] = None
+        structured_pages: Optional[list[dict[str, Any]]] = None
         supports_structured = False
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import (

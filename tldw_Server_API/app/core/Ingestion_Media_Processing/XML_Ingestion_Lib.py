@@ -2,7 +2,7 @@
 # Description: This file contains functions for reading and writing XML files.
 # Imports
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 try:  # Prefer hardened XML parser
     from defusedxml import ElementTree as DET  # type: ignore
@@ -19,17 +19,18 @@ except Exception:  # pragma: no cover - extremely unlikely to be missing
 # External Imports
 #
 # Local Imports
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords, create_media_database
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Utils.Utils import logging
+
 #
 #######################################################################################################################
 #
 # Functions:
 
 
-def _read_xml_source(import_file) -> Tuple[str, str]:
+def _read_xml_source(import_file) -> tuple[str, str]:
     """
     Return XML text and a display name from a variety of upload types.
     Supports file paths, FastAPI UploadFile objects, and generic file-like objects.

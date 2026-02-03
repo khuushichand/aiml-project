@@ -5,18 +5,20 @@ All sensitive configuration is loaded from environment variables or secure confi
 No hardcoded secrets allowed.
 """
 
+import json
 import os
 import secrets
-import json
-from typing import Optional, Dict, Any, List
 from functools import lru_cache
+from typing import Any, Optional
+
 from pydantic import Field, SecretStr
+
 try:
     from pydantic import field_validator  # v2
 except Exception:  # v1 fallback
     from pydantic import validator as field_validator  # type: ignore
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from loguru import logger
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _default_ws_allowed_origins() -> list[str]:
@@ -120,7 +122,7 @@ class MCPConfig(BaseSettings):
     ws_close_timeout: int = Field(default=10, validation_alias="MCP_WS_CLOSE_TIMEOUT")
     ws_auth_required: bool = Field(default=True, validation_alias="MCP_WS_AUTH_REQUIRED")
     # WS security
-    ws_allowed_origins: List[str] = Field(default_factory=_default_ws_allowed_origins, validation_alias="MCP_WS_ALLOWED_ORIGINS")
+    ws_allowed_origins: list[str] = Field(default_factory=_default_ws_allowed_origins, validation_alias="MCP_WS_ALLOWED_ORIGINS")
     ws_allow_query_auth: bool = Field(default=False, validation_alias="MCP_WS_ALLOW_QUERY_AUTH")
     # WS session policies
     ws_idle_timeout_seconds: int = Field(default=300, validation_alias="MCP_WS_IDLE_TIMEOUT_SECONDS")
@@ -129,11 +131,11 @@ class MCPConfig(BaseSettings):
 
     # Network access controls
     # Default to loopback-only to avoid accidental exposure
-    allowed_client_ips: List[str] = Field(default_factory=_default_allowed_ips, validation_alias="MCP_ALLOWED_IPS")
-    blocked_client_ips: List[str] = Field(default_factory=list, validation_alias="MCP_BLOCKED_IPS")
+    allowed_client_ips: list[str] = Field(default_factory=_default_allowed_ips, validation_alias="MCP_ALLOWED_IPS")
+    blocked_client_ips: list[str] = Field(default_factory=list, validation_alias="MCP_BLOCKED_IPS")
     trust_x_forwarded_for: bool = Field(default=False, validation_alias="MCP_TRUST_X_FORWARDED")
     trusted_proxy_depth: int = Field(default=1, ge=0, validation_alias="MCP_TRUSTED_PROXY_DEPTH")
-    trusted_proxy_ips: List[str] = Field(default_factory=list, validation_alias="MCP_TRUSTED_PROXY_IPS")
+    trusted_proxy_ips: list[str] = Field(default_factory=list, validation_alias="MCP_TRUSTED_PROXY_IPS")
 
     # HTTP request limits
     http_max_body_bytes: int = Field(default=524288, validation_alias="MCP_HTTP_MAX_BODY_BYTES")  # 512 KiB default
@@ -146,16 +148,16 @@ class MCPConfig(BaseSettings):
 
     # CORS Configuration
     cors_enabled: bool = Field(default=True, validation_alias="MCP_CORS_ENABLED")
-    cors_origins: List[str] = Field(
+    cors_origins: list[str] = Field(
         default=["http://localhost:3000", "http://localhost:8000"],
         validation_alias="MCP_CORS_ORIGINS"
     )
     cors_allow_credentials: bool = Field(default=True, validation_alias="MCP_CORS_CREDENTIALS")
-    cors_allow_methods: List[str] = Field(
+    cors_allow_methods: list[str] = Field(
         default=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         validation_alias="MCP_CORS_METHODS"
     )
-    cors_allow_headers: List[str] = Field(
+    cors_allow_headers: list[str] = Field(
         default=["*"],
         validation_alias="MCP_CORS_HEADERS"
     )
@@ -199,7 +201,7 @@ class MCPConfig(BaseSettings):
 
     # Rate limit categories (tool → category) mapping
     # Provide either JSON via MCP_TOOL_CATEGORY_MAP or file path via MCP_TOOL_CATEGORY_MAP_FILE
-    tool_category_map: Dict[str, str] = Field(default_factory=dict, validation_alias="MCP_TOOL_CATEGORY_MAP")
+    tool_category_map: dict[str, str] = Field(default_factory=dict, validation_alias="MCP_TOOL_CATEGORY_MAP")
     tool_category_map_file: Optional[str] = Field(default=None, validation_alias="MCP_TOOL_CATEGORY_MAP_FILE")
 
     model_config = SettingsConfigDict(
@@ -294,7 +296,7 @@ class MCPConfig(BaseSettings):
                 return {}
         return v
 
-    def get_redis_connection_params(self) -> Optional[Dict[str, Any]]:
+    def get_redis_connection_params(self) -> Optional[dict[str, Any]]:
         """Get Redis connection parameters if Redis is configured"""
         if not self.redis_url:
             return None
@@ -315,7 +317,7 @@ class MCPConfig(BaseSettings):
 
         return params
 
-    def get_database_connection_params(self) -> Dict[str, Any]:
+    def get_database_connection_params(self) -> dict[str, Any]:
         """Get database connection parameters"""
         return {
             "url": self.database_url,
@@ -393,7 +395,9 @@ def get_config() -> MCPConfig:
         # Load tool category map from YAML file if provided
         try:
             if config.tool_category_map_file:
-                import os as _os, yaml as _yaml  # type: ignore
+                import os as _os  # type: ignore
+
+                import yaml as _yaml
                 if _os.path.exists(config.tool_category_map_file):
                     with open(config.tool_category_map_file, 'r') as f:
                         data = _yaml.safe_load(f) or {}

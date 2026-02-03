@@ -11,19 +11,17 @@ Key improvements:
 
 import asyncio
 import uuid
-import weakref
-from typing import Optional, Dict, Any, List, Set
-from datetime import datetime, timedelta, timezone
-from enum import Enum
-from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Optional
 
 from loguru import logger
 
 from ..base import Task, TaskStatus
+from ..base.exceptions import WorkerError
 from ..base.queue_backend import QueueBackend
 from ..base.registry import TaskRegistry
-from ..base.exceptions import WorkerError
 from ..config import SchedulerConfig
 from ..services.lease_service import LeaseService
 
@@ -46,7 +44,7 @@ class WorkerMetrics:
     tasks_timeout: int = 0
     total_processing_time: float = 0.0
     max_processing_time: float = 0.0
-    errors: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
     last_error_at: Optional[datetime] = None
 
 
@@ -56,9 +54,9 @@ class ResourceTracker:
     """
 
     def __init__(self):
-        self.tasks: Set[asyncio.Task] = set()
-        self.leases: Dict[str, asyncio.Task] = {}
-        self.connections: List[Any] = []
+        self.tasks: set[asyncio.Task] = set()
+        self.leases: dict[str, asyncio.Task] = {}
+        self.connections: list[Any] = []
         self._lock = asyncio.Lock()
 
     async def register_task(self, task: asyncio.Task) -> None:
@@ -473,7 +471,7 @@ class ImprovedWorker:
 
         return True
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Get worker status"""
         uptime = (datetime.now(timezone.utc).replace(tzinfo=None) - self.started_at).total_seconds()
 
@@ -517,8 +515,8 @@ class ImprovedWorkerPool:
         self.registry = registry
         self.config = config
 
-        self.workers: Dict[str, ImprovedWorker] = {}
-        self.queue_workers: Dict[str, Set[str]] = {}
+        self.workers: dict[str, ImprovedWorker] = {}
+        self.queue_workers: dict[str, set[str]] = {}
         self.resource_tracker = ResourceTracker()
 
         # Consolidated ops task to minimize background tasks
@@ -771,7 +769,7 @@ class ImprovedWorkerPool:
                 await asyncio.sleep(0.5)
         logger.debug("Ops loop stopped")
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Get detailed pool status"""
         total_processed = sum(w.metrics.tasks_processed for w in self.workers.values())
         total_failed = sum(w.metrics.tasks_failed for w in self.workers.values())
@@ -795,7 +793,7 @@ class ImprovedWorkerPool:
             'workers': [w.get_status() for w in self.workers.values()]
         }
 
-    def _get_workers_by_state(self) -> Dict[str, int]:
+    def _get_workers_by_state(self) -> dict[str, int]:
         """Get worker count by state"""
         state_counts = {}
         for worker in self.workers.values():

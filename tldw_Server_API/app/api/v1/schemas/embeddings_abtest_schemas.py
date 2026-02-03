@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from typing import List, Optional, Dict, Literal, Any
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ABTestArm(BaseModel):
     model_config = ConfigDict(extra='forbid')
     provider: str = Field(description="Embedding provider id, e.g., 'openai' or 'huggingface'")
     model: str = Field(description="Embedding model id")
-    dimensions: Optional[int] = Field(default=None, description="Requested output dimensions if supported")
+    dimensions: int | None = Field(default=None, description="Requested output dimensions if supported")
 
 
 class ABTestChunking(BaseModel):
@@ -16,7 +17,7 @@ class ABTestChunking(BaseModel):
     method: str = Field(description="Chunking method, e.g., 'words' or 'sentences'")
     size: int = Field(ge=1, description="Max chunk size")
     overlap: int = Field(ge=0, description="Chunk overlap")
-    language: Optional[str] = Field(default=None, description="Language hint")
+    language: str | None = Field(default=None, description="Language hint")
 
 
 class ABTestReRanker(BaseModel):
@@ -28,69 +29,69 @@ class ABTestReRanker(BaseModel):
 class ABTestRetrieval(BaseModel):
     model_config = ConfigDict(extra='forbid')
     k: int = Field(ge=1, le=1000, description="Top-k results to return")
-    search_mode: Optional[Literal['fts', 'vector', 'hybrid']] = Field(default='vector', description="Retrieval mode")
-    hybrid_alpha: Optional[float] = Field(default=None, description="0=FTS only, 1=Vector only (hybrid blend)")
-    re_ranker: Optional[ABTestReRanker] = Field(default=None, description="Optional reranker config")
-    index_params: Optional[Dict[str, str]] = Field(default=None, description="Index parameters for vector store")
-    apply_reranker: Optional[bool] = Field(default=False, description="Apply reranker in vector-only mode when re_ranker is set")
+    search_mode: Literal['fts', 'vector', 'hybrid'] | None = Field(default='vector', description="Retrieval mode")
+    hybrid_alpha: float | None = Field(default=None, description="0=FTS only, 1=Vector only (hybrid blend)")
+    re_ranker: ABTestReRanker | None = Field(default=None, description="Optional reranker config")
+    index_params: dict[str, str] | None = Field(default=None, description="Index parameters for vector store")
+    apply_reranker: bool | None = Field(default=False, description="Apply reranker in vector-only mode when re_ranker is set")
 
 
 class ABTestQuery(BaseModel):
     model_config = ConfigDict(extra='forbid')
     text: str = Field(description="Query text")
-    expected_ids: Optional[List[int]] = Field(default=None, description="Optional ground truth media ids")
-    metadata: Optional[Dict[str, str]] = Field(default=None, description="Optional query metadata")
+    expected_ids: list[int] | None = Field(default=None, description="Optional ground truth media ids")
+    metadata: dict[str, str] | None = Field(default=None, description="Optional query metadata")
 
 
 class ABTestLimits(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    max_docs: Optional[int] = Field(default=None, ge=1, description="Max docs to include from corpus")
-    timeout_s: Optional[int] = Field(default=None, ge=1, description="Global timeout in seconds")
+    max_docs: int | None = Field(default=None, ge=1, description="Max docs to include from corpus")
+    timeout_s: int | None = Field(default=None, ge=1, description="Global timeout in seconds")
 
 
 class ABTestCleanupPolicy(BaseModel):
     model_config = ConfigDict(extra='forbid')
     on_complete: bool = Field(default=False, description="Delete collections on completion")
-    ttl_hours: Optional[int] = Field(default=None, ge=1, description="TTL for collections if not deleted immediately")
+    ttl_hours: int | None = Field(default=None, ge=1, description="TTL for collections if not deleted immediately")
 
 
 class EmbeddingsABTestConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
     # Allow single arm for toggle-style tests; still supports classic A/B with 2+ arms
-    arms: List[ABTestArm] = Field(min_length=1, description="Embedding models to compare")
+    arms: list[ABTestArm] = Field(min_length=1, description="Embedding models to compare")
     # Permit empty corpus in test-mode where synthetic or pre-existing collections may be used
-    media_ids: List[int] = Field(default_factory=list, min_length=0, description="Media IDs to build the corpus from")
-    chunking: Optional[ABTestChunking] = None
+    media_ids: list[int] = Field(default_factory=list, min_length=0, description="Media IDs to build the corpus from")
+    chunking: ABTestChunking | None = None
     retrieval: ABTestRetrieval
-    queries: List[ABTestQuery] = Field(min_length=1, description="Queries to evaluate")
-    metric_level: Optional[Literal['media', 'chunk']] = Field(default='media', description="Metric granularity")
-    limits: Optional[ABTestLimits] = None
-    reuse_existing: Optional[bool] = Field(default=True, description="Reuse matching collections if available")
-    cleanup_policy: Optional[ABTestCleanupPolicy] = None
+    queries: list[ABTestQuery] = Field(min_length=1, description="Queries to evaluate")
+    metric_level: Literal['media', 'chunk'] | None = Field(default='media', description="Metric granularity")
+    limits: ABTestLimits | None = None
+    reuse_existing: bool | None = Field(default=True, description="Reuse matching collections if available")
+    cleanup_policy: ABTestCleanupPolicy | None = None
 
 
 class EmbeddingsABTestCreateRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     name: str
     config: EmbeddingsABTestConfig
-    run_immediately: Optional[bool] = Field(default=False)
+    run_immediately: bool | None = Field(default=False)
 
 
 class ArmSummary(BaseModel):
     arm_id: str
     provider: str
     model: str
-    dimensions: Optional[int] = None
-    metrics: Dict[str, float] = Field(default_factory=dict)
-    latency_ms: Dict[str, float] = Field(default_factory=dict)
-    doc_counts: Dict[str, int] = Field(default_factory=dict)
+    dimensions: int | None = None
+    metrics: dict[str, float] = Field(default_factory=dict)
+    latency_ms: dict[str, float] = Field(default_factory=dict)
+    doc_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class EmbeddingsABTestResultSummary(BaseModel):
     test_id: str
     status: Literal['pending', 'running', 'completed', 'failed', 'canceled']
-    arms: List[ArmSummary] = Field(default_factory=list)
-    per_query: Optional[List[Dict[str, Any]]] = None
+    arms: list[ArmSummary] = Field(default_factory=list)
+    per_query: list[dict[str, Any]] | None = None
 
 
 class EmbeddingsABTestResultRow(BaseModel):
@@ -99,15 +100,15 @@ class EmbeddingsABTestResultRow(BaseModel):
     test_id: str
     arm_id: str
     query_id: str
-    ranked_ids: List[str] = Field(default_factory=list)
-    scores: Optional[List[float]] = None
-    metrics: Dict[str, Any] = Field(default_factory=dict)
-    latency_ms: Optional[float] = None
-    ranked_distances: Optional[List[float]] = None
-    ranked_metadatas: Optional[List[Dict[str, Any]]] = None
-    ranked_documents: Optional[List[str]] = None
-    rerank_scores: Optional[List[float]] = None
-    created_at: Optional[str] = None
+    ranked_ids: list[str] = Field(default_factory=list)
+    scores: list[float] | None = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    latency_ms: float | None = None
+    ranked_distances: list[float] | None = None
+    ranked_metadatas: list[dict[str, Any]] | None = None
+    ranked_documents: list[str] | None = None
+    rerank_scores: list[float] | None = None
+    created_at: str | None = None
 
 
 class EmbeddingsABTestCreateResponse(BaseModel):
@@ -118,12 +119,12 @@ class EmbeddingsABTestCreateResponse(BaseModel):
 class EmbeddingsABTestStatusResponse(BaseModel):
     test_id: str
     status: Literal['pending', 'running', 'completed', 'failed', 'canceled']
-    progress: Optional[Dict[str, float]] = None
+    progress: dict[str, float] | None = None
 
 
 class EmbeddingsABTestResultsResponse(BaseModel):
     summary: EmbeddingsABTestResultSummary
-    results: List[EmbeddingsABTestResultRow] = Field(default_factory=list)
+    results: list[EmbeddingsABTestResultRow] = Field(default_factory=list)
     page: int = 1
     page_size: int = 50
     total: int = 0

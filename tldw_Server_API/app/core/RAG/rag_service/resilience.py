@@ -7,18 +7,15 @@ and health monitoring to ensure robust operation of the RAG pipeline.
 """
 
 import asyncio
-import time
 import random
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Union, TypeVar
-from collections import deque, defaultdict
+import time
 import traceback
+from collections import deque
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Callable, Optional, TypeVar, cast
 
 from loguru import logger
-
 
 T = TypeVar('T')
 
@@ -56,8 +53,8 @@ class RetryConfig:
     max_delay: float = 60.0
     exponential_base: float = 2.0
     jitter: bool = True
-    retry_on: List[type] = field(default_factory=lambda: [Exception])
-    dont_retry_on: List[type] = field(default_factory=list)
+    retry_on: list[type] = field(default_factory=lambda: [Exception])
+    dont_retry_on: list[type] = field(default_factory=list)
 
 
 @dataclass
@@ -68,7 +65,7 @@ class ErrorContext:
     component: str
     operation: str
     attempt: int
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     traceback: Optional[str] = None
 
     def __post_init__(self):
@@ -97,16 +94,16 @@ class CircuitBreaker:
         self.state = CircuitState.CLOSED
         self.failure_count = 0
         self.success_count = 0
-        self.last_failure_time = None
+        self.last_failure_time: Optional[float] = None
         self.last_state_change = time.time()
 
         # Rolling window for tracking
-        self.call_results = deque(maxlen=self.config.window_size)
+        self.call_results: deque[bool] = deque(maxlen=self.config.window_size)
 
         # Callbacks
-        self.on_open_callbacks = []
-        self.on_close_callbacks = []
-        self.on_half_open_callbacks = []
+        self.on_open_callbacks: list[Callable[["CircuitBreaker"], None]] = []
+        self.on_close_callbacks: list[Callable[["CircuitBreaker"], None]] = []
+        self.on_half_open_callbacks: list[Callable[["CircuitBreaker"], None]] = []
 
     async def call(self, func: Callable, *args, **kwargs) -> Any:
         """
@@ -242,7 +239,7 @@ class CircuitBreaker:
         self.call_results.clear()
         logger.info(f"Circuit breaker '{self.name}' reset")
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get circuit breaker statistics."""
         return {
             "name": self.name,
@@ -297,7 +294,7 @@ class RetryPolicy:
                 if attempt > 1:
                     logger.info(f"Retry succeeded on attempt {attempt}")
 
-                return result
+                return cast(T, result)
 
             except Exception as e:
                 last_exception = e
@@ -319,7 +316,9 @@ class RetryPolicy:
 
                 await asyncio.sleep(delay)
 
-        raise last_exception
+        if last_exception is not None:
+            raise last_exception
+        raise RuntimeError("Retry policy failed without capturing an exception")
 
     def _should_retry(self, exception: Exception) -> bool:
         """Check if exception should be retried."""
@@ -353,7 +352,7 @@ class FallbackChain:
 
     def __init__(self):
         """Initialize fallback chain."""
-        self.strategies = []
+        self.strategies: list[tuple[Callable[..., Any], Optional[Callable[[Exception], bool]]]] = []
 
     def add_strategy(
         self,
@@ -415,7 +414,7 @@ class HealthMonitor:
 
     def __init__(self):
         """Initialize health monitor."""
-        self.components: Dict[str, ComponentHealth] = {}
+        self.components: dict[str, ComponentHealth] = {}
         self.check_interval = 30  # seconds
         self.monitoring_task = None
 
@@ -464,7 +463,7 @@ class HealthMonitor:
                 logger.error(f"Error in health monitoring: {e}")
                 await asyncio.sleep(self.check_interval)
 
-    async def check_all_health(self) -> Dict[str, HealthStatus]:
+    async def check_all_health(self) -> dict[str, HealthStatus]:
         """Check health of all components."""
         results = {}
 
@@ -544,9 +543,9 @@ class ErrorRecoveryCoordinator:
 
     def __init__(self):
         """Initialize error recovery coordinator."""
-        self.circuit_breakers: Dict[str, CircuitBreaker] = {}
-        self.retry_policies: Dict[str, RetryPolicy] = {}
-        self.fallback_chains: Dict[str, FallbackChain] = {}
+        self.circuit_breakers: dict[str, CircuitBreaker] = {}
+        self.retry_policies: dict[str, RetryPolicy] = {}
+        self.fallback_chains: dict[str, FallbackChain] = {}
         self.health_monitor = HealthMonitor()
         self.error_history: deque = deque(maxlen=100)
 
@@ -596,7 +595,7 @@ class ErrorRecoveryCoordinator:
                 f"{len(recent_errors)} errors in last minute"
             )
 
-    def get_recovery_stats(self) -> Dict[str, Any]:
+    def get_recovery_stats(self) -> dict[str, Any]:
         """Get recovery system statistics."""
         return {
             "circuit_breakers": {

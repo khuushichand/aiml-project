@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal, Union
 
 from pydantic import BaseModel, Field
 
@@ -11,22 +11,22 @@ class PrivilegeBucket(BaseModel):
     users: int
     endpoints: int
     scopes: int
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: dict[str, Any] | None = None
 
 
 class PrivilegeSummaryResponse(BaseModel):
     catalog_version: str
     generated_at: datetime
     group_by: str
-    buckets: List[PrivilegeBucket]
-    trends: List["PrivilegeTrend"] = Field(default_factory=list)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    buckets: list[PrivilegeBucket]
+    trends: list["PrivilegeTrend"] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class PrivilegeDependency(BaseModel):
     id: str
     type: str = "dependency"
-    module: Optional[str] = None
+    module: str | None = None
 
 
 class PrivilegeDetailItem(BaseModel):
@@ -36,18 +36,18 @@ class PrivilegeDetailItem(BaseModel):
     endpoint: str
     method: str
     privilege_scope_id: str
-    feature_flag_id: Optional[str] = None
+    feature_flag_id: str | None = None
     sensitivity_tier: str
-    ownership_predicates: List[str] = Field(default_factory=list)
+    ownership_predicates: list[str] = Field(default_factory=list)
     status: Literal["allowed", "blocked"]
-    blocked_reason: Optional[str] = None
-    dependencies: List[PrivilegeDependency] = Field(default_factory=list)
-    dependency_sources: List[str] = Field(default_factory=list)
-    rate_limit_class: Optional[str] = None
-    rate_limit_resources: List[str] = Field(default_factory=list)
-    source_module: Optional[str] = None
-    summary: Optional[str] = None
-    tags: List[str] = Field(default_factory=list)
+    blocked_reason: str | None = None
+    dependencies: list[PrivilegeDependency] = Field(default_factory=list)
+    dependency_sources: list[str] = Field(default_factory=list)
+    rate_limit_class: str | None = None
+    rate_limit_resources: list[str] = Field(default_factory=list)
+    source_module: str | None = None
+    summary: str | None = None
+    tags: list[str] = Field(default_factory=list)
 
 
 class PrivilegeDetailResponse(BaseModel):
@@ -56,8 +56,8 @@ class PrivilegeDetailResponse(BaseModel):
     page: int
     page_size: int
     total_items: int
-    items: List[PrivilegeDetailItem]
-    recommended_actions: Optional[List["PrivilegeRecommendedAction"]] = None
+    items: list[PrivilegeDetailItem]
+    recommended_actions: list["PrivilegeRecommendedAction"] | None = None
 
 
 PrivilegeOrgResponse = Union[PrivilegeSummaryResponse, PrivilegeDetailResponse]
@@ -66,29 +66,29 @@ PrivilegeOrgResponse = Union[PrivilegeSummaryResponse, PrivilegeDetailResponse]
 class PrivilegeSnapshotSummary(BaseModel):
     users: int
     scopes: int
-    endpoints: Optional[int] = None
-    sensitivity_breakdown: Dict[str, int] = Field(default_factory=dict)
-    scope_ids: List[str] = Field(default_factory=list)
-    endpoint_paths: List[str] = Field(default_factory=list)
+    endpoints: int | None = None
+    sensitivity_breakdown: dict[str, int] = Field(default_factory=dict)
+    scope_ids: list[str] = Field(default_factory=list)
+    endpoint_paths: list[str] = Field(default_factory=list)
 
 
 class PrivilegeSnapshotListItem(BaseModel):
     snapshot_id: str
     generated_at: datetime
     generated_by: str
-    org_id: Optional[str] = None
-    team_id: Optional[str] = None
+    org_id: str | None = None
+    team_id: str | None = None
     catalog_version: str
-    summary: Optional[PrivilegeSnapshotSummary] = None
-    target_scope: Optional[Literal["org", "team", "user"]] = None
+    summary: PrivilegeSnapshotSummary | None = None
+    target_scope: Literal["org", "team", "user"] | None = None
 
 
 class PrivilegeSnapshotListResponse(BaseModel):
     page: int
     page_size: int
     total_items: int
-    items: List[PrivilegeSnapshotListItem]
-    filters: Dict[str, Any] = Field(default_factory=dict)
+    items: list[PrivilegeSnapshotListItem]
+    filters: dict[str, Any] = Field(default_factory=dict)
 
 
 class PrivilegeTrendWindow(BaseModel):
@@ -105,43 +105,43 @@ class PrivilegeTrend(BaseModel):
 
 
 class PrivilegeRecommendedAction(BaseModel):
-    privilege_scope_id: Optional[str] = None
+    privilege_scope_id: str | None = None
     action: str
-    reason: Optional[str] = None
+    reason: str | None = None
 
 
 class PrivilegeSelfItem(BaseModel):
     endpoint: str
     method: str
     privilege_scope_id: str
-    feature_flag_id: Optional[str] = None
-    sensitivity_tier: Optional[str] = None
-    ownership_predicates: List[str] = Field(default_factory=list)
+    feature_flag_id: str | None = None
+    sensitivity_tier: str | None = None
+    ownership_predicates: list[str] = Field(default_factory=list)
     status: Literal["allowed", "blocked"]
-    blocked_reason: Optional[str] = None
-    dependencies: List[PrivilegeDependency] = Field(default_factory=list)
-    dependency_sources: List[str] = Field(default_factory=list)
-    rate_limit_class: Optional[str] = None
-    rate_limit_resources: List[str] = Field(default_factory=list)
-    source_module: Optional[str] = None
-    summary: Optional[str] = None
-    tags: List[str] = Field(default_factory=list)
+    blocked_reason: str | None = None
+    dependencies: list[PrivilegeDependency] = Field(default_factory=list)
+    dependency_sources: list[str] = Field(default_factory=list)
+    rate_limit_class: str | None = None
+    rate_limit_resources: list[str] = Field(default_factory=list)
+    source_module: str | None = None
+    summary: str | None = None
+    tags: list[str] = Field(default_factory=list)
 
 
 class PrivilegeSelfResponse(BaseModel):
     catalog_version: str
     generated_at: datetime
-    items: List[PrivilegeSelfItem]
-    recommended_actions: List[PrivilegeRecommendedAction] = Field(default_factory=list)
+    items: list[PrivilegeSelfItem]
+    recommended_actions: list[PrivilegeRecommendedAction] = Field(default_factory=list)
 
 
 class PrivilegeSnapshotCreateRequest(BaseModel):
     target_scope: Literal["org", "team", "user"]
-    org_id: Optional[str] = None
-    team_id: Optional[str] = None
-    user_ids: Optional[List[str]] = None
-    catalog_version: Optional[str] = None
-    notes: Optional[str] = None
+    org_id: str | None = None
+    team_id: str | None = None
+    user_ids: list[str] | None = None
+    catalog_version: str | None = None
+    notes: str | None = None
     async_job: bool = Field(False, alias="async")
 
     class Config:
@@ -152,7 +152,7 @@ class PrivilegeSnapshotCreateRequest(BaseModel):
 class PrivilegeSnapshotAcceptedResponse(BaseModel):
     request_id: str
     status: Literal["queued", "processing"]
-    estimated_ready_at: Optional[datetime] = None
+    estimated_ready_at: datetime | None = None
 
 
 class PrivilegeSnapshotRecord(BaseModel):
@@ -160,36 +160,36 @@ class PrivilegeSnapshotRecord(BaseModel):
     generated_at: datetime
     generated_by: str
     target_scope: Literal["org", "team", "user"]
-    org_id: Optional[str] = None
-    team_id: Optional[str] = None
+    org_id: str | None = None
+    team_id: str | None = None
     catalog_version: str
-    summary: Optional[PrivilegeSnapshotSummary] = None
+    summary: PrivilegeSnapshotSummary | None = None
 
 
 class PrivilegeSnapshotDetailItem(BaseModel):
-    user_id: Optional[str] = None
+    user_id: str | None = None
     endpoint: str
     method: str
     privilege_scope_id: str
-    feature_flag_id: Optional[str] = None
-    sensitivity_tier: Optional[str] = None
-    ownership_predicates: List[str] = Field(default_factory=list)
+    feature_flag_id: str | None = None
+    sensitivity_tier: str | None = None
+    ownership_predicates: list[str] = Field(default_factory=list)
     status: Literal["allowed", "blocked"]
-    blocked_reason: Optional[str] = None
-    dependencies: List[PrivilegeDependency] = Field(default_factory=list)
-    dependency_sources: List[str] = Field(default_factory=list)
-    rate_limit_class: Optional[str] = None
-    rate_limit_resources: List[str] = Field(default_factory=list)
-    source_module: Optional[str] = None
-    summary: Optional[str] = None
-    tags: List[str] = Field(default_factory=list)
+    blocked_reason: str | None = None
+    dependencies: list[PrivilegeDependency] = Field(default_factory=list)
+    dependency_sources: list[str] = Field(default_factory=list)
+    rate_limit_class: str | None = None
+    rate_limit_resources: list[str] = Field(default_factory=list)
+    source_module: str | None = None
+    summary: str | None = None
+    tags: list[str] = Field(default_factory=list)
 
 
 class PrivilegeSnapshotDetailMatrix(BaseModel):
     page: int
     page_size: int
     total_items: int
-    items: List[PrivilegeSnapshotDetailItem]
+    items: list[PrivilegeSnapshotDetailItem]
 
 
 class PrivilegeSnapshotDetailResponse(BaseModel):
@@ -198,8 +198,8 @@ class PrivilegeSnapshotDetailResponse(BaseModel):
     generated_at: datetime
     generated_by: str
     target_scope: Literal["org", "team", "user"]
-    org_id: Optional[str] = None
-    team_id: Optional[str] = None
-    summary: Optional[PrivilegeSnapshotSummary] = None
-    detail: Optional[PrivilegeSnapshotDetailMatrix] = None
-    etag: Optional[str] = None
+    org_id: str | None = None
+    team_id: str | None = None
+    summary: PrivilegeSnapshotSummary | None = None
+    detail: PrivilegeSnapshotDetailMatrix | None = None
+    etag: str | None = None

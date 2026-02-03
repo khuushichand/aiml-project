@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Callable, List, Optional
+from typing import Callable
 
 from loguru import logger
 
@@ -21,26 +21,26 @@ from tldw_Server_API.app.core.Claims_Extraction.claims_service import (
     evaluate_claims_alerts_for_scheduler,
     send_claims_alert_email_digest_for_scheduler,
 )
-from tldw_Server_API.app.core.DB_Management.DB_Manager import (
-    create_media_database,
-    content_db_settings,
-)
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+    content_db_settings,
+    create_media_database,
+)
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
-def _is_truthy(value: Optional[str]) -> bool:
+def _is_truthy(value: str | None) -> bool:
     return str(value or "").lower() in {"1", "true", "yes", "on"}
 
 
-def _enumerate_sqlite_user_ids() -> List[int]:
+def _enumerate_sqlite_user_ids() -> list[int]:
     try:
         base = DatabasePaths.get_user_db_base_dir()
     except Exception as exc:
         logger.debug(f"claims_alerts: failed to resolve user db base dir: {exc}")
         return []
-    user_ids: List[int] = []
+    user_ids: list[int] = []
     for entry in base.iterdir():
         if not entry.is_dir():
             continue
@@ -63,9 +63,9 @@ def _enumerate_sqlite_user_ids() -> List[int]:
 
 async def run_claims_alerts_once(
     *,
-    evaluator: Optional[Callable[..., dict]] = None,
-    window_sec: Optional[int] = None,
-    baseline_sec: Optional[int] = None,
+    evaluator: Callable[..., dict] | None = None,
+    window_sec: int | None = None,
+    baseline_sec: int | None = None,
 ) -> int:
     eval_fn = evaluator or evaluate_claims_alerts_for_scheduler
     window_val = int(window_sec or settings.get("CLAIMS_ALERTS_WINDOW_SEC", 3600))
@@ -142,7 +142,7 @@ async def run_claims_alerts_once(
     return processed
 
 
-async def start_claims_alerts_scheduler() -> Optional[asyncio.Task]:
+async def start_claims_alerts_scheduler() -> asyncio.Task | None:
     enabled = _is_truthy(os.getenv("CLAIMS_ALERTS_SCHEDULER_ENABLED")) or bool(
         settings.get("CLAIMS_ALERTS_SCHEDULER_ENABLED", False)
     )

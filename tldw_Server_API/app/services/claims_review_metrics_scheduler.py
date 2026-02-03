@@ -12,34 +12,34 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Callable, List, Optional
+from typing import Callable
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Claims_Extraction.claims_service import (
     aggregate_claims_review_extractor_metrics_daily,
 )
-from tldw_Server_API.app.core.DB_Management.DB_Manager import (
-    create_media_database,
-    content_db_settings,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+    content_db_settings,
+    create_media_database,
+)
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 
-def _is_truthy(value: Optional[str]) -> bool:
+def _is_truthy(value: str | None) -> bool:
     return str(value or "").lower() in {"1", "true", "yes", "on"}
 
 
-def _enumerate_sqlite_user_ids() -> List[int]:
+def _enumerate_sqlite_user_ids() -> list[int]:
     try:
         base = DatabasePaths.get_user_db_base_dir()
     except Exception as exc:
         logger.debug(f"claims_review_metrics: failed to resolve user db base dir: {exc}")
         return []
-    user_ids: List[int] = []
+    user_ids: list[int] = []
     for entry in base.iterdir():
         if not entry.is_dir():
             continue
@@ -62,11 +62,11 @@ def _enumerate_sqlite_user_ids() -> List[int]:
 
 async def run_claims_review_metrics_once(
     *,
-    aggregator: Optional[Callable[..., int]] = None,
-    lookback_days: Optional[int] = None,
-    report_date: Optional[str] = None,
-    db: Optional[MediaDatabase] = None,
-    target_user_id: Optional[str] = None,
+    aggregator: Callable[..., int] | None = None,
+    lookback_days: int | None = None,
+    report_date: str | None = None,
+    db: MediaDatabase | None = None,
+    target_user_id: str | None = None,
 ) -> int:
     agg_fn = aggregator or aggregate_claims_review_extractor_metrics_daily
     try:
@@ -152,7 +152,7 @@ async def run_claims_review_metrics_once(
     return processed
 
 
-async def start_claims_review_metrics_scheduler() -> Optional[asyncio.Task]:
+async def start_claims_review_metrics_scheduler() -> asyncio.Task | None:
     enabled = _is_truthy(os.getenv("CLAIMS_REVIEW_METRICS_SCHEDULER_ENABLED")) or bool(
         settings.get("CLAIMS_REVIEW_METRICS_SCHEDULER_ENABLED", False)
     )

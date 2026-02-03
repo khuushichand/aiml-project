@@ -2,18 +2,34 @@
 # Description: Admin data operations helpers (backups, retention policies, exports)
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import csv
 import io
 import json
 import os
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 from urllib.parse import urlparse
 
 from loguru import logger
 
+from tldw_Server_API.app.core.AuthNZ.retention_policies import (
+    RETENTION_POLICIES,
+    apply_retention_overrides,
+    upsert_retention_override,
+)
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
+from tldw_Server_API.app.core.DB_Management.DB_Backups import (
+    create_backup,
+    create_incremental_backup,
+    create_postgres_backup,
+    restore_postgres_backup,
+    restore_single_db_backup,
+)
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import (
     InvalidBackupIdError,
     InvalidBackupPathError,
@@ -22,29 +38,14 @@ from tldw_Server_API.app.core.exceptions import (
     InvalidRetentionRangeError,
     UnknownBackupDatasetError,
 )
-from tldw_Server_API.app.core.DB_Management.DB_Backups import (
-    create_backup,
-    create_incremental_backup,
-    restore_single_db_backup,
-    create_postgres_backup,
-    restore_postgres_backup,
-)
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.retention_policies import (
-    RETENTION_POLICIES,
-    apply_retention_overrides,
-    upsert_retention_override,
-)
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
-from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
 from tldw_Server_API.app.core.Utils.path_utils import safe_join
+from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
 
 
 @dataclass(frozen=True)
 class BackupFile:
     dataset: str
-    user_id: Optional[int]
+    user_id: int | None
     filename: str
     path: str
     size_bytes: int
@@ -73,7 +74,7 @@ def _validate_backup_dataset(dataset: str) -> str:
     return name
 
 
-def _normalize_user_id(user_id: Optional[int]) -> Optional[int]:
+def _normalize_user_id(user_id: int | None) -> int | None:
     if user_id is None:
         return None
     try:
@@ -96,7 +97,7 @@ def _safe_join(base_dir: str, name: str) -> str:
     return resolved
 
 
-def _backup_dir_for_dataset(dataset: str, user_id: Optional[int]) -> str:
+def _backup_dir_for_dataset(dataset: str, user_id: int | None) -> str:
     base_dir = _backup_base_dir()
     dataset_name = _validate_backup_dataset(dataset)
     safe_user_id = _normalize_user_id(user_id)
@@ -105,7 +106,7 @@ def _backup_dir_for_dataset(dataset: str, user_id: Optional[int]) -> str:
     return _safe_join(base_dir, dataset_name)
 
 
-def _extract_backup_path(message: str) -> Optional[str]:
+def _extract_backup_path(message: str) -> str | None:
     if not message:
         return None
     for prefix in ("Backup created: ", "Incremental backup created: "):
@@ -114,7 +115,7 @@ def _extract_backup_path(message: str) -> Optional[str]:
     return None
 
 
-def _list_backup_files(dataset: str, user_id: Optional[int]) -> List[BackupFile]:
+def _list_backup_files(dataset: str, user_id: int | None) -> list[BackupFile]:
     backup_dir = _backup_dir_for_dataset(dataset, user_id)
     if not os.path.isdir(backup_dir):
         return []
@@ -141,13 +142,13 @@ def _list_backup_files(dataset: str, user_id: Optional[int]) -> List[BackupFile]
 
 def list_backup_items(
     *,
-    dataset: Optional[str],
-    user_id: Optional[int],
+    dataset: str | None,
+    user_id: int | None,
     limit: int,
     offset: int,
-) -> Tuple[List[BackupFile], int]:
+) -> tuple[list[BackupFile], int]:
     datasets = [_validate_backup_dataset(dataset)] if dataset is not None else [*DATASET_DB_RESOLVERS.keys(), "authnz"]
-    items: List[BackupFile] = []
+    items: list[BackupFile] = []
     for key in datasets:
         dataset_user_id = None if key == "authnz" else user_id
         items.extend(_list_backup_files(key, dataset_user_id))
@@ -156,7 +157,7 @@ def list_backup_items(
     return items[offset: offset + limit], total
 
 
-def _resolve_dataset_db_path(dataset: str, user_id: Optional[int]) -> Tuple[str, Optional[int]]:
+def _resolve_dataset_db_path(dataset: str, user_id: int | None) -> tuple[str, int | None]:
     dataset_name = _validate_backup_dataset(dataset)
     if dataset_name == "authnz":
         settings = get_settings()
@@ -233,9 +234,9 @@ def _prune_backups(backup_dir: str, max_backups: int) -> int:
 def create_backup_snapshot(
     *,
     dataset: str,
-    user_id: Optional[int],
+    user_id: int | None,
     backup_type: str,
-    max_backups: Optional[int],
+    max_backups: int | None,
 ) -> BackupFile:
     db_path, effective_user_id = _resolve_dataset_db_path(dataset, user_id)
     backup_dir = _backup_dir_for_dataset(dataset, effective_user_id)
@@ -275,7 +276,7 @@ def create_backup_snapshot(
 def restore_backup_snapshot(
     *,
     dataset: str,
-    user_id: Optional[int],
+    user_id: int | None,
     backup_id: str,
 ) -> str:
     db_path, effective_user_id = _resolve_dataset_db_path(dataset, user_id)
@@ -298,7 +299,7 @@ def restore_backup_snapshot(
 
 
 
-async def list_retention_policies() -> List[Dict[str, Any]]:
+async def list_retention_policies() -> list[dict[str, Any]]:
     settings = get_settings()
     await apply_retention_overrides(settings)
     policies = []
@@ -313,7 +314,7 @@ async def list_retention_policies() -> List[Dict[str, Any]]:
     return policies
 
 
-async def update_retention_policy(policy_key: str, days: int) -> Dict[str, Any]:
+async def update_retention_policy(policy_key: str, days: int) -> dict[str, Any]:
     meta = RETENTION_POLICIES.get(policy_key)
     if not meta:
         raise InvalidRetentionPolicyError("unknown_policy")
@@ -390,7 +391,7 @@ def build_audit_log_json(entries: Iterable[Any], *, total: int, limit: int, offs
     return json.dumps(payload, indent=2)
 
 
-def build_users_csv(users: Iterable[Dict[str, Any]]) -> str:
+def build_users_csv(users: Iterable[dict[str, Any]]) -> str:
     headers = [
         "id",
         "uuid",
@@ -424,7 +425,7 @@ def build_users_csv(users: Iterable[Dict[str, Any]]) -> str:
     return _csv_text(headers, rows)
 
 
-def build_users_json(users: Iterable[Dict[str, Any]], *, total: int, limit: int, offset: int) -> str:
+def build_users_json(users: Iterable[dict[str, Any]], *, total: int, limit: int, offset: int) -> str:
     normalized = []
     for user in users:
         payload = dict(user)

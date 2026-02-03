@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, List
 
 from fastapi import FastAPI
 from loguru import logger
@@ -10,7 +9,7 @@ from tldw_Server_API.app.core.AuthNZ.privilege_catalog import PrivilegeCatalog, 
 from tldw_Server_API.app.core.PrivilegeMaps.introspection import RouteMetadata, collect_privilege_route_registry
 
 
-def validate_privilege_metadata_on_startup(app: FastAPI) -> Dict[str, List[RouteMetadata]]:
+def validate_privilege_metadata_on_startup(app: FastAPI) -> dict[str, list[RouteMetadata]]:
     """
     Ensure the privilege catalog can be loaded and that FastAPI routes reference valid scope identifiers.
 

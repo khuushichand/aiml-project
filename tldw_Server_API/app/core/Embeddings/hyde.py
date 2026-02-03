@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
-from typing import List, Optional
 
 from loguru import logger
 
@@ -57,16 +56,16 @@ def question_hash(text: str) -> str:
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()
 
 
-def _build_prompt(n: int, language: Optional[str]) -> str:
+def _build_prompt(n: int, language: str | None) -> str:
     base = _DEFAULT_PROMPT.format(n=max(1, int(n)))
     if language and language not in ("auto", ""):
         return base + f" Generate the questions in {language}."
     return base
 
 
-def _split_lines(output: str) -> List[str]:
+def _split_lines(output: str) -> list[str]:
     # Split into non-empty lines; strip bullets/numbers
-    lines: List[str] = []
+    lines: list[str] = []
     for raw in (output or "").splitlines():
         t = raw.strip()
         if not t:
@@ -77,9 +76,9 @@ def _split_lines(output: str) -> List[str]:
     return lines
 
 
-def _dedupe_and_trim(items: List[str], n: int) -> List[str]:
+def _dedupe_and_trim(items: list[str], n: int) -> list[str]:
     seen = set()
-    out: List[str] = []
+    out: list[str] = []
     for q in items:
         norm = normalize_question(q)
         if not norm:
@@ -96,13 +95,13 @@ def _dedupe_and_trim(items: List[str], n: int) -> List[str]:
 def generate_questions(
     text: str,
     n: int,
-    provider: Optional[str] = None,
-    model: Optional[str] = None,
+    provider: str | None = None,
+    model: str | None = None,
     temperature: float = 0.2,
     max_tokens: int = 96,
-    language: Optional[str] = None,
-    prompt_version: Optional[int] = None,
-) -> List[str]:
+    language: str | None = None,
+    prompt_version: int | None = None,
+) -> list[str]:
     """Generate up to N HYDE questions for a chunk of text.
 
     Returns empty list on any error or when provider/model are not set.

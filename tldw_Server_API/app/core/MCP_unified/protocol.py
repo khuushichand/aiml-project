@@ -4,14 +4,16 @@ MCP Protocol implementation for unified module
 Implements JSON-RPC 2.0 with enhanced error handling and request routing.
 """
 
-import uuid
-import json
 import asyncio
+import json
 import secrets
-from typing import Dict, Any, Optional, List, Union, Callable, Literal, Tuple
+import uuid
 from datetime import datetime, timezone
 from enum import IntEnum
+from typing import Any, Callable, Literal, Optional, Union
+
 from pydantic import BaseModel, Field
+
 try:
     from pydantic import field_validator, model_validator  # v2
 except Exception:  # Fallback for v1
@@ -20,20 +22,34 @@ except Exception:  # Fallback for v1
         from pydantic import root_validator as model_validator  # type: ignore
     except Exception:
         model_validator = None  # type: ignore
-from loguru import logger
+import inspect
+import re
+import time
 from collections import OrderedDict
 
-from .modules.registry import get_module_registry
-from .modules.base import BaseModule
-from .config import get_config
-import inspect
-from .auth.authnz_rbac import get_rbac_policy, Resource, Action
-from .auth.rate_limiter import get_rate_limiter, RateLimitExceeded
-import time
-from .monitoring.metrics import get_metrics_collector
-from tldw_Server_API.app.core.Metrics.telemetry import get_telemetry_manager
+from loguru import logger
+
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_async_redis_client
-import re
+from tldw_Server_API.app.core.Metrics.telemetry import get_telemetry_manager
+
+from .auth.authnz_rbac import Action, Resource, get_rbac_policy
+from .auth.rate_limiter import RateLimitExceeded, get_rate_limiter
+from .config import get_config
+from .modules.base import BaseModule
+from .modules.registry import get_module_registry
+from .monitoring.metrics import get_metrics_collector
+
+try:  # pragma: no cover - optional dependency
+    from redis.exceptions import RedisError
+except Exception:  # pragma: no cover - redis not installed
+    class RedisError(Exception):
+        """Fallback RedisError when redis-py is unavailable."""
+        pass
+
+
+# Redis exceptions can include connection URLs and credentials; keep logs sanitized.
+def _redact_redis_error(exc: Exception) -> str:
+    return f"{exc.__class__.__name__}: Redis connection error - details redacted"
 
 
 # JSON-RPC 2.0 Error Codes
@@ -62,7 +78,7 @@ class MCPRequest(BaseModel):
     """MCP request following JSON-RPC 2.0 specification"""
     jsonrpc: Literal["2.0"] = Field(default="2.0")
     method: str = Field(..., min_length=1, max_length=100)
-    params: Optional[Dict[str, Any]] = None
+    params: Optional[dict[str, Any]] = None
     id: Optional[Union[str, int]] = None
 
     @field_validator("method")
@@ -114,7 +130,7 @@ class RequestContext:
         user_id: Optional[str] = None,
         client_id: Optional[str] = None,
         session_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ):
         self.request_id = request_id
         self.user_id = user_id
@@ -123,7 +139,7 @@ class RequestContext:
         self.metadata = metadata or {}
         self.start_time = datetime.now(timezone.utc)
         # Derive per-user db paths (read-only) if possible
-        self.db_paths: Dict[str, str] = {}
+        self.db_paths: dict[str, str] = {}
         try:
             if self.user_id is not None:
                 # Attempt to parse an integer user id (expected by DatabasePaths)
@@ -148,8 +164,8 @@ class IdempotencyManager:
     """Idempotency manager with Redis backing and local lock fallback."""
 
     def __init__(self) -> None:
-        self._local_cache: "OrderedDict[str, Tuple[float, Dict[str, Any]]]" = OrderedDict()
-        self._local_locks: Dict[str, asyncio.Lock] = {}
+        self._local_cache: "OrderedDict[str, tuple[float, dict[str, Any]]]" = OrderedDict()
+        self._local_locks: dict[str, asyncio.Lock] = {}
         self._local_guard = asyncio.Lock()
         self._redis_client: Any | None = None
         self._redis_ready = False
@@ -181,13 +197,13 @@ class IdempotencyManager:
             except Exception as exc:
                 logger.warning(
                     "MCP idempotency Redis unavailable; falling back to local locks. Error: {}",
-                    exc,
+                    _redact_redis_error(exc),
                 )
                 self._redis_client = None
                 self._redis_ready = False
             return self._redis_ready
 
-    def _local_get(self, cache_key: str, ttl: int) -> Optional[Dict[str, Any]]:
+    def _local_get(self, cache_key: str, ttl: int) -> Optional[dict[str, Any]]:
         item = self._local_cache.get(cache_key)
         if not item:
             return None
@@ -204,7 +220,7 @@ class IdempotencyManager:
             pass
         return payload
 
-    def _local_put(self, cache_key: str, payload: Dict[str, Any], ttl: int, max_size: int) -> None:
+    def _local_put(self, cache_key: str, payload: dict[str, Any], ttl: int, max_size: int) -> None:
         now = time.time()
         self._local_cache[cache_key] = (now, payload)
         try:
@@ -233,7 +249,7 @@ class IdempotencyManager:
                 self._local_locks[cache_key] = lock
             return lock
 
-    async def _redis_get(self, client: Any, key: str) -> Optional[Dict[str, Any]]:
+    async def _redis_get(self, client: Any, key: str) -> Optional[dict[str, Any]]:
         raw = await client.get(key)
         if not raw:
             return None
@@ -242,7 +258,7 @@ class IdempotencyManager:
         except Exception:
             return None
 
-    async def _redis_set(self, client: Any, key: str, payload: Dict[str, Any], ttl: int) -> None:
+    async def _redis_set(self, client: Any, key: str, payload: dict[str, Any], ttl: int) -> None:
         data = json.dumps(payload, separators=(",", ":"), default=str)
         await client.set(key, data, ex=ttl)
 
@@ -251,10 +267,12 @@ class IdempotencyManager:
         return bool(resp)
 
     async def _redis_release(self, client: Any, key: str, token: str) -> None:
+        lua_script = (
+            "if redis.call('get', KEYS[1]) == ARGV[1] "
+            "then return redis.call('del', KEYS[1]) end"
+        )
         try:
-            val = await client.get(key)
-            if val == token:
-                await client.delete(key)
+            await client.eval(lua_script, 1, key, token)
         except Exception:
             pass
 
@@ -265,7 +283,7 @@ class IdempotencyManager:
         *,
         ttl: int,
         max_size: int,
-    ) -> Tuple[Dict[str, Any], bool]:
+    ) -> tuple[dict[str, Any], bool]:
         async with self._local_guard:
             cached = self._local_get(cache_key, ttl)
         if cached is not None:
@@ -289,7 +307,7 @@ class IdempotencyManager:
         *,
         ttl: int,
         lock_ttl: int,
-    ) -> Tuple[Dict[str, Any], bool]:
+    ) -> tuple[dict[str, Any], bool]:
         client = self._redis_client
         if client is None:
             raise RuntimeError("Redis client not initialized")
@@ -324,7 +342,7 @@ class IdempotencyManager:
         ttl: int,
         max_size: int,
         lock_ttl: int,
-    ) -> Tuple[Dict[str, Any], bool]:
+    ) -> tuple[dict[str, Any], bool]:
         if await self._ensure_redis():
             try:
                 return await self._run_redis(
@@ -333,10 +351,10 @@ class IdempotencyManager:
                     ttl=ttl,
                     lock_ttl=lock_ttl,
                 )
-            except Exception as exc:
+            except RedisError as exc:
                 logger.warning(
                     "MCP idempotency Redis path failed; falling back to local locks. Error: {}",
-                    exc,
+                    _redact_redis_error(exc),
                 )
                 self._redis_ready = False
         return await self._run_local(cache_key, execute_fn, ttl=ttl, max_size=max_size)
@@ -369,7 +387,7 @@ class MCPProtocol:
         self._idempotency = IdempotencyManager()
 
         # Method handlers
-        self.handlers: Dict[str, Callable] = {
+        self.handlers: dict[str, Callable] = {
             "initialize": self._handle_initialize,
             "ping": self._handle_ping,
             "tools/list": self._handle_tools_list,
@@ -397,7 +415,7 @@ class MCPProtocol:
         except Exception:
             return False
 
-    def _scoped_permissions(self, context: RequestContext) -> List[str]:
+    def _scoped_permissions(self, context: RequestContext) -> list[str]:
         metadata = getattr(context, "metadata", {})
         if not isinstance(metadata, dict):
             return []
@@ -408,8 +426,8 @@ class MCPProtocol:
             return [str(item) for item in raw if isinstance(item, str)]
         return []
 
-    def _mcp_scopes(self, context: RequestContext) -> List[str]:
-        scopes: List[str] = []
+    def _mcp_scopes(self, context: RequestContext) -> list[str]:
+        scopes: list[str] = []
         for scope in self._scoped_permissions(context):
             try:
                 if scope.lower().startswith("mcp:"):
@@ -537,7 +555,7 @@ class MCPProtocol:
         return False
 
     @staticmethod
-    def _hash_arguments(arguments: Dict[str, Any]) -> Optional[str]:
+    def _hash_arguments(arguments: dict[str, Any]) -> Optional[str]:
         try:
             payload = json.dumps(arguments or {}, sort_keys=True, default=str).encode("utf-8")
             import hashlib
@@ -577,9 +595,9 @@ class MCPProtocol:
 
     async def process_request(
         self,
-        request: Union[Dict[str, Any], List[Dict[str, Any]], MCPRequest],
+        request: Union[dict[str, Any], list[dict[str, Any]], MCPRequest],
         context: Optional[RequestContext] = None
-    ) -> Union[MCPResponse, List[MCPResponse], None]:
+    ) -> Union[MCPResponse, list[MCPResponse], None]:
         """
         Process an MCP request and return response.
 
@@ -598,7 +616,7 @@ class MCPProtocol:
                     "Invalid request: empty batch",
                     None,
                 )
-            responses: List[MCPResponse] = []
+            responses: list[MCPResponse] = []
             for item in request:
                 try:
                     resp = await self.process_request(item, context)
@@ -992,9 +1010,9 @@ class MCPProtocol:
 
     async def _handle_initialize(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle initialize request"""
         client_info = params.get("clientInfo", {})
 
@@ -1020,18 +1038,27 @@ class MCPProtocol:
 
     async def _handle_ping(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle ping request"""
         return {"pong": True, "timestamp": datetime.now(timezone.utc).isoformat()}
 
     async def _resolve_catalog_tool_names(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
     ) -> Optional[set[str]]:
         """Resolve catalog parameter into a set of tool names for filtering."""
+        strict = False
+        if isinstance(params, dict):
+            raw_strict = params.get("catalog_strict")
+            if isinstance(raw_strict, bool):
+                strict = raw_strict
+            elif isinstance(raw_strict, (int, float)):
+                strict = bool(raw_strict)
+            elif isinstance(raw_strict, str):
+                strict = raw_strict.strip().lower() in {"1", "true", "yes", "on"}
         catalog_name = None
         catalog_id = None
         if isinstance(params, dict):
@@ -1084,7 +1111,7 @@ class MCPProtocol:
                 context.logger.debug(f"Catalog lookup failed: {exc}")
 
         if resolved_id is None:
-            return None
+            return set() if strict else None
 
         try:
             rows = await pool.fetchall(
@@ -1103,13 +1130,15 @@ class MCPProtocol:
                 val = None
             if isinstance(val, str):
                 names.add(val)
-        return names if names else None
+        if names:
+            return names
+        return set() if strict else None
 
     async def _handle_tools_list(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """List available tools"""
         tools = []
         catalog_filter = await self._resolve_catalog_tool_names(params, context)
@@ -1147,7 +1176,9 @@ class MCPProtocol:
                             continue
                     # Catalog filter: include only when in selected catalog
                     if catalog_filter is not None and isinstance(name, str):
-                        if name not in catalog_filter:
+                        meta = tool_copy.get("metadata") if isinstance(tool_copy, dict) else None
+                        exempt = isinstance(meta, dict) and bool(meta.get("catalog_exempt"))
+                        if name not in catalog_filter and not exempt:
                             continue
                     is_write = None
                     try:
@@ -1165,9 +1196,9 @@ class MCPProtocol:
 
     async def _handle_tools_call(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Execute a tool"""
         tool_name = params.get("name")
         tool_args = params.get("arguments", {})
@@ -1317,7 +1348,7 @@ class MCPProtocol:
             # by raising a sentinel exception handled by process_request
             raise InvalidParamsException(str(ve))
 
-        async def _execute_tool_call() -> Dict[str, Any]:
+        async def _execute_tool_call() -> dict[str, Any]:
             # Optional per-tool/category rate limits (ingestion vs read)
             try:
                 # Categorization for per-category rate limiting
@@ -1412,7 +1443,8 @@ class MCPProtocol:
                 return response_payload
 
             except Exception as e:
-                context.logger.error(f"Tool execution failed: {tool_name} - {e}")
+                sanitized_error = self._mask_secrets(str(e))
+                context.logger.error(f"Tool execution failed: {tool_name} - {sanitized_error}")
                 try:
                     duration = max(0.0, time.time() - t0)
                     self.metrics.record_module_operation(module=getattr(module, "name", "unknown"), operation="tools_call", duration=duration, success=False)
@@ -1460,7 +1492,7 @@ class MCPProtocol:
         owner = f"user:{context.user_id}" if context.user_id else (f"client:{context.client_id}" if context.client_id else "anon")
         return f"{owner}|module:{module_name}|tool:{tool_name}|key:{idempotency_key}"
 
-    def _validate_input_schema(self, schema: Dict[str, Any], args: Dict[str, Any]) -> None:
+    def _validate_input_schema(self, schema: dict[str, Any], args: dict[str, Any]) -> None:
         """Quick JSON Schema checks: required keys, primitive types, unknown fields.
         Only applies when schema.type == object.
         """
@@ -1518,14 +1550,14 @@ class MCPProtocol:
 
     async def _handle_resources_list(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """List available resources"""
         resources = []
         modules = await self.module_registry.get_all_modules()
         catalog_filter = await self._resolve_catalog_tool_names(params, context)
-        module_tool_names: Dict[str, set[str]] = {}
+        module_tool_names: dict[str, set[str]] = {}
 
         for module_id, module in modules.items():
             try:
@@ -1566,9 +1598,9 @@ class MCPProtocol:
 
     async def _handle_resources_read(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Read a resource"""
         uri = params.get("uri")
         if not uri:
@@ -1598,9 +1630,9 @@ class MCPProtocol:
 
     async def _handle_prompts_list(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """List available prompts"""
         prompts = []
         modules = await self.module_registry.get_all_modules()
@@ -1627,9 +1659,9 @@ class MCPProtocol:
 
     async def _handle_prompts_get(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get a specific prompt"""
         name = params.get("name")
         if not name:
@@ -1653,12 +1685,12 @@ class MCPProtocol:
 
     async def _handle_modules_list(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """List registered modules"""
         registrations = await self.module_registry.list_registrations()
-        filtered: List[Dict[str, Any]] = []
+        filtered: list[dict[str, Any]] = []
         for entry in registrations:
             module_id = entry.get("module_id") if isinstance(entry, dict) else None
             try:
@@ -1670,9 +1702,9 @@ class MCPProtocol:
 
     async def _handle_modules_health(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get module health status"""
         health_results = await self.module_registry.check_all_health()
 
@@ -1697,7 +1729,7 @@ class MCPProtocol:
 
 # Convenience function
 async def process_mcp_request(
-    request: Union[Dict[str, Any], MCPRequest],
+    request: Union[dict[str, Any], MCPRequest],
     context: Optional[RequestContext] = None
 ) -> MCPResponse:
     """Process an MCP request"""

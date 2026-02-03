@@ -9,13 +9,13 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from typing import Dict, Optional
 
 from loguru import logger
 
 from ..config import get_config
 
 try:
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
     from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
         MemoryResourceGovernor,
         RedisResourceGovernor,
@@ -26,7 +26,6 @@ try:
         PolicyReloadConfig,
         default_policy_loader,
     )
-    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
 except Exception:  # pragma: no cover - RG optional
     MemoryResourceGovernor = None  # type: ignore
     RedisResourceGovernor = None  # type: ignore
@@ -76,7 +75,7 @@ class RateLimiter:
         if not rg_decision.get("allowed"):
             raise RateLimitExceeded(int(rg_decision.get("retry_after") or 1))
 
-    async def get_usage(self, key: str) -> Dict[str, object]:
+    async def get_usage(self, key: str) -> dict[str, object]:
         """Return best-effort usage info (RG does not currently expose per-key usage here)."""
         return {}
 
@@ -93,7 +92,7 @@ class RateLimiter:
         return category
 
 
-_rate_limiter: Optional[RateLimiter] = None
+_rate_limiter: RateLimiter | None = None
 
 
 def get_rate_limiter() -> RateLimiter:
@@ -116,12 +115,12 @@ async def shutdown_rate_limiter() -> None:
 _rg_mcp_governor = None
 _rg_mcp_loader = None
 _rg_mcp_lock = asyncio.Lock()
-_rg_mcp_init_error: Optional[str] = None
+_rg_mcp_init_error: str | None = None
 _rg_mcp_init_error_logged = False
 _rg_mcp_fallback_logged = False
 
 
-def _rg_mcp_context() -> Dict[str, str]:
+def _rg_mcp_context() -> dict[str, str]:
     policy_path = os.getenv(
         "RG_POLICY_PATH",
         "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
@@ -233,7 +232,7 @@ async def _get_mcp_rg_governor():
             return None
 
 
-async def _maybe_enforce_with_rg_mcp(*, key: str, category: str) -> Optional[Dict[str, object]]:
+async def _maybe_enforce_with_rg_mcp(*, key: str, category: str) -> dict[str, object] | None:
     gov = await _get_mcp_rg_governor()
     if gov is None:
         return None

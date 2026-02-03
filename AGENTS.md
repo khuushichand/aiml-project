@@ -140,6 +140,26 @@ The project is a FastAPI-first backend with a Next.js WebUI, mature AuthNZ (sing
 - **MCP Unified**
   - `/app/core/MCP_unified/` production-ready MCP server + endpoints
 
+## Scheduler vs Jobs Decision Guide
+
+Use **Jobs** when:
+- The work is user-facing or needs admin controls like pause/resume/drain, retries, quotas, or RLS.
+- You need stable API endpoints for status/summary and cross-domain queues.
+- You want worker processes using the Jobs `WorkerSDK`.
+
+Use **Scheduler** when:
+- The work is internal orchestration with task dependencies, idempotency keys, and handler registration.
+- You want tasks registered via the `@task` decorator and executed by the core Scheduler worker pool.
+- The feature fits the existing Workflows or Watchlists model.
+
+Recurring schedules:
+- Use APScheduler services to enqueue into whichever backend you chose.
+- Workflows uses APScheduler → Scheduler; Reading Digest uses APScheduler → Jobs.
+
+Default choice:
+- Use **Jobs** for new user-visible features or anything that needs admin/ops visibility.
+- Use **Scheduler** for internal system orchestration where dependency handling is central.
+
 ## Development Guidelines
 
 ### Code Style

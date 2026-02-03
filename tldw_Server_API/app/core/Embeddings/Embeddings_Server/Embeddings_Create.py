@@ -4,24 +4,27 @@
 #
 # Imports
 from __future__ import annotations
+
 #
 import asyncio
 import configparser
-import os
-import time
-import threading
 import hashlib
+import os
 import re
+import threading
+import time
 import weakref
-from pathlib import Path
 from functools import wraps
-from typing import Any, Dict, List, Optional, Annotated, Literal
+from pathlib import Path
+from typing import Annotated, Any, Literal
+
 #
 # Third-party Libraries
 import numpy as np
 from loguru import logger
+from prometheus_client import REGISTRY, Counter, Gauge  # Assuming these are defined elsewhere or used directly
 from pydantic import BaseModel, Field
-from prometheus_client import Counter, Gauge, REGISTRY  # Assuming these are defined elsewhere or used directly
+
 # NOTE: Avoid importing heavy deps (torch, transformers) at module import time.
 # Import them lazily inside functions/methods when needed to keep app import light.
 
@@ -46,7 +49,7 @@ def _import_transformers():
         ) from e
 
 
-_ORT_IMPORT_ERROR: Optional[Exception] = None
+_ORT_IMPORT_ERROR: Exception | None = None
 try:
     import onnxruntime as ort  # type: ignore
 except Exception as e:
@@ -71,16 +74,16 @@ def _import_onnxruntime():
         ) from e
 #
 # Local Imports
-from tldw_Server_API.app.core.LLM_Calls.chat_calls import get_openai_embeddings_batch
-from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram  # Keep your existing metrics
+from tldw_Server_API.app.core.config import resolve_repo_relative_path, rg_policy_path
 from tldw_Server_API.app.core.Embeddings.audit_adapter import (
-    log_model_evicted,
     log_memory_limit_exceeded,
+    log_model_evicted,
 )
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError, NetworkError, RetryExhaustedError
-from tldw_Server_API.app.core.config import rg_policy_path, resolve_repo_relative_path
+from tldw_Server_API.app.core.LLM_Calls.chat_calls import get_openai_embeddings_batch
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram  # Keep your existing metrics
 from tldw_Server_API.app.core.Utils.path_utils import safe_join
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 #
 ########################################################################################################################
@@ -96,7 +99,7 @@ except Exception:
     ORTModelForFeatureExtraction = None
     OPTIMUM_AVAILABLE = False
 
-COMMIT_HASHES: Dict[str, str] = {
+COMMIT_HASHES: dict[str, str] = {
     "jinaai/jina-embeddings-v3": "4be32c2f5d65b95e4bcce473545b7883ec8d2edd",
     "Alibaba-NLP/gte-large-en-v1.5": "104333d6af6f97649377c2afbde10a7704870c7b",
     "dunzhang/setll_en_400M_v5": "2aa5579fcae1c579de199a3866b6e514bbbf5d10",
@@ -110,7 +113,7 @@ _EMBEDDINGS_STORAGE_ALLOWLIST_ROOT = Path(
 ).resolve(strict=False)
 
 
-def _get_http_status_from_exception(exc: Exception) -> Optional[int]:
+def _get_http_status_from_exception(exc: Exception) -> int | None:
     response = getattr(exc, "response", None)
     if response is None:
         return None
@@ -172,8 +175,8 @@ def _log_rejected_path(
     value: str,
     reason: str,
     *,
-    resolved: Optional[str] = None,
-    base: Optional[str] = None,
+    resolved: str | None = None,
+    base: str | None = None,
 ) -> None:
     """Log and count a rejected storage path value with optional context."""
     trimmed = (value or "").strip()
@@ -252,8 +255,8 @@ def _safe_model_storage_subdir(base_dir: str, subpath: str, label: str) -> str:
 
 
 def resolve_model_storage_base_dir(
-    embedding_settings: Optional[Dict[str, Any]] = None,
-    default: Optional[str] = None,
+    embedding_settings: dict[str, Any] | None = None,
+    default: str | None = None,
 ) -> str:
     """
     Determine the base directory used to persist embedding model artifacts.
@@ -367,11 +370,11 @@ MAX_MODELS_IN_MEMORY = RESOURCE_LIMITS['max_models']
 MAX_MODEL_MEMORY_GB = RESOURCE_LIMITS['max_memory_gb']
 MODEL_LRU_TTL_SECONDS = RESOURCE_LIMITS['lru_ttl_seconds']
 
-embedding_models: Dict[str, Any] = {}
+embedding_models: dict[str, Any] = {}
 embedding_models_lock = threading.RLock()  # Global reentrant lock for the embedding_models dictionary
-model_last_used: Dict[str, float] = {}  # Track last usage time for LRU eviction
-model_memory_usage: Dict[str, float] = {}  # Track estimated memory per model
-model_in_use_counts: Dict[str, int] = {}  # Track active users of cached models
+model_last_used: dict[str, float] = {}  # Track last usage time for LRU eviction
+model_memory_usage: dict[str, float] = {}  # Track estimated memory per model
+model_in_use_counts: dict[str, int] = {}  # Track active users of cached models
 
 
 def _mark_model_in_use(model_id: str) -> None:
@@ -449,7 +452,7 @@ class BaseModelCfg(BaseModel):
     provider: str
     model_name_or_path: str
     trust_remote_code: bool = False
-    revision: Optional[str] = None
+    revision: str | None = None
     max_length: int = 512
     unload_timeout_seconds: int = 300
 
@@ -462,19 +465,19 @@ class HFModelCfg(BaseModelCfg):
 class ONNXModelCfg(BaseModelCfg):
     provider: Literal["onnx"] = "onnx"
     onnx_storage_dir_subpath: str = "onnx_models"
-    onnx_providers: List[str] = Field(default_factory=lambda: ["CPUExecutionProvider"])
+    onnx_providers: list[str] = Field(default_factory=lambda: ["CPUExecutionProvider"])
 
 
 class OpenAIModelCfg(BaseModelCfg):
     provider: Literal["openai"] = "openai"
-    api_key: Optional[str] = None
-    dimensions: Optional[int] = None
+    api_key: str | None = None
+    dimensions: int | None = None
 
 
 class LocalAPICfg(BaseModelCfg):
     provider: Literal["local_api"] = "local_api"
     api_url: str
-    api_key: Optional[str] = None
+    api_key: str | None = None
     # Consider adding chunk_size for local_api batching
     # chunk_size: int = 100
 
@@ -487,15 +490,15 @@ ModelCfg = Annotated[
 
 class EmbeddingConfigSchema(BaseModel):
     default_model_id: str
-    model_storage_base_dir: Optional[str] = Field(default="./models/embedding_models_data/")
+    model_storage_base_dir: str | None = Field(default="./models/embedding_models_data/")
     # These are currently NOT used by the global decorators.
     # If dynamic configuration is needed, decorators must be applied differently.
     rate_limiter: RateLimiterCfg = RateLimiterCfg()
     retry_config: RetryCfg = RetryCfg()
-    models: Dict[str, ModelCfg]
+    models: dict[str, ModelCfg]
 
 
-def _ensure_hf_revision(model_name_or_path: str, expected_sha: Optional[str]) -> None:
+def _ensure_hf_revision(model_name_or_path: str, expected_sha: str | None) -> None:
     if expected_sha is None:
         logger.debug(f"No revision SHA provided for {model_name_or_path}, skipping check.")
         return
@@ -627,12 +630,12 @@ _rg_emb_server_loader = None
 _rg_emb_server_log_lock = threading.Lock()
 _rg_emb_server_lock_guard = threading.Lock()
 _rg_emb_server_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = weakref.WeakKeyDictionary()
-_rg_emb_server_init_error: Optional[str] = None
+_rg_emb_server_init_error: str | None = None
 _rg_emb_server_init_error_logged = False
 _rg_emb_server_fallback_logged = False
 
 
-def _rg_emb_server_context() -> Dict[str, str]:
+def _rg_emb_server_context() -> dict[str, str]:
     """
     Build RG context dictionary with environment variables and resolved paths.
 
@@ -704,6 +707,7 @@ def _log_rg_emb_server_fallback(reason: str) -> None:
     )
 
 try:  # pragma: no cover - RG is optional
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
     from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
         MemoryResourceGovernor,
         RedisResourceGovernor,
@@ -714,7 +718,6 @@ try:  # pragma: no cover - RG is optional
         PolicyReloadConfig,
         default_policy_loader,
     )
-    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
 except Exception:  # pragma: no cover - safe fallback when RG not installed
     MemoryResourceGovernor = None  # type: ignore
     RedisResourceGovernor = None  # type: ignore
@@ -825,7 +828,7 @@ async def _get_embeddings_server_rg_governor():
             return None
 
 
-async def _maybe_enforce_with_rg_embeddings_server_async() -> Optional[Dict[str, object]]:
+async def _maybe_enforce_with_rg_embeddings_server_async() -> dict[str, object] | None:
     """
     Attempt to enforce embeddings server request limits via ResourceGovernor.
 
@@ -865,7 +868,7 @@ async def _maybe_enforce_with_rg_embeddings_server_async() -> Optional[Dict[str,
         return None
 
 
-def _maybe_enforce_with_rg_embeddings_server_sync() -> Optional[Dict[str, object]]:
+def _maybe_enforce_with_rg_embeddings_server_sync() -> dict[str, object] | None:
     """
     Synchronous helper for RG enforcement around create_embeddings_batch.
 
@@ -882,8 +885,8 @@ def _maybe_enforce_with_rg_embeddings_server_sync() -> Optional[Dict[str, object
             # No running loop in this thread; safe to use asyncio.run.
             return asyncio.run(_maybe_enforce_with_rg_embeddings_server_async())
         # Running inside an event loop; execute RG check in a worker thread.
-        decision_holder: Dict[str, object] = {}
-        error_holder: Dict[str, Exception] = {}
+        decision_holder: dict[str, object] = {}
+        error_holder: dict[str, Exception] = {}
         done = threading.Event()
 
         def _run_in_thread() -> None:
@@ -962,7 +965,7 @@ def exponential_backoff(max_retries: int = 3, base_delay: int = 1):
     return decorator
 
 
-def evict_lru_models(keep_model_id: Optional[str] = None) -> None:
+def evict_lru_models(keep_model_id: str | None = None) -> None:
     """
     Evict least recently used models to maintain resource limits.
 
@@ -1107,7 +1110,7 @@ def get_directory_size(path: str) -> float:
     return total_size / (1024 ** 3)  # Convert bytes to GB
 
 
-def estimate_model_size(model_name: str, model_path: Optional[str] = None) -> float:
+def estimate_model_size(model_name: str, model_path: str | None = None) -> float:
     """
     Estimate model size, preferring actual disk size when available.
 
@@ -1155,10 +1158,10 @@ class HuggingFaceEmbedder:
 
         # Initialize as Optional, to be populated by load_model
         # Type-only; actual classes are imported lazily at use time
-        self.tokenizer: Optional["AutoTokenizer"] = None
-        self.model: Optional["AutoModel"] = None  # AutoModel is a class that returns a model instance
+        self.tokenizer: "AutoTokenizer" | None = None
+        self.model: "AutoModel" | None = None  # AutoModel is a class that returns a model instance
 
-        self.unload_timer: Optional[threading.Timer] = None
+        self.unload_timer: threading.Timer | None = None
         self.last_used_time: float = 0.0
         log_counter("huggingface_embedder_init", labels={"model_id": self.model_identifier})
         logger.info(f"HuggingFaceEmbedder initialized for {model_identifier} (model: {config.model_name_or_path})")
@@ -1249,7 +1252,7 @@ class HuggingFaceEmbedder:
         except Exception:
             pass
 
-    def create_embeddings(self, texts: List[str]) -> np.ndarray:
+    def create_embeddings(self, texts: list[str]) -> np.ndarray:
         self.load_model()
 
         # --- Start of critical section for using model and tokenizer ---
@@ -1278,7 +1281,7 @@ class HuggingFaceEmbedder:
             log_counter("huggingface_create_embeddings_attempt", labels={"model_id": self.model_identifier})
             start_time_embed = time.time()
             torch = _import_torch()
-            embeddings_tensor: Optional["torch.Tensor"] = None
+            embeddings_tensor: "torch.Tensor" | None = None
 
             def _mean_pool(hidden_state, attention_mask):
                 if attention_mask is None:
@@ -1438,7 +1441,7 @@ class ONNXEmbedder:
         model_identifier: str,
         config: ONNXModelCfg,
         onnx_model_base_storage_dir: str,
-        model_storage_dir: Optional[str] = None,
+        model_storage_dir: str | None = None,
     ):
         self._lock = threading.RLock()  # Reentrant lock for this instance
         self.model_identifier = model_identifier
@@ -1458,8 +1461,8 @@ class ONNXEmbedder:
         self.onnx_model_file_path = os.path.join(self.model_specific_onnx_dir, "model.onnx")  # Standard name by optimum
 
         # Initialize critical attributes early so __del__/finalizers are safe even if setup fails
-        self.session: Optional[ort.InferenceSession] = None
-        self.unload_timer: Optional[threading.Timer] = None
+        self.session: ort.InferenceSession | None = None
+        self.unload_timer: threading.Timer | None = None
         self.last_used_time: float = 0.0
         self.device_providers = config.onnx_providers
 
@@ -1597,7 +1600,7 @@ class ONNXEmbedder:
         except Exception:
             pass
 
-    def create_embeddings(self, texts: List[str]) -> np.ndarray:
+    def create_embeddings(self, texts: list[str]) -> np.ndarray:
         self.load_model()  # Handles locking, model loading/conversion, and timer reset
 
         if self.session is None or self.tokenizer is None:
@@ -1676,7 +1679,7 @@ class ONNXEmbedder:
 
 
 
-_LIMITER_CACHE: Dict[tuple[int, int], TokenBucketLimiter] = {}
+_LIMITER_CACHE: dict[tuple[int, int], TokenBucketLimiter] = {}
 _LIMITER_CACHE_LOCK = threading.Lock()
 
 
@@ -1696,10 +1699,10 @@ def _get_token_bucket_limiter(capacity: int, period: int) -> TokenBucketLimiter:
 # To make this dynamic per model_config, apply similarly to limiter.
 @exponential_backoff(max_retries=3, base_delay=1)
 def create_embeddings_batch(
-        texts: List[str],
-        user_app_config: Dict[str, Any],  # Renamed for clarity: this is the top-level app config
-        model_id_override: Optional[str] = None,
-) -> List[List[float]]:
+        texts: list[str],
+        user_app_config: dict[str, Any],  # Renamed for clarity: this is the top-level app config
+        model_id_override: str | None = None,
+) -> list[list[float]]:
     """
     Creates embeddings for a batch of texts.
 
@@ -1741,7 +1744,7 @@ def create_embeddings_batch(
         logger.error("No `model_id` specified and no `default_model_id` found in embedding_config.")
         raise ValueError("Embedding model ID not specified or configured as default.")
 
-    def _resolve_model_key(models_map: Dict[str, Any], mid: str) -> tuple[str, Any]:
+    def _resolve_model_key(models_map: dict[str, Any], mid: str) -> tuple[str, Any]:
         """Resolve a model key from models_map supporting bare or provider-prefixed IDs.
 
         Tries exact match first, then:
@@ -1798,7 +1801,7 @@ def create_embeddings_batch(
 
     EMBEDDINGS_REQUESTS.labels(provider=provider, model_id=model_id_to_use).inc()
     start_time_batch = time.time()
-    embeddings_list: List[List[float]] = []
+    embeddings_list: list[list[float]] = []
 
     try:
         embedder_instance: Any = None  # To hold HFEmbedder or ONNXEmbedder
@@ -1807,7 +1810,7 @@ def create_embeddings_batch(
             if not isinstance(model_spec, HFModelCfg):
                 raise ValueError(f"Model spec for {model_id_to_use} is not HFModelCfg.")
 
-            model_id_in_use: Optional[str] = None
+            model_id_in_use: str | None = None
             with embedding_models_lock:  # Protect access to the global embedding_models cache
                 if model_id_to_use not in embedding_models:
                     logger.info(f"HuggingFace model ID {model_id_to_use} not in cache. Initializing.")
@@ -2066,10 +2069,10 @@ def create_embeddings_batch(
 
 
 async def create_embeddings_batch_async(
-        texts: List[str],
-        user_app_config: Dict[str, Any],
-        model_id_override: Optional[str] = None,
-) -> List[List[float]]:
+        texts: list[str],
+        user_app_config: dict[str, Any],
+        model_id_override: str | None = None,
+) -> list[list[float]]:
     """
     Async wrapper for create_embeddings_batch.
     Creates embeddings for multiple texts asynchronously.
@@ -2097,9 +2100,9 @@ async def create_embeddings_batch_async(
 
 def create_embedding(
         text: str,
-        user_app_config: Dict[str, Any],
-        model_id_override: Optional[str] = None,
-) -> List[float]:
+        user_app_config: dict[str, Any],
+        model_id_override: str | None = None,
+) -> list[float]:
     """
     Creates an embedding for a single text using the batch function.
     `user_app_config` should contain an 'embedding_config' key.
@@ -2149,7 +2152,7 @@ def create_embedding(
     log_counter("create_embedding_success", labels={"provider": provider_to_log, "model_id": model_id_to_log})
     return embedding_data
 
-def get_embedding_config() -> Dict[str, Any]:
+def get_embedding_config() -> dict[str, Any]:
     """
     Get the default embedding configuration.
     Returns a configuration dictionary for use with embedding functions.

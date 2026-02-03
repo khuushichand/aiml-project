@@ -10,18 +10,19 @@ Location: tldw_Server_API/app/core/Scheduler/handlers/workflows.py
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any
+
 from loguru import logger
 
-from tldw_Server_API.app.core.Scheduler.base.registry import task
-from tldw_Server_API.app.core.Workflows.engine import WorkflowEngine, RunMode
-from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import resolve_user_id_value
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_workflows_database,
     get_content_backend_instance,
 )
+from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+from tldw_Server_API.app.core.Scheduler.base.registry import task
 from tldw_Server_API.app.core.Workflows.daily_ledger import record_workflow_run
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import resolve_user_id_value
+from tldw_Server_API.app.core.Workflows.engine import RunMode, WorkflowEngine
 
 
 def _get_wf_db() -> WorkflowsDatabase:
@@ -29,7 +30,7 @@ def _get_wf_db() -> WorkflowsDatabase:
     return create_workflows_database(backend=backend)
 
 
-def _resolve_payload_user_id(payload: Dict[str, Any]) -> str:
+def _resolve_payload_user_id(payload: dict[str, Any]) -> str:
     return resolve_user_id_value(
         payload.get("user_id"),
         missing_detail="workflow_run: user_id is required in multi-user mode",
@@ -37,7 +38,7 @@ def _resolve_payload_user_id(payload: Dict[str, Any]) -> str:
 
 
 @task(name="workflow_run", max_retries=0, timeout=3600, queue="workflows")
-async def workflow_run(payload: Dict[str, Any]) -> Dict[str, Any]:
+async def workflow_run(payload: dict[str, Any]) -> dict[str, Any]:
     """Scheduler handler that enqueues/executes a Workflows run.
 
     Expected payload keys:
@@ -113,7 +114,7 @@ async def workflow_run(payload: Dict[str, Any]) -> Dict[str, Any]:
     if mode == RunMode.SYNC:
         # Poll for completion with backoff (bounded by task timeout)
         deadline = __import__("time").time() + 55 * 60  # 55m safety within 60m timeout
-        status: Optional[str] = None
+        status: str | None = None
         while __import__("time").time() < deadline:
             r = db.get_run(run_id)
             status = r.status if r else None

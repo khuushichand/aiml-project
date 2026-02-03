@@ -5,51 +5,42 @@ Provides CRUD operations for messages in conversations.
 """
 
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any
-from fastapi import (
-    APIRouter,
-    Depends,
-    HTTPException,
-    Query,
-    Path,
-    Response,
-    status
-)
+from typing import Any, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
 from loguru import logger
-from tldw_Server_API.app.core.config import settings
 
 # Database and authentication dependencies
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+
+# Schemas
+from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
+    MessageCreate,
+    MessageListResponse,
+    MessageResponse,
+    MessageUpdate,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+
+# Character chat helpers
+from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
+    edit_message_content,
+    find_messages_in_conversation,
+    map_sender_to_role,
+    post_message_to_conversation,
+    remove_message_from_conversation,
+    replace_placeholders,
+    retrieve_message_details,
+)
+
+# Rate limiting
+from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import get_character_rate_limiter
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
     ConflictError,
     InputError,
-)
-
-# Schemas
-from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
-    MessageCreate,
-    MessageResponse,
-    MessageUpdate,
-    MessageListResponse
-)
-
-# Character chat helpers
-from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
-    retrieve_message_details,
-    post_message_to_conversation,
-    edit_message_content,
-    remove_message_from_conversation,
-    find_messages_in_conversation,
-    map_sender_to_role,
-    replace_placeholders,
-)
-
-# Rate limiting
-from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import (
-    get_character_rate_limiter
 )
 
 
@@ -99,7 +90,7 @@ router = APIRouter()
 # Helper Functions
 # ========================================================================
 
-def _convert_db_message_to_response(msg_data: Dict[str, Any]) -> MessageResponse:
+def _convert_db_message_to_response(msg_data: dict[str, Any]) -> MessageResponse:
     """Convert database message to response model."""
     return MessageResponse(
         id=msg_data.get('id', ''),
@@ -117,7 +108,7 @@ def _verify_conversation_access(
     db: CharactersRAGDB,
     conversation_id: str,
     user_id: int
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Verify user has access to a conversation.
 
@@ -154,7 +145,7 @@ def _verify_message_access(
     db: CharactersRAGDB,
     message_id: str,
     user_id: int
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Verify user has access to a message using DB abstractions.
     """
@@ -454,7 +445,7 @@ async def get_chat_messages(
             if format_for_completions:
                 # Return format ready for chat completions endpoint
                 formatted_messages = []
-                metadata_extra_map: Dict[str, Any] = {}
+                metadata_extra_map: dict[str, Any] = {}
 
                 # Add system prompt only on the first page and only if no system message exists in DB
                 if character and include_character_context and offset == 0:
@@ -488,7 +479,7 @@ async def get_chat_messages(
                     content = _replace_text(msg.get('content'))
                     msg_id = msg.get('id')
 
-                    base_message: Dict[str, Any] = {"role": role, "content": content}
+                    base_message: dict[str, Any] = {"role": role, "content": content}
                     if include_message_ids and msg_id:
                         base_message["message_id"] = msg_id
 
@@ -531,7 +522,7 @@ async def get_chat_messages(
                         formatted_messages.append(base_message_with_tools)
 
                         # Emit tool role messages after the assistant message
-                        tool_results_by_id: Dict[str, Any] = {}
+                        tool_results_by_id: dict[str, Any] = {}
                         try:
                             extra = md.get('extra') or {}
                             # Common pattern: extra.tool_results: { tool_call_id: { ... } }
@@ -564,7 +555,7 @@ async def get_chat_messages(
                                         tool_content = str(res)
                             except Exception as e:
                                 logger.debug(f"character_messages: failed to stringify tool result: {e}")
-                            tool_msg: Dict[str, Any] = {"role": "tool", "content": tool_content}
+                            tool_msg: dict[str, Any] = {"role": "tool", "content": tool_content}
                             if tc_id:
                                 tool_msg["tool_call_id"] = tc_id
                             if tc_name:
@@ -574,7 +565,7 @@ async def get_chat_messages(
                         # No tools: append base message as-is
                         formatted_messages.append(base_message)
 
-                resp_obj: Dict[str, Any] = {
+                resp_obj: dict[str, Any] = {
                     "character_name": character.get('name') if character else None,
                     "character_id": character_id,
                     "chat_id": chat_id,

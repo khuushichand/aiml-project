@@ -4,12 +4,11 @@
 #
 ####
 import os
-from typing import Any, Union, Dict, Optional, List, Callable
+from typing import Any, Callable, Optional, Union
 
 from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
 from tldw_Server_API.app.core.LLM_Calls.deprecation import log_legacy_once
 from tldw_Server_API.app.core.Utils.Utils import logging
-
 
 ####################
 # Function List
@@ -34,8 +33,8 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 def _call_adapter(
         provider: str,
         *,
-        input_data: List[Dict[str, Any]],
-        app_config: Optional[Dict[str, Any]] = None,
+        input_data: list[dict[str, Any]],
+        app_config: Optional[dict[str, Any]] = None,
         **kwargs: Any,
 ) -> Any:
     log_legacy_once(
@@ -51,7 +50,7 @@ def _call_adapter(
 
 
 def chat_with_local_llm(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         temp: Optional[float] = None,
         temperature: Optional[float] = None,
         system_message: Optional[str] = None,
@@ -63,19 +62,19 @@ def chat_with_local_llm(
         min_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
         custom_prompt_arg: Optional[str] = None,
-        response_format: Optional[Dict[str, str]] = None,
+        response_format: Optional[dict[str, str]] = None,
         n: Optional[int] = None,
         user_identifier: Optional[str] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
+        app_config: Optional[dict[str, Any]] = None,
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
 ):
@@ -112,7 +111,7 @@ def chat_with_local_llm(
 
 
 def chat_with_llama(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         api_key: Optional[str] = None,
         custom_prompt: Optional[str] = None,
         temp: Optional[float] = None,
@@ -126,14 +125,14 @@ def chat_with_llama(
         min_p: Optional[float] = None,
         n_predict: Optional[int] = None,
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        response_format: Optional[Dict[str, str]] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
+        response_format: Optional[dict[str, str]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         n: Optional[int] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
         api_url: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
 ):
@@ -167,7 +166,7 @@ def chat_with_llama(
 
 
 def chat_with_kobold(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         api_key: Optional[str] = None,
         custom_prompt_input: Optional[str] = None,
         temp: Optional[float] = None,
@@ -177,10 +176,10 @@ def chat_with_kobold(
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
         max_length: Optional[int] = None,
-        stop_sequence: Optional[Union[str, List[str]]] = None,
+        stop_sequence: Optional[Union[str, list[str]]] = None,
         num_responses: Optional[int] = None,
         seed: Optional[int] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return _call_adapter(
         "kobold",
@@ -202,7 +201,7 @@ def chat_with_kobold(
 
 
 def chat_with_oobabooga(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         api_key: Optional[str] = None,
         custom_prompt_input: Optional[str] = None,
         temp: Optional[float] = None,
@@ -216,19 +215,19 @@ def chat_with_oobabooga(
         min_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        response_format: Optional[Dict[str, str]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
+        response_format: Optional[dict[str, str]] = None,
         n: Optional[int] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
         logprobs: Optional[bool] = None,
         user_identifier: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
         top_logprobs: Optional[int] = None,
         ooba_api_url: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
 ):
@@ -267,7 +266,7 @@ def chat_with_oobabooga(
 
 
 def chat_with_tabbyapi(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         api_key: Optional[str] = None,
         custom_prompt_input: Optional[str] = None,
         temp: Optional[float] = None,
@@ -281,19 +280,19 @@ def chat_with_tabbyapi(
         min_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        response_format: Optional[Dict[str, str]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
+        response_format: Optional[dict[str, str]] = None,
         n: Optional[int] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
         logprobs: Optional[bool] = None,
         user_identifier: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
         top_logprobs: Optional[int] = None,
         tabby_api_url: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
 ):
@@ -332,7 +331,7 @@ def chat_with_tabbyapi(
 
 
 def chat_with_vllm(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         api_key: Optional[str] = None,
         custom_prompt_input: Optional[str] = None,
         temp: Optional[float] = None,
@@ -346,19 +345,19 @@ def chat_with_vllm(
         min_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        response_format: Optional[Dict[str, str]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
+        response_format: Optional[dict[str, str]] = None,
         n: Optional[int] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
         logprobs: Optional[bool] = None,
         user_identifier: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
         top_logprobs: Optional[int] = None,
         vllm_api_url: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
 ):
@@ -397,7 +396,7 @@ def chat_with_vllm(
 
 
 def chat_with_aphrodite(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         api_key: Optional[str] = None,
         custom_prompt_input: Optional[str] = None,
         temp: Optional[float] = None,
@@ -411,19 +410,19 @@ def chat_with_aphrodite(
         min_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        response_format: Optional[Dict[str, str]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
+        response_format: Optional[dict[str, str]] = None,
         n: Optional[int] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
         logprobs: Optional[bool] = None,
         user_identifier: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
         top_logprobs: Optional[int] = None,
         aphrodite_api_url: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
 ):
@@ -462,7 +461,7 @@ def chat_with_aphrodite(
 
 
 def chat_with_ollama(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         api_key: Optional[str] = None,
         custom_prompt: Optional[str] = None,
         temp: Optional[float] = None,
@@ -476,18 +475,18 @@ def chat_with_ollama(
         min_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        response_format: Optional[Dict[str, str]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
+        response_format: Optional[dict[str, str]] = None,
         n: Optional[int] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
         logprobs: Optional[bool] = None,
         user_identifier: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
         top_logprobs: Optional[int] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
 ):
@@ -525,7 +524,7 @@ def chat_with_ollama(
 
 
 def chat_with_custom_openai(
-    input_data: List[Dict[str, Any]],
+    input_data: list[dict[str, Any]],
     api_key: Optional[str] = None,
     custom_prompt_arg: Optional[str] = None,
     temp: Optional[float] = None,
@@ -538,18 +537,18 @@ def chat_with_custom_openai(
     topk: Optional[int] = None,
     max_tokens: Optional[int] = None,
     seed: Optional[int] = None,
-    stop: Optional[Union[str, List[str]]] = None,
-    response_format: Optional[Dict[str, str]] = None,
+    stop: Optional[Union[str, list[str]]] = None,
+    response_format: Optional[dict[str, str]] = None,
     n: Optional[int] = None,
     user_identifier: Optional[str] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-    logit_bias: Optional[Dict[str, float]] = None,
+    tools: Optional[list[dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, dict[str, Any]]] = None,
+    logit_bias: Optional[dict[str, float]] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
-    app_config: Optional[Dict[str, Any]] = None,
+    app_config: Optional[dict[str, Any]] = None,
     http_client_factory: Optional[Callable[[int], Any]] = None,
     http_fetcher: Optional[Callable[..., Any]] = None,
 ):
@@ -586,7 +585,7 @@ def chat_with_custom_openai(
 
 
 def chat_with_custom_openai_2(
-    input_data: List[Dict[str, Any]],
+    input_data: list[dict[str, Any]],
     api_key: Optional[str] = None,
     custom_prompt_arg: Optional[str] = None,
     temp: Optional[float] = None,
@@ -596,18 +595,18 @@ def chat_with_custom_openai_2(
     max_tokens: Optional[int] = None,
     topp: Optional[float] = None,
     seed: Optional[int] = None,
-    stop: Optional[Union[str, List[str]]] = None,
-    response_format: Optional[Dict[str, str]] = None,
+    stop: Optional[Union[str, list[str]]] = None,
+    response_format: Optional[dict[str, str]] = None,
     n: Optional[int] = None,
     user_identifier: Optional[str] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-    logit_bias: Optional[Dict[str, float]] = None,
+    tools: Optional[list[dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, dict[str, Any]]] = None,
+    logit_bias: Optional[dict[str, float]] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
-    app_config: Optional[Dict[str, Any]] = None,
+    app_config: Optional[dict[str, Any]] = None,
     http_client_factory: Optional[Callable[[int], Any]] = None,
     http_fetcher: Optional[Callable[..., Any]] = None,
 ):

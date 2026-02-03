@@ -10,12 +10,11 @@ import json
 import uuid as uuid_module
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
-
 
 # File categories (used for file_category field)
 FILE_CATEGORY_TTS_AUDIO = "tts_audio"
@@ -72,7 +71,7 @@ class AuthnzGeneratedFilesRepo:
         return getattr(self.db_pool, "pool", None) is not None
 
     @staticmethod
-    def _normalize_record(row: Any) -> Dict[str, Any]:
+    def _normalize_record(row: Any) -> dict[str, Any]:
         """
         Normalize backend-specific row types to a consistent dict with
         JSON-friendly types.
@@ -135,18 +134,18 @@ class AuthnzGeneratedFilesRepo:
         file_category: str,
         source_feature: str,
         file_size_bytes: int = 0,
-        org_id: Optional[int] = None,
-        team_id: Optional[int] = None,
-        original_filename: Optional[str] = None,
-        mime_type: Optional[str] = None,
-        checksum: Optional[str] = None,
-        source_ref: Optional[str] = None,
-        folder_tag: Optional[str] = None,
-        tags: Optional[List[str]] = None,
+        org_id: int | None = None,
+        team_id: int | None = None,
+        original_filename: str | None = None,
+        mime_type: str | None = None,
+        checksum: str | None = None,
+        source_ref: str | None = None,
+        folder_tag: str | None = None,
+        tags: list[str] | None = None,
         is_transient: bool = False,
-        expires_at: Optional[datetime] = None,
+        expires_at: datetime | None = None,
         retention_policy: str = RETENTION_POLICY_USER_DEFAULT,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new generated file record.
 
@@ -240,7 +239,7 @@ class AuthnzGeneratedFilesRepo:
             logger.error(f"AuthnzGeneratedFilesRepo.create_file failed: {exc}")
             raise
 
-    async def get_file_by_id(self, file_id: int) -> Optional[Dict[str, Any]]:
+    async def get_file_by_id(self, file_id: int) -> dict[str, Any] | None:
         """Fetch a file record by ID."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -264,7 +263,7 @@ class AuthnzGeneratedFilesRepo:
             logger.error(f"AuthnzGeneratedFilesRepo.get_file_by_id failed: {exc}")
             raise
 
-    async def get_file_by_uuid(self, file_uuid: str) -> Optional[Dict[str, Any]]:
+    async def get_file_by_uuid(self, file_uuid: str) -> dict[str, Any] | None:
         """Fetch a file record by UUID."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -294,14 +293,14 @@ class AuthnzGeneratedFilesRepo:
         user_id: int,
         offset: int = 0,
         limit: int = 50,
-        file_category: Optional[str] = None,
-        source_feature: Optional[str] = None,
-        folder_tag: Optional[str] = None,
+        file_category: str | None = None,
+        source_feature: str | None = None,
+        folder_tag: str | None = None,
         include_deleted: bool = False,
-        search: Optional[str] = None,
-        org_id: Optional[int] = None,
-        team_id: Optional[int] = None,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+        search: str | None = None,
+        org_id: int | None = None,
+        team_id: int | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         List files for a user with filtering and pagination.
 
@@ -314,7 +313,7 @@ class AuthnzGeneratedFilesRepo:
 
                 # Build WHERE clause
                 conditions = ["user_id = " + ("$1" if is_pg else "?")]
-                params: List[Any] = [user_id]
+                params: list[Any] = [user_id]
                 param_idx = 1
 
                 if not include_deleted:
@@ -402,14 +401,14 @@ class AuthnzGeneratedFilesRepo:
         self,
         file_id: int,
         *,
-        folder_tag: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-        retention_policy: Optional[str] = None,
-        expires_at: Optional[datetime] = None,
-    ) -> Optional[Dict[str, Any]]:
+        folder_tag: str | None = None,
+        tags: list[str] | None = None,
+        retention_policy: str | None = None,
+        expires_at: datetime | None = None,
+    ) -> dict[str, Any] | None:
         """Update file metadata."""
         updates = []
-        params: List[Any] = []
+        params: list[Any] = []
         param_idx = 0
 
         if folder_tag is not None:
@@ -544,7 +543,7 @@ class AuthnzGeneratedFilesRepo:
             logger.error(f"AuthnzGeneratedFilesRepo.hard_delete_file failed: {exc}")
             raise
 
-    async def bulk_soft_delete(self, file_ids: List[int]) -> int:
+    async def bulk_soft_delete(self, file_ids: list[int]) -> int:
         """Soft delete multiple files. Returns count of deleted files."""
         if not file_ids:
             return 0
@@ -579,7 +578,7 @@ class AuthnzGeneratedFilesRepo:
             logger.error(f"AuthnzGeneratedFilesRepo.bulk_soft_delete failed: {exc}")
             raise
 
-    async def bulk_move_to_folder(self, file_ids: List[int], folder_tag: Optional[str]) -> int:
+    async def bulk_move_to_folder(self, file_ids: list[int], folder_tag: str | None) -> int:
         """Move multiple files to a folder (tag). Returns count of updated files."""
         if not file_ids:
             return 0
@@ -614,7 +613,7 @@ class AuthnzGeneratedFilesRepo:
             logger.error(f"AuthnzGeneratedFilesRepo.bulk_move_to_folder failed: {exc}")
             raise
 
-    async def list_folders(self, user_id: int) -> List[Dict[str, Any]]:
+    async def list_folders(self, user_id: int) -> list[dict[str, Any]]:
         """List unique folder tags for a user with file counts."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -667,7 +666,7 @@ class AuthnzGeneratedFilesRepo:
         *,
         offset: int = 0,
         limit: int = 50,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """List soft-deleted files for a user."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -719,7 +718,7 @@ class AuthnzGeneratedFilesRepo:
             logger.error(f"AuthnzGeneratedFilesRepo.list_trashed_files failed: {exc}")
             raise
 
-    async def get_user_storage_usage(self, user_id: int) -> Dict[str, Any]:
+    async def get_user_storage_usage(self, user_id: int) -> dict[str, Any]:
         """Get storage usage statistics for a user."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -810,7 +809,7 @@ class AuthnzGeneratedFilesRepo:
             logger.error(f"AuthnzGeneratedFilesRepo.get_user_storage_usage failed: {exc}")
             raise
 
-    async def get_expired_files(self, limit: int = 100) -> List[Dict[str, Any]]:
+    async def get_expired_files(self, limit: int = 100) -> list[dict[str, Any]]:
         """Get files that have passed their expiration date."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -845,7 +844,7 @@ class AuthnzGeneratedFilesRepo:
             logger.error(f"AuthnzGeneratedFilesRepo.get_expired_files failed: {exc}")
             raise
 
-    async def get_old_trashed_files(self, days_old: int = 30, limit: int = 100) -> List[Dict[str, Any]]:
+    async def get_old_trashed_files(self, days_old: int = 30, limit: int = 100) -> list[dict[str, Any]]:
         """Get files that have been in trash for more than specified days."""
         from datetime import timedelta
         cutoff = datetime.now(timezone.utc) - timedelta(days=days_old)
@@ -906,7 +905,7 @@ class AuthnzGeneratedFilesRepo:
         self,
         user_id: int,
         limit: int = 20,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         List files by least recent access time (for cleanup suggestions).
 

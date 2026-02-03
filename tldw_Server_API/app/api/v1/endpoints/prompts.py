@@ -2,51 +2,39 @@
 #
 #
 # Imports
-from loguru import logger
-import os
 import base64
+import os
 import re
-import sqlite3
-from typing import List, Optional, Union, Tuple, Dict, Any
+from typing import Any, Optional, Union
+
 #
 # 3rd-party imports
-from fastapi import (
-    APIRouter,
-    Depends,
-    Header,
-    HTTPException,
-    Query,
-    Body,
-    Request,
-    Response,
-    status,
-    File,
-    UploadFile
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request, Response, status
+from loguru import logger
+
+from tldw_Server_API.app.api.v1.API_Deps.Prompts_DB_Deps import get_prompts_db_for_user
+from tldw_Server_API.app.api.v1.schemas import prompt_schemas as schemas
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings as get_auth_settings
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
+    ConflictError,
+    DatabaseError,
+    InputError,
+    PromptsDatabase,
 )
-from starlette.responses import FileResponse # For serving exported files
 
 #
 # Local Imports
 from tldw_Server_API.app.core.Prompt_Management.Prompts_Interop import (
-    db_export_prompts_formatted, # Using the standalone function from interop
     db_export_prompt_keywords_to_csv,
-    db_view_prompt_keywords_markdown
-)
-from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
-    DatabaseError,
-    SchemaError,
-    InputError,
-    ConflictError,
-    PromptsDatabase
-)
-from tldw_Server_API.app.api.v1.API_Deps.Prompts_DB_Deps import get_prompts_db_for_user
-from tldw_Server_API.app.api.v1.schemas import prompt_schemas as schemas
-from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings as get_auth_settings
+    db_export_prompts_formatted,  # Using the standalone function from interop
+    )
+
 #
 # DB Mgmt
 from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
+
 #from tldw_Server_API.app.core.DB_Management.DB_Manager import DBManager
 #
 #
@@ -60,8 +48,8 @@ _TEMPLATE_VAR_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 _MAX_DUPLICATE_NAME_ITERATIONS = 10000
 
 
-def _extract_template_variables(template: str) -> List[str]:
-    variables: List[str] = []
+def _extract_template_variables(template: str) -> list[str]:
+    variables: list[str] = []
     for match in _TEMPLATE_VAR_RE.finditer(template or ""):
         var = match.group(1).strip()
         if var and var not in variables:
@@ -69,7 +57,7 @@ def _extract_template_variables(template: str) -> List[str]:
     return variables
 
 
-def _render_template(template: str, variables: Dict[str, Any]) -> str:
+def _render_template(template: str, variables: dict[str, Any]) -> str:
     def repl(match: re.Match) -> str:
         key = match.group(1).strip()
         if key not in variables:
@@ -79,7 +67,7 @@ def _render_template(template: str, variables: Dict[str, Any]) -> str:
     return _TEMPLATE_VAR_RE.sub(repl, template)
 
 
-def _generate_unique_prompt_name(base_name: str, used_names: set, name_counts: Dict[str, int]) -> str:
+def _generate_unique_prompt_name(base_name: str, used_names: set, name_counts: dict[str, int]) -> str:
     count = name_counts.get(base_name, 0)
     for _ in range(_MAX_DUPLICATE_NAME_ITERATIONS):
         count += 1
@@ -263,10 +251,11 @@ async def verify_prompts_user(
 )
 async def prompts_health():
     """Lightweight health endpoint for the Prompts subsystem."""
-    from tldw_Server_API.app.core.config import settings
-    from pathlib import Path
     import importlib
     import os
+    from pathlib import Path
+
+    from tldw_Server_API.app.core.config import settings
 
     health = {
         "service": "prompts",
@@ -318,7 +307,7 @@ async def prompts_health():
 # --- Sync Log Endpoints ---
 @router.get(
     "/sync-log",
-    response_model=List[schemas.SyncLogEntryResponse],
+    response_model=list[schemas.SyncLogEntryResponse],
     summary="Get sync log entries (admin/debug)",
     dependencies=[Depends(verify_prompts_auth)] # Should be admin-only
 )
@@ -346,7 +335,7 @@ async def get_sync_log(
 )
 async def search_all_prompts(
     search_query: str = Query(..., min_length=1, description="Search term(s)"),
-    search_fields: Optional[List[str]] = Query(None, description="Fields to search: name, author, details, system_prompt, user_prompt, keywords"),
+    search_fields: Optional[list[str]] = Query(None, description="Fields to search: name, author, details, system_prompt, user_prompt, keywords"),
     page: int = Query(1, ge=1),
     results_per_page: int = Query(20, ge=1, le=100),
     include_deleted: bool = Query(False),
@@ -430,7 +419,7 @@ async def create_keyword(
 
 @router.get(
     "/keywords/",
-    response_model=List[str], # Just a list of keyword strings
+    response_model=list[str], # Just a list of keyword strings
     summary="List all active keywords",
     dependencies=[Depends(verify_prompts_user)]
 )
@@ -485,7 +474,7 @@ async def delete_keyword(
 )
 async def export_prompts_api(
     export_format: str = Query("csv", enum=["csv", "markdown"]),
-    filter_keywords: Optional[List[str]] = Query(None),
+    filter_keywords: Optional[list[str]] = Query(None),
     include_system: bool = Query(True),
     include_user: bool = Query(True),
     include_details: bool = Query(True),
@@ -584,11 +573,11 @@ async def import_prompts_api(
             logger.warning(f"Failed to fetch existing prompt names for import: {e}")
             used_names = set()
 
-        name_counts: Dict[str, int] = {}
+        name_counts: dict[str, int] = {}
         imported = 0
         failed = 0
         skipped = 0
-        prompt_ids: List[int] = []
+        prompt_ids: list[int] = []
 
         for prompt in payload.prompts:
             base_name = (prompt.name or "").strip()
@@ -696,7 +685,7 @@ async def bulk_delete_prompts(
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     deleted = 0
-    failed_ids: List[int] = []
+    failed_ids: list[int] = []
     for prompt_id in payload.prompt_ids:
         try:
             if db.soft_delete_prompt(prompt_id):
@@ -729,7 +718,7 @@ async def bulk_update_prompt_keywords(
             detail="At least one of add_keywords or remove_keywords must be provided."
         )
     updated = 0
-    failed_ids: List[int] = []
+    failed_ids: list[int] = []
 
     def _normalize_for_compare(value: str) -> str:
         try:
@@ -1058,7 +1047,7 @@ async def delete_prompt(
 
 @router.get(
     "/{prompt_identifier}/versions",
-    response_model=List[schemas.PromptVersionResponse],
+    response_model=list[schemas.PromptVersionResponse],
     summary="List prompt versions",
     dependencies=[Depends(verify_prompts_user)]
 )

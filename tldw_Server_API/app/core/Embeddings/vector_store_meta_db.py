@@ -1,8 +1,9 @@
 import sqlite3
-from pathlib import Path
-from typing import Optional, Dict, Any, List
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 import time
+from pathlib import Path
+from typing import Any, Optional
+
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 def _db_path(user_id: Optional[str]) -> Path:
@@ -68,7 +69,7 @@ def delete_store(user_id: Optional[str], store_id: str) -> None:
         conn.commit()
 
 
-def find_store_by_name(user_id: Optional[str], name: str) -> Optional[Dict[str, Any]]:
+def find_store_by_name(user_id: Optional[str], name: str) -> Optional[dict[str, Any]]:
     with _connect(user_id) as conn:
         cur = conn.execute(
             "SELECT id, name, name_lower, created_at, updated_at FROM vector_stores WHERE name_lower = ?",
@@ -86,7 +87,7 @@ def find_store_by_name(user_id: Optional[str], name: str) -> Optional[Dict[str, 
         }
 
 
-def list_stores(user_id: Optional[str]) -> List[Dict[str, Any]]:
+def list_stores(user_id: Optional[str]) -> list[dict[str, Any]]:
     with _connect(user_id) as conn:
         cur = conn.execute(
             "SELECT id, name, name_lower, created_at, updated_at FROM vector_stores ORDER BY created_at DESC"

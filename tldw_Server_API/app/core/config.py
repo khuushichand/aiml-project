@@ -6,19 +6,20 @@ import configparser
 import json
 import os
 import sys
-import yaml
+from collections.abc import MutableMapping
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional, Dict, Any, Set
+from typing import Any, Optional
 from urllib.parse import urlparse
-from dotenv import load_dotenv
 
-from tldw_Server_API.app.core.config_paths import resolve_config_file
+import yaml
+from dotenv import load_dotenv
 
 #
 # 3rd-party Libraries
 from loguru import logger
-from collections.abc import MutableMapping
+
+from tldw_Server_API.app.core.config_paths import resolve_config_file
 
 
 def _safe_json_dict(raw: Optional[str]) -> dict:
@@ -174,7 +175,7 @@ def _load_config_parser(*, reload: bool = False) -> configparser.ConfigParser:
     return config_parser
 
 
-def get_config_section(section_name: str, *, reload: bool = False) -> Dict[str, str]:
+def get_config_section(section_name: str, *, reload: bool = False) -> dict[str, str]:
     """Return a config.txt section as a plain dict."""
     if reload:
         refresh_config_cache()
@@ -198,7 +199,7 @@ def get_config_value(
     return parser.get(section, key, fallback=default)
 
 
-def get_config_source_metadata() -> Dict[str, Any]:
+def get_config_source_metadata() -> dict[str, Any]:
     """Return cached config source metadata for logging/diagnostics."""
     return dict(_CONFIG_SOURCE_METADATA)
 
@@ -432,7 +433,7 @@ DIARIZATION_CONFIG = {
 }
 
 
-def load_tts_config() -> Dict[str, Any]:
+def load_tts_config() -> dict[str, Any]:
     """
     Load TTS configuration from YAML file and integrate with existing config.
 
@@ -473,7 +474,7 @@ def load_tts_config() -> Dict[str, Any]:
         _log_info("Falling back to default TTS configuration")
         return _get_default_tts_config()
 
-def _process_tts_config(tts_config: Dict[str, Any]) -> Dict[str, Any]:
+def _process_tts_config(tts_config: dict[str, Any]) -> dict[str, Any]:
     """
     Process and validate TTS configuration from YAML.
 
@@ -519,7 +520,7 @@ def _process_tts_config(tts_config: Dict[str, Any]) -> Dict[str, Any]:
 
     return processed
 
-def _get_default_tts_config() -> Dict[str, Any]:
+def _get_default_tts_config() -> dict[str, Any]:
     """
     Get default TTS configuration when YAML config is not available.
 
@@ -539,7 +540,7 @@ def _get_default_tts_config() -> Dict[str, Any]:
         'retry_delay_ms': 1000
     }
 
-def load_openai_mappings() -> Dict:
+def load_openai_mappings() -> dict:
     # Determine path relative to this file.
     # config.py is in project_root/tldw_server_api/app/core/config.py
     # Config_Files is assumed to be in project_root/tldw_server_api/Config_Files/
@@ -623,7 +624,7 @@ def load_settings():
     # --- Redis Configuration ---
     # Initialize comprehensive_config early to avoid UnboundLocalError
     try:
-        comprehensive_config: Dict[str, Any] = load_and_log_configs() or {}
+        comprehensive_config: dict[str, Any] = load_and_log_configs() or {}
     except Exception as e:
         _log_error(f"Error loading comprehensive_config: {e}", exc_info=True)
         comprehensive_config = {}
@@ -1669,7 +1670,8 @@ def load_settings():
             # actual server startup paths still validate and will hard-fail
             # when SINGLE_USER_API_KEY is required.
             try:
-                import os as _os, sys as _sys
+                import os as _os
+                import sys as _sys
                 _in_test = (
                     bool(_os.getenv("PYTEST_CURRENT_TEST"))
                     or str(_os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
@@ -2382,7 +2384,7 @@ def load_comprehensive_config_with_tts():
 
     # Create combined configuration object
     class CombinedConfig:
-        def __init__(self, config_parser: configparser.ConfigParser, tts_config: Dict[str, Any]):
+        def __init__(self, config_parser: configparser.ConfigParser, tts_config: dict[str, Any]):
             self.config_parser = config_parser
             self.tts_config = tts_config
 
@@ -2406,7 +2408,7 @@ def load_comprehensive_config_with_tts():
             """Get sections from main config"""
             return self.config_parser.sections()
 
-        def get_tts_config(self) -> Dict[str, Any]:
+        def get_tts_config(self) -> dict[str, Any]:
             """Get TTS configuration"""
             # Merge with API keys from main config for convenience
             merged_tts = self.tts_config.copy()
@@ -2445,7 +2447,7 @@ def _route_toggle_policy() -> dict:
       experimental_routes = k1,k2  (optional, to extend defaults)
     """
 
-    def _parse_list(val: Optional[str]) -> Set[str]:
+    def _parse_list(val: Optional[str]) -> set[str]:
         if not val:
             return set()
         try:
@@ -2460,7 +2462,7 @@ def _route_toggle_policy() -> dict:
         return {p.lower() for p in parts if p}
 
     # Defaults: include all routes; a curated set flagged as experimental
-    default_experimental: Set[str] = {
+    default_experimental: set[str] = {
         # Clearly in-development or optional scaffolds
         "sandbox",
         "connectors",
@@ -2474,9 +2476,9 @@ def _route_toggle_policy() -> dict:
 
     # Load from config.txt (if available)
     cfg_stable_only = True
-    cfg_disable: Set[str] = set()
-    cfg_enable: Set[str] = set()
-    cfg_experimental_extra: Set[str] = set()
+    cfg_disable: set[str] = set()
+    cfg_enable: set[str] = set()
+    cfg_experimental_extra: set[str] = set()
     try:
         cp = load_comprehensive_config()
         if cp and cp.has_section('API-Routes'):
@@ -4250,7 +4252,7 @@ settings = LazySettings(_settings_loader)
 config = settings
 loaded_config_data = LazyConfigData(_config_loader)
 
-def get_stt_config() -> Dict[str, Any]:
+def get_stt_config() -> dict[str, Any]:
     """
     Return the `[STT-Settings]` section as a plain dict.
 

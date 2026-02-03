@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import List, Tuple, Optional
 
 from . import SentenceSplitter
 
@@ -16,7 +15,7 @@ class RegexSentenceSplitter(SentenceSplitter):
     # Match minimal sequences ending with one or more sentence terminators, then whitespace or end
     _pattern = re.compile(r"[^.!?]+(?:[.!?]+(?:\s+|$)|$)", re.MULTILINE)
 
-    def split_to_spans(self, text: str, language: Optional[str] = None) -> List[Tuple[int, int]]:
+    def split_to_spans(self, text: str, language: str | None = None) -> list[tuple[int, int]]:
         if not text:
             return []
         try:

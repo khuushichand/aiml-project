@@ -12,7 +12,7 @@ from __future__ import annotations
 import csv
 import io
 import re
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -33,7 +33,7 @@ from tldw_Server_API.app.core.Workflows.adapters.text._config import (
     tags=["text", "conversion"],
     config_model=HTMLToMarkdownConfig,
 )
-async def run_html_to_markdown_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_html_to_markdown_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Convert HTML content to Markdown format.
 
     Config:
@@ -77,7 +77,7 @@ async def run_html_to_markdown_adapter(config: Dict[str, Any], context: Dict[str
     tags=["text", "conversion"],
     config_model=MarkdownToHTMLConfig,
 )
-async def run_markdown_to_html_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_markdown_to_html_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Convert Markdown content to HTML format.
 
     Config:
@@ -122,7 +122,7 @@ async def run_markdown_to_html_adapter(config: Dict[str, Any], context: Dict[str
     tags=["text", "conversion"],
     config_model=CSVToJSONConfig,
 )
-async def run_csv_to_json_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_csv_to_json_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Convert CSV data to JSON format.
 
     Config:
@@ -177,7 +177,7 @@ async def run_csv_to_json_adapter(config: Dict[str, Any], context: Dict[str, Any
     tags=["text", "conversion"],
     config_model=JSONToCSVConfig,
 )
-async def run_json_to_csv_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_json_to_csv_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Convert JSON data to CSV format.
 
     Config:

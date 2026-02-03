@@ -109,6 +109,7 @@ async def test_chat_wrapper_returns_future_in_running_loop(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.unit
 async def test_chat_wrapper_strict_mode_raises_in_running_loop(monkeypatch):
     """CHAT_SYNC_IN_EVENT_LOOP_STRICT should raise when chat() is invoked inside a running loop."""
 

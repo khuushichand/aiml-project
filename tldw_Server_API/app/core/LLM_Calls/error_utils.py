@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -16,7 +16,7 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import (
 from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 
 
-def get_http_status_from_exception(exc: Exception) -> Optional[int]:
+def get_http_status_from_exception(exc: Exception) -> int | None:
     """Best-effort extraction of an HTTP status code from common exception shapes."""
     response = getattr(exc, "response", None)
     if response is not None:

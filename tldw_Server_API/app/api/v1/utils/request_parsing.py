@@ -8,12 +8,13 @@ to unit test.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, List, Optional, Sequence
+from collections.abc import Iterable
+from typing import Any
 
 from tldw_Server_API.app.core.TTS.utils import parse_bool as _tts_parse_bool
 
 
-def to_bool(value: Any, default: Optional[bool] = False) -> bool:
+def to_bool(value: Any, default: bool | None = False) -> bool:
     """
     Coerce a value into a boolean.
 
@@ -23,7 +24,7 @@ def to_bool(value: Any, default: Optional[bool] = False) -> bool:
     return _tts_parse_bool(value, default=default)
 
 
-def to_int(value: Any, default: Optional[int] = None) -> Optional[int]:
+def to_int(value: Any, default: int | None = None) -> int | None:
     """
     Coerce a value into an integer.
 
@@ -43,9 +44,9 @@ def to_int(value: Any, default: Optional[int] = None) -> Optional[int]:
         return default
 
 
-def _split_on_delimiters(raw: str) -> List[str]:
+def _split_on_delimiters(raw: str) -> list[str]:
     """Split a string on commas, semicolons, or whitespace."""
-    parts: List[str] = []
+    parts: list[str] = []
     current = []
     for ch in raw:
         if ch in {",", ";", " ", "\t", "\n", "\r"}:
@@ -59,7 +60,7 @@ def _split_on_delimiters(raw: str) -> List[str]:
     return parts
 
 
-def normalize_str_list(value: Any) -> List[str]:
+def normalize_str_list(value: Any) -> list[str]:
     """
     Normalize various list representations into a clean list of strings.
 
@@ -71,7 +72,7 @@ def normalize_str_list(value: Any) -> List[str]:
     if value is None:
         return []
     if isinstance(value, (list, tuple)):
-        out: List[str] = []
+        out: list[str] = []
         for item in value:
             s = str(item).strip()
             if s:
@@ -84,7 +85,7 @@ def normalize_str_list(value: Any) -> List[str]:
     return [s] if s else []
 
 
-def normalize_urls(urls: Any) -> List[str]:
+def normalize_urls(urls: Any) -> list[str]:
     """
     Normalize URL inputs coming from forms/query parameters.
 
@@ -95,7 +96,7 @@ def normalize_urls(urls: Any) -> List[str]:
     """
     raw_list = normalize_str_list(urls)
     seen = set()
-    out: List[str] = []
+    out: list[str] = []
     for url in raw_list:
         if url not in seen:
             seen.add(url)
@@ -103,7 +104,7 @@ def normalize_urls(urls: Any) -> List[str]:
     return out
 
 
-def normalize_optional_sequence(value: Optional[Iterable[Any]]) -> List[Any]:
+def normalize_optional_sequence(value: Iterable[Any] | None) -> list[Any]:
     """
     Normalize an optional iterable into a concrete list.
 

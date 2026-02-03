@@ -24,17 +24,17 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 from scipy.io import wavfile
 
-from tldw_Server_API.app.core.Utils.Utils import logging
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram, timeit
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
-    transcribe_audio,
     is_transcription_error_message,
+    transcribe_audio,
 )
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram, timeit
+from tldw_Server_API.app.core.Utils.Utils import logging
 
 try:  # Optional desktop deps
     import pyaudio  # type: ignore
@@ -64,13 +64,13 @@ class PartialTranscriptionThread(threading.Thread):
         self,
         audio_queue: "queue.Queue[bytes]",
         stop_event: threading.Event,
-        partial_text_state: Dict[str, Any],
+        partial_text_state: dict[str, Any],
         sample_rate: int = 16000,
         chunk_size: int = 1024,
         max_buffer_seconds: float = 20.0,
         transcription_provider: str = "faster-whisper",
         whisper_model: str = "distil-large-v3",
-        speaker_lang: Optional[str] = "en",
+        speaker_lang: str | None = "en",
     ) -> None:
         super().__init__(daemon=True)
         self.audio_queue = audio_queue
@@ -83,7 +83,7 @@ class PartialTranscriptionThread(threading.Thread):
         self.whisper_model = whisper_model
         self.speaker_lang = speaker_lang
 
-        self.exception_encountered: Optional[BaseException] = None
+        self.exception_encountered: BaseException | None = None
 
     def run(self) -> None:  # pragma: no cover - interactive/desktop helper
         try:
@@ -190,7 +190,7 @@ def record_audio_to_disk(
         p.terminate()
 
 
-def stop_recording_short(record_state: Dict[str, Any]):
+def stop_recording_short(record_state: dict[str, Any]):
     """
     Stop active recording threads and return partial transcription results.
 
@@ -219,7 +219,7 @@ def stop_recording_short(record_state: Dict[str, Any]):
     return partial_thread.partial_text_state.get("text"), "", output_file_path
 
 
-def parse_device_id(selected_device_text: str) -> Optional[int]:
+def parse_device_id(selected_device_text: str) -> int | None:
     """
     Parse device ID integer from a string like \"0: Microphone (Realtek Audio)\".
     """
@@ -267,13 +267,13 @@ class LiveAudioStreamer:
         self.stop_event = threading.Event()
 
         self.last_audio_chunk_time = time.time()
-        self.silence_start_time: Optional[float] = None
+        self.silence_start_time: float | None = None
 
         if pyaudio is None:  # pragma: no cover - optional dependency
             raise RuntimeError("PyAudio is not available; install it to use LiveAudioStreamer.")
         self.pa = pyaudio.PyAudio()
         self.stream = None
-        self.listener_thread: Optional[threading.Thread] = None
+        self.listener_thread: threading.Thread | None = None
 
     def audio_callback(self, in_data, frame_count, time_info, status):
         if status:
@@ -310,7 +310,7 @@ class LiveAudioStreamer:
         self.pa.terminate()
 
     def listen_loop(self) -> None:  # pragma: no cover - interactive helper
-        audio_buffer: List[np.ndarray] = []
+        audio_buffer: list[np.ndarray] = []
 
         while not self.stop_event.is_set():
             try:
@@ -358,7 +358,7 @@ class LiveAudioStreamer:
         print("Speech received (text not shown for privacy/security).")
 
 
-def test_device_availability(device_id: Optional[int]) -> bool:
+def test_device_availability(device_id: int | None) -> bool:
     """
     Test if a specific PyAudio input device is available for recording.
     """
@@ -438,7 +438,7 @@ def stop_recording_infinite(
     stop_recording_event.set()
     audio_thread.join()
 
-    frames: List[bytes] = []
+    frames: list[bytes] = []
     while not audio_queue.empty():
         frames.append(audio_queue.get())
 
@@ -455,7 +455,7 @@ def stop_recording_infinite(
 
 
 @timeit
-def save_audio_temp(audio_data: Any, sample_rate: int = 16000) -> Optional[str]:
+def save_audio_temp(audio_data: Any, sample_rate: int = 16000) -> str | None:
     """
     Save audio data (NumPy array or Tensor) to a temporary WAV file and return its path.
     """
@@ -487,7 +487,7 @@ def save_audio_temp(audio_data: Any, sample_rate: int = 16000) -> Optional[str]:
         return None
 
 
-def get_system_audio_devices() -> List[Dict[str, Any]]:
+def get_system_audio_devices() -> list[dict[str, Any]]:
     """
     Return available audio devices for system audio recording, highlighting loopback devices.
     """
@@ -505,7 +505,7 @@ def get_system_audio_devices() -> List[Dict[str, Any]]:
         "mix",
     ]
 
-    devices: List[Dict[str, Any]] = []
+    devices: list[dict[str, Any]] = []
     try:
         host_apis = sd.query_hostapis()
         all_devs = sd.query_devices()

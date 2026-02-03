@@ -4,19 +4,22 @@
 # Imports
 import json
 import os
-import secrets
 from pathlib import Path
 from typing import Annotated, Literal, Optional
-#
-# 3rd-party imports
-from pydantic_settings import BaseSettings, NoDecode
-from pydantic import Field, field_validator
+
 #
 # Local imports
 from loguru import logger
+from pydantic import Field, field_validator
+
+#
+# 3rd-party imports
+from pydantic_settings import BaseSettings, NoDecode
+
 try:
     # Prefer centralized loader to honor project config precedence
-    from tldw_Server_API.app.core.config import load_comprehensive_config, settings as core_settings
+    from tldw_Server_API.app.core.config import load_comprehensive_config
+    from tldw_Server_API.app.core.config import settings as core_settings
 except Exception:
     load_comprehensive_config = None  # Fallback if import graph changes
     core_settings = None
@@ -1165,7 +1168,8 @@ def get_settings() -> Settings:
         # Explicit falsey flags (e.g., TEST_MODE=0) should take precedence so tests can
         # exercise real rate limiting under pytest.
         try:
-            import os as _os, sys as _sys
+            import os as _os
+            import sys as _sys
             truthy = {"1", "true", "yes", "on"}
             falsy = {"0", "false", "no", "off"}
 

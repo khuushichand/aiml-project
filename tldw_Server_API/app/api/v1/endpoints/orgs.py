@@ -6,76 +6,73 @@ Allows users to manage their own organizations, teams, members, and invites.
 """
 from __future__ import annotations
 
-from typing import List, Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+    get_or_create_audit_service_for_user_id,
+)
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
-    get_registration_service_dep,
     get_db_transaction,
+    get_registration_service_dep,
 )
 from tldw_Server_API.app.api.v1.API_Deps.org_deps import (
     OrgContext,
-    require_org_role,
     require_org_admin,
-    require_org_owner,
     require_org_membership,
-    get_user_orgs,
-)
-from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
-    OrgSelfCreateRequest,
-    OrgUpdateRequest,
-    OrgDetailResponse,
-    OrganizationResponse,
-    OrganizationListResponse,
-    OwnershipTransferRequest,
-    TeamCreateRequest,
-    TeamResponse,
-    TeamListResponse,
-    TeamUpdateRequest,
-    TeamMemberAddRequest,
-    TeamMemberResponse,
-    TeamMemberListResponse,
-    OrgMemberAddRequest,
-    OrgMemberResponse,
-    OrgMemberRoleUpdateRequest,
-    OrgMemberListItem,
-    OrgInviteCreateRequest,
-    OrgInviteResponse,
-    OrgInviteListResponse,
-    OrgInviteAcceptRequest,
-    OrgInviteAcceptResponse,
+    require_org_owner,
 )
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     OrgBudgetItem,
     OrgBudgetSelfUpdateRequest,
 )
+from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
+    OrganizationListResponse,
+    OrganizationResponse,
+    OrgDetailResponse,
+    OrgInviteAcceptRequest,
+    OrgInviteAcceptResponse,
+    OrgInviteCreateRequest,
+    OrgInviteListResponse,
+    OrgInviteResponse,
+    OrgMemberAddRequest,
+    OrgMemberListItem,
+    OrgMemberResponse,
+    OrgMemberRoleUpdateRequest,
+    OrgSelfCreateRequest,
+    OrgUpdateRequest,
+    OwnershipTransferRequest,
+    TeamCreateRequest,
+    TeamListResponse,
+    TeamMemberAddRequest,
+    TeamMemberListResponse,
+    TeamMemberResponse,
+    TeamResponse,
+    TeamUpdateRequest,
+)
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DuplicateOrganizationError,
     DuplicateTeamError,
     InvalidRegistrationCodeError,
-    RegistrationCodeExpiredError,
     RegistrationCodeExhaustedError,
+    RegistrationCodeExpiredError,
     RegistrationDisabledError,
 )
-from tldw_Server_API.app.services.org_invite_service import OrgInviteService, get_invite_service
-from tldw_Server_API.app.services.registration_service import RegistrationService
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
 from tldw_Server_API.app.core.Billing.subscription_service import get_subscription_service
 from tldw_Server_API.app.services.admin_budgets_service import (
     list_org_budgets as svc_list_org_budgets,
+)
+from tldw_Server_API.app.services.admin_budgets_service import (
     upsert_org_budget as svc_upsert_org_budget,
 )
 from tldw_Server_API.app.services.budget_audit_service import emit_budget_audit_event
-from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType
-from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
-    get_or_create_audit_service_for_user_id,
-)
-
+from tldw_Server_API.app.services.org_invite_service import get_invite_service
+from tldw_Server_API.app.services.registration_service import RegistrationService
 
 router = APIRouter(
     prefix="/orgs",
@@ -454,7 +451,7 @@ async def transfer_ownership(
 
 @router.get(
     "/{org_id}/members",
-    response_model=List[OrgMemberListItem],
+    response_model=list[OrgMemberListItem],
     summary="List organization members",
 )
 async def list_org_members(

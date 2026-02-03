@@ -4,30 +4,32 @@
 # Imports
 import asyncio
 import gc
-import psutil
+import threading
 import time
 import weakref
 from contextlib import asynccontextmanager
-from typing import Dict, Any, List, Optional, AsyncGenerator, Set, Callable, TYPE_CHECKING
-import threading
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING, Any, Callable, Optional
+
+import psutil
+
 #
 # Third-party Imports
 from loguru import logger
+
 #
 # Local Imports
 from .tts_exceptions import (
-    TTSResourceError,
     TTSInsufficientMemoryError,
-    TTSInsufficientStorageError,
-    TTSModelLoadError,
-    TTSNetworkError
+    TTSNetworkError,
+    TTSResourceError,
 )
+
 #
 # Conditional imports for type checking
 if TYPE_CHECKING:
-    from .adapters.base import TTSAdapter
+    pass
 #
 #######################################################################################################################
 #
@@ -50,7 +52,7 @@ class ResourceMetrics:
     use_count: int = 0
     memory_usage: int = 0  # bytes
     is_active: bool = True
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def update_usage(self):
         """Update usage statistics"""
@@ -84,7 +86,7 @@ class StreamingSession:
         self.chunks_sent = 0
         self.bytes_sent = 0
         self.error_count = 0
-        self._cleanup_tasks: Set[asyncio.Task] = set()
+        self._cleanup_tasks: set[asyncio.Task] = set()
 
     # Backward-compat properties used by tests
     @property
@@ -174,13 +176,13 @@ class HTTPConnectionPool:
         self.timeout = timeout
 
         # Connection pools per provider
-        self._pools: Dict[str, Any] = {}
-        self._pool_metrics: Dict[str, ResourceMetrics] = {}
+        self._pools: dict[str, Any] = {}
+        self._pool_metrics: dict[str, ResourceMetrics] = {}
         self._lock = asyncio.Lock()
 
         # Backward-compatibility: tests reference `_clients`; alias to `_pools`.
     @property
-    def _clients(self) -> Dict[str, Any]:
+    def _clients(self) -> dict[str, Any]:
         return self._pools
 
     async def get_client(self, provider: str, base_url: Optional[str] = None) -> Any:
@@ -258,7 +260,7 @@ class HTTPConnectionPool:
             self._pool_metrics.clear()
             logger.info("Closed all HTTP connection pools")
 
-    def get_stats(self) -> Dict[str, Dict[str, Any]]:
+    def get_stats(self) -> dict[str, dict[str, Any]]:
         """Get connection pool statistics"""
         stats = {}
         for provider, metrics in self._pool_metrics.items():
@@ -307,10 +309,10 @@ class MemoryMonitor:
 
         self._monitoring = False
         self._monitor_task: Optional[asyncio.Task] = None
-        self._model_references: Set[weakref.ReferenceType] = set()
+        self._model_references: set[weakref.ReferenceType] = set()
         self._last_check_time = 0
         self._last_memory_usage = None
-        self._cleanup_callbacks: List[Callable] = []
+        self._cleanup_callbacks: list[Callable] = []
 
         # Get system memory info
         self.total_memory = psutil.virtual_memory().total
@@ -332,7 +334,7 @@ class MemoryMonitor:
 
         logger.debug(f"Registered model for memory monitoring: {type(model_instance).__name__}")
 
-    def get_memory_usage(self) -> Dict[str, Any]:
+    def get_memory_usage(self) -> dict[str, Any]:
         """Get current memory usage statistics (with simple caching and robust fallbacks)"""
         now = time.time()
         if (
@@ -494,15 +496,15 @@ class MemoryMonitor:
 class StreamingSessionManager:
     """Manages streaming audio sessions"""
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         self.config = config or {}
-        self.sessions: Dict[str, StreamingSession] = {}
+        self.sessions: dict[str, StreamingSession] = {}
         self.max_sessions = self.config.get("max_streaming_sessions", 10)
         self._lock = threading.Lock()
 
     # Tests reference `_sessions`; expose alias to `sessions`.
     @property
-    def _sessions(self) -> Dict[str, StreamingSession]:
+    def _sessions(self) -> dict[str, StreamingSession]:
         return self.sessions
 
     async def create_session(self, provider: str, session_id: Optional[str] = None, **kwargs) -> str:
@@ -555,7 +557,7 @@ class StreamingSessionManager:
             return True
         return False
 
-    async def close_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+    async def close_session(self, session_id: str) -> Optional[dict[str, Any]]:
         """Close a streaming session and return stats
 
         Args:
@@ -580,7 +582,7 @@ class StreamingSessionManager:
             "error_count": session.error_count
         }
 
-    def end_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+    def end_session(self, session_id: str) -> Optional[dict[str, Any]]:
         """End a streaming session and return stats"""
         with self._lock:
             session = self.sessions.pop(session_id, None)
@@ -643,7 +645,7 @@ class StreamingSessionManager:
                     logger.warning(f"Unable to close session {sid} during cleanup")
                     session.is_active = False
 
-    async def get_active_sessions(self) -> List[StreamingSession]:
+    async def get_active_sessions(self) -> list[StreamingSession]:
         """Get list of active session objects"""
         return [s for s in self.sessions.values() if s.is_active]
 
@@ -662,7 +664,7 @@ class StreamingSessionManager:
 class TTSResourceManager:
     """Central resource manager for TTS operations"""
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         """
         Initialize TTS resource manager.
 
@@ -689,16 +691,16 @@ class TTSResourceManager:
 
         # Streaming session management
         self.session_manager = StreamingSessionManager(self.config)
-        self._streaming_sessions: Dict[str, StreamingSession] = {}
+        self._streaming_sessions: dict[str, StreamingSession] = {}
         self._session_cleanup_task: Optional[asyncio.Task] = None
         self._session_timeout = self.config.get("streaming_session_timeout", 300)  # 5 minutes
 
         # Model instance tracking
-        self._model_instances: Dict[str, weakref.ReferenceType] = {}
-        self._registered_models: Dict[str, weakref.ReferenceType] = {}
+        self._model_instances: dict[str, weakref.ReferenceType] = {}
+        self._registered_models: dict[str, weakref.ReferenceType] = {}
 
         # Resource cleanup
-        self._cleanup_handlers: Dict[ResourceType, List[Callable]] = {}
+        self._cleanup_handlers: dict[ResourceType, list[Callable]] = {}
 
         logger.info("TTS Resource Manager initialized")
 
@@ -839,7 +841,7 @@ class TTSResourceManager:
         """
         return await self.session_manager.create_session(provider)
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get comprehensive resource statistics in test-expected shape"""
         mem = self.memory_monitor.get_memory_usage()
         connections = {
@@ -880,7 +882,7 @@ class TTSResourceManager:
         # Close all HTTP clients
         await self.connection_pool.close_all()
 
-    def get_resource_stats(self) -> Dict[str, Any]:
+    def get_resource_stats(self) -> dict[str, Any]:
         """Get resource usage statistics"""
         return {
             "http_connections": self.connection_pool.get_stats(),
@@ -910,7 +912,7 @@ _resource_manager: Optional[TTSResourceManager] = None
 _manager_lock = asyncio.Lock()
 
 
-async def get_resource_manager(config: Optional[Dict[str, Any]] = None) -> TTSResourceManager:
+async def get_resource_manager(config: Optional[dict[str, Any]] = None) -> TTSResourceManager:
     """
     Get or create the global TTS resource manager.
 
@@ -948,7 +950,7 @@ reset_resource_manager = close_resource_manager
 
 # Context manager for resource management
 @asynccontextmanager
-async def managed_resources(config: Optional[Dict[str, Any]] = None):
+async def managed_resources(config: Optional[dict[str, Any]] = None):
     """Context manager for TTS resource management"""
     manager = await get_resource_manager(config)
     try:

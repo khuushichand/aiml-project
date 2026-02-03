@@ -5,38 +5,45 @@ Provides webhook registration, delivery, and retry logic for
 asynchronous evaluation notifications.
 """
 
-import json
-import hmac
-import hashlib
 import asyncio
+import hashlib
+import hmac
+import json
 import os
-from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, Optional, List, Tuple
-from dataclasses import dataclass, asdict
-from enum import Enum
-from pathlib import Path
-from loguru import logger
 import secrets
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Optional
+
+from loguru import logger
 
 from tldw_Server_API.app.core.Evaluations.audit_adapter import (
     log_webhook_registration,
     log_webhook_unregistration,
 )
+from tldw_Server_API.app.core.Evaluations.config_manager import get_config
+
 #
 # Local Imports
 from tldw_Server_API.app.core.Evaluations.db_adapter import (
-    DatabaseAdapter, DatabaseConfig, DatabaseType,
-    DatabaseAdapterFactory, get_database_adapter
+    DatabaseAdapter,
+    DatabaseAdapterFactory,
+    DatabaseConfig,
+    DatabaseType,
+    get_database_adapter,
 )
-# Import security enhancements
-from tldw_Server_API.app.core.Evaluations.webhook_security import (
-    webhook_validator,
-    WebhookPermissionManager,
-)
-from tldw_Server_API.app.core.Evaluations.config_manager import get_config
+
 # Remove legacy audit event types; use unified audit adapter
 from tldw_Server_API.app.core.Evaluations.metrics import get_metrics
-from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
+
+# Import security enhancements
+from tldw_Server_API.app.core.Evaluations.webhook_security import (
+    WebhookPermissionManager,
+    webhook_validator,
+)
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
+
 #
 #
 #######################################################################################################################
@@ -73,7 +80,7 @@ class WebhookPayload:
     event: str
     evaluation_id: str
     timestamp: str
-    data: Dict[str, Any]
+    data: dict[str, Any]
 
     def to_json(self) -> str:
         """Convert to JSON string."""
@@ -194,12 +201,12 @@ class WebhookManager:
         self,
         user_id: str,
         url: str,
-        events: List[WebhookEvent],
+        events: list[WebhookEvent],
         secret: Optional[str] = None,
         skip_validation: bool = False,
         retry_count: Optional[int] = None,
         timeout_seconds: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Register a webhook for a user with enhanced security validation.
 
@@ -417,7 +424,7 @@ class WebhookManager:
         user_id: str,
         event: WebhookEvent,
         evaluation_id: str,
-        data: Dict[str, Any]
+        data: dict[str, Any]
     ):
         """
         Send webhook notification to all registered endpoints.
@@ -457,7 +464,7 @@ class WebhookManager:
         self,
         user_id: str,
         event: WebhookEvent
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get active webhooks for user and event."""
         # In TEST_MODE, ignore event filtering to maximize delivery determinism
         from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
@@ -487,7 +494,7 @@ class WebhookManager:
                 AND events LIKE ?
             """, (user_id, f'%"{event.value}"%'))
 
-            webhooks: List[Dict[str, Any]] = []
+            webhooks: list[dict[str, Any]] = []
             for row in rows:
                 webhooks.append({
                     "id": row['id'],
@@ -535,7 +542,7 @@ class WebhookManager:
 
     async def _deliver_webhook(
         self,
-        webhook: Dict[str, Any],
+        webhook: dict[str, Any],
         payload: WebhookPayload
     ):
         """Deliver webhook with retry logic."""
@@ -544,9 +551,10 @@ class WebhookManager:
         secret = webhook["secret"]
 
         # Validate URL before delivery to prevent SSRF
-        from urllib.parse import urlparse
         import ipaddress
         import socket
+        from urllib.parse import urlparse
+
         # In tests, skip DNS validation to keep runs deterministic.
         from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
         testing_env = (_is_test_mode() or "PYTEST_CURRENT_TEST" in os.environ)
@@ -788,7 +796,7 @@ class WebhookManager:
         self,
         user_id: str,
         url: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get webhook status for user.
 
@@ -862,7 +870,7 @@ class WebhookManager:
         self,
         user_id: str,
         url: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Send a test webhook.
 
@@ -920,9 +928,9 @@ class WebhookManager:
         # Send test webhook with DNS rebinding prevention
         try:
             # Parse URL to get hostname and port
-            from urllib.parse import urlparse, urlunparse
-            import socket
             import ipaddress
+            import socket
+            from urllib.parse import urlparse, urlunparse
 
             parsed_url = urlparse(url)
             hostname = parsed_url.hostname

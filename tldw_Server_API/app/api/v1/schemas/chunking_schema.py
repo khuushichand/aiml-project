@@ -1,15 +1,16 @@
 # chunking_schema.py
 #
 # Imports
-from typing import Optional, Any, Dict, List
+from typing import Any, Optional
+
 #
 # Third-party Libraries
-from pydantic import Field, BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
 #
 # Local Imports
-from tldw_Server_API.app.core.Chunking import (
-    DEFAULT_CHUNK_OPTIONS as default_chunk_options_from_lib
-)
+from tldw_Server_API.app.core.Chunking import DEFAULT_CHUNK_OPTIONS as default_chunk_options_from_lib
+
 #
 ###########################################################################################################################
 #
@@ -152,10 +153,10 @@ class ChunkingTextRequest(BaseModel):
 
 class ChunkedContentResponse(BaseModel):
     text: str
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
 
 class ChunkingResponse(BaseModel):
-    chunks: List[ChunkedContentResponse]
+    chunks: list[ChunkedContentResponse]
     original_file_name: Optional[str]
     applied_options: ChunkingOptionsRequest
 
@@ -178,8 +179,8 @@ class ChunkMetadataResponse(BaseModel):
 # --- Capabilities schema ---
 
 class CodeMethodOptions(BaseModel):
-    code_mode: List[str] = Field(description="Supported values for option 'code_mode' when method='code'")
-    language_hints: Dict[str, str] = Field(description="Filename extension to language mapping hints")
+    code_mode: list[str] = Field(description="Supported values for option 'code_mode' when method='code'")
+    language_hints: dict[str, str] = Field(description="Filename extension to language mapping hints")
 
 
 class MethodSpecificOptions(BaseModel):
@@ -187,9 +188,9 @@ class MethodSpecificOptions(BaseModel):
 
 
 class ChunkingCapabilitiesResponse(BaseModel):
-    methods: List[str]
-    default_options: Dict[str, Any]
-    llm_required_methods: List[str]
+    methods: list[str]
+    default_options: dict[str, Any]
+    llm_required_methods: list[str]
     hierarchical_support: bool
     notes: Optional[str] = None
     method_specific_options: Optional[MethodSpecificOptions] = None

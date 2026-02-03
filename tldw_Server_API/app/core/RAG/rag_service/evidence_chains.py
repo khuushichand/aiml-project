@@ -12,15 +12,15 @@ Design:
 - Confidence scoring: Product of node confidences for conservative estimates
 """
 
-import re
 import hashlib
-from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, Set, Tuple
+import re
 from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 from loguru import logger
 
-from .types import Document, Citation, EvidenceNode, EvidenceChain
+from .types import Citation, Document, EvidenceChain, EvidenceNode
 
 
 @dataclass
@@ -28,7 +28,7 @@ class ClaimEvidence:
     """Evidence supporting a specific claim."""
     claim_id: str
     claim_text: str
-    evidence_nodes: List[EvidenceNode] = field(default_factory=list)
+    evidence_nodes: list[EvidenceNode] = field(default_factory=list)
     aggregated_confidence: float = 0.0
     is_supported: bool = False
 
@@ -36,13 +36,13 @@ class ClaimEvidence:
 @dataclass
 class ChainBuildResult:
     """Result from chain building process."""
-    chains: List[EvidenceChain]
-    claims: List[ClaimEvidence]
+    chains: list[EvidenceChain]
+    claims: list[ClaimEvidence]
     overall_confidence: float
     multi_hop_detected: bool
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "chains": [c.to_dict() for c in self.chains],
@@ -99,7 +99,7 @@ def _generate_node_id(doc_id: str, chunk_id: str, fact: str) -> str:
     return hashlib.sha256(content.encode()).hexdigest()[:12]
 
 
-def _extract_claims_heuristic(text: str) -> List[str]:
+def _extract_claims_heuristic(text: str) -> list[str]:
     """Extract claims from text using pattern matching."""
     claims = []
     for pattern in CLAIM_PATTERNS:
@@ -184,9 +184,9 @@ class EvidenceChainBuilder:
     async def build_chains(
         self,
         query: str,
-        documents: List[Document],
+        documents: list[Document],
         generated_answer: Optional[str] = None,
-        existing_citations: Optional[List[Citation]] = None,
+        existing_citations: Optional[list[Citation]] = None,
     ) -> ChainBuildResult:
         """
         Build evidence chains from documents and response.
@@ -221,7 +221,7 @@ class EvidenceChainBuilder:
                 ))
 
         # Extract facts from documents
-        all_nodes: List[EvidenceNode] = []
+        all_nodes: list[EvidenceNode] = []
         for doc in documents:
             nodes = await self._extract_facts_from_document(doc, query)
             all_nodes.extend(nodes)
@@ -267,7 +267,7 @@ class EvidenceChainBuilder:
         self,
         doc: Document,
         query: str,
-    ) -> List[EvidenceNode]:
+    ) -> list[EvidenceNode]:
         """Extract facts from a document."""
         if not doc.content:
             return []
@@ -286,7 +286,7 @@ class EvidenceChainBuilder:
         self,
         doc: Document,
         query: str,
-    ) -> List[EvidenceNode]:
+    ) -> list[EvidenceNode]:
         """Extract facts using heuristic patterns."""
         facts = []
         content = doc.content or ""
@@ -347,7 +347,7 @@ class EvidenceChainBuilder:
         self,
         doc: Document,
         query: str,
-    ) -> List[EvidenceNode]:
+    ) -> list[EvidenceNode]:
         """Extract facts using LLM."""
         try:
             from .generation import AnswerGenerator
@@ -399,8 +399,8 @@ class EvidenceChainBuilder:
     def _find_supporting_nodes(
         self,
         claim: ClaimEvidence,
-        nodes: List[EvidenceNode],
-    ) -> List[EvidenceNode]:
+        nodes: list[EvidenceNode],
+    ) -> list[EvidenceNode]:
         """Find nodes that support a claim."""
         supporting = []
 
@@ -408,9 +408,19 @@ class EvidenceChainBuilder:
             similarity = _compute_text_similarity(claim.claim_text, node.fact)
             if similarity >= self.similarity_threshold:
                 # Adjust confidence based on similarity
-                adjusted_confidence = node.confidence * (0.5 + 0.5 * similarity)
-                node.confidence = min(1.0, adjusted_confidence)
-                supporting.append(node)
+                adjusted_confidence = min(1.0, node.confidence * (0.5 + 0.5 * similarity))
+                supporting.append(
+                    EvidenceNode(
+                        document_id=node.document_id,
+                        chunk_id=node.chunk_id,
+                        fact=node.fact,
+                        confidence=adjusted_confidence,
+                        supports=list(node.supports),
+                        source_text=node.source_text,
+                        extraction_method=node.extraction_method,
+                        metadata=dict(node.metadata),
+                    )
+                )
 
         # Sort by confidence and limit
         supporting.sort(key=lambda n: n.confidence, reverse=True)
@@ -419,14 +429,14 @@ class EvidenceChainBuilder:
     def _build_chains_from_nodes(
         self,
         query: str,
-        nodes: List[EvidenceNode],
-        claims: List[ClaimEvidence],
-    ) -> List[EvidenceChain]:
+        nodes: list[EvidenceNode],
+        claims: list[ClaimEvidence],
+    ) -> list[EvidenceChain]:
         """Build evidence chains from nodes and claims."""
         chains = []
 
         # Group nodes by the claims they support
-        claim_to_nodes: Dict[str, List[EvidenceNode]] = defaultdict(list)
+        claim_to_nodes: dict[str, list[EvidenceNode]] = defaultdict(list)
         for node in nodes:
             for claim_id in node.supports:
                 claim_to_nodes[claim_id].append(node)
@@ -514,7 +524,7 @@ class EvidenceChainBuilder:
 
 async def build_evidence_chains(
     query: str,
-    documents: List[Document],
+    documents: list[Document],
     generated_answer: Optional[str] = None,
 ) -> ChainBuildResult:
     """

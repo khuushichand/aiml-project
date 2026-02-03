@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import hashlib
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, Response, status
 from loguru import logger
 
-import hashlib
-
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     MediaKeywordsUpdateRequest,
     MediaUpdateRequest,
@@ -33,7 +32,6 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     fetch_keywords_for_media,
     permanently_delete_item,
 )
-
 
 router = APIRouter(tags=["Media Management"])
 
@@ -459,7 +457,7 @@ async def update_media_item(
         payload.model_dump(exclude_unset=True),
     )
 
-    update_fields: Dict[str, Any] = payload.model_dump(exclude_unset=True)
+    update_fields: dict[str, Any] = payload.model_dump(exclude_unset=True)
 
     # No-op update: return current representation if the item exists,
     # matching the legacy handler's behaviour.
@@ -494,7 +492,7 @@ async def update_media_item(
         invalidate_rag_caches(current_user, media_id=media_id)
         return MediaDetailResponse(**details)
 
-    new_doc_version_info: Optional[Dict[str, Any]] = None
+    new_doc_version_info: dict[str, Any] | None = None
 
     try:
         # Single transaction for all DB operations.

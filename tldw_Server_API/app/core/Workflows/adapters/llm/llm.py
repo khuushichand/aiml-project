@@ -8,19 +8,18 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 from tldw_Server_API.app.core.exceptions import AdapterError
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters._common import extract_openai_content
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.llm._config import (
-    LLMConfig,
-    LLMWithToolsConfig,
     LLMCompareConfig,
+    LLMConfig,
     LLMCritiqueConfig,
+    LLMWithToolsConfig,
 )
 
 
@@ -32,7 +31,7 @@ from tldw_Server_API.app.core.Workflows.adapters.llm._config import (
     tags=["core", "ai"],
     config_model=LLMConfig,
 )
-async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_llm_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Execute an LLM chat completion via the adapter registry.
 
     Config (subset; additional keys passed through):
@@ -48,8 +47,8 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
       - metadata: token_usage/cost if available
       - response: raw provider response (optional)
     """
-    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
     from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
     from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
 
     def _render_str(val: Any) -> Any:
@@ -64,7 +63,7 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
                 return val
         return val
 
-    def _render_message(msg: Any) -> Optional[Dict[str, Any]]:
+    def _render_message(msg: Any) -> dict[str, Any] | None:
         if isinstance(msg, dict):
             out = dict(msg)
             if isinstance(out.get("content"), str):
@@ -98,7 +97,7 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
 
     messages_cfg = config.get("messages") or config.get("messages_payload")
     prompt = config.get("prompt") or config.get("input") or config.get("template")
-    messages: List[Dict[str, Any]] = []
+    messages: list[dict[str, Any]] = []
 
     if messages_cfg is None:
         if not prompt:
@@ -153,7 +152,7 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     stream = bool(config.get("stream", False))
     include_response = bool(config.get("include_response", False))
 
-    call_args: Dict[str, Any] = {
+    call_args: dict[str, Any] = {
         "api_endpoint": provider,
         "messages_payload": messages,
         "system_message": system_message,
@@ -213,8 +212,8 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
 
     response = await perform_chat_api_call_async(**call_args)
     text = extract_openai_content(response) or ""
-    out: Dict[str, Any] = {"text": text}
-    metadata: Dict[str, Any] = {}
+    out: dict[str, Any] = {"text": text}
+    metadata: dict[str, Any] = {}
     if isinstance(response, dict):
         usage = response.get("usage")
         if isinstance(usage, dict):
@@ -236,7 +235,7 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     tags=["ai", "tools", "agentic"],
     config_model=LLMWithToolsConfig,
 )
-async def run_llm_with_tools_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_llm_with_tools_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """LLM call that can invoke defined tools.
 
     Config:
@@ -342,7 +341,7 @@ async def run_llm_with_tools_adapter(config: Dict[str, Any], context: Dict[str, 
     tags=["ai", "comparison"],
     config_model=LLMCompareConfig,
 )
-async def run_llm_compare_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_llm_compare_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Run same prompt through multiple LLMs and compare.
 
     Config:
@@ -436,7 +435,7 @@ async def run_llm_compare_adapter(config: Dict[str, Any], context: Dict[str, Any
     tags=["ai", "evaluation"],
     config_model=LLMCritiqueConfig,
 )
-async def run_llm_critique_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_llm_critique_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Run LLM critique on content (Constitutional AI pattern).
 
     Config:

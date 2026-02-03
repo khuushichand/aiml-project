@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Optional
 
 from loguru import logger
 
 
-def _is_truthy(value: Optional[str]) -> bool:
+def _is_truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-async def run_loop_lag_watchdog(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_loop_lag_watchdog(stop_event: asyncio.Event | None = None) -> None:
     """Log event-loop lag when the loop is blocked beyond a threshold.
 
     Env vars:
@@ -23,7 +22,7 @@ async def run_loop_lag_watchdog(stop_event: Optional[asyncio.Event] = None) -> N
     if not _is_truthy(os.getenv("EVENT_LOOP_LAG_WATCHDOG_ENABLED", "")):
         return
 
-    def _coerce_int(raw: Optional[str], default: int) -> int:
+    def _coerce_int(raw: str | None, default: int) -> int:
         try:
             return int(str(raw or "").strip() or default)
         except (TypeError, ValueError):

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -34,14 +33,14 @@ class AnnotationCreate(BaseModel):
     )
     text: str = Field(..., description="The selected/highlighted text (or note content for page_note)")
     color: AnnotationColor = Field(default=AnnotationColor.yellow, description="Highlight color")
-    note: Optional[str] = Field(None, description="Additional note attached to the annotation")
+    note: str | None = Field(None, description="Additional note attached to the annotation")
     annotation_type: AnnotationType = Field(
         default=AnnotationType.highlight, description="Type of annotation"
     )
-    chapter_title: Optional[str] = Field(
+    chapter_title: str | None = Field(
         None, description="Chapter title for EPUB annotations"
     )
-    percentage: Optional[float] = Field(
+    percentage: float | None = Field(
         None, ge=0, le=100, description="Reading percentage (0-100) for EPUB annotations"
     )
 
@@ -49,9 +48,9 @@ class AnnotationCreate(BaseModel):
 class AnnotationUpdate(BaseModel):
     """Request body for updating an existing annotation."""
 
-    text: Optional[str] = Field(None, description="Updated highlighted text")
-    color: Optional[AnnotationColor] = Field(None, description="Updated highlight color")
-    note: Optional[str] = Field(None, description="Updated note content")
+    text: str | None = Field(None, description="Updated highlighted text")
+    color: AnnotationColor | None = Field(None, description="Updated highlight color")
+    note: str | None = Field(None, description="Updated note content")
 
 
 class AnnotationResponse(BaseModel):
@@ -62,14 +61,14 @@ class AnnotationResponse(BaseModel):
     location: str = Field(..., description="Page number or EPUB CFI")
     text: str = Field(..., description="The highlighted/annotated text")
     color: AnnotationColor = Field(..., description="Highlight color")
-    note: Optional[str] = Field(None, description="Additional note")
+    note: str | None = Field(None, description="Additional note")
     annotation_type: AnnotationType = Field(
         default=AnnotationType.highlight, description="Type of annotation"
     )
-    chapter_title: Optional[str] = Field(
+    chapter_title: str | None = Field(
         None, description="Chapter title for EPUB annotations"
     )
-    percentage: Optional[float] = Field(
+    percentage: float | None = Field(
         None, description="Reading percentage (0-100) for EPUB annotations"
     )
     created_at: datetime = Field(..., description="When the annotation was created")
@@ -80,7 +79,7 @@ class AnnotationListResponse(BaseModel):
     """Response containing all annotations for a document."""
 
     media_id: int = Field(..., description="ID of the media item")
-    annotations: List[AnnotationResponse] = Field(
+    annotations: list[AnnotationResponse] = Field(
         default_factory=list, description="List of annotations"
     )
     total_count: int = Field(..., ge=0, description="Total number of annotations")
@@ -89,10 +88,10 @@ class AnnotationListResponse(BaseModel):
 class AnnotationSyncRequest(BaseModel):
     """Request body for batch syncing annotations."""
 
-    annotations: List[AnnotationCreate] = Field(
+    annotations: list[AnnotationCreate] = Field(
         ..., description="List of annotations to sync"
     )
-    client_ids: Optional[List[str]] = Field(
+    client_ids: list[str] | None = Field(
         None,
         description="Optional client-generated IDs to match with server IDs in response",
     )
@@ -103,10 +102,10 @@ class AnnotationSyncResponse(BaseModel):
 
     media_id: int = Field(..., description="ID of the media item")
     synced_count: int = Field(..., ge=0, description="Number of annotations synced")
-    annotations: List[AnnotationResponse] = Field(
+    annotations: list[AnnotationResponse] = Field(
         default_factory=list, description="Synced annotations with server IDs"
     )
-    id_mapping: Optional[dict] = Field(
+    id_mapping: dict | None = Field(
         None, description="Mapping from client_ids to server IDs if client_ids were provided"
     )
 

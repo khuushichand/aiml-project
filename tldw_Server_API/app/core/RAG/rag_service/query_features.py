@@ -6,19 +6,18 @@ This module provides query understanding, intent detection, query rewriting,
 and other advanced query processing capabilities.
 """
 
+import os
 import re
-import hashlib
+from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict, Any, Optional, Tuple, Set
-from collections import defaultdict
-import json
+from typing import Any, Optional, cast
 
-from loguru import logger
-import os
 import nltk
-from nltk.corpus import wordnet, stopwords
+from loguru import logger
+from nltk.corpus import stopwords, wordnet
 from nltk.tokenize import word_tokenize
+
 
 # --- NLTK downloads guarded by timeout ---
 def _download_with_timeout(resource: str, timeout_s: int = 60) -> bool:
@@ -27,8 +26,8 @@ def _download_with_timeout(resource: str, timeout_s: int = 60) -> bool:
     Returns True on success, False on timeout/failure. Uses a daemon thread so
     it never blocks process shutdown if the network hangs.
     """
-    import threading
     import queue
+    import threading
 
     q: "queue.Queue[bool]" = queue.Queue(maxsize=1)
 
@@ -110,12 +109,12 @@ class QueryAnalysis:
     cleaned_query: str
     intent: QueryIntent
     complexity: QueryComplexity
-    key_terms: List[str]
-    entities: List[str]
-    temporal_refs: List[str]
+    key_terms: list[str]
+    entities: list[str]
+    temporal_refs: list[str]
     question_type: Optional[str] = None
     domain: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -145,16 +144,16 @@ class QueryAnalyzer:
         self.domain_keywords = self._load_domain_keywords()
 
     @staticmethod
-    def _safe_word_tokenize(text: str) -> List[str]:
+    def _safe_word_tokenize(text: str) -> list[str]:
         """Tokenize text, falling back if punkt is unavailable."""
         try:
-            return word_tokenize(text)
+            return cast(list[str], word_tokenize(text))
         except LookupError:
             import re
             # Simple fallback: split into words and punctuation
             return re.findall(r"\w+|[^\w\s]", text, re.UNICODE)
 
-    def _compile_intent_patterns(self) -> Dict[QueryIntent, List[re.Pattern]]:
+    def _compile_intent_patterns(self) -> dict[QueryIntent, list[re.Pattern]]:
         """Compile regex patterns for intent detection."""
         patterns = {
             QueryIntent.FACTUAL: [
@@ -193,7 +192,7 @@ class QueryAnalyzer:
         }
         return patterns
 
-    def _load_domain_keywords(self) -> Dict[str, Set[str]]:
+    def _load_domain_keywords(self) -> dict[str, set[str]]:
         """Load domain-specific keywords."""
         return {
             "technology": {"software", "hardware", "code", "programming", "algorithm",
@@ -274,7 +273,7 @@ class QueryAnalyzer:
         query_lower = query.lower()
 
         # Check each intent pattern
-        intent_scores = defaultdict(int)
+        intent_scores: defaultdict[QueryIntent, int] = defaultdict(int)
 
         for intent, patterns in self.intent_patterns.items():
             for pattern in patterns:
@@ -307,7 +306,7 @@ class QueryAnalyzer:
         else:
             return QueryComplexity.COMPLEX
 
-    def _extract_key_terms(self, query: str) -> List[str]:
+    def _extract_key_terms(self, query: str) -> list[str]:
         """Extract key terms from query."""
         words = self._safe_word_tokenize(query.lower())
 
@@ -327,7 +326,7 @@ class QueryAnalyzer:
 
         return unique_terms
 
-    def _extract_entities(self, query: str) -> List[str]:
+    def _extract_entities(self, query: str) -> list[str]:
         """Extract named entities from query."""
         entities = []
 
@@ -344,7 +343,7 @@ class QueryAnalyzer:
 
         return entities
 
-    def _extract_temporal_references(self, query: str) -> List[str]:
+    def _extract_temporal_references(self, query: str) -> list[str]:
         """Extract temporal references from query."""
         temporal_refs = []
 
@@ -418,10 +417,10 @@ class QueryRewriter:
     def rewrite_query(
         self,
         query: str,
-        strategies: Optional[List[str]] = None,
-        failed_docs: Optional[List[Any]] = None,
+        strategies: Optional[list[str]] = None,
+        failed_docs: Optional[list[Any]] = None,
         failure_reason: Optional[str] = None,
-    ) -> List[QueryRewrite]:
+    ) -> list[QueryRewrite]:
         """
         Rewrite query using various strategies.
 
@@ -437,7 +436,7 @@ class QueryRewriter:
         if strategies is None:
             strategies = ["synonym", "decompose", "generalize", "specify"]
 
-        rewrites = []
+        rewrites: list[QueryRewrite] = []
 
         # Analyze original query
         analysis = self.analyzer.analyze_query(query)
@@ -462,9 +461,9 @@ class QueryRewriter:
         self,
         query: str,
         analysis: QueryAnalysis
-    ) -> List[QueryRewrite]:
+    ) -> list[QueryRewrite]:
         """Rewrite query using synonyms."""
-        rewrites = []
+        rewrites: list[QueryRewrite] = []
 
         for term in analysis.key_terms:
             synonyms = self._get_synonyms(term)
@@ -485,9 +484,9 @@ class QueryRewriter:
         self,
         query: str,
         analysis: QueryAnalysis
-    ) -> List[QueryRewrite]:
+    ) -> list[QueryRewrite]:
         """Decompose complex query into simpler parts."""
-        rewrites = []
+        rewrites: list[QueryRewrite] = []
 
         if analysis.complexity != QueryComplexity.COMPLEX:
             return rewrites
@@ -512,7 +511,7 @@ class QueryRewriter:
         self,
         query: str,
         analysis: QueryAnalysis
-    ) -> List[QueryRewrite]:
+    ) -> list[QueryRewrite]:
         """Generalize specific query."""
         rewrites = []
 
@@ -539,7 +538,7 @@ class QueryRewriter:
         self,
         query: str,
         analysis: QueryAnalysis
-    ) -> List[QueryRewrite]:
+    ) -> list[QueryRewrite]:
         """Add specificity to vague query."""
         rewrites = []
 
@@ -569,7 +568,7 @@ class QueryRewriter:
         self,
         query: str,
         analysis: QueryAnalysis
-    ) -> List[QueryRewrite]:
+    ) -> list[QueryRewrite]:
         """Clarify ambiguous query."""
         rewrites = []
 
@@ -593,7 +592,7 @@ class QueryRewriter:
 
         return rewrites
 
-    def _get_synonyms(self, word: str) -> List[str]:
+    def _get_synonyms(self, word: str) -> list[str]:
         """Get synonyms for a word using WordNet."""
         synonyms = set()
 
@@ -611,9 +610,9 @@ class QueryRewriter:
         self,
         query: str,
         analysis: QueryAnalysis,
-        failed_docs: Optional[List[Any]] = None,
+        failed_docs: Optional[list[Any]] = None,
         failure_reason: Optional[str] = None,
-    ) -> List[QueryRewrite]:
+    ) -> list[QueryRewrite]:
         """
         Rewrite query to improve retrieval when document grading shows low relevance.
 
@@ -744,7 +743,7 @@ class QueryRewriter:
         self,
         query: str,
         analysis: QueryAnalysis,
-        failed_docs: List[Any],
+        failed_docs: list[Any],
     ) -> Optional[str]:
         """Extract potentially useful entities from failed docs and incorporate them."""
         if not failed_docs:
@@ -819,14 +818,22 @@ class QueryRewriter:
         # Get hypernyms (broader concepts) for key terms
         expanded_terms = []
         for term in analysis.key_terms[:3]:  # Limit to first 3 key terms
-            synsets = wordnet.synsets(term)
-            for syn in synsets[:1]:  # First synset
-                hypernyms = syn.hypernyms()
-                for hyp in hypernyms[:1]:  # First hypernym
-                    lemma = hyp.lemmas()[0].name().replace('_', ' ')
-                    if lemma.lower() not in query.lower():
-                        expanded_terms.append(lemma)
-                        break
+            try:
+                synsets = wordnet.synsets(term)
+                for syn in synsets[:1]:  # First synset
+                    hypernyms = syn.hypernyms()
+                    for hyp in hypernyms[:1]:  # First hypernym
+                        lemma = hyp.lemmas()[0].name().replace('_', ' ')
+                        if lemma.lower() not in query.lower():
+                            expanded_terms.append(lemma)
+                            break
+            except LookupError as exc:
+                logger.debug(
+                    "NLTK WordNet unavailable; skipping related concept expansion for '{}': {}",
+                    term,
+                    exc,
+                )
+                continue
 
         if not expanded_terms:
             return None
@@ -843,7 +850,7 @@ class QueryRouter:
         self.analyzer = QueryAnalyzer()
         self.routing_rules = self._define_routing_rules()
 
-    def _define_routing_rules(self) -> Dict[QueryIntent, Dict[str, Any]]:
+    def _define_routing_rules(self) -> dict[QueryIntent, dict[str, Any]]:
         """Define routing rules based on query intent."""
         return {
             QueryIntent.FACTUAL: {
@@ -878,7 +885,7 @@ class QueryRouter:
             }
         }
 
-    def route_query(self, query: str) -> Dict[str, Any]:
+    def route_query(self, query: str) -> dict[str, Any]:
         """
         Route query to appropriate retrieval strategy.
 

@@ -5,14 +5,14 @@ Manages module lifecycle and provides intelligent routing with failover.
 """
 
 import asyncio
-from typing import Dict, Any, Optional, List, Set, Type
-from datetime import datetime, timedelta, timezone
-from enum import Enum
 from dataclasses import dataclass, field
-from loguru import logger
-import time
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Optional
 
-from .base import BaseModule, ModuleConfig, HealthStatus, ModuleHealth
+from loguru import logger
+
+from .base import BaseModule, HealthStatus, ModuleConfig, ModuleHealth
 
 
 class ModuleStatus(str, Enum):
@@ -29,14 +29,14 @@ class ModuleStatus(str, Enum):
 class ModuleRegistration:
     """Module registration information"""
     module_id: str
-    module_type: Type[BaseModule]
+    module_type: type[BaseModule]
     module_instance: Optional[BaseModule]
     config: ModuleConfig
     status: ModuleStatus
     registered_at: datetime
     last_health_check: Optional[datetime] = None
     error_message: Optional[str] = None
-    capabilities: Set[str] = field(default_factory=set)
+    capabilities: set[str] = field(default_factory=set)
 
     def is_operational(self) -> bool:
         """Check if module is operational"""
@@ -56,17 +56,17 @@ class ModuleRegistry:
     """
 
     def __init__(self, health_check_interval: int = 60):
-        self._modules: Dict[str, ModuleRegistration] = {}
-        self._module_instances: Dict[str, BaseModule] = {}
+        self._modules: dict[str, ModuleRegistration] = {}
+        self._module_instances: dict[str, BaseModule] = {}
         self._lock = asyncio.Lock()
         self._health_check_interval = health_check_interval
         self._health_check_task = None
         self._shutdown = False
 
         # Tool/Resource/Prompt to module mapping for fast lookup
-        self._tool_registry: Dict[str, str] = {}  # tool_name -> module_id
-        self._resource_registry: Dict[str, str] = {}  # resource_uri -> module_id
-        self._prompt_registry: Dict[str, str] = {}  # prompt_name -> module_id
+        self._tool_registry: dict[str, str] = {}  # tool_name -> module_id
+        self._resource_registry: dict[str, str] = {}  # resource_uri -> module_id
+        self._prompt_registry: dict[str, str] = {}  # prompt_name -> module_id
 
         logger.info("Module registry initialized")
 
@@ -106,7 +106,7 @@ class ModuleRegistry:
     async def register_module(
         self,
         module_id: str,
-        module_type: Type[BaseModule],
+        module_type: type[BaseModule],
         config: ModuleConfig
     ) -> None:
         """
@@ -247,7 +247,7 @@ class ModuleRegistry:
             return registration.module_instance
         return None
 
-    async def get_all_modules(self) -> Dict[str, BaseModule]:
+    async def get_all_modules(self) -> dict[str, BaseModule]:
         """Get all operational modules"""
         result = {}
         for module_id, registration in self._modules.items():
@@ -309,7 +309,7 @@ class ModuleRegistry:
         """Return module id for a prompt name, if cached."""
         return self._prompt_registry.get(name)
 
-    async def check_all_health(self) -> Dict[str, ModuleHealth]:
+    async def check_all_health(self) -> dict[str, ModuleHealth]:
         """Check health of all modules"""
         health_results = {}
 
@@ -347,7 +347,7 @@ class ModuleRegistry:
 
         return health_results
 
-    async def get_module_status(self, module_id: str) -> Optional[Dict[str, Any]]:
+    async def get_module_status(self, module_id: str) -> Optional[dict[str, Any]]:
         """Get detailed status for a module"""
         registration = self._modules.get(module_id)
         if not registration:
@@ -377,7 +377,7 @@ class ModuleRegistry:
 
         return status
 
-    async def list_registrations(self) -> List[Dict[str, Any]]:
+    async def list_registrations(self) -> list[dict[str, Any]]:
         """List all module registrations"""
         registrations = []
 
@@ -418,7 +418,7 @@ class ModuleRegistry:
     async def execute_with_failover(
         self,
         primary_module_id: str,
-        fallback_module_ids: List[str],
+        fallback_module_ids: list[str],
         operation: str,
         *args,
         **kwargs
@@ -491,7 +491,7 @@ async def reset_module_registry() -> None:
 
 async def register_module(
     module_id: str,
-    module_type: Type[BaseModule],
+    module_type: type[BaseModule],
     config: ModuleConfig
 ) -> None:
     """Convenience function to register a module"""

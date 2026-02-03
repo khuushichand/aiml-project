@@ -8,7 +8,8 @@ on deprecated APIs such as ``BaseModel.dict``.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Iterable, Optional, Set
+from collections.abc import Iterable
+from typing import Any
 
 from fastapi.encoders import jsonable_encoder
 
@@ -17,9 +18,9 @@ def model_dump_compat(
     obj: Any,
     *,
     exclude_none: bool = False,
-    exclude: Optional[Iterable[Any]] = None,
+    exclude: Iterable[Any] | None = None,
     exclude_unset: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Convert a Pydantic model or dict-like object into a plain dictionary.
 
@@ -30,12 +31,12 @@ def model_dump_compat(
     if obj is None:
         return {}
 
-    exclude_set: Optional[Set[Any]] = set(exclude) if exclude is not None else None
+    exclude_set: set[Any] | None = set(exclude) if exclude is not None else None
 
     dump_method = getattr(obj, "model_dump", None)
     if callable(dump_method):
         try:
-            kwargs: Dict[str, Any] = {"exclude_none": exclude_none}
+            kwargs: dict[str, Any] = {"exclude_none": exclude_none}
             if exclude_set is not None:
                 kwargs["exclude"] = exclude_set
             if exclude_unset:
@@ -47,7 +48,7 @@ def model_dump_compat(
     dump_json_method = getattr(obj, "model_dump_json", None)
     if callable(dump_json_method):
         try:
-            kwargs: Dict[str, Any] = {}
+            kwargs: dict[str, Any] = {}
             if exclude_set is not None:
                 kwargs["exclude"] = list(exclude_set)
             if exclude_unset:

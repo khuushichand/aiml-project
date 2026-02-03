@@ -4,10 +4,11 @@ Role-Based Access Control (RBAC) for unified MCP module
 Implements fine-grained permission management with role inheritance.
 """
 
-from typing import Set, List, Optional, Dict, Any
-from enum import Enum
 from dataclasses import dataclass, field
+from enum import Enum
 from functools import lru_cache
+from typing import Any, Optional
+
 from loguru import logger
 
 
@@ -54,7 +55,7 @@ class Permission:
     resource: Resource
     action: Action
     resource_id: Optional[str] = None  # None means all resources of this type
-    conditions: Dict[str, Any] = field(default_factory=dict)
+    conditions: dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:
         resource_part = f"{self.resource.value}:{self.resource_id or '*'}"
@@ -91,8 +92,8 @@ class Role:
     """A role is a collection of permissions with inheritance support"""
     name: str
     description: str
-    permissions: Set[Permission] = field(default_factory=set)
-    inherits_from: Set[str] = field(default_factory=set)
+    permissions: set[Permission] = field(default_factory=set)
+    inherits_from: set[str] = field(default_factory=set)
 
     def add_permission(self, permission: Permission):
         """Add a permission to this role"""
@@ -118,9 +119,9 @@ class RBACPolicy:
     """
 
     def __init__(self):
-        self.roles: Dict[str, Role] = {}
-        self.user_roles: Dict[str, Set[str]] = {}
-        self.user_permissions: Dict[str, Set[Permission]] = {}
+        self.roles: dict[str, Role] = {}
+        self.user_roles: dict[str, set[str]] = {}
+        self.user_permissions: dict[str, set[Permission]] = {}
 
         # Initialize default roles
         self._init_default_roles()
@@ -313,7 +314,7 @@ class RBACPolicy:
             )
 
     @lru_cache(maxsize=1000)
-    def _get_user_permissions(self, user_id: str) -> Set[Permission]:
+    def _get_user_permissions(self, user_id: str) -> set[Permission]:
         """
         Get all permissions for a user (cached).
 
@@ -381,11 +382,11 @@ class RBACPolicy:
         )
         return False
 
-    def get_user_roles(self, user_id: str) -> Set[str]:
+    def get_user_roles(self, user_id: str) -> set[str]:
         """Get all roles for a user"""
         return self.user_roles.get(user_id, set())
 
-    def get_user_permissions_list(self, user_id: str) -> List[str]:
+    def get_user_permissions_list(self, user_id: str) -> list[str]:
         """Get a list of all permissions for a user (for display)"""
         permissions = self._get_user_permissions(user_id)
         return [str(p) for p in permissions]

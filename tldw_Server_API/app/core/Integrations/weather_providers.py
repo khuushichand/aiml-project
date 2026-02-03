@@ -11,23 +11,22 @@ and future providers to plug in.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Dict
 
 
 @dataclass
 class WeatherResult:
     ok: bool
     summary: str
-    metadata: Dict
+    metadata: dict
 
 
 class WeatherClient:
-    def get_current(self, location: Optional[str] = None, lat: Optional[float] = None, lon: Optional[float] = None) -> WeatherResult:
+    def get_current(self, location: str | None = None, lat: float | None = None, lon: float | None = None) -> WeatherResult:
         raise NotImplementedError
 
 
 class NoKeyWeatherClient(WeatherClient):
-    def get_current(self, location: Optional[str] = None, lat: Optional[float] = None, lon: Optional[float] = None) -> WeatherResult:
+    def get_current(self, location: str | None = None, lat: float | None = None, lon: float | None = None) -> WeatherResult:
         loc = location or (f"{lat},{lon}" if lat is not None and lon is not None else "your area")
         return WeatherResult(
             ok=False,

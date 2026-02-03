@@ -8,15 +8,19 @@ with storage in MediaDatabase.Claims. Optional, behind config flags.
 from __future__ import annotations
 
 import hashlib
-import uuid
 import re
 import time
-from typing import Any, Dict, List, Optional
+import uuid
+from typing import Any
 
 from loguru import logger
-from tldw_Server_API.app.core.config import settings as _settings
+
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
-from tldw_Server_API.app.core.Claims_Extraction.review_assignment import apply_review_rules
+from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
+    ClaimsJobBudget,
+    ClaimsJobContext,
+    estimate_claims_tokens,
+)
 from tldw_Server_API.app.core.Claims_Extraction.extractor_catalog import (
     LLM_PROVIDER_MODES,
     detect_claims_language,
@@ -25,11 +29,6 @@ from tldw_Server_API.app.core.Claims_Extraction.extractor_catalog import (
     resolve_ner_model_name,
     split_claims_sentences,
 )
-from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
-    ClaimsJobBudget,
-    ClaimsJobContext,
-    estimate_claims_tokens,
-)
 from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     estimate_claims_cost,
     record_claims_budget_exhausted,
@@ -37,7 +36,8 @@ from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     record_claims_throttle,
     should_throttle_claims_provider,
 )
-from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+from tldw_Server_API.app.core.Claims_Extraction.review_assignment import apply_review_rules
+from tldw_Server_API.app.core.config import settings as _settings
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
@@ -46,6 +46,7 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
     split_system_message,
 )
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 try:
     # Local import for DB helper
@@ -57,20 +58,20 @@ except Exception:  # pragma: no cover
 
 
 def extract_claims_for_chunks(
-    chunks: List[Dict[str, Any]],
+    chunks: list[dict[str, Any]],
     *,
     extractor_mode: str = "heuristic",
     max_per_chunk: int = 3,
-    language: Optional[str] = None,
-    budget: Optional[ClaimsJobBudget] = None,
-    job_context: Optional[ClaimsJobContext] = None,
-) -> List[Dict[str, Any]]:
+    language: str | None = None,
+    budget: ClaimsJobBudget | None = None,
+    job_context: ClaimsJobContext | None = None,
+) -> list[dict[str, Any]]:
     """
     Extract a small set of candidate factual statements per chunk.
 
     Returns items with: chunk_index, claim_text.
     """
-    claims: List[Dict[str, Any]] = []
+    claims: list[dict[str, Any]] = []
     resolved_mode = (extractor_mode or "heuristic").strip().lower()
     resolved_language = (language or "").strip().lower() if language else None
     if resolved_mode in {"auto", "detect"}:
@@ -121,7 +122,6 @@ def extract_claims_for_chunks(
             try:
                 cost_estimate = None
                 import concurrent.futures as _futures
-                import threading as _threading
 
                 # Determine provider: explicit mode may be a provider name; otherwise use config
                 provider = mode if mode in LLM_PROVIDER_MODES else str(_settings.get("CLAIMS_LLM_PROVIDER", "openai")).lower()
@@ -333,8 +333,8 @@ def store_claims(
     db: "MediaDatabase",
     *,
     media_id: int,
-    chunk_texts_by_index: Dict[int, str],
-    claims: List[Dict[str, Any]],
+    chunk_texts_by_index: dict[int, str],
+    claims: list[dict[str, Any]],
     extractor: str = "heuristic",
     extractor_version: str = "v1",
 ) -> int:
@@ -344,8 +344,8 @@ def store_claims(
     """
     if not claims:
         return 0
-    rows: List[Dict[str, Any]] = []
-    assignments: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+    assignments: list[dict[str, Any]] = []
     for c in claims:
         idx = int(c.get("chunk_index", 0))
         ctext = str(c.get("claim_text", ""))

@@ -9,15 +9,15 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.content._config import (
-    CitationsConfig,
     BibliographyGenerateConfig,
+    CitationsConfig,
 )
 
 
@@ -29,7 +29,7 @@ from tldw_Server_API.app.core.Workflows.adapters.content._config import (
     tags=["content", "citations"],
     config_model=CitationsConfig,
 )
-async def run_citations_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_citations_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate academic citations from documents.
 
     Config:
@@ -48,7 +48,7 @@ async def run_citations_adapter(config: Dict[str, Any], context: Dict[str, Any])
 
     # Get documents
     documents_raw = config.get("documents")
-    documents: List[Dict[str, Any]] = []
+    documents: list[dict[str, Any]] = []
 
     if documents_raw:
         # Template if it's a string reference
@@ -171,7 +171,7 @@ async def run_citations_adapter(config: Dict[str, Any], context: Dict[str, Any])
             CitationGenerator,
             CitationStyle,
         )
-        from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
+        from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
 
         # Map style string to enum
         style_enum_map = {
@@ -184,7 +184,7 @@ async def run_citations_adapter(config: Dict[str, Any], context: Dict[str, Any])
         style_enum = style_enum_map.get(style, CitationStyle.APA)
 
         # Convert input documents to Document objects
-        doc_objects: List[Document] = []
+        doc_objects: list[Document] = []
         for i, doc in enumerate(documents[:max_citations]):
             content = doc.get("content") or doc.get("text") or str(doc)
             metadata = doc.get("metadata") or {}
@@ -254,7 +254,7 @@ async def run_citations_adapter(config: Dict[str, Any], context: Dict[str, Any])
     tags=["content", "citations"],
     config_model=BibliographyGenerateConfig,
 )
-async def run_bibliography_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_bibliography_generate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate formatted bibliography/citations from sources.
 
     Config:

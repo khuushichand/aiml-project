@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
-
 
 AnchorStrategy = Literal["fuzzy_quote", "exact_offset"]
 HighlightState = Literal["active", "stale"]
@@ -19,34 +18,34 @@ class HighlightCreateRequest(BaseModel):
 
     item_id: int
     quote: str = Field(..., min_length=1)
-    start_offset: Optional[int] = Field(None, ge=0)
-    end_offset: Optional[int] = Field(None, ge=0)
-    color: Optional[str] = Field(None, max_length=32)
-    note: Optional[str] = Field(None, max_length=2000)
+    start_offset: int | None = Field(None, ge=0)
+    end_offset: int | None = Field(None, ge=0)
+    color: str | None = Field(None, max_length=32)
+    note: str | None = Field(None, max_length=2000)
     anchor_strategy: AnchorStrategy = "fuzzy_quote"
 
 
 class HighlightUpdateRequest(BaseModel):
     """Update mutable highlight properties."""
 
-    color: Optional[str] = Field(None, max_length=32)
-    note: Optional[str] = Field(None, max_length=2000)
-    state: Optional[HighlightState] = None
+    color: str | None = Field(None, max_length=32)
+    note: str | None = Field(None, max_length=2000)
+    state: HighlightState | None = None
 
 
 class Highlight(BaseModel):
     id: int
     item_id: int
     quote: str
-    start_offset: Optional[int] = None
-    end_offset: Optional[int] = None
-    color: Optional[str] = None
-    note: Optional[str] = None
+    start_offset: int | None = None
+    end_offset: int | None = None
+    color: str | None = None
+    note: str | None = None
     created_at: datetime
 
     # Anchoring
     anchor_strategy: AnchorStrategy
-    content_hash_ref: Optional[str] = None
-    context_before: Optional[str] = None
-    context_after: Optional[str] = None
+    content_hash_ref: str | None = None
+    context_before: str | None = None
+    context_after: str | None = None
     state: HighlightState = "active"

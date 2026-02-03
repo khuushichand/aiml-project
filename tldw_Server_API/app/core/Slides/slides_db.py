@@ -6,11 +6,13 @@ import json
 import sqlite3
 import threading
 import uuid
+from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Iterable, List, Optional, Tuple
+from typing import Any, ClassVar
+
 
 class SlidesDatabaseError(Exception):
     """Base exception for SlidesDatabase."""
@@ -23,7 +25,7 @@ class SchemaError(SlidesDatabaseError):
 class ConflictError(SlidesDatabaseError):
     """Raised when optimistic locking fails or duplicates exist."""
 
-    def __init__(self, message: str, *, entity: Optional[str] = None, identifier: Optional[str] = None):
+    def __init__(self, message: str, *, entity: str | None = None, identifier: str | None = None):
         super().__init__(message)
         self.entity = entity
         self.identifier = identifier
@@ -37,17 +39,17 @@ class InputError(ValueError):
 class PresentationRow:
     id: str
     title: str
-    description: Optional[str]
+    description: str | None
     theme: str
-    marp_theme: Optional[str]
-    template_id: Optional[str]
-    settings: Optional[str]
+    marp_theme: str | None
+    template_id: str | None
+    settings: str | None
     slides: str
     slides_text: str
-    source_type: Optional[str]
-    source_ref: Optional[str]
-    source_query: Optional[str]
-    custom_css: Optional[str]
+    source_type: str | None
+    source_ref: str | None
+    source_query: str | None
+    custom_css: str | None
     created_at: str
     last_modified: str
     deleted: int
@@ -216,7 +218,7 @@ class SlidesDatabase:
         entity_uuid: str,
         operation: str,
         version: int,
-        payload: Optional[Dict[str, Any]] = None,
+        payload: dict[str, Any] | None = None,
     ) -> None:
         payload_json = json.dumps(payload) if payload is not None else None
         with self.transaction() as conn:
@@ -255,7 +257,7 @@ class SlidesDatabase:
         conn: sqlite3.Connection, presentation_id: str, include_deleted: bool
     ) -> PresentationRow:
         query = "SELECT * FROM presentations WHERE id = ?"
-        params: List[Any] = [presentation_id]
+        params: list[Any] = [presentation_id]
         if not include_deleted:
             query += " AND deleted = 0"
         row = conn.execute(query, tuple(params)).fetchone()
@@ -264,7 +266,7 @@ class SlidesDatabase:
         return PresentationRow(**dict(row))
 
     @staticmethod
-    def _build_version_payload(row: PresentationRow) -> Dict[str, Any]:
+    def _build_version_payload(row: PresentationRow) -> dict[str, Any]:
         return {
             "id": row.id,
             "title": row.title,
@@ -305,19 +307,19 @@ class SlidesDatabase:
     def create_presentation(
         self,
         *,
-        presentation_id: Optional[str],
+        presentation_id: str | None,
         title: str,
-        description: Optional[str],
+        description: str | None,
         theme: str,
-        marp_theme: Optional[str],
-        settings: Optional[str],
-        template_id: Optional[str] = None,
+        marp_theme: str | None,
+        settings: str | None,
+        template_id: str | None = None,
         slides: str,
         slides_text: str,
-        source_type: Optional[str],
-        source_ref: Optional[str],
-        source_query: Optional[str],
-        custom_css: Optional[str],
+        source_type: str | None,
+        source_ref: str | None,
+        source_query: str | None,
+        custom_css: str | None,
     ) -> PresentationRow:
         if not title:
             raise InputError("title is required")
@@ -378,7 +380,7 @@ class SlidesDatabase:
         include_deleted: bool,
         sort_column: str,
         sort_direction: str,
-    ) -> Tuple[List[PresentationRow], int]:
+    ) -> tuple[list[PresentationRow], int]:
         if limit < 1:
             raise InputError("limit must be >= 1")
         allowed_columns = {
@@ -406,7 +408,7 @@ class SlidesDatabase:
         limit: int,
         offset: int,
         include_deleted: bool,
-    ) -> Tuple[List[PresentationRow], int]:
+    ) -> tuple[list[PresentationRow], int]:
         if not query:
             raise InputError("query is required")
         if limit < 1:
@@ -435,7 +437,7 @@ class SlidesDatabase:
         self,
         *,
         presentation_id: str,
-        update_fields: Dict[str, Any],
+        update_fields: dict[str, Any],
         expected_version: int,
         operation: str = "update",
     ) -> PresentationRow:
@@ -456,8 +458,8 @@ class SlidesDatabase:
             "custom_css",
             "deleted",
         }
-        sets: List[str] = []
-        params: List[Any] = []
+        sets: list[str] = []
+        params: list[Any] = []
         for key, value in update_fields.items():
             if key not in allowed:
                 continue
@@ -493,7 +495,7 @@ class SlidesDatabase:
         presentation_id: str,
         limit: int,
         offset: int,
-    ) -> Tuple[List[PresentationVersionRow], int]:
+    ) -> tuple[list[PresentationVersionRow], int]:
         if limit < 1:
             raise InputError("limit must be >= 1")
         conn = self.get_connection()

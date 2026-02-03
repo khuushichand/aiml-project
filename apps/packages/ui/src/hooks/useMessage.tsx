@@ -61,6 +61,7 @@ import { normalizeConversationState } from "@/utils/conversation-state"
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import type { ChatDocuments } from "@/models/ChatTypes"
 import type { UploadedFile } from "@/db/dexie/types"
+import { applyMcpModuleDisclosureFromToolCalls } from "@/utils/mcp-disclosure"
 
 const extractToolCalls = (generationInfo: unknown): ToolCall[] | undefined => {
   if (!generationInfo || typeof generationInfo !== "object") return undefined
@@ -586,6 +587,7 @@ export const useMessage = () => {
       }
 
       const toolCalls = extractToolCalls(generationInfo)
+      applyMcpModuleDisclosureFromToolCalls(toolCalls)
       setMessages((prev) => {
         return prev.map((message) => {
           if (message.id === generateMessageId) {
@@ -895,6 +897,7 @@ export const useMessage = () => {
       count++
     }
     const toolCalls = extractToolCalls(generationInfo)
+    applyMcpModuleDisclosureFromToolCalls(toolCalls)
     setMessages((prev) => {
       return prev.map((message) => {
         if (message.id === generateMessageId) {
@@ -1554,6 +1557,7 @@ export const useMessage = () => {
       }
 
       const toolCalls = extractToolCalls(generationInfo)
+      applyMcpModuleDisclosureFromToolCalls(toolCalls)
       setMessages((prev) => {
         return prev.map((message) => {
           if (message.id === generateMessageId) {

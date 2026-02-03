@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import (
     APIRouter,
@@ -17,15 +17,15 @@ from fastapi import (
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.schemas.media_response_models import (
-    MediaDetailResponse,
-    VersionDetailResponse,
-)
 from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     AdvancedVersionUpsertRequest,
     MetadataPatchRequest,
     VersionCreateRequest,
     VersionRollbackRequest,
+)
+from tldw_Server_API.app.api.v1.schemas.media_response_models import (
+    MediaDetailResponse,
+    VersionDetailResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     User,
@@ -47,7 +47,6 @@ from tldw_Server_API.app.core.Utils.metadata_utils import (
     update_version_safe_metadata_in_transaction,
 )
 
-
 router = APIRouter(tags=["Media Versioning"])
 
 
@@ -63,7 +62,7 @@ def _is_test_mode() -> bool:
 @router.get(
     "/{media_id:int}/versions",
     summary="List Media Versions",
-    response_model=List[VersionDetailResponse],
+    response_model=list[VersionDetailResponse],
     response_model_exclude_none=True,
 )
 async def list_versions(
@@ -84,7 +83,7 @@ async def list_versions(
         description="Page number",
     ),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> List[VersionDetailResponse]:
+) -> list[VersionDetailResponse]:
     """
     List active versions for an active media item.
     """
@@ -137,9 +136,9 @@ async def list_versions(
         cursor = db.execute_query(query, params)
         raw_rows = [dict(row) for row in cursor.fetchall()]
 
-        versions: List[VersionDetailResponse] = []
+        versions: list[VersionDetailResponse] = []
         for rv in raw_rows:
-            created_at_dt: Optional[datetime] = rv.get("created_at")
+            created_at_dt: datetime | None = rv.get("created_at")
             if isinstance(created_at_dt, str):
                 try:
                     created_at_dt = datetime.fromisoformat(
@@ -324,7 +323,7 @@ async def create_version(
     try:
         if _is_test_mode():
             db_path = getattr(db, "db_path_str", getattr(db, "db_path", "?"))
-            headers: Dict[str, Any] = getattr(request, "headers", {}) or {}
+            headers: dict[str, Any] = getattr(request, "headers", {}) or {}
             logger.info(
                 "TEST_MODE: create_version media_id={} db_path={} user_id={} "
                 "auth_headers={{'X-API-KEY': {{'present': {}}}}, "
@@ -342,7 +341,7 @@ async def create_version(
         import json as _json
 
         with db.transaction():
-            safe_metadata_json: Optional[str] = None
+            safe_metadata_json: str | None = None
             if request_body.safe_metadata is not None:
                 try:
                     safe_metadata_json = _json.dumps(
@@ -709,7 +708,7 @@ async def patch_metadata(
         if not isinstance(existing, dict):
             existing = {}
 
-        new_meta: Dict[str, Any] = dict(existing)
+        new_meta: dict[str, Any] = dict(existing)
         if body.merge:
             new_meta.update(normalized)
         else:
@@ -828,7 +827,7 @@ async def put_version_metadata(
         if not isinstance(existing, dict):
             existing = {}
 
-        new_meta: Dict[str, Any] = dict(existing)
+        new_meta: dict[str, Any] = dict(existing)
         if body.merge:
             new_meta.update(normalized)
         else:
@@ -896,7 +895,7 @@ async def create_or_update_version_advanced(
     import json as _json
 
     try:
-        normalized: Optional[Dict[str, Any]] = None
+        normalized: dict[str, Any] | None = None
         if body.safe_metadata is not None:
             try:
                 normalized = normalize_safe_metadata(body.safe_metadata)

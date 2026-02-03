@@ -58,7 +58,8 @@ async def test_export_failure_rolls_back_artifact(collections_db: CollectionsDat
         options=FileCreateOptions(persist=True),
     )
 
-    async def _boom(*args, **kwargs):
+    async def _boom(*_args, **_kwargs) -> None:
+        """Force export to fail for rollback coverage."""
         raise FileArtifactsError("export_failed")
 
     monkeypatch.setattr(service, "_export_sync", _boom)

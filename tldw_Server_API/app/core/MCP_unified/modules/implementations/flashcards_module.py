@@ -8,11 +8,12 @@ tracking, tags, and export.
 
 import asyncio
 import re
-from typing import Dict, Any, List, Optional
+from typing import Any
+
 from loguru import logger
 
-from ..base import BaseModule, ModuleConfig, create_tool_definition
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError
+from ..base import BaseModule, create_tool_definition
 
 
 class FlashcardsModule(BaseModule):
@@ -24,7 +25,7 @@ class FlashcardsModule(BaseModule):
     async def on_shutdown(self) -> None:
         logger.info(f"Shutting down Flashcards module: {self.name}")
 
-    async def check_health(self) -> Dict[str, bool]:
+    async def check_health(self) -> dict[str, bool]:
         checks = {"initialized": True, "driver_available": False, "disk_space": False}
         try:
             _ = CharactersRAGDB
@@ -46,7 +47,7 @@ class FlashcardsModule(BaseModule):
             checks["disk_space"] = False
         return checks
 
-    async def get_tools(self) -> List[Dict[str, Any]]:
+    async def get_tools(self) -> list[dict[str, Any]]:
         return [
             # Decks
             create_tool_definition(
@@ -274,7 +275,7 @@ class FlashcardsModule(BaseModule):
             ),
         ]
 
-    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+    def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):
         if tool_name == "flashcards.decks.list":
             limit = int(arguments.get("limit", 100))
             if limit < 1 or limit > 100:
@@ -383,7 +384,7 @@ class FlashcardsModule(BaseModule):
         if len(tags) > 50:
             raise ValueError("tags must contain <= 50 items")
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any = None) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any = None) -> Any:
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
@@ -428,7 +429,7 @@ class FlashcardsModule(BaseModule):
 
     # Decks
 
-    async def _list_decks(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _list_decks(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         limit = int(args.get("limit", 100))
         offset = int(args.get("offset", 0))
         include_deleted = bool(args.get("include_deleted", False))
@@ -436,7 +437,7 @@ class FlashcardsModule(BaseModule):
 
     def _list_decks_sync(
         self, context: Any, limit: int, offset: int, include_deleted: bool
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             decks = db.list_decks(limit=limit, offset=offset, include_deleted=include_deleted)
@@ -452,11 +453,11 @@ class FlashcardsModule(BaseModule):
             except Exception as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _get_deck(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _get_deck(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         deck_id = args.get("deck_id")
         return await asyncio.to_thread(self._get_deck_sync, context, deck_id)
 
-    def _get_deck_sync(self, context: Any, deck_id: int) -> Dict[str, Any]:
+    def _get_deck_sync(self, context: Any, deck_id: int) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             deck = db.get_deck(deck_id)
@@ -469,10 +470,10 @@ class FlashcardsModule(BaseModule):
             except Exception as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _create_deck(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _create_deck(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._create_deck_sync, context, args)
 
-    def _create_deck_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _create_deck_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             deck_id = db.add_deck(
@@ -489,10 +490,10 @@ class FlashcardsModule(BaseModule):
 
     # Cards
 
-    async def _list_cards(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _list_cards(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._list_cards_sync, context, args)
 
-    def _list_cards_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _list_cards_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             cards = db.list_flashcards(
@@ -527,11 +528,11 @@ class FlashcardsModule(BaseModule):
             except Exception as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _get_card(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _get_card(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         card_uuid = args.get("card_uuid")
         return await asyncio.to_thread(self._get_card_sync, context, card_uuid)
 
-    def _get_card_sync(self, context: Any, card_uuid: str) -> Dict[str, Any]:
+    def _get_card_sync(self, context: Any, card_uuid: str) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             card = db.get_flashcard(card_uuid)
@@ -544,10 +545,10 @@ class FlashcardsModule(BaseModule):
             except Exception as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _create_card(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _create_card(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._create_card_sync, context, args)
 
-    def _create_card_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _create_card_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             model_type = args.get("model_type", "basic")
@@ -575,10 +576,10 @@ class FlashcardsModule(BaseModule):
             except Exception as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _create_cards_bulk(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _create_cards_bulk(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._create_cards_bulk_sync, context, args)
 
-    def _create_cards_bulk_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _create_cards_bulk_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             cards_input = args.get("cards", [])
@@ -614,10 +615,10 @@ class FlashcardsModule(BaseModule):
             except Exception as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _update_card(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _update_card(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._update_card_sync, context, args)
 
-    def _update_card_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _update_card_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             card_uuid = args.get("card_uuid")
@@ -648,10 +649,10 @@ class FlashcardsModule(BaseModule):
             except Exception as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _delete_card(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _delete_card(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._delete_card_sync, context, args)
 
-    def _delete_card_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _delete_card_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             card_uuid = args.get("card_uuid")
@@ -670,10 +671,10 @@ class FlashcardsModule(BaseModule):
 
     # Spaced Repetition
 
-    async def _review_card(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _review_card(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._review_card_sync, context, args)
 
-    def _review_card_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _review_card_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             card_uuid = args.get("card_uuid")
@@ -693,10 +694,10 @@ class FlashcardsModule(BaseModule):
 
     # Tags
 
-    async def _set_tags(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _set_tags(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._set_tags_sync, context, args)
 
-    def _set_tags_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _set_tags_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             card_uuid = args.get("card_uuid")
@@ -713,10 +714,10 @@ class FlashcardsModule(BaseModule):
             except Exception as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _get_tags(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _get_tags(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._get_tags_sync, context, args)
 
-    def _get_tags_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_tags_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             card_uuid = args.get("card_uuid")
@@ -731,10 +732,10 @@ class FlashcardsModule(BaseModule):
 
     # Export
 
-    async def _export_cards(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _export_cards(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._export_cards_sync, context, args)
 
-    def _export_cards_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _export_cards_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             deck_id = args.get("deck_id")

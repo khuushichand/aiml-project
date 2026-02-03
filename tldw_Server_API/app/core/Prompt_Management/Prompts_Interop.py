@@ -23,27 +23,32 @@ Usage:
 # Imports
 import logging
 import threading
-from typing import List, Tuple, Dict, Any, Optional, Union
 from pathlib import Path
+from typing import Any, Optional, Union
 
 from loguru import logger
 
 #
 # Local Imports
 from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
-    PromptsDatabase,
+    ConflictError,
     DatabaseError,
-    SchemaError,
     InputError,
-    ConflictError
+    PromptsDatabase,
+    SchemaError,
+)
+from tldw_Server_API.app.core.DB_Management.Prompts_DB import add_or_update_prompt as db_add_or_update_prompt
+from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
+    export_prompt_keywords_to_csv as db_export_prompt_keywords_to_csv,
+)
+from tldw_Server_API.app.core.DB_Management.Prompts_DB import export_prompts_formatted as db_export_prompts_formatted
+from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
+    load_prompt_details_for_ui as db_load_prompt_details_for_ui,
 )
 from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
-    add_or_update_prompt as db_add_or_update_prompt,
-    load_prompt_details_for_ui as db_load_prompt_details_for_ui,
-    export_prompt_keywords_to_csv as db_export_prompt_keywords_to_csv,
     view_prompt_keywords_markdown as db_view_prompt_keywords_markdown,
-    export_prompts_formatted as db_export_prompts_formatted
 )
+
 #
 #######################################################################################################################
 #
@@ -150,20 +155,20 @@ def shutdown_interop() -> None:
 # --- Wrapper Functions for PromptsDatabase methods ---
 
 # --- Mutating Methods ---
-def add_keyword(keyword_text: str) -> Tuple[Optional[int], Optional[str]]:
+def add_keyword(keyword_text: str) -> tuple[Optional[int], Optional[str]]:
     """Adds a keyword. See PromptsDatabase.add_keyword for details."""
     db = get_db_instance()
     return db.add_keyword(keyword_text)
 
 def add_prompt(name: str, author: Optional[str], details: Optional[str],
                system_prompt: Optional[str] = None, user_prompt: Optional[str] = None,
-               keywords: Optional[List[str]] = None, overwrite: bool = False
-               ) -> Tuple[Optional[int], Optional[str], str]:
+               keywords: Optional[list[str]] = None, overwrite: bool = False
+               ) -> tuple[Optional[int], Optional[str], str]:
     """Adds or updates a prompt. See PromptsDatabase.add_prompt for details."""
     db = get_db_instance()
     return db.add_prompt(name, author, details, system_prompt, user_prompt, keywords, overwrite)
 
-def update_keywords_for_prompt(prompt_id: int, keywords_list: List[str]) -> None:
+def update_keywords_for_prompt(prompt_id: int, keywords_list: list[str]) -> None:
     """Updates keywords for a specific prompt. See PromptsDatabase.update_keywords_for_prompt for details."""
     db = get_db_instance()
     db.update_keywords_for_prompt(prompt_id, keywords_list)
@@ -179,60 +184,60 @@ def soft_delete_keyword(keyword_text: str) -> bool:
     return db.soft_delete_keyword(keyword_text)
 
 # --- Read Methods ---
-def get_prompt_by_id(prompt_id: int, include_deleted: bool = False) -> Optional[Dict]:
+def get_prompt_by_id(prompt_id: int, include_deleted: bool = False) -> Optional[dict]:
     """Fetches a prompt by its ID. See PromptsDatabase.get_prompt_by_id for details."""
     db = get_db_instance()
     return db.get_prompt_by_id(prompt_id, include_deleted)
 
-def get_prompt_by_uuid(prompt_uuid: str, include_deleted: bool = False) -> Optional[Dict]:
+def get_prompt_by_uuid(prompt_uuid: str, include_deleted: bool = False) -> Optional[dict]:
     """Fetches a prompt by its UUID. See PromptsDatabase.get_prompt_by_uuid for details."""
     db = get_db_instance()
     return db.get_prompt_by_uuid(prompt_uuid, include_deleted)
 
-def get_prompt_by_name(name: str, include_deleted: bool = False) -> Optional[Dict]:
+def get_prompt_by_name(name: str, include_deleted: bool = False) -> Optional[dict]:
     """Fetches a prompt by its name. See PromptsDatabase.get_prompt_by_name for details."""
     db = get_db_instance()
     return db.get_prompt_by_name(name, include_deleted)
 
 def list_prompts(page: int = 1, per_page: int = 10, include_deleted: bool = False
-                 ) -> Tuple[List[Dict], int, int, int]:
+                 ) -> tuple[list[dict], int, int, int]:
     """Lists prompts with pagination. See PromptsDatabase.list_prompts for details."""
     db = get_db_instance()
     return db.list_prompts(page, per_page, include_deleted)
 
 def fetch_prompt_details(prompt_id_or_name_or_uuid: Union[int, str], include_deleted: bool = False
-                         ) -> Optional[Dict]:
+                         ) -> Optional[dict]:
     """Fetches detailed information for a prompt. See PromptsDatabase.fetch_prompt_details for details."""
     db = get_db_instance()
     return db.fetch_prompt_details(prompt_id_or_name_or_uuid, include_deleted)
 
-def fetch_all_keywords(include_deleted: bool = False) -> List[str]:
+def fetch_all_keywords(include_deleted: bool = False) -> list[str]:
     """Fetches all keywords. See PromptsDatabase.fetch_all_keywords for details."""
     db = get_db_instance()
     return db.fetch_all_keywords(include_deleted)
 
-def fetch_keywords_for_prompt(prompt_id: int, include_deleted: bool = False) -> List[str]:
+def fetch_keywords_for_prompt(prompt_id: int, include_deleted: bool = False) -> list[str]:
     """Fetches keywords associated with a specific prompt. See PromptsDatabase.fetch_keywords_for_prompt for details."""
     db = get_db_instance()
     return db.fetch_keywords_for_prompt(prompt_id, include_deleted)
 
 def search_prompts(search_query: Optional[str],
-                   search_fields: Optional[List[str]] = None,
+                   search_fields: Optional[list[str]] = None,
                    page: int = 1,
                    results_per_page: int = 20,
                    include_deleted: bool = False
-                   ) -> Tuple[List[Dict[str, Any]], int]:
+                   ) -> tuple[list[dict[str, Any]], int]:
     """Searches prompts using FTS. See PromptsDatabase.search_prompts for details."""
     db = get_db_instance()
     return db.search_prompts(search_query, search_fields, page, results_per_page, include_deleted)
 
 # --- Sync Log Access Methods ---
-def get_sync_log_entries(since_change_id: int = 0, limit: Optional[int] = None) -> List[Dict]:
+def get_sync_log_entries(since_change_id: int = 0, limit: Optional[int] = None) -> list[dict]:
     """Retrieves entries from the sync log. See PromptsDatabase.get_sync_log_entries for details."""
     db = get_db_instance()
     return db.get_sync_log_entries(since_change_id, limit)
 
-def delete_sync_log_entries(change_ids: List[int]) -> int:
+def delete_sync_log_entries(change_ids: list[int]) -> int:
     """Deletes entries from the sync log. See PromptsDatabase.delete_sync_log_entries for details."""
     db = get_db_instance()
     return db.delete_sync_log_entries(change_ids)
@@ -244,8 +249,8 @@ def delete_sync_log_entries(change_ids: List[int]) -> int:
 
 def add_or_update_prompt_interop(name: str, author: Optional[str], details: Optional[str],
                                  system_prompt: Optional[str] = None, user_prompt: Optional[str] = None,
-                                 keywords: Optional[List[str]] = None
-                                 ) -> Tuple[Optional[int], Optional[str], str]:
+                                 keywords: Optional[list[str]] = None
+                                 ) -> tuple[Optional[int], Optional[str], str]:
     """
     Adds a new prompt or updates an existing one (identified by name).
     If the prompt exists (even if soft-deleted), it will be updated/undeleted.
@@ -254,7 +259,7 @@ def add_or_update_prompt_interop(name: str, author: Optional[str], details: Opti
     db = get_db_instance()
     return db_add_or_update_prompt(db, name, author, details, system_prompt, user_prompt, keywords)
 
-def load_prompt_details_for_ui_interop(prompt_name: str) -> Tuple[str, str, str, str, str, str]:
+def load_prompt_details_for_ui_interop(prompt_name: str) -> tuple[str, str, str, str, str, str]:
     """
     Loads prompt details formatted for UI display.
     This wraps the standalone load_prompt_details_for_ui function from Prompts_DB_v2.
@@ -262,7 +267,7 @@ def load_prompt_details_for_ui_interop(prompt_name: str) -> Tuple[str, str, str,
     db = get_db_instance()
     return db_load_prompt_details_for_ui(db, prompt_name)
 
-def export_prompt_keywords_to_csv_interop() -> Tuple[str, str]:
+def export_prompt_keywords_to_csv_interop() -> tuple[str, str]:
     """
     Exports prompt keywords to a CSV file.
     This wraps the standalone export_prompt_keywords_to_csv function from Prompts_DB_v2.
@@ -279,14 +284,14 @@ def view_prompt_keywords_markdown_interop() -> str:
     return db_view_prompt_keywords_markdown(db)
 
 def export_prompts_formatted_interop(export_format: str = 'csv',
-                                     filter_keywords: Optional[List[str]] = None,
+                                     filter_keywords: Optional[list[str]] = None,
                                      include_system: bool = True,
                                      include_user: bool = True,
                                      include_details: bool = True,
                                      include_author: bool = True,
                                      include_associated_keywords: bool = True,
                                      markdown_template_name: Optional[str] = "Basic Template"
-                                     ) -> Tuple[str, str]:
+                                     ) -> tuple[str, str]:
     """
     Exports prompts to a specified format (CSV or Markdown).
     This wraps the standalone export_prompts_formatted function from Prompts_DB_v2.
@@ -311,9 +316,9 @@ class PromptsInteropService:
         self._db_instance: Optional[PromptsDatabase] = None
         self._collections = {"next_id": 1, "items": {}}  # simple in-memory collections for tests
         # Preserve original-case keywords for prompts created/imported via this service
-        self._orig_keywords: Dict[int, list] = {}
+        self._orig_keywords: dict[int, list] = {}
         # Track user-facing names to present on reads (even if DB stored a unique variant)
-        self._name_overrides: Dict[int, str] = {}
+        self._name_overrides: dict[int, str] = {}
 
     def __enter__(self):
         return self
@@ -340,7 +345,7 @@ class PromptsInteropService:
 
     # CRUD
     def create_prompt(self, name: str, content: Optional[str] = None, author: Optional[str] = None,
-                      keywords: Optional[List[str]] = None, **kwargs) -> int:
+                      keywords: Optional[list[str]] = None, **kwargs) -> int:
         if not name or not isinstance(name, str) or not name.strip():
             raise ValueError("name must be a non-empty string")
         db = self._ensure_db()
@@ -601,7 +606,7 @@ class PromptsInteropService:
             return []
         return re.findall(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", content)
 
-    def render_template(self, template: str, variables: Dict[str, Any]):
+    def render_template(self, template: str, variables: dict[str, Any]):
         import re
         if not isinstance(variables, dict):
             raise TypeError("variables must be a dict")
@@ -663,10 +668,10 @@ class PromptsInteropService:
             updated = len(prompt_ids)
         return {"updated": updated, "failed": failed}
 
-    def bulk_export(self, filter_criteria: Optional[Dict[str, Any]] = None, *args, **kwargs):
+    def bulk_export(self, filter_criteria: Optional[dict[str, Any]] = None, *args, **kwargs):
         # Preserve order and duplicates when prompt_ids provided; present original names
         prompt_ids = kwargs.get("prompt_ids") if isinstance(kwargs, dict) else None
-        export_list: List[Dict[str, Any]] = []
+        export_list: list[dict[str, Any]] = []
         if prompt_ids:
             # Build a quick lookup from list_prompts as a robust fallback
             try:
@@ -696,7 +701,7 @@ class PromptsInteropService:
                     })
         else:
             # Merge explicit filter_criteria with supported kwargs (excluding prompt_ids)
-            merged_criteria: Dict[str, Any] = {}
+            merged_criteria: dict[str, Any] = {}
             if isinstance(filter_criteria, dict):
                 merged_criteria.update({k: v for k, v in filter_criteria.items() if v is not None})
             # Treat remaining kwargs as filter criteria inputs (common fields like author, keywords, etc.)
@@ -731,7 +736,7 @@ class PromptsInteropService:
         import json
         return json.dumps(self.export_prompts(*args, **kwargs))
 
-    def import_prompts(self, data: Dict[str, Any], skip_duplicates: bool = False):
+    def import_prompts(self, data: dict[str, Any], skip_duplicates: bool = False):
         if not isinstance(data, dict):
             raise TypeError("import data must be a dict")
         prompts = data.get("prompts") or []
@@ -748,7 +753,7 @@ class PromptsInteropService:
             logger.debug(f"Failed to fetch existing prompt names for import, using empty set: {e}")
             used_names = set()
 
-        name_counts: Dict[str, int] = {}
+        name_counts: dict[str, int] = {}
         new_ids = []
         imported = 0
         failed = 0
@@ -830,7 +835,7 @@ class PromptsInteropService:
                 logger.debug(f"Error closing database connection: {e}")
 
     # Stats/Analytics
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         db = self._ensure_db()
         if hasattr(db, "get_statistics"):
             return db.get_statistics()
@@ -847,7 +852,7 @@ class PromptsInteropService:
             "avg_versions_per_prompt": 1.0,
         }
 
-    def get_usage_analytics(self) -> Dict[str, Any]:
+    def get_usage_analytics(self) -> dict[str, Any]:
         db = self._ensure_db()
         if hasattr(db, "get_usage_analytics"):
             return db.get_usage_analytics()
@@ -860,7 +865,7 @@ class PromptsInteropService:
         }
 
     # Collections (in-memory minimal implementation for tests)
-    def create_collection(self, name: str, description: Optional[str] = None, prompt_ids: Optional[List[int]] = None) -> int:
+    def create_collection(self, name: str, description: Optional[str] = None, prompt_ids: Optional[list[int]] = None) -> int:
         # Delegate to DB if supported (unit tests may patch these)
         if self._db_instance and hasattr(self._db_instance, "create_collection"):
             return self._db_instance.create_collection(name=name, description=description, prompt_ids=prompt_ids or [])

@@ -1,9 +1,10 @@
 # evaluation_manager.py
 # Manages evaluation runs for prompt testing
 
-from datetime import datetime
 import time
-from typing import Dict, List, Any, Optional
+from datetime import datetime
+from typing import Any, Optional
+
 from loguru import logger
 
 from ....core.Chat.Chat_Deps import ChatConfigurationError
@@ -16,6 +17,7 @@ from ....core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
     split_system_message,
 )
+
 
 class EvaluationManager:
     """Manages prompt evaluation runs and metrics calculation."""
@@ -33,12 +35,12 @@ class EvaluationManager:
     def _call_adapter_text(
         *,
         provider: str,
-        messages_payload: List[Dict[str, Any]],
+        messages_payload: list[dict[str, Any]],
         temperature: float,
         max_tokens: int,
         api_key: Optional[str],
         model: Optional[str],
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
         timeout: Optional[float] = None,
     ) -> str:
         provider_name = normalize_provider(provider)
@@ -49,7 +51,7 @@ class EvaluationManager:
         if not resolved_model:
             raise ChatConfigurationError(provider=provider_name, message="Model is required for provider.")
         system_message, cleaned_messages = split_system_message(messages_payload or [])
-        request: Dict[str, Any] = {
+        request: dict[str, Any] = {
             "messages": cleaned_messages,
             "system_message": system_message,
             "model": resolved_model,
@@ -64,14 +66,14 @@ class EvaluationManager:
     def run_evaluation(
         self,
         prompt_id: int,
-        test_case_ids: List[int],
+        test_case_ids: list[int],
         model: str = "gpt-3.5-turbo",
         temperature: float = 0.7,
         max_tokens: int = 1000,
         provider: str = "openai",
         api_key: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        app_config: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """
         Run evaluation for a prompt against test cases.
 
@@ -261,7 +263,7 @@ class EvaluationManager:
                 return content
         return str(response)
 
-    def _calculate_score(self, expected: Dict, actual: Dict) -> float:
+    def _calculate_score(self, expected: dict, actual: dict) -> float:
         """
         Calculate similarity score between expected and actual outputs.
 
@@ -294,7 +296,7 @@ class EvaluationManager:
             overlap = len(expected_words & actual_words)
             return overlap / len(expected_words)
 
-    def get_evaluation(self, eval_id: int) -> Optional[Dict[str, Any]]:
+    def get_evaluation(self, eval_id: int) -> Optional[dict[str, Any]]:
         """
         Get evaluation details by ID.
 
@@ -313,7 +315,7 @@ class EvaluationManager:
         status: Optional[str] = None,
         page: int = 1,
         per_page: int = 20
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         List evaluations with filtering.
 
@@ -335,7 +337,7 @@ class EvaluationManager:
             per_page=per_page,
         )
 
-    def compare_evaluations(self, eval_ids: List[int]) -> Dict[str, Any]:
+    def compare_evaluations(self, eval_ids: list[int]) -> dict[str, Any]:
         """
         Compare multiple evaluation runs.
 

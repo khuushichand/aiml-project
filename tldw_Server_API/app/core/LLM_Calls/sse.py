@@ -10,7 +10,9 @@ Highlights:
 """
 
 import json
-from typing import Any, Dict, Iterable, Optional, Callable, Tuple
+from collections.abc import Iterable
+from typing import Any, Callable, Optional
+
 from loguru import logger
 
 _SSE_CONTROL_PREFIXES = ("event:", "id:", "retry:")
@@ -32,7 +34,7 @@ def finalize_stream(response: Optional[Any], done_already: bool = False) -> Iter
             pass
 
 
-def sse_data(payload: Dict[str, Any]) -> str:
+def sse_data(payload: dict[str, Any]) -> str:
     """Return an SSE data line with a blank line terminator."""
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -74,7 +76,7 @@ def normalize_provider_line(
     line: str,
     *,
     provider_control_passthru: bool = False,
-    control_filter: Optional[Callable[[str, str], Optional[Tuple[str, str]]]] = None,
+    control_filter: Optional[Callable[[str, str], Optional[tuple[str, str]]]] = None,
 ) -> Optional[str]:
     """
     Normalize a raw provider SSE line into a chunk we can forward.

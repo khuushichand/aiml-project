@@ -1,25 +1,26 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
 class ToolInfo(BaseModel):
     name: str
-    description: Optional[str] = None
-    module: Optional[str] = None
-    inputSchema: Optional[Dict[str, Any]] = None
+    description: str | None = None
+    module: str | None = None
+    inputSchema: dict[str, Any] | None = None
     canExecute: bool = Field(False, description="Whether current user can execute this tool")
 
 
 class ToolListResponse(BaseModel):
-    tools: List[ToolInfo]
+    tools: list[ToolInfo]
 
 
 class ExecuteToolRequest(BaseModel):
     tool_name: str = Field(..., description="Tool name (registry id)")
-    arguments: Dict[str, Any] = Field(default_factory=dict)
-    idempotency_key: Optional[str] = Field(
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str | None = Field(
         default=None, description="Optional key for deduplicating write-capable tools"
     )
     dry_run: bool = Field(
@@ -30,6 +31,6 @@ class ExecuteToolRequest(BaseModel):
 
 class ExecuteToolResult(BaseModel):
     ok: bool
-    result: Optional[Any] = None
-    module: Optional[str] = None
-    error: Optional[str] = None
+    result: Any | None = None
+    module: str | None = None
+    error: str | None = None

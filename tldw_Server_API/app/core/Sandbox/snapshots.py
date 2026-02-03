@@ -6,7 +6,6 @@ import tarfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from loguru import logger
 
@@ -18,7 +17,7 @@ class SnapshotManager:
     restore from snapshots, and clone sessions with their current state.
     """
 
-    def __init__(self, storage_path: Optional[str] = None) -> None:
+    def __init__(self, storage_path: str | None = None) -> None:
         """Initialize the snapshot manager.
 
         Args:
@@ -234,7 +233,7 @@ class SnapshotManager:
         logger.info(f"Cloned session {source_session_id} to {new_session_id}")
         return True
 
-    def list_snapshots(self, session_id: str) -> List[dict]:
+    def list_snapshots(self, session_id: str) -> list[dict]:
         """List all snapshots for a session.
 
         Args:
@@ -248,7 +247,7 @@ class SnapshotManager:
         if not snapshot_dir.exists():
             return []
 
-        snapshots: List[dict] = []
+        snapshots: list[dict] = []
         import json
 
         for meta_file in snapshot_dir.glob("*.meta.json"):
@@ -337,7 +336,7 @@ class SnapshotManager:
 
         return count
 
-    def get_snapshot_info(self, session_id: str, snapshot_id: str) -> Optional[dict]:
+    def get_snapshot_info(self, session_id: str, snapshot_id: str) -> dict | None:
         """Get information about a specific snapshot.
 
         Args:
@@ -392,7 +391,7 @@ class SnapshotManager:
 
     def enforce_quota(
         self, session_id: str, max_snapshots: int = 10, max_size_mb: int = 256
-    ) -> List[str]:
+    ) -> list[str]:
         """Enforce snapshot quotas by deleting old snapshots.
 
         Deletes oldest snapshots to enforce count and size limits.
@@ -406,7 +405,7 @@ class SnapshotManager:
             List of deleted snapshot IDs.
         """
         snapshots = self.list_snapshots(session_id)
-        deleted: List[str] = []
+        deleted: list[str] = []
         max_size_bytes = max_size_mb * 1024 * 1024
 
         # Delete by count (keep newest)

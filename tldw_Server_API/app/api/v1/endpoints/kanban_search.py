@@ -30,34 +30,29 @@ These weights can be customized via environment variables:
 - KANBAN_SEARCH_VECTOR_ONLY_WEIGHT
 """
 import os
-from typing import Optional, List, Dict, Any, Set, Tuple
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
-    KanbanDB,
-    KanbanDBError,
-    InputError,
-)
-from tldw_Server_API.app.core.DB_Management.kanban_vector_search import (
-    KanbanVectorSearch,
-    is_vector_search_available,
-)
-
-
-from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
-    SearchRequest,
-    SearchResultCard,
-    SearchResponse,
-    PaginationInfo,
-)
 from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     get_kanban_db_for_user,
     handle_kanban_db_error,
     kanban_rate_limit,
 )
-
+from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
+    PaginationInfo,
+    SearchRequest,
+    SearchResponse,
+    SearchResultCard,
+)
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
+    KanbanDB,
+)
+from tldw_Server_API.app.core.DB_Management.kanban_vector_search import (
+    KanbanVectorSearch,
+    is_vector_search_available,
+)
 
 # --- Search Scoring Configuration ---
 # Weights for hybrid search scoring (configurable via environment variables)
@@ -127,7 +122,7 @@ def _execute_search(
     db: KanbanDB,
     query: str,
     board_id: Optional[int],
-    label_ids: Optional[List[int]],
+    label_ids: Optional[list[int]],
     priority: Optional[str],
     include_archived: bool,
     search_mode: str,
@@ -195,12 +190,12 @@ def _perform_fts_search(
     db: KanbanDB,
     query: str,
     board_id: Optional[int],
-    label_ids: Optional[List[int]],
+    label_ids: Optional[list[int]],
     priority: Optional[str],
     include_archived: bool,
     limit: int,
     offset: int,
-) -> Tuple[List[Dict[str, Any]], int]:
+) -> tuple[list[dict[str, Any]], int]:
     """Perform FTS5 search."""
     return db.search_cards(
         query=query,
@@ -218,12 +213,12 @@ def _perform_vector_search(
     vector_search: Optional[KanbanVectorSearch],
     query: str,
     board_id: Optional[int],
-    label_ids: Optional[List[int]],
+    label_ids: Optional[list[int]],
     priority: Optional[str],
     include_archived: bool,
     limit: int,
     offset: int,
-) -> Tuple[List[Dict[str, Any]], int, str]:
+) -> tuple[list[dict[str, Any]], int, str]:
     """
     Perform vector search with fallback to FTS.
 
@@ -296,12 +291,12 @@ def _perform_hybrid_search(
     vector_search: Optional[KanbanVectorSearch],
     query: str,
     board_id: Optional[int],
-    label_ids: Optional[List[int]],
+    label_ids: Optional[list[int]],
     priority: Optional[str],
     include_archived: bool,
     limit: int,
     offset: int,
-) -> Tuple[List[Dict[str, Any]], int, str]:
+) -> tuple[list[dict[str, Any]], int, str]:
     """
     Perform hybrid search combining FTS and vector results.
 
@@ -331,15 +326,15 @@ def _perform_hybrid_search(
             return fts_cards[offset:offset + limit], fts_total, "fts"
 
         # Build a map of card_id -> vector relevance score
-        vector_scores: Dict[int, float] = {
+        vector_scores: dict[int, float] = {
             r["card_id"]: r["relevance_score"]
             for r in vector_results
             if r.get("card_id")
         }
 
         # Combine results: union of FTS and vector
-        seen_ids: Set[int] = set()
-        combined_cards: List[Dict[str, Any]] = []
+        seen_ids: set[int] = set()
+        combined_cards: list[dict[str, Any]] = []
 
         # Score FTS results (give them a base score)
         for i, card in enumerate(fts_cards):
@@ -441,7 +436,7 @@ async def search_cards_get(
     """
     try:
         # Parse label_ids from comma-separated string
-        parsed_label_ids: Optional[List[int]] = None
+        parsed_label_ids: Optional[list[int]] = None
         if label_ids:
             parsed_label_ids = [int(lid.strip()) for lid in label_ids.split(",")]
 
@@ -504,7 +499,7 @@ async def search_cards_post(
 )
 async def search_status(
     db: KanbanDB = Depends(get_kanban_db_for_user)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Get the status of search capabilities.
 

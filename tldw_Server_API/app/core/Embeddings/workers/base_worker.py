@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, Optional
 
-from prometheus_client import Histogram, REGISTRY
+from prometheus_client import REGISTRY, Histogram
 
 
 def _get_or_create_histogram(name: str, description: str, labelnames: Iterable[str]) -> Histogram:
@@ -48,7 +48,7 @@ class BaseWorker:
     def __init__(self, config: WorkerConfig) -> None:
         self.config = config
 
-    def observe_batch(self, stage: str, batch_size: int, payload_bytes: Optional[int] = None) -> None:
+    def observe_batch(self, stage: str, batch_size: int, payload_bytes: int | None = None) -> None:
         """Record batch metrics for observability."""
         EMBEDDING_STAGE_BATCH_SIZE.labels(stage=stage).observe(batch_size)
         if payload_bytes is not None:

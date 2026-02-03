@@ -12,16 +12,17 @@ This module provides:
 Based on ADR-002: Alembic-style migrations within SQLite constraints.
 """
 
+import json
 import os
 import re
-import sqlite3
-import json
 import shutil
+import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Optional
+
 from loguru import logger
-from contextlib import contextmanager
 
 from tldw_Server_API.app.core.Utils.path_utils import resolve_path
 
@@ -57,7 +58,7 @@ class Migration:
         content = f"{self.version}:{self.name}:{self.up_sql}:{self.down_sql or ''}"
         return hashlib.sha256(content.encode()).hexdigest()[:16]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert migration to dictionary"""
         return {
             "version": self.version,
@@ -232,7 +233,7 @@ class DatabaseMigrator:
 
             return 0
 
-    def get_applied_migrations(self) -> List[Dict[str, Any]]:
+    def get_applied_migrations(self) -> list[dict[str, Any]]:
         """Get list of applied migrations"""
         self.initialize_migration_table()
 
@@ -246,7 +247,7 @@ class DatabaseMigrator:
 
             return [dict(row) for row in cursor]
 
-    def load_migrations(self) -> List[Migration]:
+    def load_migrations(self) -> list[Migration]:
         """Load all migrations from the migrations directory"""
         migrations = []
 
@@ -257,7 +258,7 @@ class DatabaseMigrator:
             logger.warning(f"Migrations directory does not exist: {self.migrations_dir}")
             return migrations
 
-        seen_versions: Dict[int, Path] = {}
+        seen_versions: dict[int, Path] = {}
 
         for filepath in sorted(Path(self.migrations_dir).glob("*")):
             suffix = filepath.suffix.lower()
@@ -513,7 +514,7 @@ class DatabaseMigrator:
         self,
         target_version: Optional[int] = None,
         create_backup: bool = True
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Migrate database to target version"""
         current_version = self.get_current_version()
         migrations = self.load_migrations()
@@ -632,7 +633,7 @@ class DatabaseMigrator:
         except Exception as e:
             raise MigrationError(f"Rollback failed: {e}")
 
-    def verify_migrations(self) -> List[Dict[str, Any]]:
+    def verify_migrations(self) -> list[dict[str, Any]]:
         """Verify integrity of applied migrations"""
         issues = []
         applied = self.get_applied_migrations()
@@ -672,7 +673,7 @@ def migrate_database(
     db_path: str,
     target_version: Optional[int] = None,
     create_backup: bool = True
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Migrate database to target version"""
     migrator = get_migrator(db_path)
     return migrator.migrate_to_version(target_version, create_backup)

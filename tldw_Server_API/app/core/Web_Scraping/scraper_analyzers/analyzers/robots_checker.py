@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 from tldw_Server_API.app.core.http_client import fetch as http_fetch
 
 
-def check_robots_txt(url: str) -> Dict[str, Any]:
+def check_robots_txt(url: str) -> dict[str, Any]:
     """
     Fetch and parse robots.txt to check for scraping directives.
 
@@ -23,7 +23,7 @@ def check_robots_txt(url: str) -> Dict[str, Any]:
             if "text/html" in resp.headers.get("Content-Type", "").lower():
                 return {"status": "not_found"}
 
-            crawl_delay: Optional[float] = None
+            crawl_delay: float | None = None
             scraping_disallowed = False
             is_generic_agent_block = False
 

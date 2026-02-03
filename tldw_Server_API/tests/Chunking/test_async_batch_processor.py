@@ -5,8 +5,9 @@ import pytest
 from tldw_Server_API.app.core.Chunking.async_chunker import AsyncBatchProcessor
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
-async def test_async_batch_processor_task_done_and_eviction():
+async def test_async_batch_processor_task_done_and_eviction() -> None:
     processor = AsyncBatchProcessor(batch_size=2, max_concurrent=1, max_results=2)
 
     await processor.add_request("r1", "one two three", method="words", max_size=2, overlap=0)

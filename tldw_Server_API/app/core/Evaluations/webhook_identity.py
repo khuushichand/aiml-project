@@ -6,8 +6,6 @@ legacy identifiers in tests or internal call sites.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 
 
@@ -43,7 +41,7 @@ def webhook_user_id_from_user(user: User, *, fallback: str = "1") -> str:
     return f"user_{raw_str}"
 
 
-def webhook_user_id_from_value(value: Optional[str]) -> Optional[str]:
+def webhook_user_id_from_value(value: str | None) -> str | None:
     """Normalize a stored or provided user id to a webhook user id.
 
     Keeps non-numeric identifiers (e.g. test_user) intact.

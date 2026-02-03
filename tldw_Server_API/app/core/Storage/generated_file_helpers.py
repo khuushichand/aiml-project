@@ -31,27 +31,25 @@ import hashlib
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import aiofiles
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
-    FILE_CATEGORY_TTS_AUDIO,
     FILE_CATEGORY_IMAGE,
-    FILE_CATEGORY_VOICE_CLONE,
     FILE_CATEGORY_MINDMAP,
     FILE_CATEGORY_SPREADSHEET,
-    SOURCE_FEATURE_TTS,
-    SOURCE_FEATURE_IMAGE_GEN,
-    SOURCE_FEATURE_VOICE_STUDIO,
-    SOURCE_FEATURE_MINDMAP,
+    FILE_CATEGORY_TTS_AUDIO,
+    FILE_CATEGORY_VOICE_CLONE,
     SOURCE_FEATURE_DATA_TABLES,
-    SOURCE_FEATURE_EXPORT,
+    SOURCE_FEATURE_IMAGE_GEN,
+    SOURCE_FEATURE_MINDMAP,
+    SOURCE_FEATURE_TTS,
+    SOURCE_FEATURE_VOICE_STUDIO,
 )
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.services.storage_quota_service import get_storage_service
-
 
 # MIME type mappings
 AUDIO_MIME_TYPES = {
@@ -130,17 +128,17 @@ async def save_and_register_tts_audio(
     user_id: int,
     audio_bytes: bytes,
     audio_format: str = "mp3",
-    original_text: Optional[str] = None,
-    voice_name: Optional[str] = None,
-    model_name: Optional[str] = None,
-    org_id: Optional[int] = None,
-    team_id: Optional[int] = None,
-    folder_tag: Optional[str] = None,
-    tags: Optional[List[str]] = None,
+    original_text: str | None = None,
+    voice_name: str | None = None,
+    model_name: str | None = None,
+    org_id: int | None = None,
+    team_id: int | None = None,
+    folder_tag: str | None = None,
+    tags: list[str] | None = None,
     is_transient: bool = False,
-    expires_at: Optional[datetime] = None,
+    expires_at: datetime | None = None,
     check_quota: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Save TTS audio and register with storage tracking.
 
@@ -232,16 +230,16 @@ async def save_and_register_image(
     user_id: int,
     image_bytes: bytes,
     image_format: str = "png",
-    source_prompt: Optional[str] = None,
-    model_name: Optional[str] = None,
-    org_id: Optional[int] = None,
-    team_id: Optional[int] = None,
-    folder_tag: Optional[str] = None,
-    tags: Optional[List[str]] = None,
+    source_prompt: str | None = None,
+    model_name: str | None = None,
+    org_id: int | None = None,
+    team_id: int | None = None,
+    folder_tag: str | None = None,
+    tags: list[str] | None = None,
     is_transient: bool = False,
-    expires_at: Optional[datetime] = None,
+    expires_at: datetime | None = None,
     check_quota: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Save generated image and register with storage tracking.
 
@@ -317,13 +315,13 @@ async def save_and_register_voice_clone(
     voice_data: bytes,
     voice_format: str = "bin",
     voice_name: str,
-    provider: Optional[str] = None,
-    org_id: Optional[int] = None,
-    team_id: Optional[int] = None,
-    folder_tag: Optional[str] = None,
-    tags: Optional[List[str]] = None,
+    provider: str | None = None,
+    org_id: int | None = None,
+    team_id: int | None = None,
+    folder_tag: str | None = None,
+    tags: list[str] | None = None,
     check_quota: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Save voice clone data and register with storage tracking.
 
@@ -394,16 +392,16 @@ async def save_and_register_spreadsheet(
     user_id: int,
     spreadsheet_bytes: bytes,
     spreadsheet_format: str = "xlsx",
-    original_filename: Optional[str] = None,
-    source_ref: Optional[str] = None,
-    org_id: Optional[int] = None,
-    team_id: Optional[int] = None,
-    folder_tag: Optional[str] = None,
-    tags: Optional[List[str]] = None,
+    original_filename: str | None = None,
+    source_ref: str | None = None,
+    org_id: int | None = None,
+    team_id: int | None = None,
+    folder_tag: str | None = None,
+    tags: list[str] | None = None,
     is_transient: bool = False,
-    expires_at: Optional[datetime] = None,
+    expires_at: datetime | None = None,
     check_quota: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Save generated spreadsheet and register with storage tracking.
 
@@ -472,16 +470,16 @@ async def save_and_register_mindmap(
     user_id: int,
     mindmap_bytes: bytes,
     mindmap_format: str = "json",
-    title: Optional[str] = None,
-    source_ref: Optional[str] = None,
-    org_id: Optional[int] = None,
-    team_id: Optional[int] = None,
-    folder_tag: Optional[str] = None,
-    tags: Optional[List[str]] = None,
+    title: str | None = None,
+    source_ref: str | None = None,
+    org_id: int | None = None,
+    team_id: int | None = None,
+    folder_tag: str | None = None,
+    tags: list[str] | None = None,
     is_transient: bool = False,
-    expires_at: Optional[datetime] = None,
+    expires_at: datetime | None = None,
     check_quota: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Save generated mindmap and register with storage tracking.
 

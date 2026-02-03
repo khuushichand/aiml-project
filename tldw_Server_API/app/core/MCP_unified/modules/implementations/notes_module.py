@@ -6,14 +6,16 @@ Returns normalized result schema with 0-1 scores and 300-char snippets by defaul
 """
 
 import asyncio
-from typing import Dict, Any, List, Optional, Iterable
+from collections.abc import Iterable
+from typing import Any, Optional
+
 from loguru import logger
 
-from ..base import BaseModule, ModuleConfig, create_tool_definition
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from ..base import BaseModule, create_tool_definition
 
 
-def _normalize_scores(results: List[Dict[str, Any]], score_key: Optional[str] = None) -> List[float]:
+def _normalize_scores(results: list[dict[str, Any]], score_key: Optional[str] = None) -> list[float]:
     if not results:
         return []
     # Prefer a numeric score if present (e.g., bm25 or ts_rank), otherwise use position-based decay
@@ -63,7 +65,7 @@ class NotesModule(BaseModule):
     async def on_shutdown(self) -> None:
         logger.info(f"Shutting down Notes module: {self.name}")
 
-    async def check_health(self) -> Dict[str, bool]:
+    async def check_health(self) -> dict[str, bool]:
         checks = {"initialized": True, "driver_available": False, "disk_space": False}
         try:
             # Verify DB driver class is importable
@@ -101,7 +103,7 @@ class NotesModule(BaseModule):
 
         return checks
 
-    async def get_tools(self) -> List[Dict[str, Any]]:
+    async def get_tools(self) -> list[dict[str, Any]]:
         return [
             create_tool_definition(
                 name="notes.search",
@@ -230,7 +232,7 @@ class NotesModule(BaseModule):
             ),
         ]
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any | None = None) -> Any:
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
@@ -264,7 +266,7 @@ class NotesModule(BaseModule):
             raise ValueError("ChaChaNotes DB path not available in context")
         return CharactersRAGDB(db_path=chacha_path, client_id=f"mcp_notes_{self.config.name}")
 
-    async def _search_notes(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _search_notes(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         query: str = args.get("query")
         limit: int = int(args.get("limit", 10))
         offset: int = int(args.get("offset", 0))
@@ -288,7 +290,7 @@ class NotesModule(BaseModule):
             snippet_len,
         )
 
-    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+    def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):
         if tool_name == "notes.search":
             q = arguments.get("query")
             if not isinstance(q, str) or not (1 <= len(q) <= 1000):
@@ -378,7 +380,7 @@ class NotesModule(BaseModule):
             if offset < 0:
                 raise ValueError("offset must be >= 0")
 
-    async def _get_note(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _get_note(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         note_id: str = args.get("note_id")
         retrieval = args.get("retrieval") or {}
         mode = (retrieval or {}).get("mode", "snippet")
@@ -401,40 +403,40 @@ class NotesModule(BaseModule):
             snippet_len,
         )
 
-    async def _create_note(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _create_note(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         title = args.get("title")
         content = args.get("content")
         tags = args.get("tags") or []
         return await asyncio.to_thread(self._create_note_sync, context, title, content, tags)
 
-    async def _update_note(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _update_note(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         note_id = args.get("note_id")
         updates = args.get("updates") or {}
         expected_version = args.get("expected_version")
         return await asyncio.to_thread(self._update_note_sync, context, note_id, updates, expected_version)
 
-    async def _delete_note(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _delete_note(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         note_id = args.get("note_id")
         permanent = bool(args.get("permanent", False))
         expected_version = args.get("expected_version")
         return await asyncio.to_thread(self._delete_note_sync, context, note_id, permanent, expected_version)
 
-    async def _tags_add(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _tags_add(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         note_id = args.get("note_id")
         tags = args.get("tags") or []
         return await asyncio.to_thread(self._tags_add_sync, context, note_id, tags)
 
-    async def _tags_remove(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _tags_remove(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         note_id = args.get("note_id")
         tags = args.get("tags") or []
         return await asyncio.to_thread(self._tags_remove_sync, context, note_id, tags)
 
-    async def _tags_set(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _tags_set(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         note_id = args.get("note_id")
         tags = args.get("tags") or []
         return await asyncio.to_thread(self._tags_set_sync, context, note_id, tags)
 
-    async def _tags_list(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _tags_list(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         note_id = args.get("note_id")
         limit = int(args.get("limit", 50))
         offset = int(args.get("offset", 0))
@@ -447,7 +449,7 @@ class NotesModule(BaseModule):
         limit: int,
         offset: int,
         snippet_len: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             fetch_limit = limit + 1  # fetch one extra row to detect additional pages
@@ -519,7 +521,7 @@ class NotesModule(BaseModule):
         note_id: str,
         mode: str,
         snippet_len: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             row = db.get_note_by_id(note_id)
@@ -563,7 +565,7 @@ class NotesModule(BaseModule):
         title: str,
         content: str,
         tags: Iterable[str],
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             note_id = db.add_note(title=title, content=content)
@@ -587,9 +589,9 @@ class NotesModule(BaseModule):
         self,
         context: Any | None,
         note_id: str,
-        updates: Dict[str, Any],
+        updates: dict[str, Any],
         expected_version: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             row = db.get_note_by_id(note_id)
@@ -612,7 +614,7 @@ class NotesModule(BaseModule):
         note_id: str,
         permanent: bool,
         expected_version: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if permanent and not self._is_admin(context):
             raise PermissionError("Admin role required for permanent delete")
         db = self._open_db(context)
@@ -636,7 +638,7 @@ class NotesModule(BaseModule):
             except Exception as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after delete: {}", exc)
 
-    def _tags_add_sync(self, context: Any | None, note_id: str, tags: Iterable[str]) -> Dict[str, Any]:
+    def _tags_add_sync(self, context: Any | None, note_id: str, tags: Iterable[str]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             if not db.get_note_by_id(note_id):
@@ -657,7 +659,7 @@ class NotesModule(BaseModule):
             except Exception as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after tags add: {}", exc)
 
-    def _tags_remove_sync(self, context: Any | None, note_id: str, tags: Iterable[str]) -> Dict[str, Any]:
+    def _tags_remove_sync(self, context: Any | None, note_id: str, tags: Iterable[str]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             if not db.get_note_by_id(note_id):
@@ -674,7 +676,7 @@ class NotesModule(BaseModule):
             except Exception as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after tags remove: {}", exc)
 
-    def _tags_set_sync(self, context: Any | None, note_id: str, tags: Iterable[str]) -> Dict[str, Any]:
+    def _tags_set_sync(self, context: Any | None, note_id: str, tags: Iterable[str]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             if not db.get_note_by_id(note_id):
@@ -703,7 +705,7 @@ class NotesModule(BaseModule):
             except Exception as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after tags set: {}", exc)
 
-    def _tags_list_sync(self, context: Any | None, note_id: Optional[str], limit: int, offset: int) -> Dict[str, Any]:
+    def _tags_list_sync(self, context: Any | None, note_id: Optional[str], limit: int, offset: int) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             if note_id:
@@ -734,7 +736,7 @@ class NotesModule(BaseModule):
             except Exception as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after tags list: {}", exc)
 
-    def _build_note_meta(self, row: Dict[str, Any], snippet_len: int = 300) -> Dict[str, Any]:
+    def _build_note_meta(self, row: dict[str, Any], snippet_len: int = 300) -> dict[str, Any]:
         content = row.get("content") or ""
         return {
             "id": row.get("id"),
@@ -771,8 +773,8 @@ class NotesModule(BaseModule):
         if len(tags) > 50:
             raise ValueError("tags must contain <= 50 items")
 
-    def _normalize_tags(self, tags: Iterable[str]) -> List[str]:
-        out: List[str] = []
+    def _normalize_tags(self, tags: Iterable[str]) -> list[str]:
+        out: list[str] = []
         seen = set()
         for t in tags or []:
             if not isinstance(t, str):
@@ -800,13 +802,13 @@ class NotesModule(BaseModule):
         except Exception:
             return None
 
-    def _apply_tags(self, db: CharactersRAGDB, note_id: str, tags: List[str]) -> None:
+    def _apply_tags(self, db: CharactersRAGDB, note_id: str, tags: list[str]) -> None:
         for tag in tags:
             kid = self._ensure_keyword(db, tag)
             if kid is None:
                 continue
             db.link_note_to_keyword(note_id, int(kid))
 
-    def _tags_for_note(self, db: CharactersRAGDB, note_id: str) -> List[str]:
+    def _tags_for_note(self, db: CharactersRAGDB, note_id: str) -> list[str]:
         rows = db.get_keywords_for_note(note_id)
         return [str(r.get("keyword")).lower() for r in rows if r.get("keyword") is not None]

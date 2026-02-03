@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import os
 import time
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from loguru import logger
@@ -14,9 +11,9 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
     EmbeddingsABTestConfig,
 )
+from tldw_Server_API.app.core.Chunking import Chunker, ChunkerConfig
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.Chunking import Chunker, ChunkerConfig
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
     ABTEST_JOBS_CLEANUP_TYPE,
@@ -25,18 +22,21 @@ from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
     abtest_jobs_manager,
     abtest_jobs_queue,
 )
-from tldw_Server_API.app.core.Evaluations.metrics_retrieval import (
-    recall_at_k, mrr, ndcg, hit_at_k,
-)
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_metrics import (
     record_abtest_arm_build,
     record_abtest_run,
+)
+from tldw_Server_API.app.core.Evaluations.metrics_retrieval import (
+    hit_at_k,
+    mrr,
+    ndcg,
+    recall_at_k,
 )
 from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import RerankingStrategy
 
 
 class EmbeddingsABTestRunError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool = True, backoff_seconds: Optional[int] = None) -> None:
+    def __init__(self, message: str, *, retryable: bool = True, backoff_seconds: int | None = None) -> None:
         super().__init__(message)
         self.retryable = retryable
         if backoff_seconds is not None:
@@ -50,7 +50,7 @@ class EmbeddingsABTestPolicyError(EmbeddingsABTestRunError):
         *,
         policy_type: str,
         status_code: int,
-        details: Optional[Dict[str, object]] = None,
+        details: dict[str, object] | None = None,
     ) -> None:
         super().__init__(message, retryable=False)
         self.policy_type = policy_type
@@ -58,7 +58,7 @@ class EmbeddingsABTestPolicyError(EmbeddingsABTestRunError):
         self.details = details or {}
 
 
-def _parse_abtest_quota(raw: object) -> Optional[int]:
+def _parse_abtest_quota(raw: object) -> int | None:
     if raw is None:
         return None
     try:
@@ -68,7 +68,7 @@ def _parse_abtest_quota(raw: object) -> Optional[int]:
     return value if value > 0 else None
 
 
-def _load_abtest_quota(name: str) -> Optional[int]:
+def _load_abtest_quota(name: str) -> int | None:
     raw = os.getenv(name)
     if raw is None:
         try:
@@ -79,7 +79,7 @@ def _load_abtest_quota(name: str) -> Optional[int]:
     return _parse_abtest_quota(raw)
 
 
-def _model_allowed(model: str, allowed_models: List[str]) -> bool:
+def _model_allowed(model: str, allowed_models: list[str]) -> bool:
     for pat in allowed_models:
         if pat.endswith("*") and model.startswith(pat[:-1]):
             return True
@@ -88,11 +88,11 @@ def _model_allowed(model: str, allowed_models: List[str]) -> bool:
     return False
 
 
-def validate_abtest_policy(config: EmbeddingsABTestConfig, *, user: Optional[object] = None) -> None:
+def validate_abtest_policy(config: EmbeddingsABTestConfig, *, user: object | None = None) -> None:
     try:
         from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
-            _get_allowed_providers,
             _get_allowed_models,
+            _get_allowed_providers,
             _should_enforce_policy,
         )
     except Exception:
@@ -183,9 +183,9 @@ def _compute_pipeline_hash(config: EmbeddingsABTestConfig) -> str:
 async def _embed_texts(
     provider: str,
     model: str,
-    texts: List[str],
-    metadata: Optional[Dict[str, Any]] = None,
-) -> List[List[float]]:
+    texts: list[str],
+    metadata: dict[str, Any] | None = None,
+) -> list[list[float]]:
     from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
         create_embeddings_batch_async,
     )
@@ -195,7 +195,7 @@ async def _embed_texts(
         model_id=model,
         metadata=metadata,
     )
-    out: List[List[float]] = []
+    out: list[list[float]] = []
     for v in vectors:
         arr = np.array(v, dtype=np.float32)
         nrm = float(np.linalg.norm(arr))
@@ -205,8 +205,8 @@ async def _embed_texts(
     return out
 
 
-def _get_model_revision(provider: str, model: str) -> Dict[str, Optional[str]]:
-    meta: Dict[str, Optional[str]] = {"hf_revision": None, "onnx_sha": None}
+def _get_model_revision(provider: str, model: str) -> dict[str, str | None]:
+    meta: dict[str, str | None] = {"hf_revision": None, "onnx_sha": None}
     try:
         if provider.lower() == "huggingface":
             from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import COMMIT_HASHES
@@ -240,7 +240,7 @@ async def build_collections_vector_only(
     test_id: str,
     user_id: str,
     media_db: MediaDatabase,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """Chunk, embed, and store vectors per arm into per-user collections.
 
     Returns list of {arm_id, collection_name} for each arm.
@@ -251,7 +251,7 @@ async def build_collections_vector_only(
 
     manager = ChromaDBManager(user_id=str(user_id), user_embedding_config=embedding_config)
 
-    results: List[Dict[str, str]] = []
+    results: list[dict[str, str]] = []
     pipeline_hash = _compute_pipeline_hash(config)
     existing_arms = {}
     for arm in db.get_abtest_arms(test_id) or []:
@@ -279,7 +279,7 @@ async def build_collections_vector_only(
     created_by = test_row.get("created_by")
 
     # Load corpus content
-    corpus_texts: List[Tuple[int, str]] = []  # (media_id, text)
+    corpus_texts: list[tuple[int, str]] = []  # (media_id, text)
     for mid in config.media_ids:
         item = media_db.get_media_by_id(int(mid))
         if not item or not item.get("content"):
@@ -439,9 +439,9 @@ async def build_collections_vector_only(
                 pass
 
             # Chunk entire corpus
-            all_texts: List[str] = []
-            metadatas: List[Dict[str, str]] = []
-            ids: List[str] = []
+            all_texts: list[str] = []
+            metadatas: list[dict[str, str]] = []
+            ids: list[str] = []
             for (mid, text) in corpus_texts:
                 chunks = chunker.chunk_text_with_metadata(
                     text=text,
@@ -548,8 +548,8 @@ async def run_vector_search_and_score(
     config: EmbeddingsABTestConfig,
     test_id: str,
     user_id: str,
-    arm_collections: List[Dict[str, str]],
-) -> Dict[str, Dict[str, float]]:
+    arm_collections: list[dict[str, str]],
+) -> dict[str, dict[str, float]]:
     """Run vector-only search across arms and compute metrics, storing results in DB.
 
     Returns aggregate metrics per arm_id.
@@ -570,7 +570,7 @@ async def run_vector_search_and_score(
     else:
         texts = [r.get('text','') for r in qrows]
         qids = [r.get('query_id') for r in qrows]
-        def _parse_ids(s: Optional[str]) -> List[str]:
+        def _parse_ids(s: str | None) -> list[str]:
             if not s:
                 return []
             try:
@@ -579,7 +579,7 @@ async def run_vector_search_and_score(
             except Exception:
                 return []
         gt_lookup = {r.get('query_id'): _parse_ids(r.get('ground_truth_ids')) for r in qrows}
-    query_vecs_per_arm: Dict[str, List[List[float]]] = {}
+    query_vecs_per_arm: dict[str, list[list[float]]] = {}
     # Use sequential arm order
     query_metadata = {"user_id": str(user_id)}
     for i, arm in enumerate(config.arms):
@@ -587,7 +587,7 @@ async def run_vector_search_and_score(
         query_vecs_per_arm[key] = await _embed_texts(arm.provider, arm.model, texts, metadata=query_metadata)
 
     # Run searches and score
-    aggregates: Dict[str, Dict[str, float]] = {}
+    aggregates: dict[str, dict[str, float]] = {}
     metric_level = config.metric_level or "media"
     include_media_ids = config.media_ids or None
     for i, mapping in enumerate(arm_collections):
@@ -601,11 +601,11 @@ async def run_vector_search_and_score(
         per_query_scores = {"recall": [], "mrr": [], "ndcg": [], "hit": [], "latency_ms": []}
         for q_idx, qid in enumerate(qids):
             start = time.time()
-            ranked: List[str] = []
-            distances: List[List[float]] = [[]]
-            metadatas: List[List[Dict[str, Any]]] = [[]]
-            documents: List[List[str]] = [[]]
-            rerank_scores_out: Optional[List[float]] = None
+            ranked: list[str] = []
+            distances: list[list[float]] = [[]]
+            metadatas: list[list[dict[str, Any]]] = [[]]
+            documents: list[list[str]] = [[]]
+            rerank_scores_out: list[float] | None = None
             if (config.retrieval.search_mode or 'vector') == 'hybrid':
                 try:
                     from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
@@ -633,7 +633,7 @@ async def run_vector_search_and_score(
             else:
                 qvec = qvecs[q_idx]
                 collection = manager.get_or_create_collection(collection_name)
-                ranked: List[str] = []
+                ranked: list[str] = []
                 try:
                     # Chroma include: valid keys are documents, embeddings, metadatas, distances, uris, data
                     # 'ids' are returned by default and not a valid include key on some versions.
@@ -652,10 +652,14 @@ async def run_vector_search_and_score(
                     logger.warning(f"Vector search failed for {collection_name}; proceeding with empty results: {e}")
                 # Optional rerank controlled by toggle
                 if getattr(config.retrieval, 're_ranker', None) and bool(getattr(config.retrieval, 'apply_reranker', False)):
-                    from tldw_Server_API.app.core.RAG.rag_service.types import Document as RagDocument, DataSource
-                    from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import create_reranker, RerankingConfig
+                    from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import (
+                        RerankingConfig,
+                        create_reranker,
+                    )
+                    from tldw_Server_API.app.core.RAG.rag_service.types import DataSource
+                    from tldw_Server_API.app.core.RAG.rag_service.types import Document as RagDocument
 
-                    def _map_strategy(provider: Optional[str], model: Optional[str]) -> RerankingStrategy:
+                    def _map_strategy(provider: str | None, model: str | None) -> RerankingStrategy:
                         p = (provider or '').lower()
                         m = (model or '').lower()
                         # Explicit FlashRank
@@ -684,8 +688,8 @@ async def run_vector_search_and_score(
                         return RerankingStrategy.FLASHRANK
 
                     # Build documents and baseline scores up-front so we always record rerank_scores when toggled on
-                    docs: List[RagDocument] = []
-                    orig_scores: List[float] = []
+                    docs: list[RagDocument] = []
+                    orig_scores: list[float] = []
                     for i2 in range(len(ranked)):
                         md = metadatas[0][i2] if metadatas and metadatas[0] else {}
                         content = documents[0][i2] if documents and documents[0] else ""
@@ -703,8 +707,8 @@ async def run_vector_search_and_score(
                         rconf = RerankingConfig(strategy=strat, top_k=k, model_name=(getattr(rr, 'model', None) if rr else None))
                         reranker = create_reranker(strat, rconf)
                         scored = await reranker.rerank(query=texts[q_idx], documents=docs, original_scores=orig_scores)
-                        new_ranked: List[str] = []
-                        new_scores: List[float] = []
+                        new_ranked: list[str] = []
+                        new_scores: list[float] = []
                         for sd in scored:
                             mid = None
                             md = sd.document.metadata if hasattr(sd.document, 'metadata') else None
@@ -721,7 +725,7 @@ async def run_vector_search_and_score(
                         logger.warning(f"Reranking failed; using original ordering: {e}")
             elapsed = (time.time() - start) * 1000.0
 
-            def _parse_media_id_from_chunk_id(rid: str) -> Optional[str]:
+            def _parse_media_id_from_chunk_id(rid: str) -> str | None:
                 if not rid.startswith("mid"):
                     return None
                 try:
@@ -730,7 +734,7 @@ async def run_vector_search_and_score(
                 except Exception:
                     return None
 
-            ranked_media_ids: List[str] = []
+            ranked_media_ids: list[str] = []
             if metadatas and metadatas[0]:
                 for idx, rid in enumerate(ranked):
                     md = metadatas[0][idx] if idx < len(metadatas[0]) else {}
@@ -772,7 +776,7 @@ async def run_vector_search_and_score(
             )
 
         # Aggregate
-        def _avg(xs: List[float]) -> float:
+        def _avg(xs: list[float]) -> float:
             return float(sum(xs) / len(xs)) if xs else 0.0
 
         aggregates[arm_id] = {
@@ -860,8 +864,8 @@ def cleanup_abtest_resources(
     *,
     delete_db: bool,
     delete_idempotency: bool,
-    created_by: Optional[str] = None,
-) -> Dict[str, int]:
+    created_by: str | None = None,
+) -> dict[str, int]:
     from tldw_Server_API.app.core.config import settings as app_settings
 
     deleted = 0
@@ -908,7 +912,7 @@ def _sign_test_pvalue(wins: int, losses: int) -> float:
     return p
 
 
-def compute_significance(db: EvaluationsDatabase, test_id: str, metric: str = 'ndcg') -> Dict[str, Dict[str, float]]:
+def compute_significance(db: EvaluationsDatabase, test_id: str, metric: str = 'ndcg') -> dict[str, dict[str, float]]:
     """Compute pairwise significance (sign test) over per-query metrics by arm.
 
     Returns nested dict {arm_i: {arm_j: p_value}}.
@@ -917,7 +921,7 @@ def compute_significance(db: EvaluationsDatabase, test_id: str, metric: str = 'n
     queries = db.get_abtest_queries(test_id)
     qids = [r['query_id'] for r in queries]
     # Build per-arm metrics per query
-    per_arm: Dict[str, Dict[str, float]] = {a['arm_id']: {} for a in arms}
+    per_arm: dict[str, dict[str, float]] = {a['arm_id']: {} for a in arms}
     # Fetch all results (could paginate if large)
     rows, _total = db.list_abtest_results(test_id, limit=100000, offset=0)
     for r in rows:
@@ -931,7 +935,7 @@ def compute_significance(db: EvaluationsDatabase, test_id: str, metric: str = 'n
             pass
 
     # Pairwise p-values
-    pvals: Dict[str, Dict[str, float]] = {}
+    pvals: dict[str, dict[str, float]] = {}
     for i, ai in enumerate(arms):
         a_id = ai['arm_id']
         pvals[a_id] = {}

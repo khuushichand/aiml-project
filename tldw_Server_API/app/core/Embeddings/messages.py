@@ -8,7 +8,8 @@ requeue operations while still catching obviously malformed payloads.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Dict, Optional
+from collections.abc import Mapping
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -24,17 +25,17 @@ SCHEMA_URL = "https://schemas.tldw.ai/embeddings/v1.json"
 class ChunkingConfigModel(BaseModel):
     chunk_size: int = Field(..., ge=100)
     overlap: int = Field(..., ge=0)
-    separator: Optional[str] = None
+    separator: str | None = None
 
 
-def normalize_message(stage: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
+def normalize_message(stage: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize an embeddings pipeline message payload.
 
     Adds envelope defaults (schema/version) and validates chunking_config.
     """
     validate_schema(stage, payload)
 
-    message: Dict[str, Any] = dict(payload)
+    message: dict[str, Any] = dict(payload)
     schema_value = message.get("msg_schema") or message.get("schema") or CURRENT_SCHEMA
     message.pop("schema", None)
     message["msg_schema"] = schema_value

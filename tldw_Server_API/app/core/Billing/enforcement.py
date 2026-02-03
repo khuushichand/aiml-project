@@ -10,9 +10,9 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from loguru import logger
 
@@ -51,8 +51,8 @@ class LimitCheckResult:
     limit: int
     percent_used: float
     unlimited: bool = False
-    message: Optional[str] = None
-    retry_after: Optional[int] = None  # For rate limits
+    message: str | None = None
+    retry_after: int | None = None  # For rate limits
 
     @property
     def should_block(self) -> bool:
@@ -92,16 +92,16 @@ class BillingEnforcer:
         *,
         soft_limit_percent: float = SOFT_LIMIT_PERCENT,
         grace_period_days: int = 3,
-        cache_ttl: Optional[float] = None,
+        cache_ttl: float | None = None,
     ):
         self.soft_limit_percent = soft_limit_percent
         self.grace_period_days = grace_period_days
-        self._usage_cache: Dict[int, Tuple[UsageSummary, float]] = {}
-        self._limits_cache: Dict[int, Tuple[Dict[str, Any], float]] = {}
+        self._usage_cache: dict[int, tuple[UsageSummary, float]] = {}
+        self._limits_cache: dict[int, tuple[dict[str, Any], float]] = {}
         # Use provided TTL, env var, or default to 60s
         self._cache_ttl = cache_ttl if cache_ttl is not None else BILLING_CACHE_TTL_SECONDS
 
-    async def get_org_limits(self, org_id: int) -> Dict[str, Any]:
+    async def get_org_limits(self, org_id: int) -> dict[str, Any]:
         """Get subscription limits for an organization with caching."""
         now = time.time()
 
@@ -360,7 +360,7 @@ class BillingEnforcer:
             pool = await get_db_pool()
             repo = AuthnzOrgsTeamsRepo(db_pool=pool)
 
-            member_ids: Set[str] = set()
+            member_ids: set[str] = set()
             offset = 0
             batch_size = 500
 
@@ -422,7 +422,7 @@ class BillingEnforcer:
             offset = 0
             batch_size = 500  # keep below SQLite's max parameter count
 
-            def _chunks(values: List[int], size: int) -> List[List[int]]:
+            def _chunks(values: list[int], size: int) -> list[list[int]]:
                 return [values[i:i + size] for i in range(0, len(values), size)]
 
             while True:
@@ -631,7 +631,7 @@ class BillingEnforcer:
         limits = await self.get_org_limits(org_id)
         return bool(limits.get(feature, False))
 
-    def invalidate_cache(self, org_id: Optional[int] = None) -> None:
+    def invalidate_cache(self, org_id: int | None = None) -> None:
         """Invalidate usage/limits cache for an org or all orgs."""
         if org_id is not None:
             self._usage_cache.pop(org_id, None)
@@ -690,7 +690,7 @@ class BillingEnforcer:
 
 
 # Singleton instance with thread-safe initialization
-_billing_enforcer: Optional[BillingEnforcer] = None
+_billing_enforcer: BillingEnforcer | None = None
 _billing_enforcer_lock = threading.Lock()
 
 
@@ -720,7 +720,7 @@ async def create_billing_rg_request(
     org_id: int,
     category: LimitCategory,
     units: int = 1,
-    endpoint: Optional[str] = None,
+    endpoint: str | None = None,
 ) -> "RGRequest":
     """
     Create a Resource Governor request for billing enforcement.
@@ -757,8 +757,8 @@ async def check_billing_with_rg(
     """
     try:
         from tldw_Server_API.app.core.Resource_Governance.governor import (
-            ResourceGovernor,
             MemoryResourceGovernor,
+            ResourceGovernor,
         )
 
         # Try to get RG from app state (if we're in a request context)

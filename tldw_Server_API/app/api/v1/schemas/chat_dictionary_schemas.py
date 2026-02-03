@@ -10,9 +10,10 @@ API endpoints, ensuring proper validation and serialization.
 
 import re
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Union
-from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
+from typing import Any, Optional, Union
+
 from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from tldw_Server_API.app.core.Character_Chat.constants import MAX_CHAT_DICTIONARY_TEXT_LENGTH
 
@@ -37,7 +38,7 @@ def _has_nested_quantifiers(pattern: str) -> bool:
     """Heuristic check for nested quantifiers like '(a+)+'. """
     escaped = False
     in_class = False
-    group_stack: List[bool] = []
+    group_stack: list[bool] = []
     last_closed_group_had_quantifier = False
     last_token_was_group_end = False
 
@@ -229,7 +230,7 @@ class ChatDictionaryResponse(ChatDictionaryBase):
 
 class ChatDictionaryWithEntries(ChatDictionaryResponse):
     """Schema for chat dictionary with its entries."""
-    entries: List[DictionaryEntryResponse] = Field(default_factory=list, description="Dictionary entries")
+    entries: list[DictionaryEntryResponse] = Field(default_factory=list, description="Dictionary entries")
 
 
 class ProcessTextRequest(BaseModel):
@@ -247,7 +248,7 @@ class ProcessTextResponse(BaseModel):
     processed_text: str = Field(..., description="Text after processing")
     replacements: int = Field(..., description="Total number of replacements made")
     iterations: int = Field(..., description="Number of iterations performed")
-    entries_used: List[int] = Field(..., description="IDs of entries that made replacements")
+    entries_used: list[int] = Field(..., description="IDs of entries that made replacements")
     token_budget_exceeded: bool = Field(False, description="Whether token budget was exceeded")
     processing_time_ms: Optional[float] = Field(None, description="Processing time in milliseconds")
 
@@ -264,7 +265,7 @@ class ImportDictionaryResponse(BaseModel):
     dictionary_id: int = Field(..., description="ID of the created dictionary")
     name: str = Field(..., description="Dictionary name")
     entries_imported: int = Field(..., description="Number of entries imported")
-    groups_created: List[str] = Field(..., description="List of groups found and created")
+    groups_created: list[str] = Field(..., description="List of groups found and created")
 
 
 class ExportDictionaryResponse(BaseModel):
@@ -276,19 +277,19 @@ class ExportDictionaryResponse(BaseModel):
 
 class ImportDictionaryJSONRequest(BaseModel):
     """Request schema for importing a dictionary from JSON."""
-    data: Dict[str, Any] = Field(..., description="Dictionary JSON data with 'name' and 'entries'")
+    data: dict[str, Any] = Field(..., description="Dictionary JSON data with 'name' and 'entries'")
     activate: bool = Field(True, description="Whether to activate the dictionary after import")
 
 class ExportDictionaryJSONResponse(BaseModel):
     """Response schema for JSON export of a dictionary."""
     name: str = Field(..., description="Dictionary name")
     description: Optional[str] = Field(None, description="Dictionary description")
-    entries: List[Dict[str, Any]] = Field(..., description="Entries with pattern, replacement, type, probability, etc.")
+    entries: list[dict[str, Any]] = Field(..., description="Entries with pattern, replacement, type, probability, etc.")
 
 
 class BulkEntryOperation(BaseModel):
     """Schema for bulk entry operations."""
-    entry_ids: List[int] = Field(..., min_length=1, description="List of entry IDs to operate on")
+    entry_ids: list[int] = Field(..., min_length=1, description="List of entry IDs to operate on")
     operation: str = Field(..., pattern="^(delete|activate|deactivate|group)$", description="Operation to perform")
     group_name: Optional[str] = Field(None, description="Group name (for group operation)")
 
@@ -297,7 +298,7 @@ class BulkOperationResponse(BaseModel):
     """Response schema for bulk operations."""
     success: bool = Field(..., description="Whether the operation succeeded")
     affected_count: int = Field(..., description="Number of entries affected")
-    failed_ids: List[int] = Field(default_factory=list, description="IDs that failed to process")
+    failed_ids: list[int] = Field(default_factory=list, description="IDs that failed to process")
     message: str = Field(..., description="Operation result message")
 
 
@@ -308,7 +309,7 @@ class DictionaryStatistics(BaseModel):
     total_entries: int = Field(..., description="Total number of entries")
     regex_entries: int = Field(..., description="Number of regex entries")
     literal_entries: int = Field(..., description="Number of literal entries")
-    groups: List[str] = Field(..., description="List of unique groups")
+    groups: list[str] = Field(..., description="List of unique groups")
     average_probability: float = Field(..., description="Average replacement probability")
     total_usage_count: Optional[int] = Field(None, description="Total times used (if tracked)")
     last_used: Optional[datetime] = Field(None, description="Last usage timestamp (if tracked)")
@@ -316,7 +317,7 @@ class DictionaryStatistics(BaseModel):
 
 class DictionaryListResponse(BaseModel):
     """Response schema for listing dictionaries."""
-    dictionaries: List[ChatDictionaryResponse] = Field(..., description="List of dictionaries")
+    dictionaries: list[ChatDictionaryResponse] = Field(..., description="List of dictionaries")
     total: int = Field(..., description="Total number of dictionaries")
     active_count: int = Field(..., description="Number of active dictionaries")
     inactive_count: int = Field(..., description="Number of inactive dictionaries")
@@ -324,7 +325,7 @@ class DictionaryListResponse(BaseModel):
 
 class EntryListResponse(BaseModel):
     """Response schema for listing entries."""
-    entries: List[DictionaryEntryResponse] = Field(..., description="List of entries")
+    entries: list[DictionaryEntryResponse] = Field(..., description="List of entries")
     total: int = Field(..., description="Total number of entries")
     dictionary_id: Optional[int] = Field(None, description="Dictionary ID if filtered")
     group: Optional[str] = Field(None, description="Group name if filtered")
@@ -335,7 +336,7 @@ class DictionaryError(BaseModel):
     """Error response for dictionary operations."""
     error: str = Field(..., description="Error type")
     message: str = Field(..., description="Error message")
-    details: Optional[Dict[str, Any]] = Field(None, description="Additional error details")
+    details: Optional[dict[str, Any]] = Field(None, description="Additional error details")
 
 
 class DictionaryConflictError(DictionaryError):
@@ -365,7 +366,7 @@ class ValidationIssue(BaseModel):
 
 class ValidateDictionaryRequest(BaseModel):
     """Request body for dictionary validation endpoint."""
-    data: Dict[str, Any] = Field(..., description="Dictionary JSON data including entries")
+    data: dict[str, Any] = Field(..., description="Dictionary JSON data including entries")
     schema_version: int = Field(1, description="Schema version for validation")
     strict: bool = Field(False, description="If true, may be used to fail import on errors (reporting stays 200)")
 
@@ -374,7 +375,7 @@ class ValidateDictionaryResponse(BaseModel):
     """Structured validation result matching the validator's taxonomy."""
     ok: bool = Field(..., description="Whether validation passed without errors")
     schema_version: int = Field(..., description="Schema version that was validated")
-    errors: List[ValidationIssue] = Field(default_factory=list, description="List of validation errors")
-    warnings: List[ValidationIssue] = Field(default_factory=list, description="List of validation warnings")
-    entry_stats: Dict[str, int] = Field(default_factory=dict, description="Basic statistics about entries")
-    suggested_fixes: List[str] = Field(default_factory=list, description="Optional suggestions to fix issues")
+    errors: list[ValidationIssue] = Field(default_factory=list, description="List of validation errors")
+    warnings: list[ValidationIssue] = Field(default_factory=list, description="List of validation warnings")
+    entry_stats: dict[str, int] = Field(default_factory=dict, description="Basic statistics about entries")
+    suggested_fixes: list[str] = Field(default_factory=list, description="Optional suggestions to fix issues")

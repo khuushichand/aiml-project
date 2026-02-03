@@ -2,37 +2,40 @@
 Evaluations CRUD and Runs endpoints extracted from evaluations_unified.
 """
 
-from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Header, Query, Response, status
-from loguru import logger
+from typing import Any, Optional
 
-from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
-    verify_api_key,
-    create_error_response,
-    sanitize_error_message,
-    check_evaluation_rate_limit,
-    get_eval_request_user,
-    require_eval_permissions,
-)
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field
+
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
     require_token_scope,
 )
+from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
+    check_evaluation_rate_limit,
+    create_error_response,
+    get_eval_request_user,
+    require_eval_permissions,
+    sanitize_error_message,
+    verify_api_key,
+)
+from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
+    CreateEvaluationRequest,
+    DatasetOverride,
+    EvaluationListResponse,
+    EvaluationResponse,
+    RunListResponse,
+    RunResponse,
+    UpdateEvaluationRequest,
+)
 from tldw_Server_API.app.core.AuthNZ.permissions import EVALS_MANAGE, EVALS_READ
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
 from tldw_Server_API.app.core.Evaluations.webhook_identity import webhook_user_id_from_user
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
-from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
-    CreateEvaluationRequest, UpdateEvaluationRequest, EvaluationResponse,
-    EvaluationListResponse, RunResponse, RunListResponse,
-    DatasetOverride,
-
-)
-from pydantic import BaseModel, Field
-from pydantic import ConfigDict
 
 
 class CreateRunSimpleRequest(BaseModel):
@@ -43,7 +46,7 @@ class CreateRunSimpleRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     target_model: Optional[str] = Field(default=None, description="Model to evaluate")
     dataset_override: Optional[DatasetOverride] = Field(default=None, description="Override dataset for this run")
-    config: Dict[str, Any] = Field(default_factory=dict, description="Run configuration (free-form)")
+    config: dict[str, Any] = Field(default_factory=dict, description="Run configuration (free-form)")
     webhook_url: Optional[str] = Field(default=None, description="Optional webhook URL for run events")
 
 

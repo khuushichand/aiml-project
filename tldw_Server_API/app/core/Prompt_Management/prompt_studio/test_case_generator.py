@@ -4,8 +4,9 @@
 import json
 import random
 import uuid
-from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
+from typing import Any, Optional
+
 from loguru import logger
 
 from .test_case_manager import TestCaseManager
@@ -36,7 +37,7 @@ class TestCaseGenerator:
 
     def generate_from_description(self, project_id: int, description: str,
                                  num_cases: int = 5, signature_id: Optional[int] = None,
-                                 prompt_id: Optional[int] = None) -> List[Dict[str, Any]]:
+                                 prompt_id: Optional[int] = None) -> list[dict[str, Any]]:
         """
         Generate test cases from a task description.
 
@@ -99,7 +100,7 @@ class TestCaseGenerator:
         return generated_cases
 
     def generate_diverse_cases(self, project_id: int, signature_id: int,
-                              num_cases: int = 5) -> List[Dict[str, Any]]:
+                              num_cases: int = 5) -> list[dict[str, Any]]:
         """
         Generate diverse test cases based on signature schema.
 
@@ -156,8 +157,8 @@ class TestCaseGenerator:
         logger.info(f"Generated {len(generated_cases)} diverse test cases")
         return generated_cases
 
-    def generate_from_existing_data(self, project_id: int, source_data: List[Dict[str, Any]],
-                                   signature_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    def generate_from_existing_data(self, project_id: int, source_data: list[dict[str, Any]],
+                                   signature_id: Optional[int] = None) -> list[dict[str, Any]]:
         """
         Generate test cases from existing data samples.
 
@@ -203,8 +204,8 @@ class TestCaseGenerator:
     # Helper Methods
 
     def _generate_single_case_from_description(self, description: str, index: int,
-                                              input_schema: Optional[List] = None,
-                                              output_schema: Optional[List] = None) -> Dict[str, Any]:
+                                              input_schema: Optional[list] = None,
+                                              output_schema: Optional[list] = None) -> dict[str, Any]:
         """
         Generate a single test case from description.
 
@@ -234,8 +235,8 @@ class TestCaseGenerator:
         else:
             return self._generate_generic_case(index, input_schema, output_schema)
 
-    def _generate_summarization_case(self, index: int, input_schema: Optional[List] = None,
-                                    output_schema: Optional[List] = None) -> Dict[str, Any]:
+    def _generate_summarization_case(self, index: int, input_schema: Optional[list] = None,
+                                    output_schema: Optional[list] = None) -> dict[str, Any]:
         """Generate a summarization test case."""
         texts = [
             "The quick brown fox jumps over the lazy dog. This pangram contains all letters of the alphabet.",
@@ -255,8 +256,8 @@ class TestCaseGenerator:
             "tags": ["summarization", "generated"]
         }
 
-    def _generate_classification_case(self, index: int, input_schema: Optional[List] = None,
-                                     output_schema: Optional[List] = None) -> Dict[str, Any]:
+    def _generate_classification_case(self, index: int, input_schema: Optional[list] = None,
+                                     output_schema: Optional[list] = None) -> dict[str, Any]:
         """Generate a classification test case."""
         samples = [
             ("I love this product! Best purchase ever!", "positive"),
@@ -276,8 +277,8 @@ class TestCaseGenerator:
             "tags": ["classification", "sentiment", "generated"]
         }
 
-    def _generate_extraction_case(self, index: int, input_schema: Optional[List] = None,
-                                 output_schema: Optional[List] = None) -> Dict[str, Any]:
+    def _generate_extraction_case(self, index: int, input_schema: Optional[list] = None,
+                                 output_schema: Optional[list] = None) -> dict[str, Any]:
         """Generate an extraction test case."""
         samples = [
             "John Smith was born on January 15, 1990 in New York City.",
@@ -297,8 +298,8 @@ class TestCaseGenerator:
             "tags": ["extraction", "NER", "generated"]
         }
 
-    def _generate_translation_case(self, index: int, input_schema: Optional[List] = None,
-                                  output_schema: Optional[List] = None) -> Dict[str, Any]:
+    def _generate_translation_case(self, index: int, input_schema: Optional[list] = None,
+                                  output_schema: Optional[list] = None) -> dict[str, Any]:
         """Generate a translation test case."""
         samples = [
             ("Hello, how are you?", "Bonjour, comment allez-vous?"),
@@ -318,8 +319,8 @@ class TestCaseGenerator:
             "tags": ["translation", "generated"]
         }
 
-    def _generate_qa_case(self, index: int, input_schema: Optional[List] = None,
-                         output_schema: Optional[List] = None) -> Dict[str, Any]:
+    def _generate_qa_case(self, index: int, input_schema: Optional[list] = None,
+                         output_schema: Optional[list] = None) -> dict[str, Any]:
         """Generate a Q&A test case."""
         samples = [
             ("What is the capital of France?", "Paris"),
@@ -339,8 +340,8 @@ class TestCaseGenerator:
             "tags": ["qa", "generated"]
         }
 
-    def _generate_generic_case(self, index: int, input_schema: Optional[List] = None,
-                              output_schema: Optional[List] = None) -> Dict[str, Any]:
+    def _generate_generic_case(self, index: int, input_schema: Optional[list] = None,
+                              output_schema: Optional[list] = None) -> dict[str, Any]:
         """Generate a generic test case based on schema."""
         inputs = {}
         expected_outputs = {}
@@ -382,8 +383,8 @@ class TestCaseGenerator:
             "tags": ["generic", "generated"]
         }
 
-    def _generate_case_by_strategy(self, input_schema: List, output_schema: List,
-                                  strategy: str, index: int) -> Dict[str, Any]:
+    def _generate_case_by_strategy(self, input_schema: list, output_schema: list,
+                                  strategy: str, index: int) -> dict[str, Any]:
         """
         Generate a test case using a specific strategy.
 

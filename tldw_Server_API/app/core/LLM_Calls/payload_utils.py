@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, Tuple, Mapping
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 
-def _summarize_message_content(content: Any) -> Tuple[int, bool]:
+def _summarize_message_content(content: Any) -> tuple[int, bool]:
     """Return (text_char_count, has_attachments) for a message content payload."""
     text_chars = 0
     has_attachments = False
@@ -46,7 +47,7 @@ def _summarize_message_content(content: Any) -> Tuple[int, bool]:
     return text_chars, has_attachments
 
 
-def _summarize_messages(messages: Any, key: str) -> Dict[str, Any]:
+def _summarize_messages(messages: Any, key: str) -> dict[str, Any]:
     """Summarize a messages-like payload without logging raw content."""
     if messages is None:
         return {f"{key}_count": 0, f"{key}_text_chars": 0}
@@ -56,7 +57,7 @@ def _summarize_messages(messages: Any, key: str) -> Dict[str, Any]:
     else:
         messages_iterable = messages
 
-    role_counts: Dict[str, int] = {}
+    role_counts: dict[str, int] = {}
     total_text_chars = 0
     has_attachments = False
 
@@ -80,7 +81,7 @@ def _summarize_messages(messages: Any, key: str) -> Dict[str, Any]:
         elif isinstance(entry, str):
             total_text_chars += len(entry)
 
-    summary: Dict[str, Any] = {
+    summary: dict[str, Any] = {
         f"{key}_count": len(messages_iterable),
         f"{key}_text_chars": total_text_chars,
     }
@@ -91,10 +92,10 @@ def _summarize_messages(messages: Any, key: str) -> Dict[str, Any]:
     return summary
 
 
-def _summarize_dict_field(key: str, value: Dict[str, Any]) -> Dict[str, Any]:
+def _summarize_dict_field(key: str, value: dict[str, Any]) -> dict[str, Any]:
     """Summarize dict values without exposing raw content."""
     if key == "response_format":
-        summary: Dict[str, Any] = {f"{key}_keys_count": len(value)}
+        summary: dict[str, Any] = {f"{key}_keys_count": len(value)}
         response_type = value.get("type")
         if isinstance(response_type, str):
             summary["response_format_type"] = response_type
@@ -129,26 +130,26 @@ def _summarize_dict_field(key: str, value: Dict[str, Any]) -> Dict[str, Any]:
     return {f"{key}_keys_count": len(value)}
 
 
-def _summarize_list_field(key: str, value: Iterable[Any]) -> Dict[str, Any]:
+def _summarize_list_field(key: str, value: Iterable[Any]) -> dict[str, Any]:
     """Summarize list/tuple values."""
     items = list(value)
-    summary: Dict[str, Any] = {f"{key}_count": len(items)}
+    summary: dict[str, Any] = {f"{key}_count": len(items)}
     if key in {"stop", "stop_sequences", "stopSequences"}:
         summary[f"{key}_total_chars"] = sum(len(item) for item in items if isinstance(item, str))
     return summary
 
 
 def _sanitize_payload_for_logging(
-    payload: Optional[Dict[str, Any]],
+    payload: dict[str, Any] | None,
     *,
-    message_keys: Tuple[str, ...] = ("messages",),
-    text_keys: Tuple[str, ...] = (),
-) -> Dict[str, Any]:
+    message_keys: tuple[str, ...] = ("messages",),
+    text_keys: tuple[str, ...] = (),
+) -> dict[str, Any]:
     """Build a metadata dict safe for logging, omitting raw prompts or filenames."""
     if not isinstance(payload, dict):
         return {}
 
-    metadata: Dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
 
     model = payload.get("model")
     if isinstance(model, str):
@@ -185,7 +186,7 @@ def _sanitize_payload_for_logging(
     return metadata
 
 
-def merge_extra_body(payload: Dict[str, Any], request: Mapping[str, Any]) -> Dict[str, Any]:
+def merge_extra_body(payload: dict[str, Any], request: Mapping[str, Any]) -> dict[str, Any]:
     """Merge extra_body into payload without overriding existing payload keys."""
     extra = request.get("extra_body")
     if not isinstance(extra, Mapping) or not extra:
@@ -195,7 +196,7 @@ def merge_extra_body(payload: Dict[str, Any], request: Mapping[str, Any]) -> Dic
     return merged
 
 
-def merge_extra_headers(headers: Dict[str, str], request: Mapping[str, Any]) -> Dict[str, str]:
+def merge_extra_headers(headers: dict[str, str], request: Mapping[str, Any]) -> dict[str, str]:
     """Merge extra_headers into headers without overriding existing header keys."""
     extra = request.get("extra_headers")
     if not isinstance(extra, Mapping) or not extra:

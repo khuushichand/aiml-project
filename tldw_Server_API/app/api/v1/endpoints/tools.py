@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Coroutine, List
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.api.v1.schemas.tools import (
-    ToolListResponse,
     ExecuteToolRequest,
     ExecuteToolResult,
     ToolInfo,
+    ToolListResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.Tools.tool_executor import ToolExecutor, ToolExecutionError
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Tools.tool_executor import ToolExecutionError, ToolExecutor
 
 router = APIRouter()
 
@@ -27,7 +28,7 @@ async def list_tools_endpoint(current_user: User = Depends(get_request_user)) ->
             client_id=str(current_user.username or current_user.id),
         )
 
-        def _to_tool_info(t: Dict[str, Any]) -> ToolInfo | None:
+        def _to_tool_info(t: dict[str, Any]) -> ToolInfo | None:
             try:
                 return ToolInfo(**t)
             except Exception as e:
@@ -48,7 +49,7 @@ async def list_tools_endpoint(current_user: User = Depends(get_request_user)) ->
 
         raw_tools = (out.get("tools") or []) if isinstance(out, dict) else []
         tools_maybe = [_to_tool_info(t) for t in raw_tools]
-        tools: List[ToolInfo] = [ti for ti in tools_maybe if ti is not None]
+        tools: list[ToolInfo] = [ti for ti in tools_maybe if ti is not None]
         return ToolListResponse(tools=tools)
     except Exception as e:
         logger.error(f"tools.list failed: {e}")

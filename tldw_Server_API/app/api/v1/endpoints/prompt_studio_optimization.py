@@ -18,39 +18,48 @@ Security
 - Rate limits applied to optimization creation and comparisons
 """
 
-from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Body, Header, Request
 import json
 from datetime import datetime
+from typing import Any, Optional
+
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Path, Query, Request, status
 from loguru import logger
+
+from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
+    PromptStudioDatabase,
+    SecurityConfig,
+    check_rate_limit,
+    get_prompt_studio_db,
+    get_prompt_studio_user,
+    get_security_config,
+    require_project_access,
+    require_project_write_access,
+)
 
 # Local imports
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import (
-    StandardResponse,
     ListResponse,
     PaginationMetadata,
+    StandardResponse,
 )
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_optimization import (
-    OptimizationCreate, OptimizationResponse,
+    OptimizationCreate,
+    OptimizationResponse,
 )
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_optimization_requests import (
     CompareStrategiesRequest,
     OptimizationSimpleCreateRequest,
 )
-from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
-    get_prompt_studio_db, get_prompt_studio_user, require_project_access, require_project_write_access,
-    check_rate_limit, get_security_config, PromptStudioDatabase, SecurityConfig
-)
-from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_types import JobType
-from tldw_Server_API.app.core.Prompt_Management.prompt_studio.jobs_adapter import PromptStudioJobsAdapter
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError
-from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics
-from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.core.Logging.log_context import (
     ensure_request_id,
     ensure_traceparent,
     log_context,
 )
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_types import JobType
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.jobs_adapter import PromptStudioJobsAdapter
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 ########################################################################################################################
 # Router Setup
@@ -85,7 +94,7 @@ def _normalize_optimizer_type(opt_type: str) -> str:
     t = (opt_type or "").strip().lower()
     return _OPTIMIZER_SYNONYMS.get(t, t)
 
-def _validate_strategy_config(optimizer_type: str, cfg: Dict[str, Any]) -> None:
+def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
     """Light validation for specific strategies.
 
     Keeps existing behavior for common strategies (iterative, mipro, random_search, hill_climbing,
@@ -102,7 +111,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: Dict[str, Any]) -> None:
             )
 
     # Optional, strategy-specific validations (only apply if provided)
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
     try:
         raw = cfg.get("strategy_params")
         if isinstance(raw, dict):
@@ -423,8 +432,8 @@ async def create_optimization_simple(
     payload: OptimizationSimpleCreateRequest,
     request: Request,  # type: ignore[assignment]
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user),
-) -> Dict[str, Any]:
+    user_context: dict = Depends(get_prompt_studio_user),
+) -> dict[str, Any]:
     # Minimal creation: create a job with provided payload
     prompt_id = int(payload.prompt_id or payload.initial_prompt_id or 0)
     # Correlate job with request_id if available
@@ -437,7 +446,7 @@ async def create_optimization_simple(
     optimizer_type = _normalize_optimizer_type(
         payload.strategy or (payload.config or {}).get("optimizer_type") or "iterative"
     )
-    combined_config: Dict[str, Any] = dict(payload.config or {})
+    combined_config: dict[str, Any] = dict(payload.config or {})
     max_iters = combined_config.get("max_iterations", 10)
     optimization_record = db.create_optimization(
         project_id=project_id,
@@ -450,7 +459,7 @@ async def create_optimization_simple(
         client_id=db.client_id,
     )
     adapter = PromptStudioJobsAdapter()
-    job_payload: Dict[str, Any] = {
+    job_payload: dict[str, Any] = {
         "optimization_id": optimization_record["id"],
         "optimizer_type": optimizer_type,
         "optimization_config": combined_config,
@@ -478,7 +487,7 @@ async def create_optimization_simple(
     return {"id": job_id, "status": job.get("status", "pending")}
 
 async def _rl_optimizations(
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
     security_config: SecurityConfig = Depends(get_security_config),
 ) -> bool:
     return await check_rate_limit("optimization", user_context=user_context, security_config=security_config)
@@ -580,7 +589,7 @@ async def create_optimization(
     _: bool = Depends(_rl_optimizations),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ) -> StandardResponse:
     """
@@ -615,7 +624,7 @@ async def create_optimization(
 
         if hasattr(opt_cfg, "model_dump_json"):
             try:
-                combined_config: Dict[str, Any] = json.loads(opt_cfg.model_dump_json())
+                combined_config: dict[str, Any] = json.loads(opt_cfg.model_dump_json())
             except Exception:
                 combined_config = model_dump_compat(opt_cfg)
         else:
@@ -691,7 +700,7 @@ async def create_optimization(
 
         req_id = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
-        job_payload: Dict[str, Any] = {
+        job_payload: dict[str, Any] = {
             "optimization_id": optimization_record["id"],
             "optimizer_type": optimizer_type,
             "test_case_ids": optimization_data.test_case_ids or [],
@@ -839,7 +848,7 @@ async def list_optimizations(
 async def get_optimization(
     optimization_id: int = Path(..., description="Optimization ID"),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Get optimization details.
@@ -890,8 +899,8 @@ async def get_optimization(
 async def get_optimization_job_status(
     job_id: str,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user),
-) -> Dict[str, Any]:
+    user_context: dict = Depends(get_prompt_studio_user),
+) -> dict[str, Any]:
     adapter = PromptStudioJobsAdapter()
     job = adapter.get_job(
         job_id,
@@ -911,7 +920,7 @@ async def cancel_optimization(
     optimization_id: int = Path(..., description="Optimization ID"),
     reason: str = Body(None, description="Cancellation reason"),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
 ) -> StandardResponse:
     """
     Cancel a running optimization.
@@ -965,7 +974,7 @@ async def cancel_optimization(
             mark_completed=True,
         )
 
-        from tldw_Server_API.app.core.Logging.log_context import get_ps_logger, ensure_request_id, ensure_traceparent
+        from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
         get_ps_logger(ps_component="endpoint", ps_job_kind="optimization", optimization_id=optimization_id, request_id=rid, traceparent=tp).info(
@@ -980,7 +989,7 @@ async def cancel_optimization(
         )
 
     except DatabaseError as exc:
-        from tldw_Server_API.app.core.Logging.log_context import get_ps_logger, ensure_request_id, ensure_traceparent
+        from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
         get_ps_logger(ps_component="endpoint", ps_job_kind="optimization", optimization_id=optimization_id, request_id=rid, traceparent=tp).error(
@@ -993,7 +1002,7 @@ async def cancel_optimization(
     except HTTPException:
         raise
     except Exception as exc:
-        from tldw_Server_API.app.core.Logging.log_context import get_ps_logger, ensure_request_id, ensure_traceparent
+        from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
         get_ps_logger(ps_component="endpoint", ps_job_kind="optimization", optimization_id=optimization_id, request_id=rid, traceparent=tp).error(
@@ -1112,7 +1121,7 @@ async def get_optimization_strategies() -> StandardResponse:
 async def get_optimization_history(
     optimization_id: int = Path(..., description="Optimization ID"),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Fetch optimization status and recent job history for UI progress.
@@ -1185,10 +1194,11 @@ async def get_optimization_history(
 
 from pydantic import BaseModel, Field
 
+
 class OptimizationIterationCreate(BaseModel):
     iteration_number: int = Field(..., ge=1, description="Iteration number starting at 1")
-    prompt_variant: Optional[Dict[str, Any]] = Field(None, description="Prompt variant used")
-    metrics: Optional[Dict[str, Any]] = Field(None, description="Metrics for this iteration")
+    prompt_variant: Optional[dict[str, Any]] = Field(None, description="Prompt variant used")
+    metrics: Optional[dict[str, Any]] = Field(None, description="Metrics for this iteration")
     tokens_used: Optional[int] = Field(None, ge=0)
     cost: Optional[float] = Field(None, ge=0.0)
     note: Optional[str] = Field(None, max_length=1000)
@@ -1224,7 +1234,7 @@ async def add_optimization_iteration(
     optimization_id: int,
     payload: OptimizationIterationCreate,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """Persist a single optimization iteration event."""
     try:
@@ -1295,7 +1305,7 @@ async def list_optimization_iterations(
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> ListResponse:
     """List persisted iterations for an optimization."""
     try:
@@ -1359,7 +1369,7 @@ async def compare_strategies(
     http_request: Request,  # type: ignore[assignment]
     _: bool = Depends(_rl_optimizations),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
 ) -> StandardResponse:
     """
     Compare multiple optimization strategies.
@@ -1380,8 +1390,8 @@ async def compare_strategies(
 
         req_id = ensure_request_id(http_request) if http_request is not None else None
         tp = ensure_traceparent(http_request) if http_request is not None else ""
-        optimization_ids: List[int] = []
-        job_ids: List[str] = []
+        optimization_ids: list[int] = []
+        job_ids: list[str] = []
         adapter = PromptStudioJobsAdapter()
 
         strategies = request.strategies or []

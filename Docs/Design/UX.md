@@ -271,6 +271,30 @@ Not waifus, but clippy:
   https://github.com/fghrsh/live2d_demo
 
 
+
+
+Complete Design Principles - https://medium.com/ui-for-ai/design-principles-for-future-ai-cebc9155745f
+
+    Preserve Struggle When Delegation Is Effortless. When AI can execute any task instantly, design interfaces that help users identify what mental work is worth keeping because the process itself has value.
+    Make Metacognition the Interface. Design systems that help users decide what to think about versus what to delegate, treating cognitive resource allocation as the primary task.
+    Design AI as a Transparent Thinking Partner. Expose intermediate reasoning, uncertainty, limitations, and evolving thoughts through continuous, two-way interaction.
+    Preserve Creative Interpretation When Output Is Instant. When AI can generate perfect outputs immediately, help users identify when the creative process itself has value worth preserving.
+    Safeguard Meaning-Making Through Non-Human Metaphors. When AI manifests through voice, AR, and environmental changes, use non-human metaphors that maintain clear human-machine boundaries.
+    Design Adaptive Interfaces for Additional Modalities. Design AI interfaces to accept input beyond text and to adapt dynamically to predict user needs and goals.
+    Organize by Space-Time, Not Apps. When AI is embedded across physical environments, organize memory and context by spatial-temporal coordinates rather than applications or folders.
+    Generate Interfaces for the Moment. Design ephemeral, task-specific interfaces that assemble in real-time based on detected intent, then dissolve when complete.
+    Enhance Human Work Instead of Replacing It. AI should function as a supportive collaborator within established human processes rather than a disruptive force that bypasses them.
+    Design to Communicate Limitations. Avoid overselling the capabilities of AI, and communicate to users when something won’t work.
+    Design Consent as Continuous, Not Binary. When AI operates continuously across devices and contexts, build real-time consent feeds with granular veto power at any moment.
+    Negotiate Agency Moment-by-Moment. Replace preset autonomy modes with continuous renegotiation of who does what, with “who’s driving?” always visible and always contestable.
+    Make Accountability Visible . Surface who made key decisions, what values shaped them, and where accountability ultimately lies.
+    Design Beyond Immediate Utility Toward Societal Impact. Consider how metaphors, roles, and system framing influence society over time.
+    Establish Guardrails to Prevent Misuse. Emphasize governance mechanisms that constrain misuse, define responsibility, and allow for escalation.
+    Make Power Legible in Infrastructure. When AI is embedded in institutional systems, build permanent accountability layers showing whose interests are served and who can override.
+    Design Exit as Sacred Right. When AI maintains perfect memory and trains personalized models, build absolute exit rights with complete data export and platform portability.
+
+
+
 Prompt Engineering page:
 - 3 Sections
   - Prompt
@@ -323,3 +347,6 @@ https://github.com/albirrkarim/react-speech-highlight-demo
   - Start with a Noun or verb
   - Drop Articles (a, the, an)
   - Be clear & Direct
+
+
+

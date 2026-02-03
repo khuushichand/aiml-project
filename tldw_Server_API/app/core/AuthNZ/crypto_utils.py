@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-from typing import List, Optional
 
 from loguru import logger
 
@@ -23,7 +22,7 @@ _HMAC_KDF_ITERATIONS = 100_000
 _HMAC_KDF_DKLEN = 32
 
 
-def _ensure_secret_bytes(secret: Optional[str]) -> Optional[bytes]:
+def _ensure_secret_bytes(secret: str | None) -> bytes | None:
     if secret is None:
         return None
     if isinstance(secret, bytes):
@@ -57,7 +56,7 @@ def derive_hmac_key_from_source(raw: str | bytes, *, legacy: bool = False) -> by
     return _derive_hmac_key_from_source(source, legacy=legacy)
 
 
-def derive_hmac_key(settings: Optional[Settings] = None) -> bytes:
+def derive_hmac_key(settings: Settings | None = None) -> bytes:
     """Derive a 32-byte HMAC key from configured secrets.
 
     Order of preference:
@@ -75,7 +74,7 @@ def derive_hmac_key(settings: Optional[Settings] = None) -> bytes:
     return keys[0]
 
 
-def derive_hmac_key_candidates(settings: Optional[Settings] = None) -> List[bytes]:
+def derive_hmac_key_candidates(settings: Settings | None = None) -> list[bytes]:
     """Return ordered HMAC key candidates derived from configured secrets.
 
     The first item represents the *current* secret material. Subsequent entries
@@ -104,7 +103,7 @@ def derive_hmac_key_candidates(settings: Optional[Settings] = None) -> List[byte
     digest_sources: list[bytes] = []
     seen: set[bytes] = set()
 
-    def add_source(raw: Optional[str], *, prehash: bool = False) -> None:
+    def add_source(raw: str | None, *, prehash: bool = False) -> None:
         if not raw:
             return
         data = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")

@@ -2,39 +2,31 @@
 # Description: User storage quota management service with async operations
 #
 # Imports
-import os
 import asyncio
-from pathlib import Path
-from typing import Dict, Optional, List, Any, Tuple
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Optional
+
 #
 # 3rd-party imports
 from cachetools import TTLCache
 from loguru import logger
+
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
+from tldw_Server_API.app.core.AuthNZ.exceptions import QuotaExceededError, StorageError, UserNotFoundError
+from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
+    FILE_CATEGORY_VOICE_CLONE,
+    AuthnzGeneratedFilesRepo,
+)
+from tldw_Server_API.app.core.AuthNZ.repos.storage_quotas_repo import (
+    AuthnzStorageQuotasRepo,
+)
+
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
-from tldw_Server_API.app.core.AuthNZ.exceptions import (
-    StorageError,
-    QuotaExceededError,
-    UserNotFoundError
-)
-from tldw_Server_API.app.core.Metrics import get_metrics_registry
-from tldw_Server_API.app.core.AuthNZ.repos.storage_quotas_repo import (
-    AuthnzStorageQuotasRepo,
-    DEFAULT_ORG_QUOTA_MB,
-    DEFAULT_TEAM_QUOTA_MB,
-)
-from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
-    AuthnzGeneratedFilesRepo,
-    FILE_CATEGORY_TTS_AUDIO,
-    FILE_CATEGORY_IMAGE,
-    FILE_CATEGORY_VOICE_CLONE,
-    FILE_CATEGORY_MINDMAP,
-    FILE_CATEGORY_SPREADSHEET,
-)
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 #######################################################################################################################
 #
@@ -75,7 +67,7 @@ class StorageQuotaService:
         self,
         user_id: int,
         update_database: bool = True
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Calculate actual storage usage for a user and optionally persist it.
         """
@@ -158,7 +150,7 @@ class StorageQuotaService:
         user_id: int,
         new_bytes: int,
         raise_on_exceed: bool = False
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> tuple[bool, dict[str, Any]]:
         """
         Check if user has quota for new content
 
@@ -233,7 +225,7 @@ class StorageQuotaService:
         user_id: int,
         bytes_delta: int,
         operation: str = "add"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Update storage usage for a user
 
@@ -361,7 +353,7 @@ class StorageQuotaService:
             logger.error(f"Error calculating size for {path}: {e}")
         return total
 
-    async def get_storage_breakdown(self, user_id: int) -> Dict[str, Any]:
+    async def get_storage_breakdown(self, user_id: int) -> dict[str, Any]:
         """Get detailed storage breakdown by file type for a user."""
         if not self._initialized:
             await self.initialize()
@@ -380,7 +372,7 @@ class StorageQuotaService:
         })
         return breakdown
 
-    def _calculate_storage_breakdown(self, path: str) -> Dict[str, Any]:
+    def _calculate_storage_breakdown(self, path: str) -> dict[str, Any]:
         """Calculate storage breakdown by top-level category under the user dir."""
         breakdown = {
             "media": {"count": 0, "bytes": 0},
@@ -411,7 +403,7 @@ class StorageQuotaService:
             breakdown[category]["mb"] = round(breakdown[category]["bytes"] / (1024 * 1024), 2)
         return breakdown
 
-    async def set_user_quota(self, user_id: int, quota_mb: int) -> Dict[str, Any]:
+    async def set_user_quota(self, user_id: int, quota_mb: int) -> dict[str, Any]:
         """Set storage quota for a user (min 100MB)."""
         if not self._initialized:
             await self.initialize()
@@ -459,7 +451,7 @@ class StorageQuotaService:
             logger.error(f"Failed to set user quota: {e}")
             raise StorageError(f"Failed to set quota: {e}")
 
-    async def get_all_users_storage(self) -> List[Dict[str, Any]]:
+    async def get_all_users_storage(self) -> list[dict[str, Any]]:
         """List storage usage for all active users, sorted by usage desc."""
         if not self._initialized:
             await self.initialize()
@@ -503,7 +495,7 @@ class StorageQuotaService:
             })
         return result
 
-    async def cleanup_temp_files(self, user_id: Optional[int] = None, older_than_hours: int = 24) -> Dict[str, Any]:
+    async def cleanup_temp_files(self, user_id: Optional[int] = None, older_than_hours: int = 24) -> dict[str, Any]:
         """Delete temp files older than the threshold for one or all users."""
         if not self._initialized:
             await self.initialize()
@@ -526,7 +518,7 @@ class StorageQuotaService:
             )
         return stats
 
-    def _cleanup_temp_directories(self, temp_dirs: List[Path], cutoff_time: datetime) -> Dict[str, Any]:
+    def _cleanup_temp_directories(self, temp_dirs: list[Path], cutoff_time: datetime) -> dict[str, Any]:
         """Filesystem worker to cleanup temp directories."""
         stats = {"files_deleted": 0, "bytes_freed": 0, "errors": 0}
         for temp_dir in temp_dirs:
@@ -550,7 +542,7 @@ class StorageQuotaService:
                 continue
         return stats
 
-    async def _get_user_storage_info(self, user_id: int) -> Optional[Dict[str, Any]]:
+    async def _get_user_storage_info(self, user_id: int) -> Optional[dict[str, Any]]:
         """Get user storage info from the database."""
         return await self.db_pool.fetchone(
             "SELECT storage_used_mb, storage_quota_mb FROM users WHERE id = ?",
@@ -577,14 +569,14 @@ class StorageQuotaService:
             await self.initialize()
         return AuthnzGeneratedFilesRepo(db_pool=self.db_pool)
 
-    async def get_org_quota(self, org_id: int) -> Dict[str, Any]:
+    async def get_org_quota(self, org_id: int) -> dict[str, Any]:
         """Get storage quota status for an organization."""
         repo = await self.get_storage_quotas_repo()
         status = await repo.check_quota_status(org_id=org_id)
         status["org_id"] = org_id
         return status
 
-    async def get_team_quota(self, team_id: int) -> Dict[str, Any]:
+    async def get_team_quota(self, team_id: int) -> dict[str, Any]:
         """Get storage quota status for a team."""
         repo = await self.get_storage_quotas_repo()
         status = await repo.check_quota_status(team_id=team_id)
@@ -597,7 +589,7 @@ class StorageQuotaService:
         quota_mb: int,
         soft_limit_pct: int = 80,
         hard_limit_pct: int = 100,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Set storage quota for an organization."""
         if not self._initialized:
             await self.initialize()
@@ -621,7 +613,7 @@ class StorageQuotaService:
         quota_mb: int,
         soft_limit_pct: int = 80,
         hard_limit_pct: int = 100,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Set storage quota for a team."""
         if not self._initialized:
             await self.initialize()
@@ -646,7 +638,7 @@ class StorageQuotaService:
         org_id: Optional[int] = None,
         team_id: Optional[int] = None,
         raise_on_exceed: bool = False,
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> tuple[bool, dict[str, Any]]:
         """
         Check combined quota across user, team, and org levels.
 
@@ -722,7 +714,7 @@ class StorageQuotaService:
 
         return has_quota, combined_info
 
-    async def update_org_usage(self, org_id: int, bytes_delta: int) -> Dict[str, Any]:
+    async def update_org_usage(self, org_id: int, bytes_delta: int) -> dict[str, Any]:
         """Update storage usage for an organization."""
         if not self._initialized:
             await self.initialize()
@@ -735,7 +727,7 @@ class StorageQuotaService:
         logger.debug(f"Updated org {org_id} usage: +{mb_delta:.2f}MB (total: {new_used:.2f}MB)")
         return status
 
-    async def update_team_usage(self, team_id: int, bytes_delta: int) -> Dict[str, Any]:
+    async def update_team_usage(self, team_id: int, bytes_delta: int) -> dict[str, Any]:
         """Update storage usage for a team."""
         if not self._initialized:
             await self.initialize()
@@ -768,12 +760,12 @@ class StorageQuotaService:
         checksum: Optional[str] = None,
         source_ref: Optional[str] = None,
         folder_tag: Optional[str] = None,
-        tags: Optional[List[str]] = None,
+        tags: Optional[list[str]] = None,
         is_transient: bool = False,
         expires_at: Optional[datetime] = None,
         retention_policy: str = "user_default",
         check_quota: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Register a generated file and update storage usage.
 
@@ -920,7 +912,7 @@ class StorageQuotaService:
 
         return success
 
-    async def get_user_generated_files_usage(self, user_id: int) -> Dict[str, Any]:
+    async def get_user_generated_files_usage(self, user_id: int) -> dict[str, Any]:
         """Get detailed usage breakdown for user's generated files."""
         if not self._initialized:
             await self.initialize()
@@ -946,7 +938,7 @@ class StorageQuotaService:
         folder_tag: Optional[str] = None,
         search: Optional[str] = None,
         include_deleted: bool = False,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """List generated files for a user."""
         if not self._initialized:
             await self.initialize()
@@ -962,7 +954,7 @@ class StorageQuotaService:
             include_deleted=include_deleted,
         )
 
-    async def get_user_folders(self, user_id: int) -> List[Dict[str, Any]]:
+    async def get_user_folders(self, user_id: int) -> list[dict[str, Any]]:
         """List virtual folders for a user."""
         if not self._initialized:
             await self.initialize()
@@ -970,7 +962,7 @@ class StorageQuotaService:
         files_repo = await self.get_generated_files_repo()
         return await files_repo.list_folders(user_id)
 
-    async def recalculate_org_usage(self, org_id: int) -> Dict[str, Any]:
+    async def recalculate_org_usage(self, org_id: int) -> dict[str, Any]:
         """Recalculate and update org storage usage from generated files."""
         if not self._initialized:
             await self.initialize()
@@ -1006,7 +998,7 @@ class StorageQuotaService:
         logger.info(f"Recalculated org {org_id} usage: {total_mb:.2f}MB")
         return status
 
-    async def recalculate_team_usage(self, team_id: int) -> Dict[str, Any]:
+    async def recalculate_team_usage(self, team_id: int) -> dict[str, Any]:
         """Recalculate and update team storage usage from generated files."""
         if not self._initialized:
             await self.initialize()

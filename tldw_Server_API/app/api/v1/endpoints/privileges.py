@@ -3,10 +3,10 @@ from __future__ import annotations
 import csv
 import io
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
@@ -23,23 +23,21 @@ from tldw_Server_API.app.api.v1.schemas.privileges import (
     PrivilegeSnapshotRecord,
     PrivilegeSnapshotSummary,
 )
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
+from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
 from tldw_Server_API.app.core.PrivilegeMaps import (
     PrivilegeMapService,
     PrivilegeSnapshotStore,
     get_privilege_map_service,
     get_privilege_snapshot_store,
 )
-from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
-
 
 router = APIRouter(prefix="/privileges", tags=["privileges"])
 
 
 async def require_privilege_admin(
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
-) -> Dict[str, Any]:
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+) -> dict[str, Any]:
     role = (current_user or {}).get("role")
     if current_user.get("is_admin") or role in {"admin", "owner", "platform_admin"}:
         return current_user
@@ -51,8 +49,8 @@ async def require_privilege_admin(
 
 async def require_privilege_admin_or_self(
     user_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
-) -> Dict[str, Any]:
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+) -> dict[str, Any]:
     if current_user.get("is_admin") or str(current_user.get("id")) == str(user_id):
         return current_user
     raise HTTPException(
@@ -64,8 +62,8 @@ async def require_privilege_admin_or_self(
 @router.get("/self", response_model=PrivilegeSelfResponse)
 async def get_self_privilege_map(
     *,
-    resource: Optional[str] = Query(None),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    resource: str | None = Query(None),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     service: PrivilegeMapService = Depends(get_privilege_map_service),
 ) -> PrivilegeSelfResponse:
     user_id = str(current_user.get("id"))
@@ -81,14 +79,14 @@ async def get_org_privilege_map(
     *,
     group_by: str = Query("role", pattern="^(role|team|resource)$"),
     include_trends: bool = Query(False),
-    since: Optional[datetime] = Query(None),
+    since: datetime | None = Query(None),
     view: str = Query("summary", pattern="^(summary|detail)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=500),
-    resource: Optional[str] = Query(None),
-    role: Optional[str] = Query(None),
-    dependency: Optional[str] = Query(None),
-    current_user: Dict[str, Any] = Depends(require_privilege_admin),
+    resource: str | None = Query(None),
+    role: str | None = Query(None),
+    dependency: str | None = Query(None),
+    current_user: dict[str, Any] = Depends(require_privilege_admin),
     service: PrivilegeMapService = Depends(get_privilege_map_service),
 ) -> PrivilegeOrgResponse:
     del current_user  # dependency enforcement only
@@ -119,12 +117,12 @@ async def get_team_privilege_map(
     view: str = Query("summary", pattern="^(summary|detail)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=500),
-    resource: Optional[str] = Query(None),
-    role: Optional[str] = Query(None),
-    dependency: Optional[str] = Query(None),
+    resource: str | None = Query(None),
+    role: str | None = Query(None),
+    dependency: str | None = Query(None),
     include_trends: bool = Query(False),
-    since: Optional[datetime] = Query(None),
-    current_user: Dict[str, Any] = Depends(require_privilege_admin),
+    since: datetime | None = Query(None),
+    current_user: dict[str, Any] = Depends(require_privilege_admin),
     service: PrivilegeMapService = Depends(get_privilege_map_service),
 ) -> PrivilegeOrgResponse:
     del current_user
@@ -155,8 +153,8 @@ async def get_user_privilege_map(
     user_id: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=500),
-    resource: Optional[str] = Query(None),
-    current_user: Dict[str, Any] = Depends(require_privilege_admin_or_self),
+    resource: str | None = Query(None),
+    current_user: dict[str, Any] = Depends(require_privilege_admin_or_self),
     service: PrivilegeMapService = Depends(get_privilege_map_service),
 ) -> PrivilegeDetailResponse:
     del current_user
@@ -177,15 +175,15 @@ async def list_privilege_snapshots(
     *,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    date_from: Optional[datetime] = Query(None),
-    date_to: Optional[datetime] = Query(None),
-    generated_by: Optional[str] = Query(None),
-    org_id: Optional[str] = Query(None),
-    team_id: Optional[str] = Query(None),
-    catalog_version: Optional[str] = Query(None),
-    scope: Optional[str] = Query(None),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    generated_by: str | None = Query(None),
+    org_id: str | None = Query(None),
+    team_id: str | None = Query(None),
+    catalog_version: str | None = Query(None),
+    scope: str | None = Query(None),
     include_counts: bool = Query(False),
-    current_user: Dict[str, Any] = Depends(require_privilege_admin),
+    current_user: dict[str, Any] = Depends(require_privilege_admin),
     store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
 ) -> PrivilegeSnapshotListResponse:
     del current_user
@@ -218,7 +216,7 @@ async def get_privilege_snapshot(
     snapshot_id: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(500, ge=1, le=500),
-    current_user: Dict[str, Any] = Depends(require_privilege_admin),
+    current_user: dict[str, Any] = Depends(require_privilege_admin),
     store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
 ) -> PrivilegeSnapshotDetailResponse:
     del current_user
@@ -232,7 +230,7 @@ async def get_privilege_snapshot(
 async def export_privilege_snapshot_json(
     *,
     snapshot_id: str,
-    current_user: Dict[str, Any] = Depends(require_privilege_admin),
+    current_user: dict[str, Any] = Depends(require_privilege_admin),
     store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
 ) -> JSONResponse:
     del current_user
@@ -275,7 +273,7 @@ async def export_privilege_snapshot_json(
 async def export_privilege_snapshot_csv(
     *,
     snapshot_id: str,
-    current_user: Dict[str, Any] = Depends(require_privilege_admin),
+    current_user: dict[str, Any] = Depends(require_privilege_admin),
     store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
 ) -> StreamingResponse:
     del current_user
@@ -316,7 +314,7 @@ async def export_privilege_snapshot_csv(
         "tags",
     ]
 
-    def _flatten_detail(detail: Dict[str, Any]) -> Dict[str, Any]:
+    def _flatten_detail(detail: dict[str, Any]) -> dict[str, Any]:
         dependencies = detail.get("dependencies") or []
         dependency_ids = ";".join(dep.get("id", "") for dep in dependencies if dep)
         dependency_modules = ";".join(
@@ -383,7 +381,7 @@ async def export_privilege_snapshot_csv(
 async def create_privilege_snapshot(
     *,
     payload: PrivilegeSnapshotCreateRequest,
-    current_user: Dict[str, Any] = Depends(require_privilege_admin),
+    current_user: dict[str, Any] = Depends(require_privilege_admin),
     service: PrivilegeMapService = Depends(get_privilege_map_service),
     store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
     request: Request,

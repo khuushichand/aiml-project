@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Optional
-from loguru import logger
 
+from loguru import logger
 
 JOBS_SQLITE_DDL = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -205,7 +204,7 @@ CREATE INDEX IF NOT EXISTS idx_job_dependencies_depends_on ON job_dependencies(d
 """
 
 
-def ensure_jobs_tables(db_path: Optional[Path] = None) -> Path:
+def ensure_jobs_tables(db_path: Path | None = None) -> Path:
     """Ensure the jobs table exists in the given SQLite database.
 
     Args:

@@ -5,41 +5,33 @@ Embeddings A/B test endpoints extracted from evaluations_unified.
 import json
 import os
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Header, Query, Response
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal, require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
-    verify_api_key,
     check_evaluation_rate_limit,
     enforce_heavy_evaluations_admin,
     get_eval_request_user,
-)
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope, get_auth_principal
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
-    get_unified_evaluation_service_for_user,
+    verify_api_key,
 )
 from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
+    ArmSummary,
     EmbeddingsABTestCreateRequest,
     EmbeddingsABTestCreateResponse,
-    EmbeddingsABTestStatusResponse,
+    EmbeddingsABTestResultRow,
     EmbeddingsABTestResultsResponse,
     EmbeddingsABTestResultSummary,
-    EmbeddingsABTestResultRow,
-    ArmSummary,
     EmbeddingsABTestRunRequest,
+    EmbeddingsABTestStatusResponse,
 )
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.Evaluations.audit_adapter import (
     log_evaluation_created,
     log_run_started,
-)
-from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
-    run_abtest_full,
-    compute_significance,
-    validate_abtest_policy,
-    EmbeddingsABTestPolicyError,
 )
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
     ABTEST_JOBS_DOMAIN,
@@ -48,7 +40,15 @@ from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
     abtest_jobs_manager,
     abtest_jobs_queue,
 )
-
+from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
+    EmbeddingsABTestPolicyError,
+    compute_significance,
+    run_abtest_full,
+    validate_abtest_policy,
+)
+from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
+    get_unified_evaluation_service_for_user,
+)
 
 abtest_router = APIRouter()
 

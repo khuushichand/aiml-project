@@ -13,12 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
 
 
 def _enumerate_user_ids() -> list[int]:
@@ -59,7 +58,7 @@ def _purge_for_user(user_id: int, grace_days: int) -> dict:
             pass
 
 
-async def start_kanban_purge_scheduler() -> Optional[asyncio.Task]:
+async def start_kanban_purge_scheduler() -> asyncio.Task | None:
     enabled = os.getenv("KANBAN_PURGE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     if not enabled:
         return None

@@ -3,15 +3,10 @@ Basic usage example for the Scheduler module.
 """
 
 import asyncio
-from pathlib import Path
 from datetime import datetime, timedelta
+from pathlib import Path
 
-from tldw_Server_API.app.core.Scheduler import (
-    Scheduler,
-    task,
-    SchedulerConfig,
-    TaskPriority
-)
+from tldw_Server_API.app.core.Scheduler import Scheduler, SchedulerConfig, TaskPriority, task
 
 
 # Register task handlers using decorator

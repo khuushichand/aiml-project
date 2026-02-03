@@ -12,10 +12,10 @@ Design:
 """
 
 import hashlib
+import re
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, Set, Tuple
-import re
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -27,22 +27,22 @@ class AccumulationRound:
     """Results from a single accumulation round."""
     round_number: int
     query: str
-    documents: List[Document]
+    documents: list[Document]
     duration_sec: float
-    gap_queries: List[str] = field(default_factory=list)
+    gap_queries: list[str] = field(default_factory=list)
 
 
 @dataclass
 class AccumulationResult:
     """Complete result from evidence accumulation."""
     query: str
-    documents: List[Document]
-    rounds: List[AccumulationRound]
+    documents: list[Document]
+    rounds: list[AccumulationRound]
     total_rounds: int
     is_sufficient: bool
     sufficiency_reason: str
     total_duration_sec: float
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 # Prompts for gap assessment
@@ -77,7 +77,7 @@ def _compute_document_hash(doc: Document) -> str:
     return hashlib.sha256(f"{doc_id}:{content[:500]}".encode()).hexdigest()[:16]
 
 
-def _parse_gap_assessment(response: str) -> Tuple[bool, str, List[str]]:
+def _parse_gap_assessment(response: str) -> tuple[bool, str, list[str]]:
     """
     Parse the LLM's gap assessment response.
 
@@ -155,7 +155,7 @@ class EvidenceAccumulator:
     async def accumulate(
         self,
         query: str,
-        initial_results: List[Document],
+        initial_results: list[Document],
         retrieval_fn,
         time_budget_sec: Optional[float] = None,
     ) -> AccumulationResult:
@@ -176,9 +176,9 @@ class EvidenceAccumulator:
         deadline = start_time + time_budget_sec if time_budget_sec else None
 
         # Track all documents and their hashes
-        all_documents: List[Document] = []
-        seen_hashes: Set[str] = set()
-        rounds: List[AccumulationRound] = []
+        all_documents: list[Document] = []
+        seen_hashes: set[str] = set()
+        rounds: list[AccumulationRound] = []
 
         # Add initial results
         for doc in initial_results:
@@ -217,12 +217,12 @@ class EvidenceAccumulator:
         while current_round < self.max_rounds:
             # Check time budget
             if deadline and time.time() >= deadline:
-                logger.debug(f"Evidence accumulation stopped: time budget exhausted")
+                logger.debug("Evidence accumulation stopped: time budget exhausted")
                 break
 
             # Check document budget
             if len(all_documents) >= self.max_docs_total:
-                logger.debug(f"Evidence accumulation stopped: max docs reached")
+                logger.debug("Evidence accumulation stopped: max docs reached")
                 break
 
             current_round += 1
@@ -231,7 +231,7 @@ class EvidenceAccumulator:
             # Use gap queries or variations of original query
             queries_to_try = gap_queries if gap_queries else [self._generate_variation(query, current_round)]
 
-            round_documents: List[Document] = []
+            round_documents: list[Document] = []
             exclude_ids = {doc.id for doc in all_documents}
 
             for gap_query in queries_to_try[:3]:  # Max 3 gap queries per round
@@ -296,8 +296,8 @@ class EvidenceAccumulator:
     async def _assess_evidence(
         self,
         query: str,
-        documents: List[Document],
-    ) -> Tuple[bool, str, List[str]]:
+        documents: list[Document],
+    ) -> tuple[bool, str, list[str]]:
         """
         Assess whether the accumulated evidence is sufficient.
 
@@ -324,8 +324,8 @@ class EvidenceAccumulator:
     def _heuristic_assessment(
         self,
         query: str,
-        documents: List[Document],
-    ) -> Tuple[bool, str, List[str]]:
+        documents: list[Document],
+    ) -> tuple[bool, str, list[str]]:
         """
         Rule-based assessment of evidence sufficiency.
 
@@ -370,7 +370,7 @@ class EvidenceAccumulator:
 
         return False, f"Coverage: {coverage:.0%}, missing: {missing_terms}", gap_queries
 
-    def _build_evidence_summary(self, documents: List[Document], max_chars: int = 2000) -> str:
+    def _build_evidence_summary(self, documents: list[Document], max_chars: int = 2000) -> str:
         """Build a summary of the evidence for LLM assessment."""
         summary_parts = []
         remaining = max_chars
@@ -408,7 +408,7 @@ class EvidenceAccumulator:
             )
 
             if isinstance(result, dict):
-                return result.get("answer", "")
+                return str(result.get("answer", ""))
             return str(result)
 
         except Exception as e:
@@ -429,8 +429,8 @@ class EvidenceAccumulator:
     def assess_evidence_gaps(
         self,
         query: str,
-        evidence: List[Document],
-    ) -> List[str]:
+        evidence: list[Document],
+    ) -> list[str]:
         """
         Synchronous method to identify gaps in evidence.
 
@@ -444,7 +444,7 @@ class EvidenceAccumulator:
         _, _, gap_queries = self._heuristic_assessment(query, evidence)
         return gap_queries
 
-    def merge_results(self, rounds: List[List[Document]]) -> List[Document]:
+    def merge_results(self, rounds: list[list[Document]]) -> list[Document]:
         """
         Merge and deduplicate results from multiple rounds.
 
@@ -454,8 +454,8 @@ class EvidenceAccumulator:
         Returns:
             Deduplicated list of documents, sorted by score
         """
-        seen_hashes: Set[str] = set()
-        merged: List[Document] = []
+        seen_hashes: set[str] = set()
+        merged: list[Document] = []
 
         for round_docs in rounds:
             for doc in round_docs:
@@ -472,7 +472,7 @@ class EvidenceAccumulator:
 # Module-level convenience function
 async def accumulate_evidence(
     query: str,
-    initial_results: List[Document],
+    initial_results: list[Document],
     retrieval_fn,
     max_rounds: int = 3,
     time_budget_sec: Optional[float] = None,

@@ -1,28 +1,30 @@
 # prompt_studio_deps.py
 # FastAPI dependency injection for Prompt Studio feature
 
-import threading
-from pathlib import Path
-from typing import Dict, Optional, Any
-from functools import lru_cache
-
-from fastapi import Depends, HTTPException, status, Header, Request
 import asyncio
+import threading
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Optional
+
 from cachetools import LRUCache
+from fastapi import Depends, Header, HTTPException, Request, status
 from loguru import logger
 
-# Local imports
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
-    PromptStudioDatabase, DatabaseError, SchemaError, InputError, ConflictError
-)
+from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import SecurityConfig
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_prompt_studio_database,
     get_content_backend_instance,
 )
-from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import SecurityConfig
+
+# Local imports
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
+    DatabaseError,
+    PromptStudioDatabase,
+)
 
 ########################################################################################################################
 # Configuration
@@ -120,7 +122,7 @@ def get_current_active_user():  # noqa: D401 - simple hook for test patching
 async def get_prompt_studio_user(
     request: Request,
     x_client_id: Optional[str] = Header(None)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Extract user context for Prompt Studio operations.
 
@@ -297,7 +299,7 @@ async def get_prompt_studio_user(
     perms = getattr(current_user, "permissions", []) or []
     is_admin = bool(getattr(current_user, "is_admin", False) or ("admin" in normalized_roles))
 
-    user_context: Dict[str, Any] = {
+    user_context: dict[str, Any] = {
         "user_id": str(getattr(current_user, "id", "anonymous")),
         "client_id": x_client_id or "web",
         "is_authenticated": True,
@@ -323,7 +325,7 @@ async def get_prompt_studio_user(
 # Database Dependencies
 
 async def get_prompt_studio_db(
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> PromptStudioDatabase:
     """
     Get PromptStudioDatabase instance for the current user.
@@ -356,7 +358,7 @@ async def get_prompt_studio_db(
 
 async def require_project_access(
     project_id: int,
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
 ) -> bool:
     """
@@ -403,7 +405,7 @@ async def require_project_access(
 
 async def require_project_write_access(
     project_id: int,
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
 ) -> bool:
     """
@@ -441,7 +443,7 @@ except Exception:  # pragma: no cover - defensive fallback
 
 async def check_rate_limit(
     operation: str = "default",
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
     security_config: SecurityConfig = Depends(get_security_config)
 ) -> bool:
     """

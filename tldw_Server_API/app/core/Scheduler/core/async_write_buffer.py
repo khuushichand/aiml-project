@@ -7,16 +7,16 @@ add operations during database writes.
 
 import asyncio
 import json
-from typing import List, Optional, Any, Deque
 from collections import deque
-from datetime import datetime, timezone
-from pathlib import Path
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
+from typing import Optional
 
 from loguru import logger
 
-from ..base import Task, BufferError, BufferClosedError, BufferFlushError
+from ..base import BufferClosedError, BufferError, Task
 from ..base.queue_backend import QueueBackend
 from ..config import SchedulerConfig
 
@@ -80,17 +80,17 @@ class AsyncWriteBuffer:
         self.current_flush_interval = self.base_flush_interval
 
         # Active buffer for new tasks
-        self.active_buffer: List[Task] = []
+        self.active_buffer: list[Task] = []
         self.active_lock = asyncio.Lock()
 
         # Flush queue for tasks ready to be written
-        self.flush_queue: Deque[List[Task]] = deque()
+        self.flush_queue: deque[list[Task]] = deque()
         self.flush_queue_size = 0  # Track total tasks in queue
         self.flush_event = asyncio.Event()
 
         # Disk spill for overflow (if using SPILL_TO_DISK strategy)
         self.spill_path = config.base_path / 'buffer_spill'
-        self.spill_files: List[Path] = []
+        self.spill_files: list[Path] = []
         self._auto_start = auto_start
         self._workers_running = False
         # Background tasks

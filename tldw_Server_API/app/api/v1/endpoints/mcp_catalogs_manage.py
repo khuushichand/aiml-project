@@ -7,25 +7,23 @@ within their scope. Admins also permitted.
 
 from __future__ import annotations
 
-from typing import Optional, List, Any
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user, get_db_transaction
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
-from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_org_members, list_team_members
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     ToolCatalogCreateRequest,
-    ToolCatalogResponse,
     ToolCatalogEntryCreateRequest,
     ToolCatalogEntryResponse,
+    ToolCatalogResponse,
 )
-
+from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_org_members, list_team_members
 
 router = APIRouter(prefix="", tags=["mcp-catalogs-scope"])
 
 
-def _is_manager(role: Optional[str]) -> bool:
+def _is_manager(role: str | None) -> bool:
     if not role:
         return False
     r = str(role).lower()
@@ -71,7 +69,7 @@ async def _require_team_manager(user: dict, team_id: int) -> None:
 
 @router.get(
     "/orgs/{org_id}/mcp/tool_catalogs",
-    response_model=List[ToolCatalogResponse],
+    response_model=list[ToolCatalogResponse],
     summary="List org-scoped MCP tool catalogs",
     description=(
         "List all MCP tool catalogs scoped to the specified organization.\n\n"
@@ -83,7 +81,7 @@ async def list_org_tool_catalogs(
     org_id: int,
     user: dict = Depends(get_current_user),
     db=Depends(get_db_transaction),
-) -> List[ToolCatalogResponse]:
+) -> list[ToolCatalogResponse]:
     await _require_org_manager(user, org_id)
     try:
         is_pg = await is_postgres_backend()
@@ -176,7 +174,7 @@ async def create_org_tool_catalog(
 
 @router.get(
     "/teams/{team_id}/mcp/tool_catalogs",
-    response_model=List[ToolCatalogResponse],
+    response_model=list[ToolCatalogResponse],
     summary="List team-scoped MCP tool catalogs",
     description=(
         "List all MCP tool catalogs scoped to the specified team.\n\n"
@@ -188,7 +186,7 @@ async def list_team_tool_catalogs(
     team_id: int,
     user: dict = Depends(get_current_user),
     db=Depends(get_db_transaction),
-) -> List[ToolCatalogResponse]:
+) -> list[ToolCatalogResponse]:
     await _require_team_manager(user, team_id)
     try:
         is_pg = await is_postgres_backend()

@@ -13,32 +13,27 @@ This module includes adapters for integration operations:
 - character_chat: Character chat
 """
 
-from tldw_Server_API.app.core.Workflows.adapters.integration.webhook import (
-    run_webhook_adapter,
-    run_notify_adapter,
-)
-
-from tldw_Server_API.app.core.Workflows.adapters.integration.mcp import (
-    run_mcp_tool_adapter,
-)
-
-from tldw_Server_API.app.core.Workflows.adapters.integration.storage import (
-    run_s3_upload_adapter,
-    run_s3_download_adapter,
-)
-
-from tldw_Server_API.app.core.Workflows.adapters.integration.github import (
-    run_github_create_issue_adapter,
-)
-
 from tldw_Server_API.app.core.Workflows.adapters.integration.email import (
     run_email_send_adapter,
 )
-
+from tldw_Server_API.app.core.Workflows.adapters.integration.github import (
+    run_github_create_issue_adapter,
+)
+from tldw_Server_API.app.core.Workflows.adapters.integration.mcp import (
+    run_mcp_tool_adapter,
+)
 from tldw_Server_API.app.core.Workflows.adapters.integration.messaging import (
-    run_kanban_adapter,
-    run_chatbooks_adapter,
     run_character_chat_adapter,
+    run_chatbooks_adapter,
+    run_kanban_adapter,
+)
+from tldw_Server_API.app.core.Workflows.adapters.integration.storage import (
+    run_s3_download_adapter,
+    run_s3_upload_adapter,
+)
+from tldw_Server_API.app.core.Workflows.adapters.integration.webhook import (
+    run_notify_adapter,
+    run_webhook_adapter,
 )
 
 __all__ = [

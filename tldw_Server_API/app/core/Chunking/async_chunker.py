@@ -6,19 +6,23 @@ Provides async/await interfaces for chunking operations.
 
 import asyncio
 import copy
-from typing import List, Dict, Any, Optional, AsyncGenerator, Union
 from collections import OrderedDict
+from collections.abc import AsyncGenerator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any, Optional, Union
+
 import aiofiles
 from loguru import logger
-from concurrent.futures import ThreadPoolExecutor
+
+from tldw_Server_API.app.core.exceptions import ValidationError
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 
 from .base import ChunkerConfig, ChunkResult
-from .exceptions import InvalidInputError
 from .chunker import Chunker
+from .exceptions import InvalidInputError
 from .templates import TemplateManager
-from .utils.metrics import get_metrics, MetricsContext
-from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
+from .utils.metrics import get_metrics
 
 
 async def _close_response(resp: Any) -> None:
@@ -43,7 +47,7 @@ class AsyncChunker:
         self,
         config: Optional[ChunkerConfig] = None,
         llm_call_func: Optional[Any] = None,
-        llm_config: Optional[Dict[str, Any]] = None,
+        llm_config: Optional[dict[str, Any]] = None,
     ):
         """
         Initialize async chunker.
@@ -84,7 +88,7 @@ class AsyncChunker:
         self,
         *,
         llm_call_func: Optional[Any] = None,
-        llm_config: Optional[Dict[str, Any]] = None,
+        llm_config: Optional[dict[str, Any]] = None,
     ) -> Chunker:
         """Return a fresh Chunker instance per call to avoid shared mutable state."""
         cfg_copy = copy.deepcopy(self.config)
@@ -98,8 +102,8 @@ class AsyncChunker:
                         max_size: Optional[int] = None,
                         overlap: Optional[int] = None,
                         llm_call_func: Optional[Any] = None,
-                        llm_config: Optional[Dict[str, Any]] = None,
-                        **options) -> List[str]:
+                        llm_config: Optional[dict[str, Any]] = None,
+                        **options) -> list[str]:
         """
         Asynchronously chunk text.
 
@@ -136,7 +140,7 @@ class AsyncChunker:
                         max_size: Optional[int] = None,
                         overlap: Optional[int] = None,
                         encoding: str = 'utf-8',
-                        **options) -> List[str]:
+                        **options) -> list[str]:
         """
         Asynchronously read and chunk a file.
 
@@ -161,12 +165,12 @@ class AsyncChunker:
         return await self.chunk_text(text, method, max_size, overlap, **options)
 
     async def chunk_files(self,
-                         file_paths: List[Union[str, Path]],
+                         file_paths: list[Union[str, Path]],
                          method: Optional[str] = None,
                          max_size: Optional[int] = None,
                          overlap: Optional[int] = None,
                          encoding: str = 'utf-8',
-                         **options) -> Dict[str, List[str]]:
+                         **options) -> dict[str, list[str]]:
         """
         Asynchronously chunk multiple files.
 
@@ -204,7 +208,7 @@ class AsyncChunker:
                           overlap: Optional[int] = None,
                           buffer_size: int = 10000,
                           llm_call_func: Optional[Any] = None,
-                          llm_config: Optional[Dict[str, Any]] = None,
+                          llm_config: Optional[dict[str, Any]] = None,
                           **options) -> AsyncGenerator[str, None]:
         """
         Stream chunks from an async text generator.
@@ -363,8 +367,8 @@ class AsyncChunker:
                                  max_size: Optional[int] = None,
                                  overlap: Optional[int] = None,
                                  llm_call_func: Optional[Any] = None,
-                                 llm_config: Optional[Dict[str, Any]] = None,
-                                 **options) -> List[ChunkResult]:
+                                 llm_config: Optional[dict[str, Any]] = None,
+                                 **options) -> list[ChunkResult]:
         """
         Asynchronously chunk text and return with metadata.
 
@@ -401,7 +405,7 @@ class AsyncChunker:
                        max_size: Optional[int] = None,
                        overlap: Optional[int] = None,
                        timeout: float = 30.0,
-                       **options) -> List[str]:
+                       **options) -> list[str]:
         """
         Asynchronously fetch and chunk content from URL.
 
@@ -434,7 +438,7 @@ class AsyncChunker:
     async def process_with_template(self,
                                    text: str,
                                    template_name: str,
-                                   **options) -> List[Dict[str, Any]]:
+                                   **options) -> list[dict[str, Any]]:
         """
         Process text using a template asynchronously.
 
@@ -508,14 +512,16 @@ class AsyncBatchProcessor:
         self.max_concurrent = max_concurrent
         self._chunker = AsyncChunker()
         self._queue: asyncio.Queue = asyncio.Queue()
-        self._results: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        self._results: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
         if max_results is not None:
             try:
                 max_results = int(max_results)
             except Exception as exc:
-                raise ValueError(f"max_results must be an int or None, got {max_results}") from exc
+                raise ValidationError(
+                    f"max_results must be an int or None, got {max_results}"
+                ) from exc
             if max_results <= 0:
-                raise ValueError(f"max_results must be positive or None, got {max_results}")
+                raise ValidationError(f"max_results must be positive or None, got {max_results}")
         self._max_results = max_results
         self._processing = False
         self._closed = False
@@ -548,7 +554,7 @@ class AsyncBatchProcessor:
             'options': options
         })
 
-    def _store_result(self, request_id: str, payload: Dict[str, Any]) -> None:
+    def _store_result(self, request_id: str, payload: dict[str, Any]) -> None:
         """Store a result with eviction of oldest entries when capped."""
         if request_id in self._results:
             self._results.pop(request_id, None)
@@ -557,9 +563,9 @@ class AsyncBatchProcessor:
             while len(self._results) > self._max_results:
                 self._results.popitem(last=False)
 
-    async def process_batch(self, initial_request: Optional[Dict[str, Any]] = None):
+    async def process_batch(self, initial_request: Optional[dict[str, Any]] = None):
         """Process a batch of requests."""
-        batch: List[Dict[str, Any]] = []
+        batch: list[dict[str, Any]] = []
         if initial_request is not None:
             batch.append(initial_request)
 
@@ -588,7 +594,7 @@ class AsyncBatchProcessor:
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             # Store results
-            for request, result in zip(batch, results):
+            for request, result in zip(batch, results, strict=True):
                 if isinstance(result, Exception):
                     logger.error(f"Error processing request {request['id']}: {result}")
                     self._store_result(request['id'], {'error': str(result)})
@@ -644,7 +650,7 @@ class AsyncBatchProcessor:
             logger.warning(f"AsyncBatchProcessor.stop_processing: error closing chunker: {e}")
         self._closed = True
 
-    def get_result(self, request_id: str) -> Optional[Dict[str, Any]]:
+    def get_result(self, request_id: str) -> Optional[dict[str, Any]]:
         """
         Get result for a request.
 
@@ -658,7 +664,7 @@ class AsyncBatchProcessor:
 
     async def wait_for_result(self,
                              request_id: str,
-                             timeout: float = 30.0) -> Optional[Dict[str, Any]]:
+                             timeout: float = 30.0) -> Optional[dict[str, Any]]:
         """
         Wait for a result to be ready.
 
@@ -680,12 +686,12 @@ class AsyncBatchProcessor:
         return None
 
 
-async def chunk_parallel(texts: List[str],
+async def chunk_parallel(texts: list[str],
                         method: str = 'words',
                         max_size: int = 400,
                         overlap: int = 50,
                         max_concurrent: int = 10,
-                        **options) -> List[List[str]]:
+                        **options) -> list[list[str]]:
     """
     Chunk multiple texts in parallel.
 

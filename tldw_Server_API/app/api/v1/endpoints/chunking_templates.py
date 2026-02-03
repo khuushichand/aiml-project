@@ -4,39 +4,46 @@ API endpoints for managing chunking templates.
 """
 
 import json
-import re
-from typing import List, Optional, Dict, Any
 import os
-from fastapi import APIRouter, Depends, HTTPException, Query, Body, Response
+from typing import Any, Optional
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
 from loguru import logger
 from pydantic import BaseModel
 
-from tldw_Server_API.app.api.v1.schemas.chunking_templates_schemas import (
-    ChunkingTemplateCreate,
-    ChunkingTemplateUpdate,
-    ChunkingTemplateResponse,
-    ChunkingTemplateListResponse,
-    ChunkingTemplateFilter,
-    ApplyTemplateRequest,
-    ApplyTemplateResponse,
-    TemplateValidationResponse,
-    TemplateValidationError,
-    TemplateConfig,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.Chunking.templates import TemplateProcessor, ChunkingTemplate, TemplateStage, TemplateClassifier, TemplateLearner
-from tldw_Server_API.app.core.Chunking.regex_safety import check_pattern as _rx_check, compile_flags as _rx_flags, warn_ambiguity as _rx_warn
-from tldw_Server_API.app.core.Chunking.chunker import Chunker
 # Dependencies for user-specific database access
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.api.v1.schemas.chunking_templates_schemas import (
+    ApplyTemplateRequest,
+    ApplyTemplateResponse,
+    ChunkingTemplateCreate,
+    ChunkingTemplateListResponse,
+    ChunkingTemplateResponse,
+    ChunkingTemplateUpdate,
+    TemplateConfig,
+    TemplateValidationError,
+    TemplateValidationResponse,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Chunking.chunker import Chunker
+from tldw_Server_API.app.core.Chunking.regex_safety import check_pattern as _rx_check
+from tldw_Server_API.app.core.Chunking.regex_safety import compile_flags as _rx_flags
+from tldw_Server_API.app.core.Chunking.regex_safety import warn_ambiguity as _rx_warn
+from tldw_Server_API.app.core.Chunking.templates import (
+    ChunkingTemplate,
+    TemplateClassifier,
+    TemplateLearner,
+    TemplateProcessor,
+    TemplateStage,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 router = APIRouter(prefix="/chunking/templates", tags=["chunking-templates"])
 
 # In-memory fallback store for environments where DB methods are unavailable
 # Structure: { user_id: { template_name: record_dict } }
-_FALLBACK_TEMPLATES: Dict[str, Dict[str, Dict[str, Any]]] = {}
+_FALLBACK_TEMPLATES: dict[str, dict[str, dict[str, Any]]] = {}
 
 def _now_iso() -> str:
     try:
@@ -45,7 +52,7 @@ def _now_iso() -> str:
     except Exception:
         return ""
 
-def _fb_bucket(user_id: Optional[str]) -> Dict[str, Dict[str, Any]]:
+def _fb_bucket(user_id: Optional[str]) -> dict[str, dict[str, Any]]:
     uid = str(user_id or "default")
     if uid not in _FALLBACK_TEMPLATES:
         _FALLBACK_TEMPLATES[uid] = {}
@@ -60,7 +67,7 @@ def _db_class_str(db: Any) -> str:
     except Exception:
         return str(type(db))
 
-def _emit_db_capability_headers(response: Response, db: Any, required: List[str]) -> None:
+def _emit_db_capability_headers(response: Response, db: Any, required: list[str]) -> None:
     if not isinstance(response, Response):
         return
     try:
@@ -122,7 +129,7 @@ def _fallback_allowed() -> bool:
     val = str(os.getenv("CHUNKING_TEMPLATES_FALLBACK_ENABLED", "1")).lower()
     return val in ("1", "true", "yes")
 
-def _ensure_fallback_policy(db: Any, required: List[str]) -> None:
+def _ensure_fallback_policy(db: Any, required: list[str]) -> None:
     """If DB lacks required methods and fallback is disabled, raise a 500 with a hint."""
     missing = [m for m in required if not _supports(db, m)]
     if missing and not _fallback_allowed():
@@ -147,7 +154,7 @@ def _set_db_capability_gauge(response: Response) -> None:
 async def list_templates(
     include_builtin: bool = Query(True, description="Include built-in templates"),
     include_custom: bool = Query(True, description="Include custom templates"),
-    tags: Optional[List[str]] = Query(None, description="Filter by tags"),
+    tags: Optional[list[str]] = Query(None, description="Filter by tags"),
     user_id: Optional[str] = Query(None, description="Filter by user ID"),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
@@ -769,7 +776,7 @@ async def apply_template(
 
 @router.post("/validate", response_model=TemplateValidationResponse)
 async def validate_template(
-    template_config: Dict[str, Any] = Body(..., description="Template configuration to validate")
+    template_config: dict[str, Any] = Body(..., description="Template configuration to validate")
 ) -> TemplateValidationResponse:
     """
     Validate a template configuration without saving it.
@@ -825,7 +832,7 @@ async def validate_template(
                     ))
 
         # Validate hierarchical options (either top-level or inside chunking.config)
-        def _get_cfg_path(cfg: Dict[str, Any], path: List[str]) -> Optional[Any]:
+        def _get_cfg_path(cfg: dict[str, Any], path: list[str]) -> Optional[Any]:
             cur = cfg
             for key in path:
                 if not isinstance(cur, dict) or key not in cur:
@@ -1019,7 +1026,7 @@ class LearnTemplateRequest(BaseModel):
     example_text: Optional[str] = None
     description: Optional[str] = None
     save: bool = False
-    classifier: Optional[Dict[str, Any]] = None
+    classifier: Optional[dict[str, Any]] = None
 
 
 @router.post("/learn")

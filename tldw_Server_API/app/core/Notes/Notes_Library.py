@@ -2,12 +2,14 @@
 # Description: This module provides a service layer for managing notes and note keywords
 #
 # Imports
-from loguru import logger
-import threading
-import sqlite3  # For exception handling in _get_db
 import re
+import sqlite3  # For exception handling in _get_db
+import threading
 from pathlib import Path
-from typing import List, Dict, Optional, Any, Union
+from typing import Any, Optional, Union
+
+from loguru import logger
+
 #
 # Third-Party Imports
 #
@@ -16,9 +18,8 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
     SchemaError,
-    InputError,
-    ConflictError
 )
+
 #
 #######################################################################################################################
 #
@@ -49,7 +50,7 @@ class NotesInteropService:
         # Keep path as provided to avoid /var vs /private/var mismatch in tests
         self.base_db_directory = Path(base_db_directory)
         self.api_client_id = api_client_id
-        self._db_instances: Dict[str, CharactersRAGDB] = {}
+        self._db_instances: dict[str, CharactersRAGDB] = {}
         # Backward-compatible lock naming expected by tests
         self._lock = threading.Lock()
         self._db_lock = self._lock  # alias used internally
@@ -179,19 +180,19 @@ class NotesInteropService:
             raise CharactersRAGDBError("Failed to create note, received None ID unexpectedly.")
         return created_note_id
 
-    def get_note(self, *, note_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    def get_note(self, *, note_id: str, user_id: str) -> Optional[dict[str, Any]]:
         """Get a note by id. Uses mock-style `get_note` if available, else DB `get_note_by_id`."""
         db = self._get_db(user_id)
         if hasattr(db, "get_note"):
             return db.get_note(note_id)
         return db.get_note_by_id(note_id=note_id)
 
-    def get_note_by_id(self, user_id: str, note_id: str) -> Optional[Dict[str, Any]]:
+    def get_note_by_id(self, user_id: str, note_id: str) -> Optional[dict[str, Any]]:
         """Retrieves a specific note by its ID for the given user."""
         db = self._get_db(user_id)
         return db.get_note_by_id(note_id=note_id)
 
-    def list_notes(self, user_id: str, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def list_notes(self, user_id: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         """Lists notes for the given user."""
         db = self._get_db(user_id)
         return db.list_notes(limit=limit, offset=offset)
@@ -235,10 +236,10 @@ class NotesInteropService:
         expected_version = kwargs.get("expected_version")
         title: Optional[str] = kwargs.get("title")
         content: Optional[str] = kwargs.get("content")
-        update_data: Optional[Dict[str, Any]] = kwargs.get("update_data")
+        update_data: Optional[dict[str, Any]] = kwargs.get("update_data")
 
         db = self._get_db(user_id)
-        data: Dict[str, Any] = update_data.copy() if update_data else {}
+        data: dict[str, Any] = update_data.copy() if update_data else {}
         if title is not None:
             data["title"] = title
         if content is not None:
@@ -259,7 +260,7 @@ class NotesInteropService:
         db = self._get_db(user_id)
         return db.soft_delete_note(note_id=note_id, expected_version=expected_version)
 
-    def search_notes(self, *args, **kwargs) -> List[Dict[str, Any]]:
+    def search_notes(self, *args, **kwargs) -> list[dict[str, Any]]:
         """
         Search notes.
 
@@ -328,13 +329,13 @@ class NotesInteropService:
         db = self._get_db(user_id)
         return db.unlink_note_from_keyword(note_id=note_id, keyword_id=keyword_id)
 
-    def get_keywords_for_note(self, user_id: str, note_id: str) -> List[Dict[str, Any]]:
+    def get_keywords_for_note(self, user_id: str, note_id: str) -> list[dict[str, Any]]:
         """Retrieves all keywords linked to a specific note for the given user."""
         db = self._get_db(user_id)
         return db.get_keywords_for_note(note_id=note_id)
 
-    def get_notes_for_keyword(self, user_id: str, keyword_id: int, limit: int = 50, offset: int = 0) -> List[
-        Dict[str, Any]]:
+    def get_notes_for_keyword(self, user_id: str, keyword_id: int, limit: int = 50, offset: int = 0) -> list[
+        dict[str, Any]]:
         """Retrieves all notes linked to a specific keyword for the given user."""
         db = self._get_db(user_id)
         return db.get_notes_for_keyword(keyword_id=keyword_id, limit=limit, offset=offset)
@@ -353,24 +354,24 @@ class NotesInteropService:
         db = self._get_db(user_id)
         return db.add_keyword(keyword_text=keyword_text)
 
-    def get_keyword(self, *, keyword_id: int, user_id: str) -> Optional[Dict[str, Any]]:
+    def get_keyword(self, *, keyword_id: int, user_id: str) -> Optional[dict[str, Any]]:
         """Get keyword by id. Uses mock-style `get_keyword` if available."""
         db = self._get_db(user_id)
         if hasattr(db, "get_keyword"):
             return db.get_keyword(keyword_id)
         return db.get_keyword_by_id(keyword_id=keyword_id)
 
-    def get_keyword_by_id(self, user_id: str, keyword_id: int) -> Optional[Dict[str, Any]]:
+    def get_keyword_by_id(self, user_id: str, keyword_id: int) -> Optional[dict[str, Any]]:
         """Retrieves a keyword by its ID for the given user."""
         db = self._get_db(user_id)
         return db.get_keyword_by_id(keyword_id=keyword_id)
 
-    def get_keyword_by_text(self, user_id: str, keyword_text: str) -> Optional[Dict[str, Any]]:
+    def get_keyword_by_text(self, user_id: str, keyword_text: str) -> Optional[dict[str, Any]]:
         """Retrieves a keyword by its text for the given user."""
         db = self._get_db(user_id)
         return db.get_keyword_by_text(keyword_text=keyword_text)
 
-    def list_keywords(self, user_id: str, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def list_keywords(self, user_id: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         """Lists keywords for the given user."""
         db = self._get_db(user_id)
         return db.list_keywords(limit=limit, offset=offset)
@@ -394,7 +395,7 @@ class NotesInteropService:
         query: Optional[str] = None,
         search_term: Optional[str] = None,
         limit: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Search keywords. Supports both (query=...) and (search_term=...)."""
         term = query if query is not None else search_term
         db = self._get_db(user_id)

@@ -1,23 +1,24 @@
 from __future__ import annotations
 
 import ipaddress
-import os
 import socket
 import subprocess
-from typing import Callable, Iterable, List, Optional, Sequence, Dict, Tuple
+from collections.abc import Iterable, Sequence
+from typing import Callable
+
 from loguru import logger
 
 
-def _truthy(v: Optional[str]) -> bool:
+def _truthy(v: str | None) -> bool:
     return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
-def default_resolver(host: str) -> List[str]:
+def default_resolver(host: str) -> list[str]:
     """Resolve hostname to IPv4 addresses using getaddrinfo; return unique list.
 
     Avoids raising on DNS errors, returns empty list if resolution fails.
     """
-    out: List[str] = []
+    out: list[str] = []
     try:
         infos = socket.getaddrinfo(host, None, family=socket.AF_INET)
         for _fam, _sock, _proto, _canon, sa in infos:
@@ -29,7 +30,7 @@ def default_resolver(host: str) -> List[str]:
     return out
 
 
-def _normalize_host_token(token: str) -> Tuple[str, bool, bool]:
+def _normalize_host_token(token: str) -> tuple[str, bool, bool]:
     """Normalize a hostname-like token and detect wildcard/suffix semantics.
 
     Returns (host, is_wildcard, is_suffix).
@@ -64,9 +65,9 @@ def _normalize_host_token(token: str) -> Tuple[str, bool, bool]:
 def expand_allowlist_to_targets(
     raw_allowlist: Sequence[str] | str | None,
     *,
-    resolver: Callable[[str], List[str]] = default_resolver,
+    resolver: Callable[[str], list[str]] = default_resolver,
     wildcard_subdomains: Sequence[str] | None = ("", "www", "api"),
-) -> List[str]:
+) -> list[str]:
     """Expand allowlist inputs (CIDR, IP, hostname, wildcard *.domain) into CIDR/IP targets.
 
     - CIDR tokens: validated and returned as-is
@@ -105,7 +106,7 @@ def expand_allowlist_to_targets(
         if not host:
             continue
         # Resolve apex and a small set of common subdomains for wildcard tokens
-        to_resolve: List[str] = []
+        to_resolve: list[str] = []
         if is_wild:
             subs = list(wildcard_subdomains or ("",))
             for sub in subs:
@@ -126,9 +127,9 @@ def expand_allowlist_to_targets(
 def pin_dns_map(
     raw_allowlist: Sequence[str] | str | None,
     *,
-    resolver: Callable[[str], List[str]] = default_resolver,
+    resolver: Callable[[str], list[str]] = default_resolver,
     wildcard_subdomains: Sequence[str] | None = ("", "www", "api"),
-) -> Dict[str, List[str]]:
+) -> dict[str, list[str]]:
     """Return a mapping of normalized host tokens to resolved IPv4 addresses.
 
     CIDR and literal IP inputs are returned as themselves (keyed by the token),
@@ -140,7 +141,7 @@ def pin_dns_map(
         tokens = [t.strip() for t in raw_allowlist.split(',') if t.strip()]
     else:
         tokens = [str(t).strip() for t in raw_allowlist if str(t).strip()]
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     for tok in tokens:
         # CIDR or IP
         try:
@@ -160,14 +161,14 @@ def pin_dns_map(
         host, is_wild, _is_suffix = _normalize_host_token(tok)
         if not host:
             continue
-        hosts: List[str] = []
+        hosts: list[str] = []
         if is_wild:
             for sub in list(wildcard_subdomains or ("",)):
                 fqdn = f"{sub}.{host}" if sub else host
                 hosts.append(fqdn)
         else:
             hosts.append(host)
-        ips: List[str] = []
+        ips: list[str] = []
         for h in hosts:
             for ip in resolver(h):
                 try:
@@ -185,9 +186,9 @@ def refresh_egress_rules(
     raw_allowlist: Sequence[str] | str | None,
     label: str,
     *,
-    resolver: Callable[[str], List[str]] = default_resolver,
+    resolver: Callable[[str], list[str]] = default_resolver,
     wildcard_subdomains: Sequence[str] | None = ("", "www", "api"),
-) -> List[str]:
+) -> list[str]:
     """Revoke existing rules by label and apply pinned rules for the current allowlist.
 
     Performs a best-effort deletion via delete_rules_by_label(), then applies
@@ -205,7 +206,7 @@ def _build_restore_blob(container_ip: str, targets: Iterable[str], label: str) -
     """Build an iptables-restore filter table blob that appends ACCEPT rules for targets
     and a final DROP for the container IP, labeled for later cleanup.
     """
-    lines: List[str] = ["*filter"]
+    lines: list[str] = ["*filter"]
     for tgt in targets:
         dspec = tgt if "/" in tgt else f"{tgt}/32"
         lines.append(
@@ -218,13 +219,13 @@ def _build_restore_blob(container_ip: str, targets: Iterable[str], label: str) -
     return "\n".join(lines)
 
 
-def apply_egress_rules_atomic(container_ip: str, targets: Sequence[str], label: str) -> List[str]:
+def apply_egress_rules_atomic(container_ip: str, targets: Sequence[str], label: str) -> list[str]:
     """Apply iptables rules via iptables-restore --noflush for atomicity.
 
     Returns a list of rule specs (as in `iptables -S` without the initial action) for deletion fallback.
     On failure, attempts iterative application with `iptables` commands.
     """
-    rule_specs: List[str] = []
+    rule_specs: list[str] = []
     try:
         blob = _build_restore_blob(container_ip, targets, label)
         proc = subprocess.run(["iptables-restore", "--noflush"], input=blob.encode("utf-8"), check=False)
@@ -272,7 +273,7 @@ def delete_rules_by_label(label: str) -> None:
         out = subprocess.check_output(["iptables", "-L", "DOCKER-USER", "--line-numbers", "-n", "-v"], text=True)
         lines = out.splitlines()
         # Skip header lines, find those with the comment
-        numbered: List[int] = []
+        numbered: list[int] = []
         for ln in lines:
             if label in ln:
                 try:

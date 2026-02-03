@@ -11,11 +11,10 @@ Preference order:
   5) IP scope (trusted header via RG_CLIENT_IP_HEADER else request.client.host)
 """
 
-from typing import Optional
+import ipaddress
 import os
 
 from fastapi import Request
-import ipaddress
 
 from .tenant import hash_entity
 

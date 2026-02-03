@@ -3,41 +3,34 @@
 #
 # Imports
 import os
-from typing import Optional, Dict, Any, AsyncGenerator, Set, List
+from collections.abc import AsyncGenerator
+from typing import Any, Optional
+
 #
 # Third-party Imports
 from loguru import logger
+
 #
 # Local Imports
 from tldw_Server_API.app.core.http_client import afetch, astream_bytes
-from .base import (
-    TTSAdapter,
-    TTSCapabilities,
-    TTSRequest,
-    TTSResponse,
-    AudioFormat,
-    VoiceInfo,
-    ProviderStatus
-)
+
 from ..tts_exceptions import (
-    TTSProviderNotConfiguredError,
-    TTSProviderInitializationError,
     TTSAuthenticationError,
-    TTSRateLimitError,
-    TTSQuotaExceededError,
-    TTSNetworkError,
-    TTSTimeoutError,
-    TTSProviderError,
-    TTSGenerationError,
-    TTSValidationError,
     TTSError,
-    auth_error,
+    TTSGenerationError,
+    TTSProviderError,
+    TTSProviderInitializationError,
+    TTSProviderNotConfiguredError,
+    TTSQuotaExceededError,
+    TTSRateLimitError,
+    TTSTimeoutError,
+    TTSValidationError,
     rate_limit_error,
-    network_error,
-    timeout_error
 )
-from ..tts_validation import validate_tts_request
 from ..tts_resource_manager import get_resource_manager
+from ..tts_validation import validate_tts_request
+from .base import AudioFormat, ProviderStatus, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse, VoiceInfo
+
 #
 #######################################################################################################################
 #
@@ -157,7 +150,7 @@ class ElevenLabsAdapter(TTSAdapter):
         }
     }
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config)
 
         # API configuration
@@ -191,7 +184,7 @@ class ElevenLabsAdapter(TTSAdapter):
         self.client: Optional[Any] = None
 
         # Cache for user voices
-        self._user_voices: List[VoiceInfo] = []
+        self._user_voices: list[VoiceInfo] = []
 
     async def initialize(self) -> bool:
         """Initialize the ElevenLabs adapter"""
@@ -589,10 +582,10 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
 
     PROVIDER_KEY = "elevenlabs"
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         cfg = config.copy() if isinstance(config, dict) else {}
         # Map generic keys to adapter-specific keys used by the base class
-        mapped_cfg: Dict[str, Any] = {}
+        mapped_cfg: dict[str, Any] = {}
         if "api_key" in cfg:
             mapped_cfg["elevenlabs_api_key"] = cfg.get("api_key")
         if "base_url" in cfg:
@@ -620,11 +613,11 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         return bool(self.api_key)
 
     @property
-    def supported_models(self) -> List[str]:
+    def supported_models(self) -> list[str]:
         return list(self.MODELS.keys())
 
     # --- Convenience API ---
-    async def fetch_voices(self) -> List[Dict[str, Any]]:
+    async def fetch_voices(self) -> list[dict[str, Any]]:
         """Return available voices as a list of dicts from the public API."""
         if not self.client:
             from tldw_Server_API.app.core.http_client import create_async_client
@@ -640,7 +633,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         data = resp.json() or {}
         return data.get("voices", [])
 
-    async def get_voice_info(self, voice_id: str) -> Dict[str, Any]:
+    async def get_voice_info(self, voice_id: str) -> dict[str, Any]:
         if not self.client:
             from tldw_Server_API.app.core.http_client import create_async_client
             self.client = create_async_client()
@@ -654,7 +647,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         resp.raise_for_status()
         return resp.json() or {}
 
-    async def clone_voice(self, name: str, samples: List[bytes]) -> str:
+    async def clone_voice(self, name: str, samples: list[bytes]) -> str:
         if not self.client:
             from tldw_Server_API.app.core.http_client import create_async_client
             self.client = create_async_client()
@@ -671,7 +664,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         data = resp.json() or {}
         return data.get("voice_id") or data.get("id") or ""
 
-    async def get_usage(self) -> Dict[str, Any]:
+    async def get_usage(self) -> dict[str, Any]:
         if not self.client:
             from tldw_Server_API.app.core.http_client import create_async_client
             self.client = create_async_client()

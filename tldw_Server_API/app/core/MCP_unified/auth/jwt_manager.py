@@ -4,20 +4,20 @@ Secure JWT authentication manager for unified MCP module
 Uses environment-based secrets and implements secure token management.
 """
 
-from jose import jwt, JWTError
-from jose.exceptions import ExpiredSignatureError
-import secrets
 import hashlib
-from typing import Dict, Any, Optional, List, Tuple
+import secrets
 from datetime import datetime, timedelta, timezone
+from typing import Optional
+
 from fastapi import HTTPException, Security, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field
-from passlib.context import CryptContext
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt
+from jose.exceptions import ExpiredSignatureError
 from loguru import logger
+from passlib.context import CryptContext
+from pydantic import BaseModel, Field
 
 from ..config import get_config
-
 
 # Security scheme
 security = HTTPBearer(auto_error=False)
@@ -35,8 +35,8 @@ class TokenData(BaseModel):
     """Token payload data"""
     sub: str  # Subject (user_id)
     username: Optional[str] = None
-    roles: List[str] = Field(default_factory=list)
-    permissions: List[str] = Field(default_factory=list)
+    roles: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
     token_type: str = "access"
     jti: Optional[str] = None  # JWT ID for revocation
     iat: Optional[datetime] = None
@@ -96,8 +96,8 @@ class JWTManager:
         self,
         subject: str,
         username: Optional[str] = None,
-        roles: Optional[List[str]] = None,
-        permissions: Optional[List[str]] = None,
+        roles: Optional[list[str]] = None,
+        permissions: Optional[list[str]] = None,
         expires_delta: Optional[timedelta] = None
     ) -> str:
         """
@@ -148,7 +148,7 @@ class JWTManager:
         self,
         subject: str,
         expires_delta: Optional[timedelta] = None
-    ) -> Tuple[str, str]:
+    ) -> tuple[str, str]:
         """
         Create a refresh token with rotation support.
 
@@ -243,7 +243,7 @@ class JWTManager:
         self,
         old_token: str,
         token_id: str
-    ) -> Tuple[str, str, str]:
+    ) -> tuple[str, str, str]:
         """
         Rotate a refresh token for enhanced security.
 
@@ -350,7 +350,7 @@ class JWTManager:
 
         return self.verify_token(credentials.credentials)
 
-    def create_api_key(self, user_id: str, name: str, permissions: List[str]) -> str:
+    def create_api_key(self, user_id: str, name: str, permissions: list[str]) -> str:
         """
         Create a secure API key for a user.
 

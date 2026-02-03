@@ -11,22 +11,23 @@ from __future__ import annotations
 import json
 import os
 from functools import lru_cache
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Utils.common import parse_boolean
 
 
 @lru_cache(maxsize=1)
-def _visual_rag_settings() -> Dict[str, Any]:
+def _visual_rag_settings() -> dict[str, Any]:
     """
     Load Visual RAG settings from env/config.
 
     Env takes precedence; falls back to [Visual-RAG] in config.txt when present.
     """
-    settings: Dict[str, Any] = {
+    settings: dict[str, Any] = {
         "enable_visual_rag": False,
         "max_images_per_media": 32,
     }
@@ -72,7 +73,7 @@ def persist_visual_documents_from_analysis(
     db_path: str,
     client_id: str,
     media_id: int,
-    analysis_details: Optional[Dict[str, Any]],
+    analysis_details: dict[str, Any] | None,
 ) -> int:
     """
     Best-effort helper that extracts visual detections (currently from PDF VLM
@@ -148,7 +149,9 @@ def persist_visual_documents_from_analysis(
     finally:
         try:
             db.close_connection()
-        except Exception:
-            logger.debug("visual_ingestion: failed to close MediaDatabase connection")
+        except Exception as exc:  # noqa: BLE001
+            logger.opt(exception=exc).warning(
+                "visual_ingestion: failed to close MediaDatabase connection"
+            )
 
     return created

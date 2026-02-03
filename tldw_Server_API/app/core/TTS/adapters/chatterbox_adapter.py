@@ -10,29 +10,22 @@ Updated to use upstream chatterbox package (v0.1.4):
 
 # Imports
 import os
-from typing import Optional, Dict, Any, AsyncGenerator, Set, List
+from collections.abc import AsyncGenerator
+from typing import Any, Optional
+
+import numpy as np
 
 # Third-party Imports
 import torch
-import numpy as np
 from loguru import logger
 
-# Local Imports
-from .base import (
-    TTSAdapter,
-    TTSCapabilities,
-    TTSRequest,
-    TTSResponse,
-    AudioFormat,
-    VoiceInfo,
-    ProviderStatus
-)
 from ..tts_exceptions import (
     TTSModelLoadError,
 )
-from ..tts_validation import validate_tts_request
 from ..utils import parse_bool
 
+# Local Imports
+from .base import AudioFormat, ProviderStatus, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse, VoiceInfo
 
 #######################################################################################################################
 # No-op watermarker to ensure no watermark is applied
@@ -100,13 +93,13 @@ class ChatterboxAdapter(TTSAdapter):
     }
 
     # Multilingual language codes supported upstream
-    MULTILINGUAL_LANGS: Set[str] = {
+    MULTILINGUAL_LANGS: set[str] = {
         "ar", "da", "de", "el", "en", "es", "fi", "fr", "he", "hi",
         "it", "ja", "ko", "ms", "nl", "no", "pl", "pt", "ru", "sv",
         "sw", "tr", "zh"
     }
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config)
 
         # Device selection: prefer explicit config; otherwise CUDA if available, else CPU.
@@ -303,7 +296,7 @@ class ChatterboxAdapter(TTSAdapter):
 
         try:
             # Prepare kwargs for upstream generate
-            gen_kwargs: Dict[str, Any] = {
+            gen_kwargs: dict[str, Any] = {
                 "audio_prompt_path": voice_reference_path,
                 "exaggeration": exaggeration,
                 "cfg_weight": request.extra_params.get("cfg_weight", self.default_cfg_weight),
@@ -390,7 +383,7 @@ class ChatterboxAdapter(TTSAdapter):
         """
         try:
             import tempfile
-            from pathlib import Path
+
             from tldw_Server_API.app.core.TTS.audio_utils import process_voice_reference_async
 
             # Process voice reference for Chatterbox requirements

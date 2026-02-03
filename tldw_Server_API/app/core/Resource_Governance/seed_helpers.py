@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, Mapping, Optional
-
-from loguru import logger
+from typing import Any
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 

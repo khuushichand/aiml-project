@@ -5,11 +5,11 @@ Manages user-specific audit service instances for dependency injection.
 import asyncio
 import os
 import threading
-import weakref
 import time
+import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional, Set, Union
+from typing import Any, Callable, Optional, Union
 
 from fastapi import Depends, HTTPException, status
 from loguru import logger
@@ -25,15 +25,15 @@ except ImportError:
     )
 
 # Local Imports
-from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.testing import is_test_mode
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import (
     ServiceInitializationError,
     ServiceInitializationTimeoutError,
 )
+from tldw_Server_API.app.core.testing import is_test_mode
 
 #######################################################################################################################
 
@@ -271,7 +271,7 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
     threading.Thread(target=_run, name=f"audit-stop-{user_id}", daemon=True).start()
 
 
-_services_stopping: Set[int] = set()
+_services_stopping: set[int] = set()
 _services_stopping_lock = threading.Lock()  # Protects _services_stopping service-id set
 
 
@@ -412,8 +412,8 @@ class _LoopState:
     cache: Any
     cache_lock: threading.Lock = field(default_factory=threading.Lock)
     init_lock: threading.Lock = field(default_factory=threading.Lock)
-    initializing_users: Set[Optional[Union[int, str]]] = field(default_factory=set)
-    initializing_events: Dict[Optional[Union[int, str]], asyncio.Event] = field(default_factory=dict)
+    initializing_users: set[Optional[Union[int, str]]] = field(default_factory=set)
+    initializing_events: dict[Optional[Union[int, str]], asyncio.Event] = field(default_factory=dict)
 
 
 _STATE_LOCK = threading.Lock()

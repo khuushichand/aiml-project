@@ -13,7 +13,6 @@ from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
     create_error_response,
     get_eval_request_user,
     sanitize_error_message,
-    verify_api_key,
 )
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     PipelineCleanupResponse,

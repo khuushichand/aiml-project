@@ -20,25 +20,28 @@ Integration entrypoint: `agentic_rag_pipeline(...)` which mirrors a subset of
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+import hashlib
 import re
 import time
-import hashlib
+from dataclasses import dataclass
+from typing import Any, Literal
 
+import numpy as np
 from loguru import logger
 
-from .types import Document, DataSource
 from .advanced_cache import AGENTIC_CACHE
 from .agentic_tools import make_default_registry
-from .unified_pipeline import UnifiedSearchResult
 from .database_retrievers import MultiDatabaseRetriever, RetrievalConfig
+from .types import DataSource, Document
+from .unified_pipeline import UnifiedSearchResult
 
 # Expose AnswerGenerator at module level for tests/patching parity with unified pipeline
+AnswerGenerator: Any
 try:
-    from .generation import AnswerGenerator  # type: ignore
+    from .generation import AnswerGenerator as _AnswerGenerator
+    AnswerGenerator = _AnswerGenerator
 except Exception:
-    AnswerGenerator = None  # type: ignore
+    AnswerGenerator = None
 
 
 @dataclass
@@ -58,7 +61,7 @@ class AgenticConfig:
     # Tool loop (ReAct-like)
     enable_tools: bool = False
     use_llm_planner: bool = False
-    time_budget_sec: Optional[float] = None
+    time_budget_sec: float | None = None
     # Caching
     cache_ttl_sec: int = 600
     debug_trace: bool = False
@@ -73,17 +76,17 @@ class AgenticConfig:
     prefer_structural_anchors: bool = True
     # Table/figure support
     enable_table_support: bool = True
-    table_trigger_keywords: Tuple[str, ...] = ("table", "figure", "tabular", "dataset")
+    table_trigger_keywords: tuple[str, ...] = ("table", "figure", "tabular", "dataset")
     table_min_bar_count: int = 3  # '|' count heuristic
     # VLM late chunking (agentic path)
     agentic_enable_vlm_late_chunking: bool = False
-    agentic_vlm_backend: Optional[str] = None
+    agentic_vlm_backend: str | None = None
     agentic_vlm_detect_tables_only: bool = True
-    agentic_vlm_max_pages: Optional[int] = None
+    agentic_vlm_max_pages: int | None = None
     agentic_vlm_late_chunk_top_k_docs: int = 2
     # Provider embeddings for intra-doc vectors
     agentic_use_provider_embeddings_within: bool = False
-    agentic_provider_embedding_model_id: Optional[str] = None
+    agentic_provider_embedding_model_id: str | None = None
     # Adaptive budgets & stopping criteria
     adaptive_budgets: bool = True
     coverage_target: float = 0.8
@@ -94,9 +97,9 @@ class AgenticConfig:
 
 
 # Simple in-process caches (namespaced via adapter)
-_INTRA_DOC_VEC_CACHE: Dict[str, Any] = {}
+_INTRA_DOC_VEC_CACHE: dict[str, Any] = {}
 # Back-compat ephemeral cache dict used by older tests
-_EPHEMERAL_CACHE: Dict[str, Any] = {}
+_EPHEMERAL_CACHE: dict[str, Any] = {}
 
 # Lazy DB handle for structure index lookups
 _STRUCT_DB: Any = None
@@ -110,9 +113,9 @@ def _get_media_db_for_structure() -> Any:
     if _STRUCT_DB is not None:
         return _STRUCT_DB
     try:
-        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase as _MDB
-        from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend as _get_cb
         from tldw_Server_API.app.core.config import load_comprehensive_config as _load_cfg
+        from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend as _get_cb
+        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase as _MDB
         cfg = _load_cfg()
         backend = _get_cb(cfg) if cfg else None
         if backend is None:
@@ -128,7 +131,7 @@ def _now() -> float:
     return time.time()
 
 
-def _cache_get(key: str) -> Optional[Dict[str, Any]]:
+def _cache_get(key: str) -> dict[str, Any] | None:
     v = AGENTIC_CACHE.get("ephemeral_chunk", key)
     if isinstance(v, dict):
         return v
@@ -137,7 +140,7 @@ def _cache_get(key: str) -> Optional[Dict[str, Any]]:
     return v2 if isinstance(v2, dict) else None
 
 
-def _cache_set(key: str, value: Dict[str, Any], ttl: int) -> None:
+def _cache_set(key: str, value: dict[str, Any], ttl: int) -> None:
     AGENTIC_CACHE.set("ephemeral_chunk", key, value, ttl)
     # Mirror into legacy dict for test visibility
     _EPHEMERAL_CACHE[key] = value
@@ -182,12 +185,12 @@ def _token_estimate(text: str) -> int:
     return max(1, int(len(text) / 4))
 
 
-def _keyword_terms(query: str) -> List[str]:
+def _keyword_terms(query: str) -> list[str]:
     """Extract lightweight keyword set from query (alphanum >= 3 chars)."""
     terms = [t.lower() for t in re.findall(r"[A-Za-z0-9_-]{3,}", query or "")]
     # Deduplicate while preserving order
     seen = set()
-    out: List[str] = []
+    out: list[str] = []
     for t in terms:
         if t not in seen:
             out.append(t)
@@ -195,7 +198,14 @@ def _keyword_terms(query: str) -> List[str]:
     return out[:12]
 
 
-def _split_headings_and_paragraphs(text: str) -> Tuple[List[Tuple[str, int, int]], List[Tuple[int, int]]]:
+def _coerce_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _split_headings_and_paragraphs(text: str) -> tuple[list[tuple[str, int, int]], list[tuple[int, int]]]:
     """Return (sections, paragraphs).
 
     sections: list of (heading_text, start_offset, end_offset)
@@ -205,13 +215,13 @@ def _split_headings_and_paragraphs(text: str) -> Tuple[List[Tuple[str, int, int]
         return [], []
     # Identify headings (markdown '#' or underlined or short uppercase lines)
     lines = text.splitlines()
-    offsets: List[int] = []
+    offsets: list[int] = []
     pos = 0
     for ln in lines:
         offsets.append(pos)
         pos += len(ln) + 1
-    section_indices: List[int] = []
-    section_titles: List[str] = []
+    section_indices: list[int] = []
+    section_titles: list[str] = []
     for i, ln in enumerate(lines):
         if re.match(r"^\s*#{1,6}\s+", ln):
             section_indices.append(i)
@@ -224,7 +234,7 @@ def _split_headings_and_paragraphs(text: str) -> Tuple[List[Tuple[str, int, int]
             section_indices.append(i)
             section_titles.append(ln.strip())
 
-    sections: List[Tuple[str, int, int]] = []
+    sections: list[tuple[str, int, int]] = []
     for idx, title in zip(section_indices, section_titles):
         start = offsets[idx]
         # next section or end
@@ -237,7 +247,7 @@ def _split_headings_and_paragraphs(text: str) -> Tuple[List[Tuple[str, int, int]
         sections.append((title, start, end))
 
     # Paragraph detection: split on blank lines or long gaps
-    paragraphs: List[Tuple[int, int]] = []
+    paragraphs: list[tuple[int, int]] = []
     start = 0
     for m in re.finditer(r"\n\s*\n", text):
         end = m.start()
@@ -265,7 +275,11 @@ def _hash_embed(text: str, dim: int = 2048) -> 'np.ndarray':
     return v
 
 
-def _find_spans(text: str, terms: List[str], max_spans: int = 6, window: int = 300) -> List[Tuple[int, int]]:
+def _normalize_fts_level(level: str | None) -> Literal["media", "chunk"]:
+    return "chunk" if str(level).lower() == "chunk" else "media"
+
+
+def _find_spans(text: str, terms: list[str], max_spans: int = 6, window: int = 300) -> list[tuple[int, int]]:
     """Find up to `max_spans` promising spans around keyword hits.
 
     This is a deterministic, cheap heuristic: locate case-insensitive matches
@@ -275,7 +289,7 @@ def _find_spans(text: str, terms: List[str], max_spans: int = 6, window: int = 3
     if not text:
         return []
     lowered = text.lower()
-    hits: List[Tuple[int, int]] = []
+    hits: list[tuple[int, int]] = []
     for term in terms:
         start = 0
         while True:
@@ -297,7 +311,7 @@ def _find_spans(text: str, terms: List[str], max_spans: int = 6, window: int = 3
 
     # Merge overlapping/adjacent ranges
     hits.sort(key=lambda x: x[0])
-    merged: List[Tuple[int, int]] = []
+    merged: list[tuple[int, int]] = []
     for s, e in hits:
         if not merged or s > merged[-1][1] + 20:
             merged.append((s, e))
@@ -311,10 +325,10 @@ def _find_spans(text: str, terms: List[str], max_spans: int = 6, window: int = 3
 
 
 def _assemble_ephemeral_chunk(
-    docs: List[Document],
+    docs: list[Document],
     query: str,
     cfg: AgenticConfig,
-) -> Tuple[str, List[Dict[str, Any]]]:
+) -> tuple[str, list[dict[str, Any]]]:
     """Build a synthetic chunk and provenance from top documents.
 
     Returns:
@@ -323,8 +337,8 @@ def _assemble_ephemeral_chunk(
     """
     terms = _keyword_terms(query)
     remaining_tokens = int(cfg.max_tokens_read)
-    parts: List[str] = []
-    provenance: List[Dict[str, Any]] = []
+    parts: list[str] = []
+    provenance: list[dict[str, Any]] = []
 
     for d in docs[: max(1, cfg.top_k_docs)]:
         if remaining_tokens <= 0:
@@ -352,7 +366,7 @@ def _assemble_ephemeral_chunk(
             })
             if cfg.enable_metrics:
                 try:
-                    from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram, increment_counter
+                    from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter, observe_histogram
                     observe_histogram("agentic_span_length_chars", float(len(snippet)), labels={"phase": "assemble"})
                     increment_counter("span_bytes_read_total", float(len(snippet.encode('utf-8'))), labels={"tool": "heuristic"})
                 except Exception:
@@ -373,12 +387,12 @@ class AgenticToolbox:
     These avoid external dependencies and work over the provided Document objects.
     """
 
-    def __init__(self, docs: List[Document], cfg: AgenticConfig):
+    def __init__(self, docs: list[Document], cfg: AgenticConfig):
         self.docs = docs
         self.cfg = cfg
-        self._sections: Dict[str, List[Tuple[str, int, int]]] = {}
-        self._paragraphs: Dict[str, List[Tuple[int, int]]] = {}
-        self._para_vecs: Dict[str, List[Any]] = {}
+        self._sections: dict[str, list[tuple[str, int, int]]] = {}
+        self._paragraphs: dict[str, list[tuple[int, int]]] = {}
+        self._para_vecs: dict[str, list[Any]] = {}
         if cfg.enable_section_index or cfg.enable_semantic_within:
             self._build_indexes()
 
@@ -407,8 +421,10 @@ class AgenticToolbox:
                                 except Exception:
                                     pass
                         else:
-                            from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import create_embeddings_batch
                             from tldw_Server_API.app.core.config import load_comprehensive_config
+                            from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+                                create_embeddings_batch,
+                            )
                             app_cfg = load_comprehensive_config() or {}
                             embedding_settings = app_cfg.get("EMBEDDING_CONFIG", {})
                             app_config = {"embedding_config": embedding_settings}
@@ -431,7 +447,7 @@ class AgenticToolbox:
                     vecs.append(_hash_embed(text[s:e], self.cfg.semantic_dim))
                 self._para_vecs[d.id] = vecs
 
-    def search_within(self, doc: Document, query: str, max_hits: int = 8, window: int = 300) -> List[Tuple[int, int]]:
+    def search_within(self, doc: Document, query: str, max_hits: int = 8, window: int = 300) -> list[tuple[int, int]]:
         if self.cfg.enable_semantic_within and doc.id in self._para_vecs:
             try:
                 import numpy as _np
@@ -450,7 +466,7 @@ class AgenticToolbox:
         terms = _keyword_terms(query)
         return _find_spans(doc.content or "", terms, max_spans=max_hits, window=window)
 
-    def open_section(self, doc: Document, heading: str) -> Optional[Tuple[int, int]]:
+    def open_section(self, doc: Document, heading: str) -> tuple[int, int] | None:
         """Find a section by heuristic heading match; returns [start,end) char range."""
         # Prefer DB-backed structure index when available
         try:
@@ -495,17 +511,17 @@ class AgenticToolbox:
                 return (start, end)
         return None
 
-    def expand_window(self, doc: Document, start: int, end: int, delta: int = 200) -> Tuple[int, int]:
+    def expand_window(self, doc: Document, start: int, end: int, delta: int = 200) -> tuple[int, int]:
         text = doc.content or ""
         left = max(0, start - delta)
         right = min(len(text), end + delta)
         return (left, right)
 
-    def quote_spans(self, doc: Document, spans: List[Tuple[int, int]]) -> List[str]:
+    def quote_spans(self, doc: Document, spans: list[tuple[int, int]]) -> list[str]:
         text = doc.content or ""
         return [text[s:e] for s, e in spans]
 
-    def section_title_for(self, doc: Document, start: int) -> Optional[str]:
+    def section_title_for(self, doc: Document, start: int) -> str | None:
         secs = self._sections.get(doc.id) or []
         for title, s, e in secs:
             if s <= start < e:
@@ -521,7 +537,7 @@ class AgenticToolbox:
         return bars >= self.cfg.table_min_bar_count or tabs >= 2 or (nums >= 10 and ('|' in text or '\t' in text))
 
 
-def _decompose_query(query: str, cfg: AgenticConfig) -> List[str]:
+def _decompose_query(query: str, cfg: AgenticConfig) -> list[str]:
     # Heuristic split on ' and ', ' then ', ',', and question separators
     q = (query or '').strip()
     if not q:
@@ -534,7 +550,7 @@ def _decompose_query(query: str, cfg: AgenticConfig) -> List[str]:
     return sub or [q]
 
 
-async def _tool_loop(docs: List[Document], query: str, cfg: AgenticConfig) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
+async def _tool_loop(docs: list[Document], query: str, cfg: AgenticConfig) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
     """Simple bounded tool loop. If cfg.use_llm_planner is True, we try a light
     planning prompt; otherwise use a deterministic heuristic policy. Network
     failures automatically fall back to heuristics.
@@ -545,16 +561,16 @@ async def _tool_loop(docs: List[Document], query: str, cfg: AgenticConfig) -> Tu
     max_steps = max(1, int(cfg.max_tool_calls))
     deadline = (_now() + cfg.time_budget_sec) if cfg.time_budget_sec else None
 
-    assembled: List[Tuple[Document, int, int]] = []
+    assembled: list[tuple[Document, int, int]] = []
     steps = 0
-    tool_trace: List[Dict[str, Any]] = []
+    tool_trace: list[dict[str, Any]] = []
 
     def time_left() -> bool:
         return (deadline is None) or (_now() < deadline)
 
     # Optional: LLM planning for headings/keywords (best-effort)
-    planned_headings: List[str] = []
-    planned_terms: List[str] = []
+    planned_headings: list[str] = []
+    planned_terms: list[str] = []
     if cfg.use_llm_planner:
         try:
             from .generation import AnswerGenerator
@@ -587,7 +603,7 @@ async def _tool_loop(docs: List[Document], query: str, cfg: AgenticConfig) -> Tu
     subgoals = _decompose_query(query, cfg) if cfg.enable_query_decomposition else [query]
 
     # Helper to compute coverage/corroboration + redundancy
-    def _compute_progress_metrics() -> Dict[str, Any]:
+    def _compute_progress_metrics() -> dict[str, Any]:
         try:
             terms = _keyword_terms(query)
             assembled_text = "\n".join([(d.content or "")[s:e] for d, s, e in assembled])
@@ -599,13 +615,13 @@ async def _tool_loop(docs: List[Document], query: str, cfg: AgenticConfig) -> Tu
             uniq_docs = len({getattr(d, 'id', '') for d, _, _ in assembled})
             raw = 0
             merged = 0
-            per_doc: Dict[str, List[Tuple[int, int]]] = {}
+            per_doc: dict[str, list[tuple[int, int]]] = {}
             for d, s, e in assembled:
                 per_doc.setdefault(getattr(d, 'id', ''), []).append((int(s), int(e)))
             for _doc_id, ranges in per_doc.items():
                 ranges = sorted(ranges, key=lambda x: x[0])
                 raw += sum(e - s for s, e in ranges)
-                merged_ranges: List[Tuple[int, int]] = []
+                merged_ranges: list[tuple[int, int]] = []
                 for s, e in ranges:
                     if not merged_ranges or s > merged_ranges[-1][1]:
                         merged_ranges.append((s, e))
@@ -651,7 +667,10 @@ async def _tool_loop(docs: List[Document], query: str, cfg: AgenticConfig) -> Tu
                     _s1 = time.time()
                     if cfg.enable_metrics:
                         try:
-                            from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter, observe_histogram
+                            from tldw_Server_API.app.core.Metrics.metrics_manager import (
+                                increment_counter,
+                                observe_histogram,
+                            )
                             increment_counter("agentic_tool_calls_total", 1, labels={"tool": "open_section"})
                             observe_histogram("agentic_tool_duration_seconds", (_s1 - _s0), labels={"tool": "open_section"})
                         except Exception:
@@ -668,7 +687,10 @@ async def _tool_loop(docs: List[Document], query: str, cfg: AgenticConfig) -> Tu
                 _e1 = time.time()
                 if cfg.enable_metrics:
                     try:
-                        from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter, observe_histogram
+                        from tldw_Server_API.app.core.Metrics.metrics_manager import (
+                            increment_counter,
+                            observe_histogram,
+                        )
                         increment_counter("agentic_tool_calls_total", 1, labels={"tool": "expand_window"})
                         observe_histogram("agentic_tool_duration_seconds", (_e1 - _e0), labels={"tool": "expand_window"})
                     except Exception:
@@ -679,7 +701,10 @@ async def _tool_loop(docs: List[Document], query: str, cfg: AgenticConfig) -> Tu
                 remaining_tokens -= _token_estimate(snippet)
                 if cfg.enable_metrics:
                     try:
-                        from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram, increment_counter
+                        from tldw_Server_API.app.core.Metrics.metrics_manager import (
+                            increment_counter,
+                            observe_histogram,
+                        )
                         observe_histogram("agentic_span_length_chars", float(len(snippet)), labels={"phase": "tool"})
                         increment_counter("span_bytes_read_total", float(len(snippet.encode('utf-8'))), labels={"tool": "expand_window"})
                     except Exception:
@@ -710,8 +735,8 @@ async def _tool_loop(docs: List[Document], query: str, cfg: AgenticConfig) -> Tu
         assembled = [(d0, 0, min(len(d0.content or ''), cfg.window_chars))]
 
     # Compose chunk and provenance
-    parts: List[str] = []
-    provenance: List[Dict[str, Any]] = []
+    parts: list[str] = []
+    provenance: list[dict[str, Any]] = []
     for d, s, e in assembled:
         snippet = (d.content or "")[s:e]
         parts.append(snippet.strip())
@@ -732,26 +757,26 @@ async def agentic_rag_pipeline(
     *,
     query: str,
     # data sources
-    sources: Optional[List[str]] = None,
+    sources: list[str] | None = None,
     media_db: Any = None,
     chacha_db: Any = None,
-    media_db_path: Optional[str] = None,
-    notes_db_path: Optional[str] = None,
-    character_db_path: Optional[str] = None,
-    kanban_db_path: Optional[str] = None,
+    media_db_path: str | None = None,
+    notes_db_path: str | None = None,
+    character_db_path: str | None = None,
+    kanban_db_path: str | None = None,
     # retrieval config
     search_mode: str = "hybrid",
     fts_level: str = "media",
     hybrid_alpha: float = 0.7,
     top_k: int = 10,
     min_score: float = 0.0,
-    index_namespace: Optional[str] = None,
+    index_namespace: str | None = None,
     # agentic config
-    agentic: Optional[AgenticConfig] = None,
+    agentic: AgenticConfig | None = None,
     # generation config passthrough
     enable_generation: bool = True,
-    generation_model: Optional[str] = None,
-    generation_prompt: Optional[str] = None,
+    generation_model: str | None = None,
+    generation_prompt: str | None = None,
     max_generation_tokens: int = 500,
     # misc
     enable_citations: bool = False,
@@ -767,7 +792,7 @@ async def agentic_rag_pipeline(
     claims_top_k: int = 5,
     claims_conf_threshold: float = 0.7,
     claims_max: int = 25,
-    nli_model: Optional[str] = None,
+    nli_model: str | None = None,
     claims_concurrency: int = 8,
     # NLI/low-confidence gate
     adaptive_unsupported_threshold: float = 0.15,
@@ -784,12 +809,12 @@ async def agentic_rag_pipeline(
     try:
         from tldw_Server_API.app.core.config import rag_require_hard_citations as _rag_req_hc
         if not bool(require_hard_citations) and bool(_rag_req_hc(default=False)):
-            require_hard_citations = True  # type: ignore[assignment]
+            require_hard_citations = True
     except Exception:
         pass
 
     # 1) Build retriever
-    db_paths: Dict[str, str] = {}
+    db_paths: dict[str, str] = {}
     if media_db_path:
         db_paths["media_db"] = media_db_path
     if notes_db_path:
@@ -813,7 +838,7 @@ async def agentic_rag_pipeline(
         use_fts=(search_mode in ("fts", "hybrid")),
         use_vector=(search_mode in ("vector", "hybrid")),
         include_metadata=True,
-        fts_level=(fts_level or "media"),
+        fts_level=_normalize_fts_level(fts_level),
     )
 
     # Map source strings to DataSource for retriever
@@ -839,14 +864,15 @@ async def agentic_rag_pipeline(
     # ensures quality-gate tests have at least one document when media exists.
     if (not docs) and media_db_path and search_mode in ("fts", "hybrid"):
         try:
-            from .database_retrievers import MediaDBRetriever as _MDBR, RetrievalConfig as _RCfg
+            from .database_retrievers import MediaDBRetriever as _MDBR
+            from .database_retrievers import RetrievalConfig as _RCfg
             fb_cfg = _RCfg(
                 max_results=max(1, int(top_k or 10)),
                 min_score=float(min_score or 0.0),
                 use_fts=True,
                 use_vector=False,
                 include_metadata=True,
-                fts_level=(fts_level or "media"),
+                fts_level=_normalize_fts_level(fts_level),
             )
             fb_retriever = _MDBR(
                 db_path=media_db_path,
@@ -867,9 +893,11 @@ async def agentic_rag_pipeline(
     if cfg.agentic_enable_vlm_late_chunking and docs:
         try:
             try:
-                from tldw_Server_API.app.core.Ingestion_Media_Processing.VLM.registry import get_backend as _get_vlm_backend
+                from tldw_Server_API.app.core.Ingestion_Media_Processing.VLM.registry import (
+                    get_backend as _get_vlm_backend,
+                )
             except Exception:
-                _get_vlm_backend = lambda name=None: None  # type: ignore
+                _get_vlm_backend = lambda name=None: None
             backend = _get_vlm_backend(cfg.agentic_vlm_backend if cfg.agentic_vlm_backend not in (None, "auto") else None)
             if backend is not None:
                 # Select top-k docs with local PDF path
@@ -887,13 +915,13 @@ async def agentic_rag_pipeline(
                     except Exception:
                         continue
                 sel = sel[: max(1, int(cfg.agentic_vlm_late_chunk_top_k_docs or 1))]
-                added: List[Document] = []
+                added: list[Document] = []
                 for (doc0, pdf_path) in sel:
                     detections = []
                     # Prefer doc-level processing
                     if hasattr(backend, "process_pdf"):
                         res = backend.process_pdf(pdf_path, max_pages=cfg.agentic_vlm_max_pages)
-                        by_page = []
+                        by_page: list[dict[str, Any]] = []
                         if isinstance(getattr(res, "extra", None), dict):
                             by_page = res.extra.get("by_page") or []
                         for entry in by_page:
@@ -934,9 +962,10 @@ async def agentic_rag_pipeline(
                         except Exception:
                             pass
                     for idx, dct in enumerate(detections[:100]):
-                        label = dct.get("label", "vlm")
-                        score = dct.get("score", 0.0)
-                        bbox = dct.get("bbox")
+                        label_val = dct.get("label")
+                        label = str(label_val) if label_val is not None else "vlm"
+                        score = _coerce_float(dct.get("score", 0.0))
+                        bbox = dct.get("bbox") or [0.0, 0.0, 0.0, 0.0]
                         page_no = dct.get("page")
                         chunk_text = f"Detected {label} ({score:.2f}) on page {page_no} at {bbox}"
                         added.append(
@@ -982,7 +1011,7 @@ async def agentic_rag_pipeline(
     else:
         cached_hit = False
         # 4) Assemble ephemeral chunk (either tools or heuristics)
-        tool_trace: List[Dict[str, Any]] = []
+        tool_trace: list[dict[str, Any]] = []
         if cfg.enable_tools:
             chunk_text, prov, tool_trace = await _tool_loop(docs, query, cfg)
         else:
@@ -1035,7 +1064,7 @@ async def agentic_rag_pipeline(
         term_hits = sum(1 for t in terms if t in (chunk_text or "").lower())
         coverage = (term_hits / max(1, len(terms)))
         uniq_docs = len({str(p.get("document_id")) for p in (prov or []) if isinstance(p, dict)})
-        per_doc: Dict[str, List[Tuple[int, int]]] = {}
+        per_doc: dict[str, list[tuple[int, int]]] = {}
         for p in (prov or []):
             try:
                 per_doc.setdefault(str(p.get("document_id")), []).append((int(p.get("start", 0)), int(p.get("end", 0))))
@@ -1045,15 +1074,15 @@ async def agentic_rag_pipeline(
         merged = 0
         for _doc_id, ranges in per_doc.items():
             ranges = sorted(ranges, key=lambda x: x[0])
-            raw += sum(e - s for s, e in ranges)
-            merged_ranges: List[Tuple[int, int]] = []
-            for s, e in ranges:
-                if not merged_ranges or s > merged_ranges[-1][1]:
-                    merged_ranges.append((s, e))
+            raw += sum(end_pos - start_pos for start_pos, end_pos in ranges)
+            merged_ranges: list[tuple[int, int]] = []
+            for start_pos, end_pos in ranges:
+                if not merged_ranges or start_pos > merged_ranges[-1][1]:
+                    merged_ranges.append((start_pos, end_pos))
                 else:
                     ps, pe = merged_ranges[-1]
-                    merged_ranges[-1] = (ps, max(pe, e))
-            merged += sum(e - s for s, e in merged_ranges)
+                    merged_ranges[-1] = (ps, max(pe, end_pos))
+            merged += sum(end_pos - start_pos for start_pos, end_pos in merged_ranges)
         redundancy = 1.0 - (merged / max(1, raw))
         result.metadata.setdefault("agentic_metrics", {})
         result.metadata["agentic_metrics"].update({
@@ -1106,11 +1135,12 @@ async def agentic_rag_pipeline(
         # Optional claims verification (NLI/LLM) constrained to assembled spans
         if enable_claims:
             try:
-                import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
+                import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
+
                 from .claims import ClaimsEngine
-                def _analyze(api_name: str, input_data: Any, custom_prompt_arg: Optional[str] = None,
-                             api_key: Optional[str] = None, system_message: Optional[str] = None,
-                             temp: Optional[float] = None, **kwargs):
+                def _analyze(api_name: str, input_data: Any, custom_prompt_arg: str | None = None,
+                             api_key: str | None = None, system_message: str | None = None,
+                             temp: float | None = None, **kwargs):
                     return sgl.analyze(api_name, input_data, custom_prompt_arg, api_key, system_message, temp, **kwargs)
                 engine = ClaimsEngine(_analyze)
                 async def _retrieve_for_claim(_c_text: str, top_k: int = 3):
@@ -1156,7 +1186,7 @@ async def agentic_rag_pipeline(
     # Numeric fidelity check and optional mitigation
         try:
             from .guardrails import check_numeric_fidelity
-            if enable_numeric_fidelity and check_numeric_fidelity:
+            if enable_numeric_fidelity:
                 nf = check_numeric_fidelity(result.generated_answer, [synthetic])
                 if nf:
                     result.metadata.setdefault("numeric_fidelity", {})
@@ -1175,7 +1205,14 @@ async def agentic_rag_pipeline(
                             try:
                                 if media_db_path:
                                     mdr = MultiDatabaseRetriever({"media_db": media_db_path}, user_id="rag_agentic", media_db=media_db, chacha_db=chacha_db)
-                                    conf = RetrievalConfig(max_results=min(10, top_k), min_score=min_score, use_fts=True, use_vector=True, include_metadata=True, fts_level=fts_level)
+                                    conf = RetrievalConfig(
+                                        max_results=min(10, top_k),
+                                        min_score=min_score,
+                                        use_fts=True,
+                                        use_vector=True,
+                                        include_metadata=True,
+                                        fts_level=_normalize_fts_level(fts_level),
+                                    )
                                     added = []
                                     for tok in list(nf.missing)[:3]:
                                         try:
@@ -1183,7 +1220,7 @@ async def agentic_rag_pipeline(
                                         except Exception:
                                             continue
                                     if added:
-                                        by_id: Dict[str, Document] = {getattr(d, 'id', ''): d for d in (result.documents or [])}
+                                        by_id: dict[str, Document] = {getattr(d, 'id', ''): d for d in (result.documents or [])}
                                         for d in added:
                                             cur = by_id.get(getattr(d, 'id', ''))
                                             if cur is None or float(getattr(d, 'score', 0.0)) > float(getattr(cur, 'score', 0.0)):
@@ -1224,7 +1261,7 @@ async def agentic_rag_pipeline(
                 })
                 # Gauge and gate behavior
                 try:
-                    from tldw_Server_API.app.core.Metrics.metrics_manager import set_gauge, increment_counter
+                    from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter, set_gauge
                     set_gauge("rag_nli_unsupported_ratio", float(vres.unsupported_ratio or 0.0), labels={"strategy": "agentic"})
                 except Exception:
                     pass
@@ -1272,13 +1309,13 @@ async def agentic_rag_pipeline(
             import re as _re
             sents = [s.strip() for s in _re.split(r"(?<=[\.!?])\s+", result.generated_answer.strip()) if s.strip()]
             chunk = synthetic.content or ""
-            def _find_off(full: str, t: str) -> Tuple[int, int]:
+            def _find_off(full: str, t: str) -> tuple[int, int]:
                 i = full.find(t)
                 return (i, i + len(t)) if i >= 0 else (0, 0)
-            entries: List[Dict[str, Any]] = []
-            for s in sents:
-                st, en = _find_off(chunk, s)
-                entry = {"text": s, "citations": []}
+            entries: list[dict[str, Any]] = []
+            for sent in sents:
+                st, en = _find_off(chunk, sent)
+                entry = {"text": sent, "citations": []}
                 if en > st:
                     entry["citations"].append({
                         "doc_id": synthetic.id,

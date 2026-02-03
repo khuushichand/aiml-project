@@ -1,14 +1,12 @@
 # prompt_studio_optimization.py
 # Optimization and job queue schemas for Prompt Studio
 
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime
+from typing import Any, Optional
 
-from .prompt_studio_base import (
-    TimestampMixin, UUIDMixin,
-    JobType, JobStatus, EvaluationStatus
-)
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from .prompt_studio_base import JobStatus, JobType, TimestampMixin, UUIDMixin
 
 ########################################################################################################################
 # Optimization Schemas
@@ -30,12 +28,12 @@ class OptimizationConfig(BaseModel):
     target_value: Optional[float] = Field(None, description="Target metric value to achieve")
     early_stopping: bool = Field(default=True, description="Enable early stopping")
     early_stopping_patience: int = Field(default=5, ge=1, description="Iterations without improvement before stopping")
-    temperature_range: List[float] = Field(default=[0.0, 1.0], description="Temperature range to explore")
-    techniques_to_try: List[str] = Field(default=["cot", "few_shot"], description="Prompt techniques to try")
-    models_to_test: Optional[List[str]] = Field(None, description="Models to test during optimization")
+    temperature_range: list[float] = Field(default=[0.0, 1.0], description="Temperature range to explore")
+    techniques_to_try: list[str] = Field(default=["cot", "few_shot"], description="Prompt techniques to try")
+    models_to_test: Optional[list[str]] = Field(None, description="Models to test during optimization")
     budget_limit: Optional[float] = Field(None, ge=0.0, description="Maximum budget in dollars")
     # Strategy-specific knobs (optional, forward-compatible)
-    strategy_params: Dict[str, Any] = Field(default_factory=dict, description="Additional strategy-specific parameters (e.g., beam_width, mutation_rate)")
+    strategy_params: dict[str, Any] = Field(default_factory=dict, description="Additional strategy-specific parameters (e.g., beam_width, mutation_rate)")
 
     @field_validator('temperature_range')
     @classmethod
@@ -59,7 +57,7 @@ class OptimizationCreate(BaseModel):
     initial_prompt_id: int
     optimization_config: OptimizationConfig
     bootstrap_config: Optional[BootstrapConfig] = None
-    test_case_ids: Optional[List[int]] = Field(None, description="Specific test cases to optimize against")
+    test_case_ids: Optional[list[int]] = Field(None, description="Specific test cases to optimize against")
     name: Optional[str] = Field(None, max_length=255, description="Optimization run name")
     description: Optional[str] = Field(None, max_length=1000, description="Optimization run description")
 
@@ -70,9 +68,9 @@ class OptimizationResponse(TimestampMixin, UUIDMixin):
     initial_prompt_id: int
     optimized_prompt_id: Optional[int]
     optimizer_type: str
-    optimization_config: Dict[str, Any]
-    initial_metrics: Optional[Dict[str, Any]]
-    final_metrics: Optional[Dict[str, Any]]
+    optimization_config: dict[str, Any]
+    initial_metrics: Optional[dict[str, Any]]
+    final_metrics: Optional[dict[str, Any]]
     improvement_percentage: Optional[float]
     iterations_completed: Optional[int]
     max_iterations: int
@@ -100,8 +98,8 @@ class OptimizationStatusResponse(BaseModel):
 class OptimizationIteration(BaseModel):
     """Single iteration of optimization"""
     iteration_number: int
-    prompt_variant: Dict[str, Any]
-    metrics: Dict[str, float]
+    prompt_variant: dict[str, Any]
+    metrics: dict[str, float]
     tokens_used: int
     cost: float
     timestamp: datetime
@@ -109,9 +107,9 @@ class OptimizationIteration(BaseModel):
 class OptimizationHistory(BaseModel):
     """Optimization history"""
     optimization_id: int
-    iterations: List[OptimizationIteration]
+    iterations: list[OptimizationIteration]
     best_iteration: int
-    convergence_data: Dict[str, Any]
+    convergence_data: dict[str, Any]
 
 ########################################################################################################################
 # Job Queue Schemas
@@ -121,7 +119,7 @@ class JobCreate(BaseModel):
     job_type: JobType
     entity_id: int = Field(..., description="ID of entity (evaluation, optimization, etc.)")
     priority: int = Field(default=5, ge=1, le=10, description="Job priority (1=lowest, 10=highest)")
-    payload: Dict[str, Any] = Field(..., description="Job-specific payload")
+    payload: dict[str, Any] = Field(..., description="Job-specific payload")
     max_retries: int = Field(default=3, ge=0, le=10, description="Maximum retry attempts")
 
 class JobResponse(TimestampMixin, UUIDMixin):
@@ -131,8 +129,8 @@ class JobResponse(TimestampMixin, UUIDMixin):
     entity_id: int
     priority: int
     status: JobStatus
-    payload: Dict[str, Any]
-    result: Optional[Dict[str, Any]]
+    payload: dict[str, Any]
+    result: Optional[dict[str, Any]]
     error_message: Optional[str]
     retry_count: int
     max_retries: int
@@ -152,7 +150,7 @@ class JobStatusResponse(BaseModel):
 
 class JobListResponse(BaseModel):
     """Job list response"""
-    jobs: List[JobResponse]
+    jobs: list[JobResponse]
     queued_count: int
     processing_count: int
     completed_count: int
@@ -167,6 +165,7 @@ class JobCancelRequest(BaseModel):
 
 from enum import Enum
 
+
 class ModuleType(str, Enum):
     """Available prompt modules"""
     CHAIN_OF_THOUGHT = "chain_of_thought"
@@ -180,13 +179,13 @@ class ModuleConfig(BaseModel):
     """Module configuration"""
     module_type: ModuleType
     enabled: bool = True
-    parameters: Dict[str, Any] = Field(default_factory=dict)
+    parameters: dict[str, Any] = Field(default_factory=dict)
     priority: int = Field(default=5, ge=1, le=10)
 
 class ModuleLibrary(BaseModel):
     """Available modules library"""
-    modules: List[ModuleConfig]
-    presets: Dict[str, List[ModuleConfig]]
+    modules: list[ModuleConfig]
+    presets: dict[str, list[ModuleConfig]]
 
 ########################################################################################################################
 # Cost Analysis Schemas
@@ -195,14 +194,14 @@ class CostEstimate(BaseModel):
     """Cost estimate for an operation"""
     estimated_tokens: int
     estimated_cost: float
-    cost_breakdown: Dict[str, float]
-    model_pricing: Dict[str, float]
+    cost_breakdown: dict[str, float]
+    model_pricing: dict[str, float]
 
 class CostAnalysisRequest(BaseModel):
     """Request for cost analysis"""
     project_id: int
     prompt_id: Optional[int] = None
-    test_case_ids: Optional[List[int]] = None
+    test_case_ids: Optional[list[int]] = None
     model_name: str
     include_optimization: bool = Field(default=False)
     optimization_iterations: int = Field(default=50)
@@ -212,5 +211,5 @@ class CostAnalysisResponse(BaseModel):
     total_estimated_cost: float
     cost_per_test_case: float
     cost_per_optimization_iteration: Optional[float] = None
-    recommendations: List[str]
-    alternative_models: Dict[str, float]
+    recommendations: list[str]
+    alternative_models: dict[str, float]

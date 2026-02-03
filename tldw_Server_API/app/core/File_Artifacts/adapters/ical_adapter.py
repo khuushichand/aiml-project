@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from typing import Any, ClassVar, Dict, List, Optional, Tuple
-from zoneinfo import ZoneInfo
 import re
+from datetime import date, datetime, timedelta
+from typing import Any, ClassVar
+from zoneinfo import ZoneInfo
 
-from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult, ValidationIssue
 from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
+from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult, ValidationIssue
 
 
 class IcalAdapter:
@@ -17,7 +17,7 @@ class IcalAdapter:
     export_formats: ClassVar[set[str]] = {"ics"}
     _UTC_EQUIVALENTS: ClassVar[set[str]] = {"UTC", "ETC/UTC", "ETC/GMT", "GMT", "Z"}
 
-    def normalize(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def normalize(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Normalize calendar payload shape and apply default values."""
         calendar = payload.get("calendar")
         if not isinstance(calendar, dict):
@@ -41,9 +41,9 @@ class IcalAdapter:
             }
         }
 
-    def validate(self, structured: Dict[str, Any]) -> List[ValidationIssue]:
+    def validate(self, structured: dict[str, Any]) -> list[ValidationIssue]:
         """Validate a structured calendar payload and return issues."""
-        issues: List[ValidationIssue] = []
+        issues: list[ValidationIssue] = []
         calendar = structured.get("calendar")
         if not isinstance(calendar, dict):
             return [ValidationIssue(code="calendar_required", message="calendar must be an object", path="calendar")]
@@ -119,7 +119,7 @@ class IcalAdapter:
             )
         return issues
 
-    def export(self, structured: Dict[str, Any], *, format: str) -> ExportResult:
+    def export(self, structured: dict[str, Any], *, format: str) -> ExportResult:
         """Export the structured payload as an ICS file."""
         if format != "ics":
             raise FileArtifactsValidationError("unsupported_format")
@@ -144,12 +144,12 @@ class IcalAdapter:
     def _parse_event_datetime(
         self,
         raw: Any,
-        tzid: Optional[str],
+        tzid: str | None,
         *,
         path: str,
-    ) -> Tuple[datetime | date | None, List[ValidationIssue]]:
+    ) -> tuple[datetime | date | None, list[ValidationIssue]]:
         """Parse event date/datetime values and collect validation issues."""
-        issues: List[ValidationIssue] = []
+        issues: list[ValidationIssue] = []
         if raw is None:
             return None, issues
         if not isinstance(raw, str):
@@ -259,7 +259,7 @@ class IcalAdapter:
         sign = -1 if match.group("sign") == "-" else 1
         return timedelta(hours=sign * hours, minutes=sign * minutes)
 
-    def _build_calendar(self, structured: Dict[str, Any]):
+    def _build_calendar(self, structured: dict[str, Any]):
         """Build an icalendar.Calendar from a structured payload."""
         try:
             from icalendar import Calendar, Event

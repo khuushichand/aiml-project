@@ -18,13 +18,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.exceptions import StoragePathValidationError
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.exceptions import StoragePathValidationError
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.services.outputs_service import normalize_output_storage_path
 
@@ -159,7 +158,7 @@ async def _purge_for_user(user_id: int, delete_files: bool, grace_days: int) -> 
     return removed, files_deleted
 
 
-async def start_outputs_purge_scheduler() -> Optional[asyncio.Task]:
+async def start_outputs_purge_scheduler() -> asyncio.Task | None:
     enabled = os.getenv("OUTPUTS_PURGE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     if not enabled:
         return None

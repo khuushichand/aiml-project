@@ -5,11 +5,9 @@ import json
 import os
 import tempfile
 import threading
-from typing import Optional
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
 from tldw_Server_API.app.core.Utils.Utils import logging
-
 
 _TF_MODEL = None
 _TF_TOKENIZER = None
@@ -81,7 +79,7 @@ class PointsReaderBackend(OCRBackend):
             })
         return info
 
-    def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
+    def ocr_image(self, image_bytes: bytes, lang: str | None = None) -> str:
         if not self.available():
             logging.warning("PointsReaderBackend not available: install 'transformers'+'torch' or set up SGLang (requests)")
             return ""
@@ -178,8 +176,8 @@ def _load_transformers():
     with _TF_LOCK:
         if _TF_MODEL is not None and _TF_TOKENIZER is not None and _TF_IMAGE_PROCESSOR is not None:
             return _TF_MODEL, _TF_TOKENIZER, _TF_IMAGE_PROCESSOR
-        from transformers import AutoModelForCausalLM, AutoTokenizer, Qwen2VLImageProcessor
         import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer, Qwen2VLImageProcessor
 
         model_path = os.getenv("POINTS_MODEL_PATH", "tencent/POINTS-Reader")
         # device and dtype selection

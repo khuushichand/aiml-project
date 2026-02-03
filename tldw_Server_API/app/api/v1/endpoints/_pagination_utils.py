@@ -7,22 +7,21 @@ This module is intentionally lightweight and dependency-free, so it can be
 used across endpoints (e.g., runs, events, future artifacts listings).
 """
 
-from typing import List, Optional, Tuple
 
 import urllib.parse as _u
 
 
 def build_link_header(
     base_path: str,
-    common_params: List[Tuple[str, str]] | None = None,
+    common_params: list[tuple[str, str]] | None = None,
     *,
-    next_cursor: Optional[str] = None,
-    limit: Optional[int] = None,
-    offset: Optional[int] = None,
-    has_more: Optional[bool] = None,
+    next_cursor: str | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+    has_more: bool | None = None,
     cursor_param: str = "cursor",
     include_first_last: bool = True,
-) -> Optional[str]:
+) -> str | None:
     """Build an RFC5988 Link header string for pagination.
 
     - Cursor mode: when `next_cursor` is provided, returns a `rel="next"` link using
@@ -55,8 +54,8 @@ def build_link_header(
         '</api/v1/workflows/runs?status=running&limit=25&offset=25>; rel="prev", '
         '</api/v1/workflows/runs?status=running&limit=25&offset=0>; rel="first"'
     """
-    params_common: List[Tuple[str, str]] = list(common_params or [])
-    links: List[str] = []
+    params_common: list[tuple[str, str]] = list(common_params or [])
+    links: list[str] = []
 
     # Cursor-based next link
     if next_cursor:

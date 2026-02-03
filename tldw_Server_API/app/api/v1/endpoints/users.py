@@ -2,46 +2,18 @@
 # Description: User management endpoints for profile, password, and session management
 #
 # Imports
-from typing import Dict, Any, List, Optional
-from pydantic import BaseModel, Field
-from datetime import datetime, timezone, timedelta
 import os
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
 #
 # 3rd-party imports
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Header, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from loguru import logger
-#
-# Local imports
-from tldw_Server_API.app.api.v1.schemas.auth_schemas import (
-    UserResponse,
-    DeprecatedUserResponse,
-    UpdateProfileRequest,
-    PasswordChangeRequest,
-    MessageResponse,
-    SessionResponse,
-    StorageQuotaResponse
-)
-from tldw_Server_API.app.api.v1.schemas.user_profile_schemas import (
-    UserProfileCatalogResponse,
-    UserProfileResponse,
-    UserProfileUpdateRequest,
-    UserProfileUpdateResponse,
-    UserProfileUpdateError,
-    UserProfileErrorResponse,
-    UserProfileErrorDetail,
-)
-from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
-    APIKeyCreateRequest,
-    APIKeyCreateResponse,
-    APIKeyRotateRequest,
-    APIKeyMetadata,
-)
-from tldw_Server_API.app.api.v1.utils.cache import generate_etag, is_not_modified
-from tldw_Server_API.app.api.v1.utils.profile_errors import (
-    classify_profile_update_skips,
-)
+from pydantic import BaseModel, Field
+
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_current_active_user,
     get_db_transaction,
@@ -50,21 +22,51 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_storage_service_dep,
     require_api_key_scope,
 )
-from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
-from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
-from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
-from tldw_Server_API.app.core.AuthNZ.exceptions import (
-    InvalidCredentialsError,
-    WeakPasswordError,
+from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
+    APIKeyCreateRequest,
+    APIKeyCreateResponse,
+    APIKeyMetadata,
+    APIKeyRotateRequest,
+)
+
+#
+# Local imports
+from tldw_Server_API.app.api.v1.schemas.auth_schemas import (
+    DeprecatedUserResponse,
+    MessageResponse,
+    PasswordChangeRequest,
+    SessionResponse,
+    StorageQuotaResponse,
+    UpdateProfileRequest,
+)
+from tldw_Server_API.app.api.v1.schemas.user_profile_schemas import (
+    UserProfileCatalogResponse,
+    UserProfileErrorDetail,
+    UserProfileErrorResponse,
+    UserProfileResponse,
+    UserProfileUpdateError,
+    UserProfileUpdateRequest,
+    UserProfileUpdateResponse,
+)
+from tldw_Server_API.app.api.v1.utils.cache import generate_etag, is_not_modified
+from tldw_Server_API.app.api.v1.utils.profile_errors import (
+    classify_profile_update_skips,
 )
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.exceptions import (
+    WeakPasswordError,
+)
+from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
-from tldw_Server_API.app.core.UserProfiles.user_profile_catalog import load_user_profile_catalog
-from tldw_Server_API.app.core.UserProfiles.update_service import UserProfileUpdateService
+from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.core.UserProfiles.service import UserProfileService
+from tldw_Server_API.app.core.UserProfiles.update_service import UserProfileUpdateService
+from tldw_Server_API.app.core.UserProfiles.user_profile_catalog import load_user_profile_catalog
+from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
 
-def _build_deprecation_headers(successor: str) -> Dict[str, str]:
+
+def _build_deprecation_headers(successor: str) -> dict[str, str]:
     try:
         sunset_days = int(os.getenv("DEPRECATION_SUNSET_DAYS", "120"))
         sunset = (datetime.now(timezone.utc) + timedelta(days=sunset_days)).strftime(
@@ -84,7 +86,7 @@ def _legacy_user_me_enabled() -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _legacy_warning_payload(successor: str) -> Dict[str, str]:
+def _legacy_warning_payload(successor: str) -> dict[str, str]:
     return {"warning": "deprecated_endpoint", "successor": successor}
 
 
@@ -93,7 +95,7 @@ def _profile_error_response(
     status_code: int,
     error_code: str,
     detail: str,
-    errors: Optional[List[UserProfileErrorDetail]] = None,
+    errors: Optional[list[UserProfileErrorDetail]] = None,
 ) -> JSONResponse:
     payload = UserProfileErrorResponse(
         error_code=error_code,
@@ -107,7 +109,7 @@ async def _emit_user_profile_audit_event(
     request: Request,
     *,
     user_id: int,
-    update_keys: List[str],
+    update_keys: list[str],
     applied_count: int,
     skipped_count: int,
     dry_run: bool,
@@ -175,7 +177,7 @@ router = APIRouter(
 
 @router.get("/profile/catalog", response_model=UserProfileCatalogResponse)
 async def get_user_profile_catalog(
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     if_none_match: Optional[str] = Header(None),
 ) -> Response:
     """
@@ -211,7 +213,7 @@ async def get_current_user_profile_view(
     mask_secrets: bool = Query(
         True, description="Mask secret values in the response"
     ),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     session_manager: SessionManager = Depends(get_session_manager_dep),
 ) -> UserProfileResponse:
     """
@@ -228,7 +230,7 @@ async def get_current_user_profile_view(
     user = await repo.get_user_by_id(int(current_user["id"]))
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    user_dict: Dict[str, Any] = dict(user)
+    user_dict: dict[str, Any] = dict(user)
     user_dict.pop("password_hash", None)
     requested = service.parse_sections(sections)
     api_mgr = await get_api_key_manager()
@@ -253,7 +255,7 @@ async def get_current_user_profile_view(
 async def update_current_user_profile(
     payload: UserProfileUpdateRequest,
     http_request: Request,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     db=Depends(get_db_transaction),
 ) -> UserProfileUpdateResponse:
     """
@@ -339,7 +341,7 @@ async def update_current_user_profile(
 
 @router.get("/me", response_model=DeprecatedUserResponse, deprecated=True)
 async def get_current_user_profile(
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     response: Response = None,
 ) -> DeprecatedUserResponse:
     """
@@ -381,7 +383,7 @@ async def get_current_user_profile(
 @router.put("/me", response_model=DeprecatedUserResponse, deprecated=True)
 async def update_user_profile(
     request: UpdateProfileRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     db=Depends(get_db_transaction),
     response: Response = None,
 ) -> DeprecatedUserResponse:
@@ -465,7 +467,7 @@ async def update_user_profile(
 @router.post("/change-password", response_model=MessageResponse)
 async def change_password(
     request: PasswordChangeRequest,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     password_service: PasswordService = Depends(get_password_service_dep),
     db=Depends(get_db_transaction)
 ) -> MessageResponse:
@@ -576,7 +578,7 @@ async def change_password(
     dependencies=[Depends(require_api_key_scope("read"))],
 )
 async def list_api_keys(
-    current_user: Dict[str, Any] = Depends(get_current_active_user)
+    current_user: dict[str, Any] = Depends(get_current_active_user)
 ) -> list[APIKeyMetadata]:
     """List active API keys for the current user (metadata only)."""
     api_mgr = await get_api_key_manager()
@@ -594,7 +596,7 @@ async def list_api_keys(
 async def create_api_key(
     payload: APIKeyCreateRequest,
     request: Request,
-    current_user: Dict[str, Any] = Depends(get_current_active_user)
+    current_user: dict[str, Any] = Depends(get_current_active_user)
 ) -> APIKeyCreateResponse:
     """Create a new API key for the current user and return the key once."""
     api_mgr = await get_api_key_manager()
@@ -612,10 +614,10 @@ class SelfVirtualAPIKeyRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     expires_in_days: Optional[int] = Field(30, ge=1)
-    allowed_endpoints: Optional[List[str]] = None
+    allowed_endpoints: Optional[list[str]] = None
     # Generic constraints
-    allowed_methods: Optional[List[str]] = None
-    allowed_paths: Optional[List[str]] = None
+    allowed_methods: Optional[list[str]] = None
+    allowed_paths: Optional[list[str]] = None
     max_calls: Optional[int] = Field(None, ge=0)
     max_runs: Optional[int] = Field(None, ge=0)
     # Optional LLM budgets (if used by client tools)
@@ -634,7 +636,7 @@ class SelfVirtualAPIKeyRequest(BaseModel):
 async def create_virtual_api_key(
     payload: SelfVirtualAPIKeyRequest,
     request: Request,
-    current_user: Dict[str, Any] = Depends(get_current_active_user)
+    current_user: dict[str, Any] = Depends(get_current_active_user)
 ) -> APIKeyCreateResponse:
     """Create a constrained (virtual/burnable) API key for the current user."""
     api_mgr = await get_api_key_manager()
@@ -665,7 +667,7 @@ async def rotate_api_key(
     key_id: int,
     payload: APIKeyRotateRequest,
     request: Request,
-    current_user: Dict[str, Any] = Depends(get_current_active_user)
+    current_user: dict[str, Any] = Depends(get_current_active_user)
 ) -> APIKeyCreateResponse:
     """Rotate an API key (revoke old; create new) and return the new key once."""
     api_mgr = await get_api_key_manager()
@@ -685,7 +687,7 @@ async def rotate_api_key(
 async def revoke_api_key(
     key_id: int,
     request: Request,
-    current_user: Dict[str, Any] = Depends(get_current_active_user)
+    current_user: dict[str, Any] = Depends(get_current_active_user)
 ) -> MessageResponse:
     """Revoke an API key for the current user."""
     api_mgr = await get_api_key_manager()
@@ -699,11 +701,11 @@ async def revoke_api_key(
 #
 # Session Management
 
-@router.get("/sessions", response_model=List[SessionResponse])
+@router.get("/sessions", response_model=list[SessionResponse])
 async def list_user_sessions(
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     session_manager: SessionManager = Depends(get_session_manager_dep)
-) -> List[SessionResponse]:
+) -> list[SessionResponse]:
     """
     List all active sessions for the current user.
 
@@ -721,7 +723,7 @@ async def list_user_sessions(
 @router.delete("/sessions/{session_id}", response_model=MessageResponse)
 async def revoke_session(
     session_id: int,
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     session_manager: SessionManager = Depends(get_session_manager_dep)
 ) -> MessageResponse:
     """
@@ -749,7 +751,7 @@ async def revoke_session(
 
 @router.post("/sessions/revoke-all", response_model=MessageResponse)
 async def revoke_all_sessions(
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     session_manager: SessionManager = Depends(get_session_manager_dep)
 ) -> MessageResponse:
     """
@@ -774,7 +776,7 @@ async def revoke_all_sessions(
 
 @router.get("/storage", response_model=StorageQuotaResponse)
 async def get_storage_quota(
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     storage_service: StorageQuotaService = Depends(get_storage_service_dep)
 ) -> StorageQuotaResponse:
     """
@@ -812,7 +814,7 @@ async def get_storage_quota(
 
 @router.post("/storage/recalculate", response_model=StorageQuotaResponse)
 async def recalculate_storage(
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
     storage_service: StorageQuotaService = Depends(get_storage_service_dep)
 ) -> StorageQuotaResponse:
     """

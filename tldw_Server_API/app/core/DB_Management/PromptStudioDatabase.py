@@ -3,16 +3,17 @@
 # Extends PromptsDatabase to add Prompt Studio specific functionality
 
 import json
-import os
 import re
 import sqlite3
 import threading
 import uuid
+from collections.abc import Iterable
 from configparser import ConfigParser
 from contextlib import contextmanager
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
+
 try:  # psycopg v3 preferred; fall back to psycopg2 if installed
     from psycopg import sql as psycopg_sql  # type: ignore
 except Exception:  # pragma: no cover
@@ -23,24 +24,24 @@ except Exception:  # pragma: no cover
 
 from loguru import logger
 
-# Local imports
-from .Prompts_DB import PromptsDatabase, DatabaseError, SchemaError, InputError, ConflictError
 from .backends.base import (
     BackendType,
     DatabaseBackend,
-    DatabaseError as BackendDatabaseError,
     QueryResult,
 )
+from .backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
+from .backends.fts_translator import FTSQueryTranslator
 from .backends.query_utils import (
-    convert_sqlite_placeholders_to_postgres,
-    normalise_params,
     prepare_backend_many_statement,
     prepare_backend_statement,
     replace_collate_nocase,
     replace_insert_or_ignore,
-    transform_sqlite_query_for_postgres,
 )
-from .backends.fts_translator import FTSQueryTranslator
+
+# Local imports
+from .Prompts_DB import ConflictError, DatabaseError, InputError, PromptsDatabase, SchemaError
 
 
 def _serialise_tags(tags: Optional[Union[str, Iterable[str]]]) -> Optional[str]:
@@ -64,7 +65,7 @@ def _serialise_tags(tags: Optional[Union[str, Iterable[str]]]) -> Optional[str]:
         return None
 
 
-def _parse_tags(value: Any) -> List[str]:
+def _parse_tags(value: Any) -> list[str]:
     """Convert stored tag payloads into a list representation."""
 
     if value is None:
@@ -87,7 +88,7 @@ def _parse_tags(value: Any) -> List[str]:
     return []
 
 
-def _format_test_case_record(record: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _format_test_case_record(record: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
     """Normalise Prompt Studio test case payloads for caller consumption."""
 
     if record is None:
@@ -122,7 +123,7 @@ class PromptStudioRowAdapter:
 
     __slots__ = ("_mapping", "_columns")
 
-    def __init__(self, mapping: Dict[str, Any], columns: Tuple[str, ...]):
+    def __init__(self, mapping: dict[str, Any], columns: tuple[str, ...]):
         self._mapping = mapping
         self._columns = columns
 
@@ -148,7 +149,7 @@ class PromptStudioRowAdapter:
         for column in self._columns:
             yield self._mapping.get(column)
 
-    def keys(self) -> Tuple[str, ...]:
+    def keys(self) -> tuple[str, ...]:
         return self._columns
 
     def items(self):
@@ -158,7 +159,7 @@ class PromptStudioRowAdapter:
     def get(self, key: str, default: Any = None) -> Any:
         return self._mapping.get(key, default)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return dict(self._mapping)
 
 
@@ -171,7 +172,7 @@ class PromptStudioBackendCursorAdapter:
         self.rowcount = result.rowcount
         self.lastrowid = result.lastrowid
         self.description = result.description or []
-        self._columns: Tuple[str, ...] = tuple(
+        self._columns: tuple[str, ...] = tuple(
             (
                 desc[0]
                 if isinstance(desc, (list, tuple)) and desc
@@ -199,12 +200,12 @@ class PromptStudioBackendCursorAdapter:
         self._index += 1
         return self._wrap_row(row)
 
-    def fetchall(self) -> List[PromptStudioRowAdapter]:
+    def fetchall(self) -> list[PromptStudioRowAdapter]:
         rows = self._result.rows[self._index :]
         self._index = len(self._result.rows)
         return [self._wrap_row(row) for row in rows]
 
-    def fetchmany(self, size: Optional[int] = None) -> List[PromptStudioRowAdapter]:
+    def fetchmany(self, size: Optional[int] = None) -> list[PromptStudioRowAdapter]:
         if size is None or size <= 0:
             size = len(self._result.rows) - self._index
         end = min(self._index + size, len(self._result.rows))
@@ -231,9 +232,9 @@ class PromptStudioBackendCursorWrapper:
         self.rowcount: int = -1
         self.lastrowid: Optional[int] = None
         self.description = None
-        self._columns: Tuple[str, ...] = tuple()
+        self._columns: tuple[str, ...] = tuple()
 
-    def execute(self, query: str, params: Optional[Union[Tuple, List, Dict, Any]] = None):
+    def execute(self, query: str, params: Optional[Union[tuple, list, dict, Any]] = None):
         import sqlite3
 
         prepared_query, prepared_params = self._db._prepare_backend_statement(query, params)
@@ -256,7 +257,7 @@ class PromptStudioBackendCursorWrapper:
         self._columns = self._adapter._columns
         return self
 
-    def executemany(self, query: str, params_list: List[Union[Tuple, List, Dict, Any]]):
+    def executemany(self, query: str, params_list: list[Union[tuple, list, dict, Any]]):
         import sqlite3
 
         prepared_query, prepared_params_list = self._db._prepare_backend_many_statement(query, params_list)
@@ -279,14 +280,14 @@ class PromptStudioBackendCursorWrapper:
         self._columns = self._adapter._columns
         return self
 
-    def fetchone(self) -> Optional[Dict[str, Any]]:
+    def fetchone(self) -> Optional[dict[str, Any]]:
         row = self._adapter.fetchone() if self._adapter else None
         return row
 
-    def fetchall(self) -> List[Dict[str, Any]]:
+    def fetchall(self) -> list[dict[str, Any]]:
         return self._adapter.fetchall() if self._adapter else []
 
-    def fetchmany(self, size: Optional[int] = None) -> List[Dict[str, Any]]:
+    def fetchmany(self, size: Optional[int] = None) -> list[dict[str, Any]]:
         return self._adapter.fetchmany(size) if self._adapter else []
 
     def close(self) -> None:
@@ -309,11 +310,11 @@ class PromptStudioBackendConnectionWrapper:
     def cursor(self):
         return PromptStudioBackendCursorWrapper(self._db, self.raw_connection)
 
-    def execute(self, query: str, params: Optional[Union[Tuple, List, Dict, Any]] = None):
+    def execute(self, query: str, params: Optional[Union[tuple, list, dict, Any]] = None):
         cursor = self.cursor()
         return cursor.execute(query, params)
 
-    def executemany(self, query: str, params_list: List[Union[Tuple, List, Dict, Any]]):
+    def executemany(self, query: str, params_list: list[Union[tuple, list, dict, Any]]):
         cursor = self.cursor()
         return cursor.executemany(query, params_list)
 
@@ -487,8 +488,8 @@ class BackendPromptStudioDatabaseBase:
     def _prepare_backend_statement(
         self,
         query: str,
-        params: Optional[Union[Tuple, List, Dict, Any]] = None,
-    ) -> Tuple[str, Optional[Union[Tuple, Dict]]]:
+        params: Optional[Union[tuple, list, dict, Any]] = None,
+    ) -> tuple[str, Optional[Union[tuple, dict]]]:
         return prepare_backend_statement(
             self.backend_type,
             query,
@@ -500,8 +501,8 @@ class BackendPromptStudioDatabaseBase:
     def _prepare_backend_many_statement(
         self,
         query: str,
-        params_list: List[Union[Tuple, List, Dict, Any]],
-    ) -> Tuple[str, List[Optional[Union[Tuple, Dict]]]]:
+        params_list: list[Union[tuple, list, dict, Any]],
+    ) -> tuple[str, list[Optional[Union[tuple, dict]]]]:
         return prepare_backend_many_statement(
             self.backend_type,
             query,
@@ -514,7 +515,7 @@ class BackendPromptStudioDatabaseBase:
     def _execute(
         self,
         query: str,
-        params: Optional[Union[Tuple, List, Dict, Any]] = None,
+        params: Optional[Union[tuple, list, dict, Any]] = None,
         *,
         connection: Optional[PromptStudioBackendConnectionWrapper] = None,
     ) -> PromptStudioBackendCursorWrapper:
@@ -525,7 +526,7 @@ class BackendPromptStudioDatabaseBase:
     def _executemany(
         self,
         query: str,
-        params_list: List[Union[Tuple, List, Dict, Any]],
+        params_list: list[Union[tuple, list, dict, Any]],
         *,
         connection: Optional[PromptStudioBackendConnectionWrapper] = None,
     ) -> PromptStudioBackendCursorWrapper:
@@ -605,7 +606,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         }
         self._initialize_schema_postgres()
 
-    def _cursor_exec(self, conn: Any, query: str, params: Optional[Union[Tuple, List, Dict, Any]] = None):
+    def _cursor_exec(self, conn: Any, query: str, params: Optional[Union[tuple, list, dict, Any]] = None):
         """Execute a query using the backend's parameter style.
 
         Converts SQLite-style placeholders to PostgreSQL, then executes using the
@@ -736,9 +737,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
     def get_fts_column(self, table_name: str) -> Optional[str]:
         return getattr(self, "_fts_columns", {}).get(table_name)
 
-    def _convert_sqlite_schema_to_postgres_statements(self, sql: str) -> List[str]:
-        statements: List[str] = []
-        buffer: List[str] = []
+    def _convert_sqlite_schema_to_postgres_statements(self, sql: str) -> list[str]:
+        statements: list[str] = []
+        buffer: list[str] = []
         in_block_comment = False
         in_trigger_block = False
 
@@ -897,7 +898,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
     # indentation/scope issues during import.
 
     # --- Data helpers ---
-    def _row_to_dict(self, cursor, row: Optional[Any] = None) -> Optional[Dict[str, Any]]:
+    def _row_to_dict(self, cursor, row: Optional[Any] = None) -> Optional[dict[str, Any]]:
         if row is None:
             row_obj = cursor
         else:
@@ -940,7 +941,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         return result
 
-    def _log_sync_event(self, entity: str, entity_uuid: str, operation: str, payload: Dict[str, Any]) -> None:
+    def _log_sync_event(self, entity: str, entity_uuid: str, operation: str, payload: dict[str, Any]) -> None:
         if not entity or not entity_uuid or not operation:
             return
         if self._sync_log_available is False:
@@ -1004,9 +1005,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         name: str,
         description: Optional[str] = None,
         status: str = "draft",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
         user_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         # Validate project name
         if not name or not isinstance(name, str):
             raise ValueError("Project name must be a non-empty string")
@@ -1065,9 +1066,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 raise ConflictError(f"Project with name '{name}' already exists for this user") from exc
             raise
 
-    def get_project(self, project_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_project(self, project_id: int, include_deleted: bool = False) -> Optional[dict[str, Any]]:
         clauses = ["id = ?"]
-        params: List[Any] = [project_id]
+        params: list[Any] = [project_id]
         if not include_deleted:
             clauses.append("deleted = FALSE")
         query = (
@@ -1090,9 +1091,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         page: int = 1,
         per_page: int = 20,
         search: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        where_clauses: List[str] = []
-        params: List[Any] = []
+    ) -> dict[str, Any]:
+        where_clauses: list[str] = []
+        params: list[Any] = []
 
         if not include_deleted:
             where_clauses.append("deleted = FALSE")
@@ -1161,7 +1162,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         parent_version_id: Optional[int] = None,
         change_description: Optional[str] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         prompt_uuid = str(uuid.uuid4())
         payload = (
             prompt_uuid,
@@ -1222,10 +1223,10 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 ) from exc
             raise
 
-    def update_project(self, project_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_project(self, project_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         allowed_fields = {"name", "description", "status", "metadata"}
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         # Validate name if being updated
         if "name" in updates:
@@ -1328,7 +1329,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         constraints: Optional[Any] = None,
         validation_rules: Optional[Any] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not name or not str(name).strip():
             raise InputError("Signature name cannot be empty")
 
@@ -1382,9 +1383,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         signature_id: int,
         *,
         include_deleted: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         clauses = ["id = ?"]
-        params: List[Any] = [signature_id]
+        params: list[Any] = [signature_id]
         if not include_deleted:
             clauses.append("deleted = FALSE")
 
@@ -1406,14 +1407,14 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         page: int = 1,
         per_page: int = 20,
         return_pagination: bool = False,
-    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    ) -> Union[dict[str, Any], list[dict[str, Any]]]:
         if page < 1:
             raise InputError("Page index must be >= 1")
         if per_page < 1:
             raise InputError("Items per page must be >= 1")
 
         conditions = ["project_id = ?"]
-        params: List[Any] = [project_id]
+        params: list[Any] = [project_id]
 
         if not include_deleted:
             conditions.append("deleted = FALSE")
@@ -1462,7 +1463,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             }
         return signatures
 
-    def update_signature(self, signature_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_signature(self, signature_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         allowed_fields = {
             "name",
             "input_schema",
@@ -1471,8 +1472,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             "validation_rules",
         }
 
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field not in allowed_fields:
@@ -1565,17 +1566,17 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         prompt_id: int,
         test_case_id: int,
         model_name: str,
-        model_params: Optional[Dict[str, Any]] = None,
-        inputs: Optional[Dict[str, Any]] = None,
-        outputs: Optional[Dict[str, Any]] = None,
-        expected_outputs: Optional[Dict[str, Any]] = None,
-        scores: Optional[Dict[str, Any]] = None,
+        model_params: Optional[dict[str, Any]] = None,
+        inputs: Optional[dict[str, Any]] = None,
+        outputs: Optional[dict[str, Any]] = None,
+        expected_outputs: Optional[dict[str, Any]] = None,
+        scores: Optional[dict[str, Any]] = None,
         execution_time_ms: Optional[int] = None,
         tokens_used: Optional[int] = None,
         cost_estimate: Optional[float] = None,
         error_message: Optional[str] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         run_uuid = str(uuid.uuid4())
         payload = (
             run_uuid,
@@ -1619,7 +1620,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         test_case_ids: Iterable[int],
         *,
         include_deleted: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         identifiers = list(dict.fromkeys(test_case_ids))
         if not identifiers:
             return []
@@ -1645,11 +1646,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         *,
         prompt_id: int,
         project_id: int,
-        model_configs: Optional[Dict[str, Any]] = None,
+        model_configs: Optional[dict[str, Any]] = None,
         status: str = "running",
         test_case_ids: Optional[Iterable[int]] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         evaluation_uuid = str(uuid.uuid4())
         payload = (
             evaluation_uuid,
@@ -1678,7 +1679,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed to create prompt studio evaluation: {exc}") from exc
 
-    def update_evaluation(self, evaluation_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_evaluation(self, evaluation_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         if not updates:
             evaluation = self.get_evaluation(evaluation_id)
             if evaluation is None:
@@ -1686,8 +1687,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             return evaluation
 
         json_fields = {"model_configs", "test_case_ids", "test_run_ids", "aggregate_metrics"}
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field in json_fields and value is not None:
@@ -1717,7 +1718,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed to update evaluation {evaluation_id}: {exc}") from exc
 
-    def get_evaluation(self, evaluation_id: int) -> Optional[Dict[str, Any]]:
+    def get_evaluation(self, evaluation_id: int) -> Optional[dict[str, Any]]:
         try:
             cursor = self._execute(
                 "SELECT * FROM prompt_studio_evaluations WHERE id = ?",
@@ -1736,14 +1737,14 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         status: Optional[str] = None,
         page: int = 1,
         per_page: int = 20,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if page < 1:
             raise InputError("Page index must be >= 1")
         if per_page < 1:
             raise InputError("Items per page must be >= 1")
 
-        conditions: List[str] = []
-        params: List[Any] = []
+        conditions: list[str] = []
+        params: list[Any] = []
 
         if project_id is not None:
             conditions.append("project_id = ?")
@@ -1801,12 +1802,12 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         name: Optional[str],
         initial_prompt_id: Optional[int],
         optimizer_type: str,
-        optimization_config: Optional[Dict[str, Any]] = None,
+        optimization_config: Optional[dict[str, Any]] = None,
         max_iterations: Optional[int] = None,
         bootstrap_samples: Optional[int] = None,
         status: str = "pending",
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         optimization_uuid = str(uuid.uuid4())
         payload = (
             optimization_uuid,
@@ -1866,9 +1867,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         optimization_id: int,
         *,
         include_deleted: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         clauses = ["id = ?"]
-        params: List[Any] = [optimization_id]
+        params: list[Any] = [optimization_id]
         if not include_deleted:
             clauses.append("deleted = FALSE")
 
@@ -1889,14 +1890,14 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         include_deleted: bool = False,
         page: int = 1,
         per_page: int = 20,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if page < 1:
             raise InputError("Page index must be >= 1")
         if per_page < 1:
             raise InputError("Items per page must be >= 1")
 
-        conditions: List[str] = []
-        params: List[Any] = []
+        conditions: list[str] = []
+        params: list[Any] = []
 
         if project_id is not None:
             conditions.append("project_id = ?")
@@ -1947,11 +1948,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
     def update_optimization(
         self,
         optimization_id: int,
-        updates: Dict[str, Any],
+        updates: dict[str, Any],
         *,
         set_started_at: bool = False,
         set_completed_at: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         json_fields = {
             "optimization_config",
             "initial_metrics",
@@ -1959,8 +1960,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             "test_case_ids",
             "test_run_ids",
         }
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field in json_fields and value is not None:
@@ -2030,8 +2031,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         error_message: Optional[str] = None,
         mark_started: bool = False,
         mark_completed: bool = False,
-    ) -> Dict[str, Any]:
-        updates: Dict[str, Any] = {"status": status}
+    ) -> dict[str, Any]:
+        updates: dict[str, Any] = {"status": status}
         if error_message is not None:
             updates["error_message"] = error_message
         return self.update_optimization(
@@ -2047,13 +2048,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         *,
         optimized_prompt_id: Optional[int] = None,
         iterations_completed: Optional[int] = None,
-        initial_metrics: Optional[Dict[str, Any]] = None,
-        final_metrics: Optional[Dict[str, Any]] = None,
+        initial_metrics: Optional[dict[str, Any]] = None,
+        final_metrics: Optional[dict[str, Any]] = None,
         improvement_percentage: Optional[float] = None,
         total_tokens: Optional[int] = None,
         total_cost: Optional[float] = None,
-    ) -> Dict[str, Any]:
-        updates: Dict[str, Any] = {
+    ) -> dict[str, Any]:
+        updates: dict[str, Any] = {
             "status": "completed",
             "optimized_prompt_id": optimized_prompt_id,
             "iterations_completed": iterations_completed,
@@ -2076,12 +2077,12 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         optimization_id: int,
         *,
         iteration_number: int,
-        prompt_variant: Optional[Dict[str, Any]] = None,
-        metrics: Optional[Dict[str, Any]] = None,
+        prompt_variant: Optional[dict[str, Any]] = None,
+        metrics: Optional[dict[str, Any]] = None,
         tokens_used: Optional[int] = None,
         cost: Optional[float] = None,
         note: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         payload = (
             str(uuid.uuid4()),
             optimization_id,
@@ -2126,7 +2127,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         *,
         page: int = 1,
         per_page: int = 50,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """List persisted iterations for an optimization (SQLite backend)."""
         if page < 1:
             raise InputError("Page index must be >= 1")
@@ -2178,7 +2179,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         *,
         page: int = 1,
         per_page: int = 50,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if page < 1:
             raise InputError("Page index must be >= 1")
         if per_page < 1:
@@ -2221,9 +2222,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
     # --- Prompt helpers ---
 
-    def get_prompt(self, prompt_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_prompt(self, prompt_id: int, include_deleted: bool = False) -> Optional[dict[str, Any]]:
         clauses = ["id = ?"]
-        params: List[Any] = [prompt_id]
+        params: list[Any] = [prompt_id]
         if not include_deleted:
             clauses.append("deleted = FALSE")
 
@@ -2245,14 +2246,14 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         page: int = 1,
         per_page: int = 20,
         include_deleted: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if page < 1:
             raise InputError("Page index must be >= 1")
         if per_page < 1:
             raise InputError("Items per page must be >= 1")
 
         base_conditions = ["project_id = ?"]
-        params: List[Any] = [project_id]
+        params: list[Any] = [project_id]
         if not include_deleted:
             base_conditions.append("deleted = FALSE")
 
@@ -2297,9 +2298,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         prompt_name: str,
         *,
         include_deleted: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         conditions = ["project_id = ?", "name = ?"]
-        params: List[Any] = [project_id, prompt_name]
+        params: list[Any] = [project_id, prompt_name]
         if not include_deleted:
             conditions.append("deleted = FALSE")
 
@@ -2381,7 +2382,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         status: str = "queued",
         max_retries: int = 3,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         job_uuid = str(uuid.uuid4())
         payload_json = json.dumps(payload) if payload is not None else json.dumps({})
 
@@ -2414,7 +2415,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 job = self._row_to_dict(cursor, row)
         return job or {}
 
-    def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
+    def get_job(self, job_id: int) -> Optional[dict[str, Any]]:
         try:
             cursor = self._execute(
                 "SELECT * FROM prompt_studio_job_queue WHERE id = ? LIMIT 1",
@@ -2425,7 +2426,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed to fetch job {job_id}: {exc}") from exc
 
-    def get_job_by_uuid(self, job_uuid: str) -> Optional[Dict[str, Any]]:
+    def get_job_by_uuid(self, job_uuid: str) -> Optional[dict[str, Any]]:
         try:
             cursor = self._execute(
                 "SELECT * FROM prompt_studio_job_queue WHERE uuid = ? LIMIT 1",
@@ -2442,9 +2443,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         status: Optional[str] = None,
         job_type: Optional[str] = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        clauses: List[str] = []
-        params: List[Any] = []
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
         if status:
             clauses.append("status = ?")
             params.append(status)
@@ -2476,9 +2477,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         *,
         error_message: Optional[str] = None,
         result: Optional[Any] = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         updates = ["status = ?"]
-        params: List[Any] = [status]
+        params: list[Any] = [status]
 
         if status == "processing":
             updates.append("started_at = CURRENT_TIMESTAMP")
@@ -2539,7 +2540,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         set_owner_sql = ", lease_owner = COALESCE(?, lease_owner)" if owner_value is not None else ""
         owner_guard_sql = " AND (lease_owner IS NULL OR lease_owner = ?)" if owner_value is not None else ""
-        params: List[Any] = [job_id]
+        params: list[Any] = [job_id]
         if owner_value is not None:
             params = [owner_value, job_id, owner_value]
 
@@ -2566,7 +2567,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed to renew job lease for {job_id}: {exc}") from exc
 
-    def acquire_next_job(self, worker_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def acquire_next_job(self, worker_id: Optional[str] = None) -> Optional[dict[str, Any]]:
         with self._write_lock:
             with self.transaction() as conn:
                 cursor = conn.cursor()
@@ -2588,11 +2589,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     # Metrics: advisory lock attempt
                     _psm = None
                     try:
-                        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics as _psm
+                        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import (
+                            prompt_studio_metrics as _psm,
+                        )
                     except Exception:
                         _psm = None
 
-                    def _inc_metric(name: str, labels: Optional[Dict[str, str]] = None) -> None:
+                    def _inc_metric(name: str, labels: Optional[dict[str, str]] = None) -> None:
                         if _psm is None:
                             return
                         try:
@@ -2738,7 +2741,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     if cdt and sdt:
                         qlat = max(0.0, (sdt - cdt).total_seconds())
                         try:
-                            from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics as _psm2
+                            from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import (
+                                prompt_studio_metrics as _psm2,
+                            )
                             _psm2.metrics_manager.observe(
                                 "jobs.queue_latency_seconds",
                                 qlat,
@@ -2794,7 +2799,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed cleaning up old jobs: {exc}") from exc
 
-    def get_latest_job_for_entity(self, job_type: str, entity_id: int) -> Optional[Dict[str, Any]]:
+    def get_latest_job_for_entity(self, job_type: str, entity_id: int) -> Optional[dict[str, Any]]:
         query = """
             SELECT *
             FROM prompt_studio_job_queue
@@ -2818,7 +2823,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         *,
         limit: int = 50,
         ascending: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         order_clause = "ASC" if ascending else "DESC"
         query = f"""
             SELECT *
@@ -2841,7 +2846,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         prompt_id: int,
         *,
         include_deleted: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         clauses = ["p.id = ?"]
         if not include_deleted:
             clauses.append("p.deleted = FALSE")
@@ -2870,7 +2875,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         few_shot_examples: Optional[Any] = None,
         modules_config: Optional[Any] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not change_description:
             raise InputError("change_description is required")
 
@@ -2971,7 +2976,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         target_version: int,
         *,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if target_version < 1:
             raise InputError("target_version must be >= 1")
 
@@ -3084,7 +3089,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         project_id: int,
         limit: int = 100,
         offset: int = 0,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         query = (
             """
             SELECT id, uuid, project_id, signature_id, name, description,
@@ -3095,7 +3100,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             WHERE project_id = ? AND is_golden = TRUE
         """
         )
-        params: List[Any] = [project_id]
+        params: list[Any] = [project_id]
         query += " AND deleted = FALSE"  # Always exclude deleted in helper
         query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
@@ -3109,7 +3114,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
     # --- Test case helpers -------------------------------------------------
 
-    def _format_test_case(self, row: Any) -> Optional[Dict[str, Any]]:
+    def _format_test_case(self, row: Any) -> Optional[dict[str, Any]]:
         return _format_test_case_record(self._row_to_dict(row))
 
     def _build_test_case_filters(
@@ -3118,11 +3123,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         *,
         signature_id: Optional[int] = None,
         is_golden: Optional[bool] = None,
-        tags: Optional[List[str]] = None,
+        tags: Optional[list[str]] = None,
         include_deleted: bool = False,
-    ) -> Tuple[str, List[Any]]:
-        conditions: List[str] = ["project_id = ?"]
-        params: List[Any] = [project_id]
+    ) -> tuple[str, list[Any]]:
+        conditions: list[str] = ["project_id = ?"]
+        params: list[Any] = [project_id]
 
         if not include_deleted:
             conditions.append("deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0")
@@ -3151,16 +3156,16 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         project_id: int,
         name: str,
         *,
-        inputs: Dict[str, Any],
+        inputs: dict[str, Any],
         description: Optional[str] = None,
-        expected_outputs: Optional[Dict[str, Any]] = None,
-        actual_outputs: Optional[Dict[str, Any]] = None,
+        expected_outputs: Optional[dict[str, Any]] = None,
+        actual_outputs: Optional[dict[str, Any]] = None,
         tags: Optional[Iterable[str]] = None,
         is_golden: bool = False,
         is_generated: bool = False,
         signature_id: Optional[int] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not name or not name.strip():
             raise InputError("Test case name cannot be empty")
 
@@ -3207,9 +3212,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         test_case_id: int,
         *,
         include_deleted: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         where_clauses = ["id = ?"]
-        params: List[Any] = [test_case_id]
+        params: list[Any] = [test_case_id]
         if not include_deleted:
             where_clauses.append("deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0")
 
@@ -3232,13 +3237,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         *,
         signature_id: Optional[int] = None,
         is_golden: Optional[bool] = None,
-        tags: Optional[List[str]] = None,
+        tags: Optional[list[str]] = None,
         search: Optional[str] = None,
         include_deleted: bool = False,
         page: int = 1,
         per_page: int = 20,
         return_pagination: bool = False,
-    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    ) -> Union[dict[str, Any], list[dict[str, Any]]]:
         where_clause, params = self._build_test_case_filters(
             project_id,
             signature_id=signature_id,
@@ -3289,7 +3294,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             }
         return records
 
-    def update_test_case(self, test_case_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_test_case(self, test_case_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         allowed_fields = {
             "name",
             "description",
@@ -3301,8 +3306,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             "is_generated",
             "signature_id",
         }
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field not in allowed_fields:
@@ -3376,12 +3381,12 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
     def create_bulk_test_cases(
         self,
         project_id: int,
-        test_cases: List[Dict[str, Any]],
+        test_cases: list[dict[str, Any]],
         *,
         signature_id: Optional[int] = None,
         client_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        created: List[Dict[str, Any]] = []
+    ) -> list[dict[str, Any]]:
+        created: list[dict[str, Any]] = []
         for test_case in test_cases:
             created_case = self.create_test_case(
                 project_id,
@@ -3405,7 +3410,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         query: str,
         *,
         limit: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         backend_query = query
         if self.backend_type == BackendType.POSTGRESQL:
             backend_query = FTSQueryTranslator.normalize_query(query, "postgresql") or query
@@ -3440,7 +3445,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed to search test cases in project {project_id}: {exc}") from exc
 
-    def get_test_cases_by_signature(self, signature_id: int) -> List[Dict[str, Any]]:
+    def get_test_cases_by_signature(self, signature_id: int) -> list[dict[str, Any]]:
         query = """
             SELECT *
             FROM prompt_studio_test_cases
@@ -3454,8 +3459,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed to fetch test cases for signature {signature_id}: {exc}") from exc
 
-    def get_test_case_stats(self, project_id: int) -> Dict[str, Any]:
-        stats: Dict[str, Any] = {}
+    def get_test_case_stats(self, project_id: int) -> dict[str, Any]:
+        stats: dict[str, Any] = {}
         try:
             total_cursor = self._execute(
                 "SELECT COUNT(*) FROM prompt_studio_test_cases WHERE project_id = ? AND deleted = 0",
@@ -3508,7 +3513,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 """,
                 (project_id,),
             )
-            tag_counts: Dict[str, int] = {}
+            tag_counts: dict[str, int] = {}
             for row in tags_cursor.fetchall():
                 for tag in _parse_tags(row[0]):
                     tag_counts[tag] = tag_counts.get(tag, 0) + 1
@@ -3641,7 +3646,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             raise SchemaError(f"Failed to initialize Prompt Studio schema: {e}")
 
     # Keep parity with backend helper: local execute that returns a cursor
-    def _cursor_exec(self, conn: sqlite3.Connection, query: str, params: Optional[Union[Tuple, List, Dict, Any]] = None):
+    def _cursor_exec(self, conn: sqlite3.Connection, query: str, params: Optional[Union[tuple, list, dict, Any]] = None):
         cursor = conn.cursor()
         if params is not None:
             cursor.execute(query, params)
@@ -3652,7 +3657,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
     def _execute(
         self,
         query: str,
-        params: Optional[Union[Tuple, List, Dict, Any]] = None,
+        params: Optional[Union[tuple, list, dict, Any]] = None,
         *,
         connection: Optional[sqlite3.Connection] = None,
     ):
@@ -3662,7 +3667,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
     def _executemany(
         self,
         query: str,
-        params_list: List[Union[Tuple, List, Dict, Any]],
+        params_list: list[Union[tuple, list, dict, Any]],
         *,
         connection: Optional[sqlite3.Connection] = None,
     ):
@@ -3748,8 +3753,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
     # Project Management
 
     def create_project(self, name: str, description: Optional[str] = None,
-                      status: str = "draft", metadata: Optional[Dict] = None,
-                      user_id: Optional[str] = None) -> Dict[str, Any]:
+                      status: str = "draft", metadata: Optional[dict] = None,
+                      user_id: Optional[str] = None) -> dict[str, Any]:
         """
         Create a new prompt studio project.
 
@@ -3762,9 +3767,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         Returns:
             Created project record
         """
-        import time
-        import sqlite3
         import random
+        import sqlite3
+        import time
 
         project_id = None
         # Get connection before acquiring lock to avoid deadlock
@@ -3827,7 +3832,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         # Get the project after releasing the lock
         return self.get_project(project_id)
 
-    def get_project(self, project_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_project(self, project_id: int, include_deleted: bool = False) -> Optional[dict[str, Any]]:
         """
         Get a project by ID.
 
@@ -3838,7 +3843,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         Returns:
             Project record or None
         """
-        import sqlite3, time, random
+        import random
+        import sqlite3
+        import time
         conn = self.get_connection()
         cursor = conn.cursor()
         query = """
@@ -3872,7 +3879,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
     def list_projects(self, user_id: Optional[str] = None, status: Optional[str] = None,
                      include_deleted: bool = False, page: int = 1, per_page: int = 20,
-                     search: Optional[str] = None) -> Dict[str, Any]:
+                     search: Optional[str] = None) -> dict[str, Any]:
         """
         List projects with optional filtering.
 
@@ -3886,7 +3893,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         Returns:
             Dictionary with projects list and pagination metadata
         """
-        import sqlite3, time, random
+        import random
+        import sqlite3
+        import time
         conn = self.get_connection()
         cursor = conn.cursor()
 
@@ -3961,7 +3970,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             except sqlite3.Error as e:
                 raise DatabaseError(f"Failed to list projects: {e}")
 
-    def update_project(self, project_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_project(self, project_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         """
         Update a project.
 
@@ -3972,9 +3981,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         Returns:
             Updated project record
         """
-        import time
-        import sqlite3
         import random
+        import sqlite3
+        import time
 
         conn = self.get_connection()
         max_retries = 5
@@ -3988,8 +3997,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
                     # Build update query
                     allowed_fields = ["name", "description", "status", "metadata"]
-                    set_clauses: List[str] = []
-                    params: List[Any] = []
+                    set_clauses: list[str] = []
+                    params: list[Any] = []
 
                     for field in allowed_fields:
                         if field in updates:
@@ -4064,10 +4073,10 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         constraints: Optional[Any] = None,
         validation_rules: Optional[Any] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        import random
         import sqlite3
         import time
-        import random
 
         if not name or not str(name).strip():
             raise InputError("Signature name cannot be empty")
@@ -4147,16 +4156,16 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         signature_id: int,
         *,
         include_deleted: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
+        import random
         import sqlite3
         import time
-        import random
 
         conn = self.get_connection()
         cursor = conn.cursor()
 
         query = "SELECT * FROM prompt_studio_signatures WHERE id = ?"
-        params: List[Any] = [signature_id]
+        params: list[Any] = [signature_id]
         if not include_deleted:
             query += " AND deleted = 0"
 
@@ -4187,10 +4196,10 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         page: int = 1,
         per_page: int = 20,
         return_pagination: bool = False,
-    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    ) -> Union[dict[str, Any], list[dict[str, Any]]]:
+        import random
         import sqlite3
         import time
-        import random
 
         if page < 1:
             raise InputError("Page index must be >= 1")
@@ -4201,7 +4210,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         cursor = conn.cursor()
 
         conditions = ["project_id = ?"]
-        params: List[Any] = [project_id]
+        params: list[Any] = [project_id]
         if not include_deleted:
             conditions.append("deleted = 0")
         if search:
@@ -4266,7 +4275,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             }
         return signatures
 
-    def update_signature(self, signature_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_signature(self, signature_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         import sqlite3
 
         allowed_fields = {
@@ -4277,8 +4286,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             "validation_rules",
         }
 
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field not in allowed_fields:
@@ -4410,20 +4419,20 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         prompt_id: int,
         test_case_id: int,
         model_name: str,
-        model_params: Optional[Dict[str, Any]] = None,
-        inputs: Optional[Dict[str, Any]] = None,
-        outputs: Optional[Dict[str, Any]] = None,
-        expected_outputs: Optional[Dict[str, Any]] = None,
-        scores: Optional[Dict[str, Any]] = None,
+        model_params: Optional[dict[str, Any]] = None,
+        inputs: Optional[dict[str, Any]] = None,
+        outputs: Optional[dict[str, Any]] = None,
+        expected_outputs: Optional[dict[str, Any]] = None,
+        scores: Optional[dict[str, Any]] = None,
         execution_time_ms: Optional[int] = None,
         tokens_used: Optional[int] = None,
         cost_estimate: Optional[float] = None,
         error_message: Optional[str] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        import random
         import sqlite3
         import time
-        import random
 
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -4484,7 +4493,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         test_case_ids: Iterable[int],
         *,
         include_deleted: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         import sqlite3
 
         identifiers = list(dict.fromkeys(test_case_ids))
@@ -4514,14 +4523,14 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         *,
         prompt_id: int,
         project_id: int,
-        model_configs: Optional[Dict[str, Any]] = None,
+        model_configs: Optional[dict[str, Any]] = None,
         status: str = "running",
         test_case_ids: Optional[Iterable[int]] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        import random
         import sqlite3
         import time
-        import random
 
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -4567,7 +4576,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         raise DatabaseError("Failed to create evaluation due to database locks")
 
-    def update_evaluation(self, evaluation_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_evaluation(self, evaluation_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         import sqlite3
 
         if not updates:
@@ -4577,8 +4586,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             return evaluation
 
         json_fields = {"model_configs", "test_case_ids", "test_run_ids", "aggregate_metrics"}
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field in json_fields and value is not None:
@@ -4613,7 +4622,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             except sqlite3.Error as exc:  # noqa: BLE001
                 raise DatabaseError(f"Failed to update evaluation: {exc}") from exc
 
-    def get_evaluation(self, evaluation_id: int) -> Optional[Dict[str, Any]]:
+    def get_evaluation(self, evaluation_id: int) -> Optional[dict[str, Any]]:
         import sqlite3
 
         cursor = self.get_connection().cursor()
@@ -4636,10 +4645,10 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         status: Optional[str] = None,
         page: int = 1,
         per_page: int = 20,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        import random
         import sqlite3
         import time
-        import random
 
         if page < 1:
             raise InputError("Page index must be >= 1")
@@ -4649,8 +4658,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        conditions: List[str] = []
-        params: List[Any] = []
+        conditions: list[str] = []
+        params: list[Any] = []
         if project_id is not None:
             conditions.append("project_id = ?")
             params.append(project_id)
@@ -4729,9 +4738,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         parent_version_id: Optional[int] = None,
         change_description: Optional[str] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        import time
+    ) -> dict[str, Any]:
         import random
+        import time
 
         prompt_uuid = str(uuid.uuid4())
         payload = (
@@ -4810,9 +4819,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         Returns:
             True if deleted
         """
+        import random
         import sqlite3
         import time
-        import random
 
         conn = self.get_connection()
         max_retries = 5
@@ -4860,7 +4869,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
     ####################################################################################################################
     # Helper Methods
 
-    def _row_to_dict(self, cursor: sqlite3.Cursor, row: tuple) -> Dict[str, Any]:
+    def _row_to_dict(self, cursor: sqlite3.Cursor, row: tuple) -> dict[str, Any]:
         """Convert a database row to dictionary."""
         if not row:
             return None
@@ -4897,7 +4906,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         return result
 
-    def _log_sync_event(self, entity: str, entity_uuid: str, operation: str, payload: Dict[str, Any]):
+    def _log_sync_event(self, entity: str, entity_uuid: str, operation: str, payload: dict[str, Any]):
         """Log an event to sync_log table if it exists."""
         try:
             with self.transaction() as conn:
@@ -4941,14 +4950,14 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 logger.warning(f"Failed to log sync event for {entity}/{entity_uuid}: {e}")
 
     # Public convenience alias matching some endpoint call sites
-    def row_to_dict(self, row: tuple, cursor: sqlite3.Cursor) -> Dict[str, Any]:
+    def row_to_dict(self, row: tuple, cursor: sqlite3.Cursor) -> dict[str, Any]:
         """
         Convert a (row, cursor) pair to a dict. Wrapper around _row_to_dict,
         provided to match call sites that pass (row, cursor) in that order.
         """
         return self._row_to_dict(cursor, row)
 
-    def _format_test_case(self, cursor: sqlite3.Cursor, row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+    def _format_test_case(self, cursor: sqlite3.Cursor, row: Optional[sqlite3.Row]) -> Optional[dict[str, Any]]:
         if row is None:
             return None
         return _format_test_case_record(self._row_to_dict(cursor, row))
@@ -4956,7 +4965,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
     ####################################################################################################################
     # Prompt Accessors (Prompt Studio tables)
 
-    def get_prompt(self, prompt_id: int) -> Optional[Dict[str, Any]]:
+    def get_prompt(self, prompt_id: int) -> Optional[dict[str, Any]]:
         """
         Fetch a prompt-studio prompt by id from the prompt_studio_prompts table.
 
@@ -4990,7 +4999,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         prompt_id: int,
         *,
         include_deleted: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -5023,7 +5032,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         few_shot_examples: Optional[Any] = None,
         modules_config: Optional[Any] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         import random
         import time
 
@@ -5142,7 +5151,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         target_version: int,
         *,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         import random
         import time
 
@@ -5269,7 +5278,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         optimization_id: int,
         *,
         include_deleted: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -5291,11 +5300,11 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
     def update_optimization(
         self,
         optimization_id: int,
-        updates: Dict[str, Any],
+        updates: dict[str, Any],
         *,
         set_started_at: bool = False,
         set_completed_at: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not updates and not (set_started_at or set_completed_at):
             optimization = self.get_optimization(optimization_id, include_deleted=True)
             if optimization is None:
@@ -5309,8 +5318,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             "test_case_ids",
             "test_run_ids",
         }
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field in json_fields and value is not None:
@@ -5379,8 +5388,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         error_message: Optional[str] = None,
         mark_started: bool = False,
         mark_completed: bool = False,
-    ) -> Dict[str, Any]:
-        updates: Dict[str, Any] = {"status": status}
+    ) -> dict[str, Any]:
+        updates: dict[str, Any] = {"status": status}
         if error_message is not None:
             updates["error_message"] = error_message
         return self.update_optimization(
@@ -5396,13 +5405,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         *,
         optimized_prompt_id: Optional[int] = None,
         iterations_completed: Optional[int] = None,
-        initial_metrics: Optional[Dict[str, Any]] = None,
-        final_metrics: Optional[Dict[str, Any]] = None,
+        initial_metrics: Optional[dict[str, Any]] = None,
+        final_metrics: Optional[dict[str, Any]] = None,
         improvement_percentage: Optional[float] = None,
         total_tokens: Optional[int] = None,
         total_cost: Optional[float] = None,
-    ) -> Dict[str, Any]:
-        updates: Dict[str, Any] = {
+    ) -> dict[str, Any]:
+        updates: dict[str, Any] = {
             "status": "completed",
             "optimized_prompt_id": optimized_prompt_id,
             "iterations_completed": iterations_completed,
@@ -5424,12 +5433,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         optimization_id: int,
         *,
         iteration_number: int,
-        prompt_variant: Optional[Dict[str, Any]] = None,
-        metrics: Optional[Dict[str, Any]] = None,
+        prompt_variant: Optional[dict[str, Any]] = None,
+        metrics: Optional[dict[str, Any]] = None,
         tokens_used: Optional[int] = None,
         cost: Optional[float] = None,
         note: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         payload = (
             str(uuid.uuid4()),
             optimization_id,
@@ -5483,7 +5492,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         *,
         page: int = 1,
         per_page: int = 50,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """List persisted iterations for an optimization (SQLite backend)."""
         if page < 1:
             raise InputError("Page index must be >= 1")
@@ -5540,7 +5549,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         status: str = "queued",
         max_retries: int = 3,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         import random
         import time
 
@@ -5590,7 +5599,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         raise DatabaseError("Failed to create job due to database locks")
 
-    def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
+    def get_job(self, job_id: int) -> Optional[dict[str, Any]]:
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -5603,7 +5612,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         except sqlite3.Error as exc:  # noqa: BLE001
             raise DatabaseError(f"Failed to fetch job {job_id}: {exc}") from exc
 
-    def get_job_by_uuid(self, job_uuid: str) -> Optional[Dict[str, Any]]:
+    def get_job_by_uuid(self, job_uuid: str) -> Optional[dict[str, Any]]:
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -5622,12 +5631,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         status: Optional[str] = None,
         job_type: Optional[str] = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             query = "SELECT * FROM prompt_studio_job_queue WHERE 1=1"
-            params: List[Any] = []
+            params: list[Any] = []
             if status:
                 query += " AND status = ?"
                 params.append(status)
@@ -5650,7 +5659,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         *,
         error_message: Optional[str] = None,
         result: Optional[Any] = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         import random
         import time
 
@@ -5663,7 +5672,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 try:
                     cursor = conn.cursor()
                     updates = ["status = ?"]
-                    params: List[Any] = [status]
+                    params: list[Any] = [status]
 
                     if status == "processing":
                         updates.append("started_at = CURRENT_TIMESTAMP")
@@ -5721,7 +5730,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         raise DatabaseError("Failed to update job status due to database locks")
 
-    def acquire_next_job(self, worker_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def acquire_next_job(self, worker_id: Optional[str] = None) -> Optional[dict[str, Any]]:
         import random
         import time
 
@@ -5799,7 +5808,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                                 if cdt and sdt:
                                     qlat = max(0.0, (sdt - cdt).total_seconds())
                                     try:
-                                        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics as _psm2
+                                        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import (
+                                            prompt_studio_metrics as _psm2,
+                                        )
                                         _psm2.metrics_manager.observe(
                                             "jobs.queue_latency_seconds",
                                             qlat,
@@ -5910,7 +5921,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         except sqlite3.Error as exc:  # noqa: BLE001
             raise DatabaseError(f"Failed to clean up old jobs: {exc}") from exc
 
-    def get_latest_job_for_entity(self, job_type: str, entity_id: int) -> Optional[Dict[str, Any]]:
+    def get_latest_job_for_entity(self, job_type: str, entity_id: int) -> Optional[dict[str, Any]]:
         conn = self.get_connection()
         cursor = conn.cursor()
         query = """
@@ -5936,7 +5947,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         *,
         limit: int = 50,
         ascending: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         conn = self.get_connection()
         cursor = conn.cursor()
         order_clause = "ASC" if ascending else "DESC"
@@ -6017,7 +6028,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         page: int = 1,
         per_page: int = 20,
         include_deleted: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         import sqlite3
 
         if page < 1:
@@ -6030,7 +6041,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             cursor = conn.cursor()
 
             base_clause = "FROM prompt_studio_prompts WHERE project_id = ?"
-            params: List[Any] = [project_id]
+            params: list[Any] = [project_id]
             if not include_deleted:
                 base_clause += " AND deleted = 0"
 
@@ -6064,7 +6075,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         prompt_name: str,
         *,
         include_deleted: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         import sqlite3
 
         try:
@@ -6145,16 +6156,16 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         project_id: int,
         name: str,
         *,
-        inputs: Dict[str, Any],
+        inputs: dict[str, Any],
         description: Optional[str] = None,
-        expected_outputs: Optional[Dict[str, Any]] = None,
-        actual_outputs: Optional[Dict[str, Any]] = None,
+        expected_outputs: Optional[dict[str, Any]] = None,
+        actual_outputs: Optional[dict[str, Any]] = None,
         tags: Optional[Iterable[str]] = None,
         is_golden: bool = False,
         is_generated: bool = False,
         signature_id: Optional[int] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not name or not name.strip():
             raise InputError("Test case name cannot be empty")
 
@@ -6239,11 +6250,11 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         raise DatabaseError("Failed to create test case after multiple retries")
 
-    def get_test_case(self, test_case_id: int, *, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_test_case(self, test_case_id: int, *, include_deleted: bool = False) -> Optional[dict[str, Any]]:
         conn = self.get_connection()
         cursor = conn.cursor()
         query = "SELECT * FROM prompt_studio_test_cases WHERE id = ?"
-        params: List[Any] = [test_case_id]
+        params: list[Any] = [test_case_id]
         if not include_deleted:
             query += " AND deleted = 0"
         cursor.execute(query, params)
@@ -6256,20 +6267,20 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         *,
         signature_id: Optional[int] = None,
         is_golden: Optional[bool] = None,
-        tags: Optional[List[str]] = None,
+        tags: Optional[list[str]] = None,
         search: Optional[str] = None,
         include_deleted: bool = False,
         page: int = 1,
         per_page: int = 20,
         return_pagination: bool = False,
-    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    ) -> Union[dict[str, Any], list[dict[str, Any]]]:
         import time
 
         conn = self.get_connection()
         cursor = conn.cursor()
 
         conditions = ["project_id = ?"]
-        params: List[Any] = [project_id]
+        params: list[Any] = [project_id]
 
         if not include_deleted:
             conditions.append("deleted = 0")
@@ -6337,7 +6348,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             }
         return records
 
-    def update_test_case(self, test_case_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_test_case(self, test_case_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         conn = self.get_connection()
         cursor = conn.cursor()
 
@@ -6353,8 +6364,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             "signature_id",
         }
 
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field not in allowed_fields:
@@ -6443,13 +6454,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
     def create_bulk_test_cases(
         self,
         project_id: int,
-        test_cases: List[Dict[str, Any]],
+        test_cases: list[dict[str, Any]],
         *,
         signature_id: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         import time
 
-        created: List[Dict[str, Any]] = []
+        created: list[dict[str, Any]] = []
         with self.transaction() as conn:
             cursor = conn.cursor()
             max_retries = 5
@@ -6499,7 +6510,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         logger.info("Created %s test cases in bulk for project %s", len(created), project_id)
         return created
 
-    def search_test_cases(self, project_id: int, query: str, *, limit: int = 10) -> List[Dict[str, Any]]:
+    def search_test_cases(self, project_id: int, query: str, *, limit: int = 10) -> list[dict[str, Any]]:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -6517,7 +6528,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         )
         return [self._format_test_case(cursor, row) for row in cursor.fetchall() if row]
 
-    def get_test_cases_by_signature(self, signature_id: int) -> List[Dict[str, Any]]:
+    def get_test_cases_by_signature(self, signature_id: int) -> list[dict[str, Any]]:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -6531,10 +6542,10 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         )
         return [self._format_test_case(cursor, row) for row in cursor.fetchall() if row]
 
-    def get_test_case_stats(self, project_id: int) -> Dict[str, Any]:
+    def get_test_case_stats(self, project_id: int) -> dict[str, Any]:
         conn = self.get_connection()
         cursor = conn.cursor()
-        stats: Dict[str, Any] = {}
+        stats: dict[str, Any] = {}
 
         cursor.execute(
             "SELECT COUNT(*) FROM prompt_studio_test_cases WHERE project_id = ? AND deleted = 0",
@@ -6592,7 +6603,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             """,
             (project_id,),
         )
-        tag_counts: Dict[str, int] = {}
+        tag_counts: dict[str, int] = {}
         for row in cursor.fetchall():
             for tag in _parse_tags(row[0]):
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
@@ -6600,7 +6611,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         stats["top_tags"] = sorted(tag_counts.items(), key=lambda item: item[1], reverse=True)[:10]
         return stats
 
-    def get_golden_test_cases(self, project_id: int, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def get_golden_test_cases(self, project_id: int, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -6642,12 +6653,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         name: Optional[str],
         initial_prompt_id: Optional[int],
         optimizer_type: str,
-        optimization_config: Optional[Dict[str, Any]] = None,
+        optimization_config: Optional[dict[str, Any]] = None,
         max_iterations: Optional[int] = None,
         bootstrap_samples: Optional[int] = None,
         status: str = "pending",
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         optimization_uuid = str(uuid.uuid4())
         payload = (
             optimization_uuid,
@@ -6743,8 +6754,8 @@ class PromptStudioDatabase:
             except Exception:
                 pass
 
-    def update_project(self, project_id: int, updates: Optional[Dict[str, Any]] = None, **fields: Any) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {}
+    def update_project(self, project_id: int, updates: Optional[dict[str, Any]] = None, **fields: Any) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
         if updates:
             payload.update(updates)
         if fields:
@@ -6753,22 +6764,22 @@ class PromptStudioDatabase:
 
     # Signature delegation ------------------------------------------------
 
-    def create_signature(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def create_signature(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.create_signature(*args, **kwargs)
 
-    def get_signature(self, *args: Any, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    def get_signature(self, *args: Any, **kwargs: Any) -> Optional[dict[str, Any]]:
         return self._impl.get_signature(*args, **kwargs)
 
-    def list_signatures(self, *args: Any, **kwargs: Any) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    def list_signatures(self, *args: Any, **kwargs: Any) -> Union[dict[str, Any], list[dict[str, Any]]]:
         return self._impl.list_signatures(*args, **kwargs)
 
-    def update_signature(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def update_signature(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.update_signature(*args, **kwargs)
 
     def delete_signature(self, *args: Any, **kwargs: Any) -> bool:
         return self._impl.delete_signature(*args, **kwargs)
 
-    def create_prompt(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def create_prompt(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.create_prompt(*args, **kwargs)
 
     def ensure_prompt_stub(self, *args: Any, **kwargs: Any) -> None:
@@ -6787,7 +6798,7 @@ class PromptStudioDatabase:
         status: str = "queued",
         max_retries: int = 3,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return self._impl.create_job(
             job_type,
             entity_id,
@@ -6799,10 +6810,10 @@ class PromptStudioDatabase:
             client_id=client_id,
         )
 
-    def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
+    def get_job(self, job_id: int) -> Optional[dict[str, Any]]:
         return self._impl.get_job(job_id)
 
-    def get_job_by_uuid(self, job_uuid: str) -> Optional[Dict[str, Any]]:
+    def get_job_by_uuid(self, job_uuid: str) -> Optional[dict[str, Any]]:
         return self._impl.get_job_by_uuid(job_uuid)
 
     def list_jobs(
@@ -6811,7 +6822,7 @@ class PromptStudioDatabase:
         status: Optional[str] = None,
         job_type: Optional[str] = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         return self._impl.list_jobs(status=status, job_type=job_type, limit=limit)
 
     def update_job_status(
@@ -6821,7 +6832,7 @@ class PromptStudioDatabase:
         *,
         error_message: Optional[str] = None,
         result: Optional[Any] = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         return self._impl.update_job_status(
             job_id,
             status,
@@ -6829,7 +6840,7 @@ class PromptStudioDatabase:
             result=result,
         )
 
-    def acquire_next_job(self, *, worker_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def acquire_next_job(self, *, worker_id: Optional[str] = None) -> Optional[dict[str, Any]]:
         return self._impl.acquire_next_job(worker_id=worker_id)
 
     def retry_job_record(self, job_id: int) -> bool:
@@ -6847,87 +6858,87 @@ class PromptStudioDatabase:
     def cleanup_jobs(self, older_than_days: int = 30) -> int:
         return self._impl.cleanup_jobs(older_than_days)
 
-    def get_latest_job_for_entity(self, *args: Any, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    def get_latest_job_for_entity(self, *args: Any, **kwargs: Any) -> Optional[dict[str, Any]]:
         return self._impl.get_latest_job_for_entity(*args, **kwargs)
 
-    def list_jobs_for_entity(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
+    def list_jobs_for_entity(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return self._impl.list_jobs_for_entity(*args, **kwargs)
     # Test case delegation -------------------------------------------------
 
-    def create_test_case(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def create_test_case(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.create_test_case(*args, **kwargs)
 
-    def get_test_case(self, *args: Any, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    def get_test_case(self, *args: Any, **kwargs: Any) -> Optional[dict[str, Any]]:
         return self._impl.get_test_case(*args, **kwargs)
 
-    def list_test_cases(self, *args: Any, **kwargs: Any) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    def list_test_cases(self, *args: Any, **kwargs: Any) -> Union[dict[str, Any], list[dict[str, Any]]]:
         return self._impl.list_test_cases(*args, **kwargs)
 
-    def update_test_case(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def update_test_case(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.update_test_case(*args, **kwargs)
 
     def delete_test_case(self, *args: Any, **kwargs: Any) -> bool:
         return self._impl.delete_test_case(*args, **kwargs)
 
-    def create_bulk_test_cases(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
+    def create_bulk_test_cases(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return self._impl.create_bulk_test_cases(*args, **kwargs)
 
-    def search_test_cases(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
+    def search_test_cases(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return self._impl.search_test_cases(*args, **kwargs)
 
-    def get_test_cases_by_signature(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
+    def get_test_cases_by_signature(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return self._impl.get_test_cases_by_signature(*args, **kwargs)
 
-    def get_test_case_stats(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def get_test_case_stats(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.get_test_case_stats(*args, **kwargs)
 
-    def get_golden_test_cases(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
+    def get_golden_test_cases(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return self._impl.get_golden_test_cases(*args, **kwargs)
 
     # Test run delegation -------------------------------------------------
 
-    def create_test_run(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def create_test_run(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.create_test_run(*args, **kwargs)
 
-    def get_test_cases_by_ids(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
+    def get_test_cases_by_ids(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return self._impl.get_test_cases_by_ids(*args, **kwargs)
 
     # Evaluation delegation -----------------------------------------------
 
-    def create_evaluation(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def create_evaluation(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.create_evaluation(*args, **kwargs)
 
-    def update_evaluation(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def update_evaluation(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.update_evaluation(*args, **kwargs)
 
-    def get_evaluation(self, *args: Any, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    def get_evaluation(self, *args: Any, **kwargs: Any) -> Optional[dict[str, Any]]:
         return self._impl.get_evaluation(*args, **kwargs)
 
-    def list_evaluations(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def list_evaluations(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.list_evaluations(*args, **kwargs)
 
     # Optimization delegation --------------------------------------------
 
-    def create_optimization(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def create_optimization(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.create_optimization(*args, **kwargs)
 
-    def get_optimization(self, *args: Any, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    def get_optimization(self, *args: Any, **kwargs: Any) -> Optional[dict[str, Any]]:
         return self._impl.get_optimization(*args, **kwargs)
 
-    def list_optimizations(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def list_optimizations(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.list_optimizations(*args, **kwargs)
 
-    def update_optimization(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def update_optimization(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.update_optimization(*args, **kwargs)
 
-    def set_optimization_status(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def set_optimization_status(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.set_optimization_status(*args, **kwargs)
 
-    def complete_optimization(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def complete_optimization(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.complete_optimization(*args, **kwargs)
 
-    def record_optimization_iteration(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def record_optimization_iteration(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.record_optimization_iteration(*args, **kwargs)
 
-    def list_optimization_iterations(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def list_optimization_iterations(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.list_optimization_iterations(*args, **kwargs)

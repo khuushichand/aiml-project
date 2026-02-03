@@ -8,14 +8,14 @@ import hashlib
 import os
 import re
 from pathlib import Path
-from typing import Callable, Dict, Optional, Union
+from typing import Callable, Optional, Union
+
 from loguru import logger
 
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.exceptions import InvalidStoragePathError, StorageUnavailableError
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.Utils import get_project_root
-from tldw_Server_API.app.core.exceptions import InvalidStoragePathError, StorageUnavailableError
-
 
 UserId = Union[int, str]
 _SAFE_TEST_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -526,7 +526,7 @@ class DatabasePaths:
         return user_dir / "rag_personalization.json"
 
     @staticmethod
-    def get_all_user_db_paths(user_id: Optional[UserId]) -> Dict[str, Path]:
+    def get_all_user_db_paths(user_id: Optional[UserId]) -> dict[str, Path]:
         """
         Get all database paths for a user.
 

@@ -7,49 +7,47 @@ import io
 import json
 import math
 import random
-import threading
-import time
 import socket
 import ssl
+import threading
+import time
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from uuid import uuid4
 
 from fastapi import HTTPException, status
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.permissions import (
     CLAIMS_ADMIN,
     CLAIMS_REVIEW,
-    SYSTEM_CONFIGURE,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
-from tldw_Server_API.app.core.Claims_Extraction.claims_rebuild_service import get_claims_rebuild_service
-from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
-    record_claims_alert_email_delivery,
-    record_claims_review_metrics,
-    record_claims_webhook_delivery,
-)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.Claims_Extraction.claims_clustering import rebuild_claim_clusters_embeddings
 from tldw_Server_API.app.core.Claims_Extraction.claims_embeddings import claim_embedding_id
 from tldw_Server_API.app.core.Claims_Extraction.claims_notifications import (
     dispatch_claim_review_notifications,
     record_watchlist_cluster_notifications,
 )
+from tldw_Server_API.app.core.Claims_Extraction.claims_rebuild_service import get_claims_rebuild_service
+from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
+    record_claims_alert_email_delivery,
+    record_claims_review_metrics,
+    record_claims_webhook_delivery,
+)
 from tldw_Server_API.app.core.Claims_Extraction.span_alignment import find_text_span
+from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
-from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
-from tldw_Server_API.app.core.Setup import setup_manager
-from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.exceptions import EgressPolicyError, RetryExhaustedError
-
+from tldw_Server_API.app.core.Setup import setup_manager
 
 _ROLE_HIERARCHY = {
     "owner": 4,
@@ -73,7 +71,7 @@ def _role_at_least(user_role: str, required_role: str) -> bool:
     return user_level >= required_level
 
 
-def _is_membership_active(membership: Optional[dict]) -> bool:
+def _is_membership_active(membership: dict | None) -> bool:
     if not membership:
         return False
     status_val = membership.get("status")
@@ -87,13 +85,13 @@ def _is_review_transition_allowed(current_status: str, new_status: str) -> bool:
     return new_status in _REVIEW_TRANSITIONS.get(current_status, {new_status})
 
 
-def _normalize_claim_row(row: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_claim_row(row: dict[str, Any]) -> dict[str, Any]:
     row.pop("media_owner_user_id", None)
     row.pop("media_client_id", None)
     return row
 
 
-def _normalize_search_row(row: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_search_row(row: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(row)
     try:
         cluster_id = normalized.get("claim_cluster_id")
@@ -108,7 +106,7 @@ def _normalize_search_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def _parse_email_recipients(raw_value: Optional[str]) -> List[str]:
+def _parse_email_recipients(raw_value: str | None) -> list[str]:
     if raw_value is None:
         return []
     text = str(raw_value).strip()
@@ -123,7 +121,7 @@ def _parse_email_recipients(raw_value: Optional[str]) -> List[str]:
     return [item.strip() for item in text.split(",") if item.strip()]
 
 
-def _normalize_channels(raw_value: Optional[Any]) -> Dict[str, bool]:
+def _normalize_channels(raw_value: Any | None) -> dict[str, bool]:
     if isinstance(raw_value, dict):
         data = raw_value
     else:
@@ -140,7 +138,7 @@ def _normalize_channels(raw_value: Optional[Any]) -> Dict[str, bool]:
     }
 
 
-def _normalize_alert_row(row: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_alert_row(row: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(row)
     normalized["email_recipients"] = _parse_email_recipients(row.get("email_recipients"))
     normalized["channels"] = _normalize_channels(
@@ -154,7 +152,7 @@ def _normalize_alert_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def _normalize_review_rule(row: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_review_rule(row: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(row)
     raw = normalized.get("predicate_json")
     try:
@@ -164,7 +162,7 @@ def _normalize_review_rule(row: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def _normalize_notification_row(row: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_notification_row(row: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(row)
     raw = normalized.get("payload_json")
     try:
@@ -175,7 +173,7 @@ def _normalize_notification_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def _normalize_monitoring_event_row(row: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_monitoring_event_row(row: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(row)
     raw = normalized.get("payload_json")
     try:
@@ -187,10 +185,10 @@ def _normalize_monitoring_event_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def _normalize_review_extractor_metrics_row(row: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_review_extractor_metrics_row(row: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(row)
     raw = normalized.get("reason_code_counts_json")
-    reason_payload: Dict[str, int] = {}
+    reason_payload: dict[str, int] = {}
     if raw:
         try:
             parsed = json.loads(str(raw))
@@ -208,14 +206,14 @@ def _normalize_review_extractor_metrics_row(row: Dict[str, Any]) -> Dict[str, An
 
 
 def _filter_monitoring_events_by_payload(
-    events: List[Dict[str, Any]],
+    events: list[dict[str, Any]],
     *,
-    provider: Optional[str],
-    model: Optional[str],
-) -> List[Dict[str, Any]]:
+    provider: str | None,
+    model: str | None,
+) -> list[dict[str, Any]]:
     if not provider and not model:
         return events
-    filtered: List[Dict[str, Any]] = []
+    filtered: list[dict[str, Any]] = []
     for event in events:
         payload = event.get("payload") or {}
         if provider and str(payload.get("provider")) != str(provider):
@@ -226,14 +224,14 @@ def _filter_monitoring_events_by_payload(
     return filtered
 
 
-def _get_watchlists_db(user_id: str) -> Optional[WatchlistsDatabase]:
+def _get_watchlists_db(user_id: str) -> WatchlistsDatabase | None:
     try:
         return WatchlistsDatabase.for_user(user_id=int(user_id))
     except Exception:
         return None
 
 
-def _load_watchlist_cluster_counts(user_id: str, cluster_ids: Optional[List[int]] = None) -> Dict[int, int]:
+def _load_watchlist_cluster_counts(user_id: str, cluster_ids: list[int] | None = None) -> dict[int, int]:
     watch_db = _get_watchlists_db(user_id)
     if not watch_db:
         return {}
@@ -243,7 +241,7 @@ def _load_watchlist_cluster_counts(user_id: str, cluster_ids: Optional[List[int]
         return {}
 
 
-def _extract_request_metadata(request: Any) -> tuple[Optional[str], Optional[str]]:
+def _extract_request_metadata(request: Any) -> tuple[str | None, str | None]:
     """Extract IP and user-agent for audit logging."""
     action_ip = None
     action_user_agent = None
@@ -261,7 +259,7 @@ def _extract_request_metadata(request: Any) -> tuple[Optional[str], Optional[str
     return action_ip, action_user_agent
 
 
-def _resolve_claim_owner_user_id(claim_row: Dict[str, Any], fallback_user_id: Optional[int]) -> str:
+def _resolve_claim_owner_user_id(claim_row: dict[str, Any], fallback_user_id: int | None) -> str:
     owner_user_id = claim_row.get("media_owner_user_id")
     if owner_user_id is None:
         owner_user_id = claim_row.get("media_client_id")
@@ -272,9 +270,9 @@ def _resolve_claim_owner_user_id(claim_row: Dict[str, Any], fallback_user_id: Op
 
 def _resolve_corrected_claim_span(
     target_db: MediaDatabase,
-    claim_row: Dict[str, Any],
+    claim_row: dict[str, Any],
     corrected_text: str,
-) -> tuple[Optional[int], Optional[int]]:
+) -> tuple[int | None, int | None]:
     try:
         media_id = int(claim_row.get("media_id") or 0)
         chunk_index = int(claim_row.get("chunk_index") or 0)
@@ -318,7 +316,7 @@ def _enqueue_claim_rebuild_if_needed(*, media_id: int, db_path: str) -> None:
         pass
 
 
-def _format_ratio(value: Optional[float]) -> str:
+def _format_ratio(value: float | None) -> str:
     """Return a human-friendly ratio string for alert messages."""
     if value is None:
         return "n/a"
@@ -329,9 +327,9 @@ def _format_ratio(value: Optional[float]) -> str:
 
 
 def _build_alert_channels(
-    payload: Dict[str, Any],
-    existing: Optional[Dict[str, Any]] = None,
-) -> Dict[str, bool]:
+    payload: dict[str, Any],
+    existing: dict[str, Any] | None = None,
+) -> dict[str, bool]:
     channels = payload.get("channels")
     if channels is None:
         channels = {}
@@ -358,7 +356,7 @@ def _build_alert_channels(
     }
 
 
-def _classify_httpx_exception(exc: Exception, msg: str) -> Optional[str]:
+def _classify_httpx_exception(exc: Exception, msg: str) -> str | None:
     module = getattr(exc.__class__, "__module__", "")
     if not module.startswith("httpx"):
         return None
@@ -400,9 +398,9 @@ def _record_webhook_event(
     channel: str,
     status: str,
     attempt: int,
-    reason: Optional[str] = None,
-    status_code: Optional[int] = None,
-    alert_id: Optional[int] = None,
+    reason: str | None = None,
+    status_code: int | None = None,
+    alert_id: int | None = None,
 ) -> None:
     try:
         db = create_media_database(
@@ -445,14 +443,14 @@ def _record_webhook_event(
 def _deliver_claims_alert_webhook(
     *,
     url: str,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     channel: str,
     db_path: str,
     user_id: str,
-    alert_id: Optional[int] = None,
+    alert_id: int | None = None,
 ) -> None:
     try:
-        from tldw_Server_API.app.core.http_client import create_client, fetch, RetryPolicy
+        from tldw_Server_API.app.core.http_client import RetryPolicy, create_client, fetch
     except Exception:
         return
     backoff_schedule = [5, 15, 45, 120, 300]
@@ -547,7 +545,7 @@ def _claims_monitoring_system_user_id() -> int:
         return 0
 
 
-def _parse_iso_timestamp(value: Optional[str]) -> Optional[float]:
+def _parse_iso_timestamp(value: str | None) -> float | None:
     if not value:
         return None
     try:
@@ -557,7 +555,7 @@ def _parse_iso_timestamp(value: Optional[str]) -> Optional[float]:
         return None
 
 
-def _format_utc_timestamp(value: Optional[float]) -> Optional[str]:
+def _format_utc_timestamp(value: float | None) -> str | None:
     if not value:
         return None
     try:
@@ -566,7 +564,7 @@ def _format_utc_timestamp(value: Optional[float]) -> Optional[str]:
         return None
 
 
-def _build_rebuild_health_summary_from_persisted(persisted: Dict[str, Any]) -> Dict[str, Any]:
+def _build_rebuild_health_summary_from_persisted(persisted: dict[str, Any]) -> dict[str, Any]:
     now_ts = datetime.utcnow().timestamp()
     heartbeat_ts = _parse_iso_timestamp(persisted.get("last_worker_heartbeat")) or 0.0
     age_sec = now_ts - heartbeat_ts if heartbeat_ts > 0 else None
@@ -590,7 +588,7 @@ def _build_rebuild_health_summary_from_persisted(persisted: Dict[str, Any]) -> D
     }
 
 
-def _build_rebuild_health_summary_from_service(health: Dict[str, Any]) -> Dict[str, Any]:
+def _build_rebuild_health_summary_from_service(health: dict[str, Any]) -> dict[str, Any]:
     now_ts = datetime.utcnow().timestamp()
     heartbeat_ts = float(health.get("last_heartbeat_ts") or 0.0)
     age_sec = now_ts - heartbeat_ts if heartbeat_ts > 0 else None
@@ -608,7 +606,7 @@ def _build_rebuild_health_summary_from_service(health: Dict[str, Any]) -> Dict[s
     }
 
 
-def _load_persisted_rebuild_health() -> Dict[str, Any]:
+def _load_persisted_rebuild_health() -> dict[str, Any]:
     user_id = _claims_monitoring_system_user_id()
     db_path = get_user_media_db_path(user_id)
     db = create_media_database(
@@ -630,8 +628,8 @@ def _load_persisted_rebuild_health() -> Dict[str, Any]:
 
 def _dispatch_claims_alert_notifications(
     *,
-    config_row: Dict[str, Any],
-    payload: Dict[str, Any],
+    config_row: dict[str, Any],
+    payload: dict[str, Any],
     db_path: str,
     user_id: str,
 ) -> None:
@@ -678,16 +676,16 @@ def _dispatch_claims_alert_notifications(
 
 async def _send_claims_alert_email_digest(
     *,
-    recipients: List[str],
+    recipients: list[str],
     subject: str,
     html_body: str,
     text_body: str,
-    email_service: Optional[Any] = None,
+    email_service: Any | None = None,
 ) -> bool:
     if not recipients:
         return False
     service = email_service or _get_email_service()
-    deliveries: List[bool] = []
+    deliveries: list[bool] = []
     for addr in recipients:
         try:
             ok = await service.send_email(
@@ -702,7 +700,7 @@ async def _send_claims_alert_email_digest(
     return any(deliveries)
 
 
-def _format_alert_digest_entry(event: Dict[str, Any], alert_name: str) -> tuple[str, str]:
+def _format_alert_digest_entry(event: dict[str, Any], alert_name: str) -> tuple[str, str]:
     payload = event.get("payload") or {}
     created_at = event.get("created_at") or "unknown"
     window_ratio = _format_ratio(payload.get("window_ratio"))
@@ -729,10 +727,10 @@ async def send_claims_alert_email_digest_for_scheduler(
     *,
     target_user_id: str,
     db: MediaDatabase,
-    interval_sec: Optional[int] = None,
-    max_events: Optional[int] = None,
-    email_service: Optional[Any] = None,
-) -> Dict[str, Any]:
+    interval_sec: int | None = None,
+    max_events: int | None = None,
+    email_service: Any | None = None,
+) -> dict[str, Any]:
     if not bool(settings.get("CLAIMS_ALERT_EMAIL_DIGEST_ENABLED", False)):
         return {"sent": 0, "events": 0, "skipped": "disabled"}
 
@@ -773,9 +771,9 @@ async def send_claims_alert_email_digest_for_scheduler(
     config_by_id = {int(row.get("id")): dict(row) for row in configs if row.get("id") is not None}
 
     normalized_events = [_normalize_monitoring_event_row(row) for row in raw_events]
-    grouped: Dict[Tuple[str, ...], List[Dict[str, Any]]] = {}
-    group_alert_names: Dict[Tuple[str, ...], Dict[int, str]] = {}
-    undelivered_ids: List[int] = []
+    grouped: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    group_alert_names: dict[tuple[str, ...], dict[int, str]] = {}
+    undelivered_ids: list[int] = []
 
     for event in normalized_events:
         payload = event.get("payload") or {}
@@ -815,8 +813,8 @@ async def send_claims_alert_email_digest_for_scheduler(
     for recipients, events in grouped.items():
         if not events:
             continue
-        lines: List[str] = []
-        html_lines: List[str] = []
+        lines: list[str] = []
+        html_lines: list[str] = []
         name_map = group_alert_names.get(recipients, {})
         for event in events:
             payload = event.get("payload") or {}
@@ -949,7 +947,7 @@ def _refresh_claim_embedding(
         return
 
 
-def _claims_settings_snapshot() -> Dict[str, Any]:
+def _claims_settings_snapshot() -> dict[str, Any]:
     return {
         "enable_ingestion_claims": bool(settings.get("ENABLE_INGESTION_CLAIMS", False)),
         "claim_extractor_mode": str(settings.get("CLAIM_EXTRACTOR_MODE", "heuristic")),
@@ -969,7 +967,7 @@ def _claims_settings_snapshot() -> Dict[str, Any]:
     }
 
 
-def _claims_monitoring_settings_snapshot() -> Dict[str, Any]:
+def _claims_monitoring_settings_snapshot() -> dict[str, Any]:
     return {
         "threshold_ratio": float(settings.get("CLAIMS_ALERT_THRESHOLD_DEFAULT", 0.2)),
         "baseline_ratio": None,
@@ -983,7 +981,7 @@ def _claims_monitoring_settings_snapshot() -> Dict[str, Any]:
 async def _ensure_claim_edit_access(
     *,
     principal: AuthPrincipal,
-    claim_row: Dict[str, Any],
+    claim_row: dict[str, Any],
 ) -> None:
     if principal.is_admin:
         return
@@ -1037,7 +1035,7 @@ async def _ensure_claim_edit_access(
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to edit claim")
 
 
-def _can_review_claim(principal: AuthPrincipal, claim_row: Dict[str, Any]) -> bool:
+def _can_review_claim(principal: AuthPrincipal, claim_row: dict[str, Any]) -> bool:
     if principal.is_admin:
         return True
     reviewer_id = claim_row.get("reviewer_id")
@@ -1073,13 +1071,13 @@ def _ensure_claims_review(principal: AuthPrincipal) -> None:
 
 def _filter_notifications_for_principal(
     principal: AuthPrincipal,
-    rows: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     if principal.is_admin:
         return rows
     allowed_roles = {str(r) for r in (principal.roles or [])}
     allowed_user = str(principal.user_id) if principal.user_id is not None else ""
-    filtered: List[Dict[str, Any]] = []
+    filtered: list[dict[str, Any]] = []
     for row in rows:
         target_user_id = row.get("target_user_id")
         target_group = row.get("target_review_group")
@@ -1092,7 +1090,7 @@ def _filter_notifications_for_principal(
     return filtered
 
 
-def _percentile_value(values: List[int], percentile: float) -> Optional[int]:
+def _percentile_value(values: list[int], percentile: float) -> int | None:
     if not values:
         return None
     ordered = sorted(values)
@@ -1101,7 +1099,7 @@ def _percentile_value(values: List[int], percentile: float) -> Optional[int]:
     return int(ordered[idx])
 
 
-def _percentile_float(values: List[float], percentile: float) -> Optional[float]:
+def _percentile_float(values: list[float], percentile: float) -> float | None:
     if not values:
         return None
     ordered = sorted(values)
@@ -1111,8 +1109,8 @@ def _percentile_float(values: List[float], percentile: float) -> Optional[float]
 
 
 async def _fetch_claims_provider_usage_async(
-    owner_user_id: Optional[str],
-) -> List[Dict[str, Any]]:
+    owner_user_id: str | None,
+) -> list[dict[str, Any]]:
     db_pool = await get_db_pool()
     pg = await is_postgres_backend()
     operations = ["claims_extract", "claims_verify", "claims_ingestion"]
@@ -1125,7 +1123,7 @@ async def _fetch_claims_provider_usage_async(
 
     if pg:
         where = ["operation = ANY(?)"]
-        params: List[Any] = [operations]
+        params: list[Any] = [operations]
         if user_id_val is not None:
             where.append("user_id = ?")
             params.append(user_id_val)
@@ -1170,7 +1168,7 @@ async def _fetch_claims_provider_usage_async(
         "FROM llm_usage_log WHERE " + " AND ".join(where)
     )
     rows = await db_pool.fetchall(sql, params)
-    grouped: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in rows:
         provider = str(row["provider"] if isinstance(row, dict) else row[0])
         model = str(row["model"] if isinstance(row, dict) else row[1])
@@ -1205,7 +1203,7 @@ async def _fetch_claims_provider_usage_async(
                 bucket["latencies"].append(float(latency_ms))
             except Exception:
                 pass
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for bucket in grouped.values():
         latencies = bucket.pop("latencies", [])
         latency_avg = None
@@ -1220,7 +1218,7 @@ async def _fetch_claims_provider_usage_async(
     return out
 
 
-def _fetch_claims_provider_usage(owner_user_id: Optional[str]) -> List[Dict[str, Any]]:
+def _fetch_claims_provider_usage(owner_user_id: str | None) -> list[dict[str, Any]]:
     try:
         return asyncio.run(_fetch_claims_provider_usage_async(owner_user_id))
     except RuntimeError:
@@ -1229,7 +1227,7 @@ def _fetch_claims_provider_usage(owner_user_id: Optional[str]) -> List[Dict[str,
         return []
 
 
-def _build_review_latency_stats(db: MediaDatabase) -> Dict[str, Optional[float]]:
+def _build_review_latency_stats(db: MediaDatabase) -> dict[str, float | None]:
     avg_latency_sec = None
     if db.backend_type == BackendType.POSTGRESQL:
         avg_row = db.execute_query(
@@ -1285,7 +1283,7 @@ def _build_review_latency_stats(db: MediaDatabase) -> Dict[str, Optional[float]]
     }
 
 
-def _build_review_throughput(db: MediaDatabase, window_days: int) -> Dict[str, Any]:
+def _build_review_throughput(db: MediaDatabase, window_days: int) -> dict[str, Any]:
     window_days = max(1, int(window_days))
     today = datetime.utcnow().date()
     start_date = today - timedelta(days=window_days - 1)
@@ -1305,7 +1303,7 @@ def _build_review_throughput(db: MediaDatabase, window_days: int) -> Dict[str, A
         )
         rows = db.execute_query(sql, (since_dt.strftime("%Y-%m-%d %H:%M:%S"),)).fetchall()
 
-    counts_by_day: Dict[str, int] = {}
+    counts_by_day: dict[str, int] = {}
     for row in rows:
         day_val = row[0]
         if day_val is None:
@@ -1313,7 +1311,7 @@ def _build_review_throughput(db: MediaDatabase, window_days: int) -> Dict[str, A
         day_str = str(day_val)
         counts_by_day[day_str] = int(row[1]) if row[1] is not None else 0
 
-    series: List[Dict[str, Any]] = []
+    series: list[dict[str, Any]] = []
     total = 0
     for i in range(window_days):
         day = start_date + timedelta(days=i)
@@ -1324,7 +1322,7 @@ def _build_review_throughput(db: MediaDatabase, window_days: int) -> Dict[str, A
     return {"window_days": window_days, "total": total, "daily": series}
 
 
-def _build_review_status_trends(db: MediaDatabase, window_days: int) -> Dict[str, Any]:
+def _build_review_status_trends(db: MediaDatabase, window_days: int) -> dict[str, Any]:
     window_days = max(1, int(window_days))
     today = datetime.utcnow().date()
     start_date = today - timedelta(days=window_days - 1)
@@ -1345,7 +1343,7 @@ def _build_review_status_trends(db: MediaDatabase, window_days: int) -> Dict[str
         )
         rows = db.execute_query(sql, (since_dt.strftime("%Y-%m-%d %H:%M:%S"),)).fetchall()
 
-    counts_by_day: Dict[str, Dict[str, int]] = {}
+    counts_by_day: dict[str, dict[str, int]] = {}
     for row in rows:
         day_val = row.get("day") if hasattr(row, "get") else row[0]
         status_val = row.get("new_status") if hasattr(row, "get") else row[1]
@@ -1362,7 +1360,7 @@ def _build_review_status_trends(db: MediaDatabase, window_days: int) -> Dict[str
             counts_by_day[day_str] = {}
         counts_by_day[day_str][status_key] = count_int
 
-    series: List[Dict[str, Any]] = []
+    series: list[dict[str, Any]] = []
     for i in range(window_days):
         day = start_date + timedelta(days=i)
         day_str = day.isoformat()
@@ -1372,7 +1370,7 @@ def _build_review_status_trends(db: MediaDatabase, window_days: int) -> Dict[str
     return {"window_days": window_days, "daily": series}
 
 
-def _build_claims_per_media_stats(db: MediaDatabase) -> Tuple[List[Dict[str, int]], Dict[str, Optional[float]]]:
+def _build_claims_per_media_stats(db: MediaDatabase) -> tuple[list[dict[str, int]], dict[str, float | None]]:
     media_rows = db.execute_query(
         "SELECT media_id, COUNT(*) AS count FROM Claims WHERE deleted = 0 GROUP BY media_id"
     ).fetchall()
@@ -1385,9 +1383,9 @@ def _build_claims_per_media_stats(db: MediaDatabase) -> Tuple[List[Dict[str, int
     return top, {"mean": mean_val, "p95": p95_val, "max": max_val}
 
 
-def _build_cluster_stats(db: MediaDatabase, owner_user_id: Optional[str]) -> Dict[str, Any]:
-    conditions: List[str] = []
-    params: List[Any] = []
+def _build_cluster_stats(db: MediaDatabase, owner_user_id: str | None) -> dict[str, Any]:
+    conditions: list[str] = []
+    params: list[Any] = []
     if owner_user_id:
         conditions.append("c.user_id = ?")
         params.append(str(owner_user_id))
@@ -1432,8 +1430,8 @@ def _build_cluster_stats(db: MediaDatabase, owner_user_id: Optional[str]) -> Dic
             }
         )
 
-    hotspot_conditions: List[str] = ["COALESCE(i.issue_count, 0) > 0"]
-    hotspot_params: List[Any] = []
+    hotspot_conditions: list[str] = ["COALESCE(i.issue_count, 0) > 0"]
+    hotspot_params: list[Any] = []
     if owner_user_id:
         hotspot_conditions.append("c.user_id = ?")
         hotspot_params.append(str(owner_user_id))
@@ -1455,7 +1453,7 @@ def _build_cluster_stats(db: MediaDatabase, owner_user_id: Optional[str]) -> Dic
         "ORDER BY issue_count DESC, member_count DESC LIMIT 20"
     )
     hotspot_rows = db.execute_query(hotspot_sql, tuple(hotspot_params)).fetchall()
-    hotspots: List[Dict[str, Any]] = []
+    hotspots: list[dict[str, Any]] = []
     for row in hotspot_rows:
         member_count = int(row.get("member_count") or 0)
         issue_count = int(row.get("issue_count") or 0)
@@ -1487,7 +1485,7 @@ def _build_cluster_stats(db: MediaDatabase, owner_user_id: Optional[str]) -> Dic
     }
 
 
-def _build_claims_analytics(db: MediaDatabase, owner_user_id: Optional[str], window_days: int) -> Dict[str, Any]:
+def _build_claims_analytics(db: MediaDatabase, owner_user_id: str | None, window_days: int) -> dict[str, Any]:
     status_rows = db.execute_query(
         "SELECT review_status, COUNT(*) AS count FROM Claims WHERE deleted = 0 GROUP BY review_status"
     ).fetchall()
@@ -1515,7 +1513,7 @@ def _build_claims_analytics(db: MediaDatabase, owner_user_id: Optional[str], win
     }
 
 
-def _compute_unsupported_ratios(window_sec: int, baseline_sec: int) -> Dict[str, Optional[float]]:
+def _compute_unsupported_ratios(window_sec: int, baseline_sec: int) -> dict[str, float | None]:
     try:
         from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
     except Exception:
@@ -1554,12 +1552,12 @@ def _resolve_media_db(
     *,
     db: MediaDatabase,
     current_user: User,
-    user_id: Optional[int],
+    user_id: int | None,
     admin_required: bool,
     owner_filter: bool = False,
-) -> Tuple[MediaDatabase, Optional[int]]:
-    override_db: Optional[MediaDatabase] = None
-    owner_user_id: Optional[int] = None
+) -> tuple[MediaDatabase, int | None]:
+    override_db: MediaDatabase | None = None
+    owner_user_id: int | None = None
     try:
         if user_id is not None:
             if not getattr(current_user, "is_admin", False) and admin_required:
@@ -1587,18 +1585,18 @@ def _resolve_media_db(
 
 def list_all_claims(
     *,
-    media_id: Optional[int],
-    review_status: Optional[str],
-    reviewer_id: Optional[int],
-    review_group: Optional[str],
-    claim_cluster_id: Optional[int],
+    media_id: int | None,
+    review_status: str | None,
+    reviewer_id: int | None,
+    review_group: str | None,
+    claim_cluster_id: int | None,
     limit: int,
     offset: int,
     include_deleted: bool,
-    user_id: Optional[int],
+    user_id: int | None,
     current_user: User,
     db: MediaDatabase,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     with _resolve_media_db(
         db=db,
         current_user=current_user,
@@ -1626,10 +1624,10 @@ def search_claims(
     limit: int,
     offset: int,
     group_by_cluster: bool,
-    user_id: Optional[int],
+    user_id: int | None,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     with _resolve_media_db(
         db=db,
         current_user=current_user,
@@ -1656,9 +1654,9 @@ def search_claims(
                 "orphaned": None,
             }
 
-        clusters: List[Dict[str, Any]] = []
-        orphaned: List[Dict[str, Any]] = []
-        cluster_ids: List[int] = []
+        clusters: list[dict[str, Any]] = []
+        orphaned: list[dict[str, Any]] = []
+        cluster_ids: list[int] = []
         for row in sliced:
             cluster_id = row.get("claim_cluster_id")
             if cluster_id is None:
@@ -1671,7 +1669,7 @@ def search_claims(
             for c in target_db.get_claim_clusters_by_ids(cluster_ids)
             if c.get("id") is not None
         }
-        cluster_hits: Dict[int, Dict[str, Any]] = {}
+        cluster_hits: dict[int, dict[str, Any]] = {}
         for row in sliced:
             cluster_id = row.get("claim_cluster_id")
             if cluster_id is None:
@@ -1705,19 +1703,19 @@ def search_claims(
 
 def list_claim_notifications(
     *,
-    kind: Optional[str],
-    target_user_id: Optional[str],
-    target_review_group: Optional[str],
-    resource_type: Optional[str],
-    resource_id: Optional[str],
-    delivered: Optional[bool],
+    kind: str | None,
+    target_user_id: str | None,
+    target_review_group: str | None,
+    resource_type: str | None,
+    resource_id: str | None,
+    delivered: bool | None,
     limit: int,
     offset: int,
-    user_id: Optional[int],
+    user_id: int | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     _ensure_claims_review(principal)
     with _resolve_media_db(
         db=db,
@@ -1746,12 +1744,12 @@ def list_claim_notifications(
 
 def mark_claim_notifications_delivered(
     *,
-    ids: List[int],
-    user_id: Optional[int],
+    ids: list[int],
+    user_id: int | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_review(principal)
     if not ids:
         return {"status": "ok", "updated": 0}
@@ -1771,21 +1769,21 @@ def mark_claim_notifications_delivered(
 
 def claim_notifications_digest(
     *,
-    kind: Optional[str],
-    target_user_id: Optional[str],
-    target_review_group: Optional[str],
-    resource_type: Optional[str],
-    resource_id: Optional[str],
-    delivered: Optional[bool],
+    kind: str | None,
+    target_user_id: str | None,
+    target_review_group: str | None,
+    resource_type: str | None,
+    resource_id: str | None,
+    delivered: bool | None,
     limit: int,
     offset: int,
     include_items: bool,
     ack: bool,
-    user_id: Optional[int],
+    user_id: int | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_review(principal)
     with _resolve_media_db(
         db=db,
@@ -1807,9 +1805,9 @@ def claim_notifications_digest(
             offset=offset,
         )
         filtered = _filter_notifications_for_principal(principal, rows)
-        counts_by_kind: Dict[str, int] = {}
-        counts_by_target_user: Dict[str, int] = {}
-        counts_by_review_group: Dict[str, int] = {}
+        counts_by_kind: dict[str, int] = {}
+        counts_by_target_user: dict[str, int] = {}
+        counts_by_review_group: dict[str, int] = {}
         normalized = [_normalize_notification_row(row) for row in filtered]
         for row in normalized:
             kind_val = str(row.get("kind") or "unknown")
@@ -1825,7 +1823,7 @@ def claim_notifications_digest(
         if ack:
             allowed_ids = [int(row.get("id")) for row in normalized if row.get("id") is not None]
             target_db.mark_claim_notifications_delivered(allowed_ids)
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "total": len(normalized),
             "counts_by_kind": counts_by_kind,
             "counts_by_target_user": counts_by_target_user,
@@ -1836,12 +1834,12 @@ def claim_notifications_digest(
         return payload
 
 
-def get_claims_settings(principal: AuthPrincipal) -> Dict[str, Any]:
+def get_claims_settings(principal: AuthPrincipal) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     return _claims_settings_snapshot()
 
 
-def list_claims_extractors(principal: AuthPrincipal) -> Dict[str, Any]:
+def list_claims_extractors(principal: AuthPrincipal) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     from tldw_Server_API.app.core.Claims_Extraction.extractor_catalog import get_claims_extractor_catalog
 
@@ -1854,11 +1852,11 @@ def list_claims_extractors(principal: AuthPrincipal) -> Dict[str, Any]:
 
 def update_claims_settings(
     *,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     principal: AuthPrincipal,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
-    updates: Dict[str, Any] = {}
+    updates: dict[str, Any] = {}
     if payload.get("enable_ingestion_claims") is not None:
         updates["ENABLE_INGESTION_CLAIMS"] = bool(payload["enable_ingestion_claims"])
     if payload.get("claim_extractor_mode") is not None:
@@ -1905,7 +1903,7 @@ def update_claims_settings(
     return _claims_settings_snapshot()
 
 
-def _normalize_monitoring_config_row(row: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_monitoring_config_row(row: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(row)
     if normalized.get("threshold_ratio") is None:
         normalized["threshold_ratio"] = float(settings.get("CLAIMS_ALERT_THRESHOLD_DEFAULT", 0.2))
@@ -1919,7 +1917,7 @@ def get_claims_monitoring_config(
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     row = db.get_claims_monitoring_settings(target_user_id)
@@ -1940,11 +1938,11 @@ def get_claims_monitoring_config(
 
 def update_claims_monitoring_config(
     *,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     existing = db.get_claims_monitoring_settings(target_user_id) or {}
@@ -1978,11 +1976,11 @@ def update_claims_monitoring_config(
 
 def list_claims_alerts(
     *,
-    user_id: Optional[int],
+    user_id: int | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     if user_id is not None:
@@ -1999,12 +1997,12 @@ def list_claims_alerts(
 
 def create_claims_alert(
     *,
-    payload: Dict[str, Any],
-    user_id: Optional[int],
+    payload: dict[str, Any],
+    user_id: int | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     if user_id is not None:
@@ -2053,11 +2051,11 @@ def create_claims_alert(
 def update_claims_alert(
     *,
     config_id: int,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     try:
         db.migrate_legacy_claims_monitoring_alerts(str(current_user.id))
@@ -2116,7 +2114,7 @@ def delete_claims_alert(
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     try:
         db.migrate_legacy_claims_monitoring_alerts(str(current_user.id))
@@ -2135,11 +2133,11 @@ def evaluate_claims_alerts(
     *,
     window_sec: int,
     baseline_sec: int,
-    user_id: Optional[int],
+    user_id: int | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     if user_id is not None:
@@ -2160,7 +2158,7 @@ def evaluate_claims_alerts_for_scheduler(
     window_sec: int,
     baseline_sec: int,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return _evaluate_claims_alerts_for_user(
         target_user_id=target_user_id,
         db=db,
@@ -2175,7 +2173,7 @@ def _evaluate_claims_alerts_for_user(
     window_sec: int,
     baseline_sec: int,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     monitoring_enabled = bool(settings.get("CLAIMS_MONITORING_ENABLED", False))
     try:
         db.migrate_legacy_claims_monitoring_alerts(target_user_id)
@@ -2186,7 +2184,7 @@ def _evaluate_claims_alerts_for_user(
     config_defaults = db.get_claims_monitoring_settings(target_user_id) or {}
     if config_defaults and not bool(config_defaults.get("enabled", True)):
         monitoring_enabled = False
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     for cfg in configs:
         enabled = bool(cfg.get("enabled", True))
         threshold = cfg.get("threshold_ratio")
@@ -2262,7 +2260,7 @@ def _evaluate_claims_alerts_for_user(
     return {"monitoring_enabled": monitoring_enabled, "ratios": ratios, "results": results}
 
 
-def claims_rebuild_status(*, rebuild_service: Any = None) -> Dict[str, Any]:
+def claims_rebuild_status(*, rebuild_service: Any = None) -> dict[str, Any]:
     """Return statistics about the claims rebuild worker."""
     try:
         svc = rebuild_service or get_claims_rebuild_service()
@@ -2285,9 +2283,9 @@ def claims_rebuild_status(*, rebuild_service: Any = None) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-def claims_rebuild_health(principal: AuthPrincipal, *, summary: bool = False) -> Dict[str, Any]:
+def claims_rebuild_health(principal: AuthPrincipal, *, summary: bool = False) -> dict[str, Any]:
     _ensure_claims_admin(principal)
-    persisted: Dict[str, Any] = {}
+    persisted: dict[str, Any] = {}
     try:
         persisted = _load_persisted_rebuild_health()
     except Exception:
@@ -2320,19 +2318,19 @@ def claims_rebuild_health(principal: AuthPrincipal, *, summary: bool = False) ->
 
 def get_review_queue(
     *,
-    status_filter: Optional[str],
-    reviewer_id: Optional[int],
-    review_group: Optional[str],
-    media_id: Optional[int],
-    extractor: Optional[str],
+    status_filter: str | None,
+    reviewer_id: int | None,
+    review_group: str | None,
+    media_id: int | None,
+    extractor: str | None,
     limit: int,
     offset: int,
     include_deleted: bool,
-    user_id: Optional[int],
+    user_id: int | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     _ensure_claims_review(principal)
     with _resolve_media_db(
         db=db,
@@ -2370,13 +2368,13 @@ def get_review_queue(
 async def review_claim(
     *,
     claim_id: int,
-    payload: Dict[str, Any],
-    user_id: Optional[int],
+    payload: dict[str, Any],
+    user_id: int | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
     request: Any = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_review(principal)
     with _resolve_media_db(
         db=db,
@@ -2517,11 +2515,11 @@ async def review_claim(
 def get_claim_review_history(
     *,
     claim_id: int,
-    user_id: Optional[int],
+    user_id: int | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     _ensure_claims_review(principal)
     with _resolve_media_db(
         db=db,
@@ -2540,13 +2538,13 @@ def get_claim_review_history(
 
 def bulk_review_claims(
     *,
-    payload: Dict[str, Any],
-    user_id: Optional[int],
+    payload: dict[str, Any],
+    user_id: int | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
     request: Any = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     if str(payload.get("status")).lower() == "reassigned" and not (
         payload.get("reviewer_id") or payload.get("review_group")
@@ -2559,10 +2557,10 @@ def bulk_review_claims(
         admin_required=not principal.is_admin,
         owner_filter=False,
     ) as (target_db, _owner_filter):
-        updated_ids: List[int] = []
-        conflicts: List[int] = []
-        missing: List[int] = []
-        invalid: List[int] = []
+        updated_ids: list[int] = []
+        conflicts: list[int] = []
+        missing: list[int] = []
+        invalid: list[int] = []
         rebuild_media_ids: set[int] = set()
         action_ip, action_user_agent = _extract_request_metadata(request)
         desired_status = str(payload.get("status")).lower()
@@ -2646,12 +2644,12 @@ def bulk_review_claims(
 
 def list_review_rules(
     *,
-    user_id: Optional[int],
+    user_id: int | None,
     active_only: bool,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     if user_id is not None:
@@ -2664,12 +2662,12 @@ def list_review_rules(
 
 def create_review_rule(
     *,
-    payload: Dict[str, Any],
-    user_id: Optional[int],
+    payload: dict[str, Any],
+    user_id: int | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     if user_id is not None:
@@ -2692,11 +2690,11 @@ def create_review_rule(
 def update_review_rule(
     *,
     rule_id: int,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     existing = db.get_claim_review_rule(int(rule_id))
     if not existing:
@@ -2720,7 +2718,7 @@ def delete_review_rule(
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     existing = db.get_claim_review_rule(int(rule_id))
     if not existing:
@@ -2731,7 +2729,7 @@ def delete_review_rule(
     return {"status": "deleted", "id": int(rule_id)}
 
 
-def review_analytics(principal: AuthPrincipal, db: MediaDatabase) -> Dict[str, Any]:
+def review_analytics(principal: AuthPrincipal, db: MediaDatabase) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     owner_user_id = str(principal.user_id) if principal.user_id is not None else None
     return _build_claims_analytics(db, owner_user_id, window_days=7)
@@ -2744,7 +2742,7 @@ def claims_dashboard_analytics(
     baseline_sec: int,
     principal: AuthPrincipal,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     owner_user_id = str(principal.user_id) if principal.user_id is not None else None
     payload = _build_claims_analytics(db, owner_user_id, window_days=window_days)
@@ -2781,7 +2779,7 @@ def claims_dashboard_analytics(
     return payload
 
 
-def _parse_iso_date(value: Optional[str]) -> Optional[date]:
+def _parse_iso_date(value: str | None) -> date | None:
     if not value:
         return None
     try:
@@ -2793,9 +2791,9 @@ def _parse_iso_date(value: Optional[str]) -> Optional[date]:
 def aggregate_claims_review_extractor_metrics_daily(
     *,
     db: MediaDatabase,
-    target_user_id: Optional[str] = None,
-    report_date: Optional[str] = None,
-    lookback_days: Optional[int] = None,
+    target_user_id: str | None = None,
+    report_date: str | None = None,
+    lookback_days: int | None = None,
 ) -> int:
     if db.backend_type == BackendType.POSTGRESQL and not target_user_id:
         logger.debug("Claims review metrics aggregation skipped: missing target_user_id for Postgres")
@@ -2837,7 +2835,7 @@ def aggregate_claims_review_extractor_metrics_daily(
         media_table = "Media"
 
     owner_filter_sql = ""
-    params: List[Any] = [start_param, end_param]
+    params: list[Any] = [start_param, end_param]
     if db.backend_type == BackendType.POSTGRESQL and target_user_id:
         owner_filter_sql = (
             f" AND COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = {placeholder}"
@@ -2886,7 +2884,7 @@ def aggregate_claims_review_extractor_metrics_daily(
         return 0
 
     reason_rows = db.execute_query(reason_sql, tuple(params)).fetchall()
-    reason_counts: Dict[Tuple[str, str, str], Dict[str, int]] = {}
+    reason_counts: dict[tuple[str, str, str], dict[str, int]] = {}
     for row in reason_rows:
         try:
             day_val = row[0]
@@ -2946,17 +2944,17 @@ def aggregate_claims_review_extractor_metrics_daily(
 
 def list_claims_review_metrics(
     *,
-    start_date: Optional[str],
-    end_date: Optional[str],
-    extractor: Optional[str],
-    extractor_version: Optional[str],
-    user_id: Optional[int],
+    start_date: str | None,
+    end_date: str | None,
+    extractor: str | None,
+    extractor_version: str | None,
+    user_id: int | None,
     limit: int,
     offset: int,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     target_user_id = str(getattr(current_user, "id", None) or settings.get("SINGLE_USER_FIXED_ID", "1"))
     if user_id is not None:
@@ -2987,7 +2985,7 @@ def list_claims_review_metrics(
 
 def export_claims_analytics(
     *,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
@@ -3101,13 +3099,13 @@ def list_claims_analytics_exports(
     *,
     limit: int,
     offset: int,
-    status_filter: Optional[str],
-    format_filter: Optional[str],
-    workspace_id: Optional[str],
+    status_filter: str | None,
+    format_filter: str | None,
+    workspace_id: str | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     if workspace_id:
@@ -3133,7 +3131,7 @@ def list_claims_analytics_exports(
         status=status_filter,
         format=format_filter,
     )
-    exports: List[Dict[str, Any]] = []
+    exports: list[dict[str, Any]] = []
     for row in rows:
         filters = None
         pagination = None
@@ -3177,7 +3175,7 @@ def get_claims_analytics_export(
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     row = db.get_claims_analytics_export(str(export_id))
     if not row:
@@ -3205,15 +3203,15 @@ def list_claim_clusters(
     *,
     limit: int,
     offset: int,
-    updated_since: Optional[str],
-    keyword: Optional[str],
-    min_size: Optional[int],
-    watchlisted: Optional[bool],
-    user_id: Optional[int],
+    updated_since: str | None,
+    keyword: str | None,
+    min_size: int | None,
+    watchlisted: bool | None,
+    user_id: int | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     _ensure_claims_review(principal)
     target_user_id = str(current_user.id)
     if user_id is not None:
@@ -3247,13 +3245,13 @@ def list_claim_clusters(
 def rebuild_claim_clusters(
     *,
     min_size: int,
-    user_id: Optional[int],
-    method: Optional[str],
-    similarity_threshold: Optional[float],
+    user_id: int | None,
+    method: str | None,
+    similarity_threshold: float | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_admin(principal)
     target_user_id = str(current_user.id)
     if user_id is not None:
@@ -3303,14 +3301,14 @@ def rebuild_claim_clusters(
     return result
 
 
-def _evaluate_watchlist_cluster_notifications(db: MediaDatabase, user_id: str) -> Dict[str, Any]:
+def _evaluate_watchlist_cluster_notifications(db: MediaDatabase, user_id: str) -> dict[str, Any]:
     watch_db = _get_watchlists_db(user_id)
     if not watch_db:
         return {"status": "skipped", "reason": "watchlists_unavailable"}
     rows = watch_db.list_watchlist_cluster_subscriptions()
     if not rows:
         return {"status": "skipped", "reason": "no_subscriptions"}
-    subscriptions: Dict[int, List[int]] = {}
+    subscriptions: dict[int, list[int]] = {}
     for row in rows:
         try:
             cluster_id = int(row.get("cluster_id"))
@@ -3348,7 +3346,7 @@ def get_claim_cluster(
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_review(principal)
     cluster = db.get_claim_cluster(int(cluster_id))
     if not cluster:
@@ -3375,7 +3373,7 @@ def list_claim_cluster_links(
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     _ensure_claims_review(principal)
     cluster = db.get_claim_cluster(int(cluster_id))
     if not cluster:
@@ -3383,7 +3381,7 @@ def list_claim_cluster_links(
     if not principal.is_admin and str(cluster.get("user_id")) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
     rows = db.list_claim_cluster_links(cluster_id=int(cluster_id), direction=direction)
-    links: List[Dict[str, Any]] = []
+    links: list[dict[str, Any]] = []
     for row in rows:
         parent_id = int(row.get("parent_cluster_id") or 0)
         child_id = int(row.get("child_cluster_id") or 0)
@@ -3408,11 +3406,11 @@ def list_claim_cluster_links(
 def create_claim_cluster_link(
     *,
     cluster_id: int,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_review(principal)
     parent_id = int(cluster_id)
     child_id = int(payload.get("child_cluster_id"))
@@ -3447,7 +3445,7 @@ def delete_claim_cluster_link(
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_review(principal)
     parent = db.get_claim_cluster(int(cluster_id))
     child = db.get_claim_cluster(int(child_cluster_id))
@@ -3475,7 +3473,7 @@ def list_claim_cluster_members(
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     _ensure_claims_review(principal)
     cluster = db.get_claim_cluster(int(cluster_id))
     if not cluster:
@@ -3488,11 +3486,11 @@ def list_claim_cluster_members(
 
 def evaluate_watchlist_cluster_notifications(
     *,
-    user_id: Optional[int],
+    user_id: int | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_review(principal)
     with _resolve_media_db(
         db=db,
@@ -3513,7 +3511,7 @@ def claim_cluster_timeline(
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_review(principal)
     cluster = db.get_claim_cluster(int(cluster_id))
     if not cluster:
@@ -3538,7 +3536,7 @@ def claim_cluster_evidence(
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _ensure_claims_review(principal)
     cluster = db.get_claim_cluster(int(cluster_id))
     if not cluster:
@@ -3572,7 +3570,7 @@ def list_claims_by_media(
     offset: int,
     envelope: bool,
     absolute_links: bool,
-    user_id: Optional[int],
+    user_id: int | None,
     current_user: User,
     db: MediaDatabase,
     request: Any = None,
@@ -3596,10 +3594,10 @@ def list_claims_by_media(
             total = int(row[0]) if row else 0
         except Exception:
             total = offset + len(claims)
-        next_off: Optional[int] = None
+        next_off: int | None = None
         if offset + len(claims) < total:
             next_off = offset + len(claims)
-        next_link: Optional[str] = None
+        next_link: str | None = None
         if next_off is not None:
             if request and absolute_links:
                 base = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
@@ -3625,10 +3623,10 @@ def get_claim_item(
     *,
     claim_id: int,
     include_deleted: bool,
-    user_id: Optional[int],
+    user_id: int | None,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     with _resolve_media_db(
         db=db,
         current_user=current_user,
@@ -3645,12 +3643,12 @@ def get_claim_item(
 async def update_claim_item(
     *,
     claim_id: int,
-    payload: Dict[str, Any],
-    user_id: Optional[int],
+    payload: dict[str, Any],
+    user_id: int | None,
     principal: AuthPrincipal,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     with _resolve_media_db(
         db=db,
         current_user=current_user,
@@ -3695,11 +3693,11 @@ async def update_claim_item(
 def rebuild_claims(
     *,
     media_id: int,
-    user_id: Optional[int],
+    user_id: int | None,
     current_user: User,
     db: MediaDatabase,
     rebuild_service: Any = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if user_id is not None and getattr(current_user, "is_admin", False):
         db_path = get_user_media_db_path(int(user_id))
     else:
@@ -3712,12 +3710,12 @@ def rebuild_claims(
 def rebuild_all_media(
     *,
     policy: str,
-    user_id: Optional[int],
+    user_id: int | None,
     current_user: User,
     db: MediaDatabase,
     rebuild_service: Any = None,
-) -> Dict[str, Any]:
-    override_db: Optional[MediaDatabase] = None
+) -> dict[str, Any]:
+    override_db: MediaDatabase | None = None
     try:
         if user_id is not None and getattr(current_user, "is_admin", False):
             db_path = get_user_media_db_path(int(user_id))
@@ -3778,11 +3776,11 @@ def rebuild_all_media(
 
 def rebuild_claims_fts(
     *,
-    user_id: Optional[int],
+    user_id: int | None,
     current_user: User,
     db: MediaDatabase,
-) -> Dict[str, Any]:
-    override_db: Optional[MediaDatabase] = None
+) -> dict[str, Any]:
+    override_db: MediaDatabase | None = None
     try:
         if user_id is not None and getattr(current_user, "is_admin", False):
             db_path = get_user_media_db_path(int(user_id))

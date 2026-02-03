@@ -21,44 +21,29 @@ Notes
 #
 # Import necessary libraries
 import asyncio
-import threading
-import json
 import os
-import time
-from typing import List, Any, Optional, Tuple, Dict, Union, Iterable
-#
-# Import 3rd-Party Libraries
-from tldw_Server_API.app.core.http_client import fetch, RetryPolicy
+from typing import Any, Optional, Union
 
-from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call, perform_chat_api_call_async
+
 #
 # Import Local libraries
 from tldw_Server_API.app.core.config import load_and_log_configs
-from tldw_Server_API.app.core.Utils.Utils import logging
-from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAuthenticationError, ChatRateLimitError, \
-    ChatBadRequestError, ChatProviderError, ChatConfigurationError
-from tldw_Server_API.app.core.LLM_Calls.sse import (
-    finalize_stream,
-    ensure_sse_line,
-    is_done_line,
-    normalize_provider_line,
-    openai_delta_chunk,
-    sse_data,
-    sse_done,
-)
-from tldw_Server_API.app.core.LLM_Calls.http_helpers import create_session_with_retries as _legacy_create_session_with_retries
-from tldw_Server_API.app.core.LLM_Calls.streaming import (
-    iter_sse_lines_requests,
-)
+
+#
+# Import 3rd-Party Libraries
+from tldw_Server_API.app.core.http_client import RetryPolicy, fetch
+from tldw_Server_API.app.core.LLM_Calls.deprecation import log_legacy_once
 from tldw_Server_API.app.core.LLM_Calls.error_utils import (
     get_http_error_text,
     get_http_status_from_exception,
-    is_chunked_encoding_error,
     is_http_status_error,
     is_network_error,
 )
-from tldw_Server_API.app.core.LLM_Calls.deprecation import log_legacy_once
+from tldw_Server_API.app.core.LLM_Calls.http_helpers import (
+    create_session_with_retries as _legacy_create_session_with_retries,
+)
+from tldw_Server_API.app.core.Utils.Utils import logging
 
 # -----------------------------------------------------------------------------
 # Session shim for non-streaming POST calls
@@ -148,8 +133,8 @@ def create_session_with_retries(
 def _call_adapter(
         provider: str,
         *,
-        input_data: List[Dict[str, Any]],
-        app_config: Optional[Dict[str, Any]] = None,
+        input_data: list[dict[str, Any]],
+        app_config: Optional[dict[str, Any]] = None,
         **kwargs: Any,
 ) -> Any:
     log_legacy_once(
@@ -167,8 +152,8 @@ def _call_adapter(
 async def _call_adapter_async(
         provider: str,
         *,
-        input_data: List[Dict[str, Any]],
-        app_config: Optional[Dict[str, Any]] = None,
+        input_data: list[dict[str, Any]],
+        app_config: Optional[dict[str, Any]] = None,
         **kwargs: Any,
 ) -> Any:
     log_legacy_once(
@@ -189,7 +174,7 @@ async def _call_adapter_async(
 # Provider-specific implementations live under `providers/`.
 
 def chat_with_openai(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_message: Optional[str] = None,
@@ -197,20 +182,20 @@ def chat_with_openai(
         maxp: Optional[float] = None,
         streaming: Optional[bool] = False,
         frequency_penalty: Optional[float] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
         max_tokens: Optional[int] = None,
         n: Optional[int] = None,
         presence_penalty: Optional[float] = None,
-        response_format: Optional[Dict[str, str]] = None,
+        response_format: Optional[dict[str, str]] = None,
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
         user: Optional[str] = None,
         custom_prompt_arg: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return _call_adapter(
         "openai",
@@ -240,7 +225,7 @@ def chat_with_openai(
 
 
 def chat_with_groq(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_message: Optional[str] = None,
@@ -249,19 +234,19 @@ def chat_with_groq(
         streaming: Optional[bool] = False,
         max_tokens: Optional[int] = None,
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        response_format: Optional[Dict[str, str]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
+        response_format: Optional[dict[str, str]] = None,
         n: Optional[int] = None,
         user: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
         custom_prompt_arg: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return _call_adapter(
         "groq",
@@ -291,7 +276,7 @@ def chat_with_groq(
 
 
 def chat_with_openrouter(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_message: Optional[str] = None,
@@ -302,19 +287,19 @@ def chat_with_openrouter(
         min_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        response_format: Optional[Dict[str, str]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
+        response_format: Optional[dict[str, str]] = None,
         n: Optional[int] = None,
         user: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
         custom_prompt_arg: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return _call_adapter(
         "openrouter",
@@ -346,7 +331,7 @@ def chat_with_openrouter(
 
 
 def chat_with_google(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_message: Optional[str] = None,
@@ -355,12 +340,12 @@ def chat_with_google(
         topp: Optional[float] = None,
         topk: Optional[int] = None,
         max_output_tokens: Optional[int] = None,
-        stop_sequences: Optional[List[str]] = None,
+        stop_sequences: Optional[list[str]] = None,
         candidate_count: Optional[int] = None,
-        response_format: Optional[Dict[str, str]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
+        response_format: Optional[dict[str, str]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
         custom_prompt_arg: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return _call_adapter(
         "google",
@@ -383,19 +368,19 @@ def chat_with_google(
 
 
 def chat_with_mistral(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_message: Optional[str] = None,
         temp: Optional[float] = None,
         streaming: Optional[bool] = False,
         topp: Optional[float] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
         random_seed: Optional[int] = None,
         top_k: Optional[int] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return _call_adapter(
         "mistral",
@@ -416,7 +401,7 @@ def chat_with_mistral(
 
 
 def chat_with_qwen(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_message: Optional[str] = None,
@@ -425,19 +410,19 @@ def chat_with_qwen(
         maxp: Optional[float] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
         max_tokens: Optional[int] = None,
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        response_format: Optional[Dict[str, str]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
+        response_format: Optional[dict[str, str]] = None,
         n: Optional[int] = None,
         user: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
         custom_prompt_arg: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return _call_adapter(
         "qwen",
@@ -467,13 +452,13 @@ def chat_with_qwen(
 
 
 def chat_with_huggingface(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_message: Optional[str] = None,
         temp: Optional[float] = None,
         streaming: Optional[bool] = False,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return _call_adapter(
         "huggingface",
@@ -501,7 +486,7 @@ def _safe_cast(value: Any, cast_to: type, default: Any = None) -> Any:
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
-def _resolve_openai_api_base(openai_cfg: Dict[str, Any]) -> str:
+def _resolve_openai_api_base(openai_cfg: dict[str, Any]) -> str:
     """Resolve the OpenAI API base URL.
 
     Precedence: config keys (api_base_url, api_base, base_url),
@@ -528,8 +513,8 @@ def _resolve_openai_api_base(openai_cfg: Dict[str, Any]) -> str:
 
 def _resolve_openai_embeddings_api_key(
     model: Optional[str],
-    openai_cfg: Optional[Dict[str, Any]],
-    app_config: Optional[Dict[str, Any]],
+    openai_cfg: Optional[dict[str, Any]],
+    app_config: Optional[dict[str, Any]],
 ) -> Optional[str]:
     api_key = (openai_cfg or {}).get("api_key")
     if api_key:
@@ -580,7 +565,7 @@ def extract_text_from_segments(segments):
     return text.strip()
 
 
-def _parse_data_url_for_multimodal(data_url: str) -> Optional[Tuple[str, str]]:
+def _parse_data_url_for_multimodal(data_url: str) -> Optional[tuple[str, str]]:
     """Parses a data URL (e.g., data:image/png;base64,xxxx) into (mime_type, base64_data)."""
     if data_url.startswith("data:") and ";base64," in data_url:
         try:
@@ -596,9 +581,9 @@ def _parse_data_url_for_multimodal(data_url: str) -> Optional[Tuple[str, str]]:
 def get_openai_embeddings(
     input_data: str,
     model: str,
-    app_config: Optional[Dict[str, Any]] = None,
+    app_config: Optional[dict[str, Any]] = None,
     dimensions: Optional[int] = None,
-) -> List[float]:
+) -> list[float]:
     """
     Get embeddings for a single input text from OpenAI API.
     Args:
@@ -610,7 +595,7 @@ def get_openai_embeddings(
         List[float]: The embeddings generated by the API.
     """
     api_key = None
-    openai_cfg: Dict[str, Any] = {}
+    openai_cfg: dict[str, Any] = {}
     if app_config:
         # Preferred: explicit openai_api section
         openai_cfg = (app_config.get('openai_api') or {})
@@ -694,11 +679,11 @@ def get_openai_embeddings(
 
 # NEW BATCH FUNCTION
 def get_openai_embeddings_batch(
-    texts: List[str],
+    texts: list[str],
     model: str,
-    app_config: Optional[Dict[str, Any]] = None,
+    app_config: Optional[dict[str, Any]] = None,
     dimensions: Optional[int] = None,
-) -> List[List[float]]:
+) -> list[list[float]]:
     """
     Get embeddings for a batch of input texts from OpenAI API in a single call.
     Args:
@@ -712,7 +697,7 @@ def get_openai_embeddings_batch(
     if not texts:
         return []
 
-    openai_cfg: Dict[str, Any] = {}
+    openai_cfg: dict[str, Any] = {}
     if app_config:
         openai_cfg = app_config.get('openai_api', {}) or {}
         api_key = _resolve_openai_embeddings_api_key(model, openai_cfg, app_config)
@@ -817,7 +802,7 @@ def get_openai_embeddings_batch(
 
 
 async def chat_with_openai_async(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_message: Optional[str] = None,
@@ -825,20 +810,20 @@ async def chat_with_openai_async(
         maxp: Optional[float] = None,
         streaming: Optional[bool] = False,
         frequency_penalty: Optional[float] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
         max_tokens: Optional[int] = None,
         n: Optional[int] = None,
         presence_penalty: Optional[float] = None,
-        response_format: Optional[Dict[str, str]] = None,
+        response_format: Optional[dict[str, str]] = None,
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
         user: Optional[str] = None,
         custom_prompt_arg: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return await _call_adapter_async(
         "openai",
@@ -868,7 +853,7 @@ async def chat_with_openai_async(
 
 
 async def chat_with_groq_async(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_message: Optional[str] = None,
@@ -877,18 +862,18 @@ async def chat_with_groq_async(
         streaming: Optional[bool] = False,
         max_tokens: Optional[int] = None,
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        response_format: Optional[Dict[str, str]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
+        response_format: Optional[dict[str, str]] = None,
         n: Optional[int] = None,
         user: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return await _call_adapter_async(
         "groq",
@@ -917,7 +902,7 @@ async def chat_with_groq_async(
 
 
 async def chat_with_anthropic_async(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_prompt: Optional[str] = None,
@@ -926,9 +911,9 @@ async def chat_with_anthropic_async(
         topk: Optional[int] = None,
         streaming: Optional[bool] = False,
         max_tokens: Optional[int] = None,
-        stop_sequences: Optional[List[str]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        stop_sequences: Optional[list[str]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return await _call_adapter_async(
         "anthropic",
@@ -948,7 +933,7 @@ async def chat_with_anthropic_async(
 
 
 async def chat_with_openrouter_async(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_message: Optional[str] = None,
@@ -959,18 +944,18 @@ async def chat_with_openrouter_async(
         min_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        response_format: Optional[Dict[str, str]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
+        response_format: Optional[dict[str, str]] = None,
         n: Optional[int] = None,
         user: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return await _call_adapter_async(
         "openrouter",
@@ -1001,7 +986,7 @@ async def chat_with_openrouter_async(
 
 
 def chat_with_bedrock(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_message: Optional[str] = None,
@@ -1010,20 +995,20 @@ def chat_with_bedrock(
         maxp: Optional[float] = None,  # top_p
         max_tokens: Optional[int] = None,
         n: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         seed: Optional[int] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        response_format: Optional[dict[str, Any]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
         user: Optional[str] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[dict[str, str]] = None,
+        extra_body: Optional[dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     """Uniform adapter-backed Bedrock entry point (prod)."""
     return _call_adapter(
@@ -1055,7 +1040,7 @@ def chat_with_bedrock(
 
 
 async def chat_with_bedrock_async(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_message: Optional[str] = None,
@@ -1064,20 +1049,20 @@ async def chat_with_bedrock_async(
         maxp: Optional[float] = None,  # top_p
         max_tokens: Optional[int] = None,
         n: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         seed: Optional[int] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        response_format: Optional[dict[str, Any]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
         user: Optional[str] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[dict[str, str]] = None,
+        extra_body: Optional[dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return await _call_adapter_async(
         "bedrock",
@@ -1108,7 +1093,7 @@ async def chat_with_bedrock_async(
 
 
 def chat_with_anthropic(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_prompt: Optional[str] = None,
@@ -1117,10 +1102,10 @@ def chat_with_anthropic(
         topk: Optional[int] = None,
         streaming: Optional[bool] = False,
         max_tokens: Optional[int] = None,
-        stop_sequences: Optional[List[str]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
+        stop_sequences: Optional[list[str]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
         custom_prompt_arg: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return _call_adapter(
         "anthropic",
@@ -1141,7 +1126,7 @@ def chat_with_anthropic(
 
 
 def chat_with_cohere(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_prompt: Optional[str] = None,
@@ -1150,14 +1135,14 @@ def chat_with_cohere(
         topp: Optional[float] = None,
         topk: Optional[int] = None,
         max_tokens: Optional[int] = None,
-        stop_sequences: Optional[List[str]] = None,
+        stop_sequences: Optional[list[str]] = None,
         seed: Optional[int] = None,
         num_generations: Optional[int] = None, # Only for non-streaming
         frequency_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
         custom_prompt_arg: Optional[str] = None, # Kept for legacy, but focus on structured input
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return _call_adapter(
         "cohere",
@@ -1182,7 +1167,7 @@ def chat_with_cohere(
 
 
 def chat_with_deepseek(
-        input_data: List[Dict[str, Any]],
+        input_data: list[dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         system_message: Optional[str] = None,
@@ -1191,19 +1176,19 @@ def chat_with_deepseek(
         topp: Optional[float] = None,
         max_tokens: Optional[int] = None,
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
         logprobs: Optional[bool] = None,
         top_logprobs: Optional[int] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
-        response_format: Optional[Dict[str, str]] = None,
+        response_format: Optional[dict[str, str]] = None,
         n: Optional[int] = None,
         user: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
+        logit_bias: Optional[dict[str, float]] = None,
         custom_prompt_arg: Optional[str] = None,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return _call_adapter(
         "deepseek",
@@ -1233,7 +1218,7 @@ def chat_with_deepseek(
 
 
 def chat_with_moonshot(
-        input_data: List[Dict[str, Any]],  # Mapped from 'messages_payload'
+        input_data: list[dict[str, Any]],  # Mapped from 'messages_payload'
         model: Optional[str] = None,  # Mapped from 'model'
         api_key: Optional[str] = None,  # Mapped from 'api_key'
         system_message: Optional[str] = None,  # Mapped from 'system_message'
@@ -1245,14 +1230,14 @@ def chat_with_moonshot(
         max_tokens: Optional[int] = None,
         n: Optional[int] = None,  # Number of completions
         presence_penalty: Optional[float] = None,
-        response_format: Optional[Dict[str, str]] = None,  # e.g., {"type": "json_object"}
+        response_format: Optional[dict[str, str]] = None,  # e.g., {"type": "json_object"}
         seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        stop: Optional[Union[str, list[str]]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, dict[str, Any]]] = None,
         user: Optional[str] = None,  # User identifier
         custom_prompt_arg: Optional[str] = None,  # Legacy
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return _call_adapter(
         "moonshot",
@@ -1279,7 +1264,7 @@ def chat_with_moonshot(
 
 
 def chat_with_zai(
-        input_data: List[Dict[str, Any]],  # Mapped from 'messages_payload'
+        input_data: list[dict[str, Any]],  # Mapped from 'messages_payload'
         model: Optional[str] = None,  # Mapped from 'model'
         api_key: Optional[str] = None,  # Mapped from 'api_key'
         system_message: Optional[str] = None,  # Mapped from 'system_message'
@@ -1288,11 +1273,11 @@ def chat_with_zai(
         streaming: Optional[bool] = False,  # Mapped from 'streaming'
         # Z.AI specific parameters
         max_tokens: Optional[int] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
         do_sample: Optional[bool] = None,
         request_id: Optional[str] = None,
         custom_prompt_arg: Optional[str] = None,  # Legacy
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
 ):
     return _call_adapter(
         "zai",

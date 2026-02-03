@@ -10,16 +10,15 @@ Notes:
 - Per-project feature toggle is supported via project metadata or env var.
 """
 
+import json
 import os
 import re
-import sys
-import json
-import tempfile
 import subprocess
+import sys
+import tempfile
 import textwrap
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, List
-
+from typing import Any, Optional
 
 _FORBIDDEN_IMPORTS = {
     "socket", "requests", "urllib", "http", "ftplib", "subprocess", "multiprocessing", "asyncio",
@@ -34,7 +33,7 @@ _FORBIDDEN_PATTERNS = [
 class EvalResult:
     success: bool
     reward: float
-    metrics: Dict[str, Any]
+    metrics: dict[str, Any]
     error: Optional[str] = None
 
 
@@ -102,7 +101,7 @@ class ProgramEvaluator:
             reward -= 2.0
         return float(max(-1.0, min(10.0, reward)))
 
-    def evaluate(self, *, project_id: Optional[int], db, llm_output: str, spec: Optional[Dict[str, Any]] = None) -> EvalResult:
+    def evaluate(self, *, project_id: Optional[int], db, llm_output: str, spec: Optional[dict[str, Any]] = None) -> EvalResult:
         """End-to-end evaluation: extract code, run sandbox, score.
 
         spec may include:
@@ -144,7 +143,7 @@ class ProgramEvaluator:
             return textwrap.dedent(block).strip()
         # Heuristic: find regions with many code-like lines
         lines = text.splitlines()
-        buf: List[str] = []
+        buf: list[str] = []
         for ln in lines:
             if any(tok in ln for tok in ("def ", "import ", "class ", "return ", "for ", "while ")):
                 buf.append(ln)
@@ -160,7 +159,7 @@ class ProgramEvaluator:
                 return True
         return False
 
-    def _execute_in_sandbox(self, code: str) -> Tuple[bool, str, str, Dict[str, Any]]:
+    def _execute_in_sandbox(self, code: str) -> tuple[bool, str, str, dict[str, Any]]:
         """Execute code in a restricted subprocess using isolated mode.
 
         Returns (success, stdout, stderr, globals_dump)
@@ -267,9 +266,9 @@ class ProgramEvaluator:
                     gjson = {}
             return True, out, err, gjson
 
-    def _score_from_outputs(self, stdout: str, globals_dump: Dict[str, Any], spec: Dict[str, Any]) -> Tuple[float, Dict[str, Any]]:
+    def _score_from_outputs(self, stdout: str, globals_dump: dict[str, Any], spec: dict[str, Any]) -> tuple[float, dict[str, Any]]:
         """Map execution results to reward in [-1..10]."""
-        metrics: Dict[str, Any] = {"mode": "sandbox", "constraints_ok": None}
+        metrics: dict[str, Any] = {"mode": "sandbox", "constraints_ok": None}
 
         # If spec provides metric_var and objective, use it
         metric_var = (spec or {}).get("metric_var")
@@ -323,7 +322,7 @@ class ProgramEvaluator:
 
     # --------------------------------------------------------------------------------------------
     # Safe constraint evaluation via AST
-    def _safe_eval_constraint(self, expr: str, names: Dict[str, Any]) -> bool:
+    def _safe_eval_constraint(self, expr: str, names: dict[str, Any]) -> bool:
         import ast
         try:
             tree = ast.parse(str(expr), mode="eval")

@@ -7,13 +7,12 @@ import time
 from contextlib import nullcontext
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.config import get_stt_config
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib import DiarizationError
-
 
 DEFAULT_ASR_MODEL = "nvidia/multitalker-parakeet-streaming-0.6b-v1"
 DEFAULT_DIAR_MODEL = "nvidia/diar_streaming_sortformer_4spk-v2.1"
@@ -21,7 +20,7 @@ DEFAULT_MAX_SPEAKERS = 4
 DEFAULT_ATT_CONTEXT_SIZE = [70, 13]
 
 
-def _resolve_device(device: Optional[str]) -> "torch.device":
+def _resolve_device(device: str | None) -> "torch.device":
     import torch  # type: ignore
 
     if not device or str(device).strip().lower() == "auto":
@@ -29,7 +28,7 @@ def _resolve_device(device: Optional[str]) -> "torch.device":
     return torch.device(str(device).strip().lower())
 
 
-def _ensure_cache_dir(cache_dir: Optional[str]) -> None:
+def _ensure_cache_dir(cache_dir: str | None) -> None:
     if not cache_dir:
         return
     path = Path(cache_dir)
@@ -37,7 +36,7 @@ def _ensure_cache_dir(cache_dir: Optional[str]) -> None:
     os.environ["NEMO_CACHE_DIR"] = str(path)
 
 
-def _resolve_cache_dir(config: Dict[str, Any]) -> Optional[str]:
+def _resolve_cache_dir(config: dict[str, Any]) -> str | None:
     cache_dir = config.get("nemo_multitalk_cache_dir")
     if cache_dir:
         return str(cache_dir)
@@ -93,7 +92,7 @@ def _normalize_words_field(words: Any) -> str:
     if isinstance(words, list):
         if all(isinstance(item, str) for item in words):
             return " ".join(item for item in words if item)
-        tokens: List[str] = []
+        tokens: list[str] = []
         for item in words:
             if isinstance(item, dict):
                 token = item.get("word") or item.get("text") or item.get("token") or ""
@@ -107,8 +106,8 @@ def _normalize_words_field(words: Any) -> str:
     return str(words)
 
 
-def _calculate_speaker_stats(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    stats: Dict[int, Dict[str, Any]] = {}
+def _calculate_speaker_stats(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    stats: dict[int, dict[str, Any]] = {}
     for segment in segments:
         speaker_id = int(segment.get("speaker_id", -1))
         start = float(segment.get("start_seconds", segment.get("start", 0.0)))
@@ -129,7 +128,7 @@ def _calculate_speaker_stats(segments: List[Dict[str, Any]]) -> List[Dict[str, A
     return list(stats.values())
 
 
-def normalize_multitalk_segments(results: List[Dict[str, Any]], audio_duration: float) -> List[Dict[str, Any]]:
+def normalize_multitalk_segments(results: list[dict[str, Any]], audio_duration: float) -> list[dict[str, Any]]:
     if not results:
         return []
 
@@ -140,7 +139,7 @@ def normalize_multitalk_segments(results: List[Dict[str, Any]], audio_duration: 
             max_seg_time = end_time
     seg_to_sec = audio_duration / max_seg_time if max_seg_time > 0 else 1.0
 
-    normalized: List[Dict[str, Any]] = []
+    normalized: list[dict[str, Any]] = []
     for idx, segment in enumerate(results):
         start = float(segment.get("start_time", 0) or 0) * seg_to_sec
         end = float(segment.get("end_time", 0) or 0) * seg_to_sec
@@ -184,10 +183,10 @@ def _load_models(
     diar_model_name: str,
     asr_model_name: str,
     device_str: str,
-    cache_dir: Optional[str],
-) -> Tuple[Any, Any]:
+    cache_dir: str | None,
+) -> tuple[Any, Any]:
     try:
-        from nemo.collections.asr.models import SortformerEncLabelModel, ASRModel  # type: ignore
+        from nemo.collections.asr.models import ASRModel, SortformerEncLabelModel  # type: ignore
     except Exception as exc:
         raise DiarizationError("NeMo ASR is required for multitalk diarization") from exc
 
@@ -204,13 +203,13 @@ def _load_models(
 
 def transcribe_with_nemo_multitalk(
     audio_path: str,
-    config: Dict[str, Any],
-    output_path: Optional[str] = None,
-) -> Dict[str, Any]:
+    config: dict[str, Any],
+    output_path: str | None = None,
+) -> dict[str, Any]:
     try:
         import torch  # type: ignore
-        from nemo.collections.asr.parts.utils.streaming_utils import CacheAwareStreamingAudioBuffer  # type: ignore
         from nemo.collections.asr.parts.utils.multispk_transcribe_utils import SpeakerTaggedASR  # type: ignore
+        from nemo.collections.asr.parts.utils.streaming_utils import CacheAwareStreamingAudioBuffer  # type: ignore
         from omegaconf import OmegaConf  # type: ignore
     except Exception as exc:
         raise DiarizationError("NeMo multitalk dependencies are unavailable") from exc

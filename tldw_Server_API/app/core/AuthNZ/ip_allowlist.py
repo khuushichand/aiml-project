@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from typing import Optional, Iterable, Any
 import ipaddress
+from collections.abc import Iterable
+from typing import Any
 
 from loguru import logger
 
@@ -12,7 +13,7 @@ def _normalize_entries(raw: Iterable[Any]) -> list[str]:
     return [str(entry).strip() for entry in raw if str(entry).strip()]
 
 
-def _ip_in_allowlist(ip: Optional[str], allowlist: list[str]) -> bool:
+def _ip_in_allowlist(ip: str | None, allowlist: list[str]) -> bool:
     """Return True when IP matches any entry in allowlist (CIDR or exact)."""
     if not ip:
         return False
@@ -38,7 +39,7 @@ def _ip_in_allowlist(ip: Optional[str], allowlist: list[str]) -> bool:
     return False
 
 
-def is_trusted_proxy_ip(ip: Optional[str], settings: Optional[Settings] = None) -> bool:
+def is_trusted_proxy_ip(ip: str | None, settings: Settings | None = None) -> bool:
     """Return True when IP is in the trusted proxy allowlist."""
     s = settings or get_settings()
     raw = getattr(s, "AUTH_TRUSTED_PROXY_IPS", None) or []
@@ -48,7 +49,7 @@ def is_trusted_proxy_ip(ip: Optional[str], settings: Optional[Settings] = None) 
     return _ip_in_allowlist(ip, allowlist)
 
 
-def resolve_client_ip(request: Any, settings: Optional[Settings] = None) -> Optional[str]:
+def resolve_client_ip(request: Any, settings: Settings | None = None) -> str | None:
     """Resolve client IP, honoring proxy headers only for trusted proxies."""
     if request is None:
         return None
@@ -92,7 +93,7 @@ def resolve_client_ip(request: Any, settings: Optional[Settings] = None) -> Opti
     return peer
 
 
-def is_single_user_ip_allowed(ip: Optional[str], settings: Optional[Settings] = None) -> bool:
+def is_single_user_ip_allowed(ip: str | None, settings: Settings | None = None) -> bool:
     """Return True when the client IP is allowed for single-user API key auth."""
     s = settings or get_settings()
     allowed_raw = getattr(s, "SINGLE_USER_ALLOWED_IPS", None) or []
@@ -102,7 +103,7 @@ def is_single_user_ip_allowed(ip: Optional[str], settings: Optional[Settings] = 
     return _ip_in_allowlist(ip, allowed)
 
 
-def is_service_token_ip_allowed(ip: Optional[str], settings: Optional[Settings] = None) -> bool:
+def is_service_token_ip_allowed(ip: str | None, settings: Settings | None = None) -> bool:
     """Return True when the client IP is allowed for service token auth."""
     s = settings or get_settings()
     allowed_raw = getattr(s, "SERVICE_TOKEN_ALLOWED_IPS", None) or []

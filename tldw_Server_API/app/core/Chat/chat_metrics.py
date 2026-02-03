@@ -2,11 +2,10 @@
 # Chat-specific metrics integration for telemetry
 
 import time
-import asyncio
-from typing import Dict, Any, Optional, List
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -686,7 +685,7 @@ class ChatMetricsCollector:
             error_labels = {**labels, ChatMetricLabels.ERROR_TYPE.value: error_type}
             self.metrics.llm_errors.add(1, error_labels)
 
-    def get_active_metrics(self) -> Dict[str, int]:
+    def get_active_metrics(self) -> dict[str, int]:
         """Get counts of active operations."""
         return {
             "active_requests": self.active_requests,

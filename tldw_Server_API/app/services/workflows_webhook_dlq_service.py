@@ -4,15 +4,15 @@ import asyncio
 import json
 import os
 import random
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from urllib.parse import urlparse
 
 from loguru import logger
-from tldw_Server_API.app.core.Metrics import get_metrics_registry
-from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
 
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
 def _now_iso() -> str:
@@ -27,7 +27,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return v.lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _get_lists_for_tenant(tenant_id: str) -> Tuple[List[str], List[str]]:
+def _get_lists_for_tenant(tenant_id: str) -> tuple[list[str], list[str]]:
     """Return (allowlist, denylist) patterns for a tenant.
 
     Patterns are comma-separated; entries may be hostnames or wildcard like '*.example.com'.
@@ -68,8 +68,8 @@ def _host_allowed(url: str, tenant_id: str) -> bool:
         # Fallback path: derive allow/deny lists and evaluate via core policy
         allow, deny = _get_lists_for_tenant(tenant_id)
         # Normalize wildcard patterns to bare host suffixes for policy evaluation
-        def _norm(pats: List[str]) -> List[str]:
-            out: List[str] = []
+        def _norm(pats: list[str]) -> list[str]:
+            out: list[str] = []
             for s in pats:
                 v = (s or "").strip().lower()
                 if v.startswith("*."):
@@ -131,7 +131,7 @@ def _compute_next_backoff(attempts: int) -> int:
     return max(1, int(jitter))
 
 
-async def _attempt_delivery(url: str, payload: Dict[str, Any], timeout: float) -> Tuple[bool, Optional[str]]:
+async def _attempt_delivery(url: str, payload: dict[str, Any], timeout: float) -> tuple[bool, str | None]:
     try:
         policy = RetryPolicy()
         resp = await afetch(method="POST", url=url, json=payload, timeout=timeout, retry=policy)

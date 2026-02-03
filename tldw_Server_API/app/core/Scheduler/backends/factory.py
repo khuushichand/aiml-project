@@ -3,10 +3,11 @@ Backend factory for automatic detection and instantiation.
 """
 
 from typing import Optional
+
 from loguru import logger
 
-from ..base.queue_backend import QueueBackend
 from ..base.exceptions import BackendError
+from ..base.queue_backend import QueueBackend
 from ..config import SchedulerConfig, get_config
 
 

@@ -3,71 +3,76 @@
 
 import asyncio
 import math
+import os
 import re
-from typing import Optional, Dict, Any
+import tempfile
+from pathlib import Path
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from tldw_Server_API.app.api.v1.API_Deps.backpressure import guard_backpressure_and_quota
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
-import tempfile
-import os
-from pathlib import Path
 
-from tldw_Server_API.app.api.v1.schemas.research_schemas import (
-    ArxivSearchRequestForm,
-    ArxivSearchResponse,
-    ArxivPaper,
-    SemanticScholarSearchRequestForm,
-    SemanticScholarSearchResponse,
-    SemanticScholarPaper,
-)
+from tldw_Server_API.app.api.v1.API_Deps.backpressure import guard_backpressure_and_quota
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
-    BioRxivSearchRequestForm,
-    BioRxivSearchResponse,
+    BioRxivFunderPaper,
+    BioRxivFunderSearchRequestForm,
+    BioRxivFunderSearchResponse,
     BioRxivPaper,
-    BioRxivPubsSearchRequestForm,
-    BioRxivPubsSearchResponse,
     BioRxivPublishedRecord,
     BioRxivPublisherSearchRequestForm,
     BioRxivPubSearchRequestForm,
-    BioRxivFunderSearchRequestForm,
-    BioRxivFunderSearchResponse,
-    BioRxivFunderPaper,
+    BioRxivPubsSearchRequestForm,
+    BioRxivPubsSearchResponse,
+    BioRxivSearchRequestForm,
+    BioRxivSearchResponse,
     BioRxivSummaryRequestForm,
     BioRxivSummaryResponse,
     BioRxivUsageRequestForm,
     BioRxivUsageResponse,
+    OSFSearchRequestForm,
+    PMCOAIdentifyResponse,
+    PMCOAIHeader,
+    PMCOAIIdentifiersResponse,
+    PMCOAIIdentifyResponse,
+    PMCOAIListResponse,
+    PMCOAIListSetsResponse,
+    PMCOAIRecord,
+    PMCOAQueryResponse,
+    PMCOARecord,
+    PubMedPaper,
     PubMedSearchRequestForm,
     PubMedSearchResponse,
-    PubMedPaper,
-    PMCOAIListResponse,
-    PMCOAIIdentifiersResponse,
-    PMCOAIListSetsResponse,
-    PMCOAIIdentifyResponse,
-    PMCOAQueryResponse,
-    PMCOAIdentifyResponse,
-    PMCOAIRecord,
-    PMCOAIHeader,
-    PMCOARecord,
-    OSFSearchRequestForm,
 )
-from tldw_Server_API.app.core.Third_Party import Arxiv as Arxiv
-from tldw_Server_API.app.core.Third_Party import Semantic_Scholar as Semantic_Scholar
-from tldw_Server_API.app.core.Third_Party import BioRxiv as BioRxiv
-from tldw_Server_API.app.core.Third_Party import PubMed as PubMed
-from tldw_Server_API.app.core.Third_Party import PMC_OAI as PMC_OAI
-from tldw_Server_API.app.core.Third_Party import PMC_OA as PMC_OA
+from tldw_Server_API.app.api.v1.schemas.research_schemas import (
+    ArxivPaper,
+    ArxivSearchRequestForm,
+    ArxivSearchResponse,
+    SemanticScholarPaper,
+    SemanticScholarSearchRequestForm,
+    SemanticScholarSearchResponse,
+)
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.core.http_client import (
-    create_client as _create_http_client,
-    afetch as _http_afetch,
-    adownload as _http_adownload,
     RetryPolicy as _RetryPolicy,
 )
-
+from tldw_Server_API.app.core.http_client import (
+    adownload as _http_adownload,
+)
+from tldw_Server_API.app.core.http_client import (
+    afetch as _http_afetch,
+)
+from tldw_Server_API.app.core.http_client import (
+    create_client as _create_http_client,
+)
+from tldw_Server_API.app.core.Third_Party import PMC_OA as PMC_OA
+from tldw_Server_API.app.core.Third_Party import PMC_OAI as PMC_OAI
+from tldw_Server_API.app.core.Third_Party import Arxiv as Arxiv
+from tldw_Server_API.app.core.Third_Party import BioRxiv as BioRxiv
+from tldw_Server_API.app.core.Third_Party import PubMed as PubMed
+from tldw_Server_API.app.core.Third_Party import Semantic_Scholar as Semantic_Scholar
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 router = APIRouter()
 
@@ -106,7 +111,7 @@ def _raise_http_error_from_exception(
 async def _download_pdf_bytes(
     url: str,
     *,
-    headers: Optional[Dict[str, str]] = None,
+    headers: Optional[dict[str, str]] = None,
     timeout: int = 60,
     enforce_pdf: bool = False,
 ) -> bytes:
@@ -665,8 +670,10 @@ async def pmc_oa_query(
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
 
-from fastapi.responses import StreamingResponse, Response
 import io
+
+from fastapi.responses import Response, StreamingResponse
+
 
 @router.get(
     "/pmc-oa/fetch-pdf",
@@ -2182,32 +2189,32 @@ async def biorxiv_raw_usage(
 # -------------------- Additional Provider Endpoints (Scaffold) --------------------
 
 from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
-    IEEESearchRequestForm,
-    SimpleVenueSearchForm,
-    DOIRequestForm,
-    GenericSearchResponse,
-    GenericPaper,
     ChemRxivSearchRequestForm,
+    DOIRequestForm,
+    GenericPaper,
+    GenericSearchResponse,
     IacrConferenceResponse,
+    IEEESearchRequestForm,
     IngestBatchRequest,
     IngestBatchResponse,
     IngestBatchResultItem,
+    SimpleVenueSearchForm,
 )
-from tldw_Server_API.app.core.Third_Party import IEEE_Xplore as IEEE_Xplore
-from tldw_Server_API.app.core.Third_Party import Springer_Nature as Springer_Nature
-from tldw_Server_API.app.core.Third_Party import Elsevier_Scopus as Elsevier_Scopus
-from tldw_Server_API.app.core.Third_Party import OpenAlex as OpenAlex
-from tldw_Server_API.app.core.Third_Party import Crossref as Crossref
-from tldw_Server_API.app.core.Third_Party import Unpaywall as Unpaywall
-from tldw_Server_API.app.core.Third_Party import ChemRxiv as ChemRxiv
-from tldw_Server_API.app.core.Third_Party import IACR as IACR
-from tldw_Server_API.app.core.Third_Party import EarthRxiv as EarthRxiv
-from tldw_Server_API.app.core.Third_Party import OSF as OSF
-from tldw_Server_API.app.core.Third_Party import Zenodo as Zenodo
-from tldw_Server_API.app.core.Third_Party import Figshare as Figshare
-from tldw_Server_API.app.core.Third_Party import Vixra as Vixra
 from tldw_Server_API.app.core.Third_Party import HAL as HAL
+from tldw_Server_API.app.core.Third_Party import IACR as IACR
+from tldw_Server_API.app.core.Third_Party import OSF as OSF
+from tldw_Server_API.app.core.Third_Party import ChemRxiv as ChemRxiv
+from tldw_Server_API.app.core.Third_Party import Crossref as Crossref
+from tldw_Server_API.app.core.Third_Party import EarthRxiv as EarthRxiv
+from tldw_Server_API.app.core.Third_Party import Elsevier_Scopus as Elsevier_Scopus
+from tldw_Server_API.app.core.Third_Party import Figshare as Figshare
+from tldw_Server_API.app.core.Third_Party import IEEE_Xplore as IEEE_Xplore
+from tldw_Server_API.app.core.Third_Party import OpenAlex as OpenAlex
 from tldw_Server_API.app.core.Third_Party import RePEc as RePEc
+from tldw_Server_API.app.core.Third_Party import Springer_Nature as Springer_Nature
+from tldw_Server_API.app.core.Third_Party import Unpaywall as Unpaywall
+from tldw_Server_API.app.core.Third_Party import Vixra as Vixra
+from tldw_Server_API.app.core.Third_Party import Zenodo as Zenodo
 
 
 def _extract_http_status(err: str) -> Optional[int]:
@@ -3459,7 +3466,7 @@ async def chemrxiv_oai(
     set_name: Optional[str] = Query(None, alias="set"),
 ):
     loop = asyncio.get_running_loop()
-    params: Dict[str, Any] = {"verb": verb}
+    params: dict[str, Any] = {"verb": verb}
     if identifier:
         params["identifier"] = identifier
     if metadataPrefix:
@@ -3850,7 +3857,7 @@ async def osf_raw(
     page_number: Optional[int] = Query(None, alias="page[number]"),
 ):
     loop = asyncio.get_running_loop()
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
     if term:
         params["q"] = term
     if provider:
@@ -3983,7 +3990,7 @@ async def zenodo_oai(
     set_name: Optional[str] = Query(None, alias="set"),
 ):
     loop = asyncio.get_running_loop()
-    params: Dict[str, Any] = {"verb": verb}
+    params: dict[str, Any] = {"verb": verb}
     if identifier:
         params["identifier"] = identifier
     if metadataPrefix:
@@ -4263,7 +4270,7 @@ async def figshare_oai(
     set_name: Optional[str] = Query(None, alias="set"),
 ):
     loop = asyncio.get_running_loop()
-    params: Dict[str, Any] = {"verb": verb}
+    params: dict[str, Any] = {"verb": verb}
     if identifier:
         params["identifier"] = identifier
     if metadataPrefix:
@@ -4646,7 +4653,7 @@ async def hal_raw(
     scope: Optional[str] = Query(None, description="Portal or COLLECTION scope segment"),
 ):
     loop = asyncio.get_running_loop()
-    params: Dict[str, Any] = {"q": q, "wt": wt, "rows": rows, "start": start}
+    params: dict[str, Any] = {"q": q, "wt": wt, "rows": rows, "start": start}
     if fl:
         params["fl"] = fl
     if fq:

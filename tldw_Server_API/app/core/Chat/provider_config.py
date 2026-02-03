@@ -6,7 +6,8 @@ Dispatch tables were removed in favor of the adapter registry.
 """
 #
 # Imports
-from typing import Dict, Callable
+from typing import Callable
+
 #
 # Legacy module; dispatch tables removed in favor of adapter registry.
 from tldw_Server_API.app.core.LLM_Calls.deprecation import log_legacy_once
@@ -21,8 +22,8 @@ log_legacy_once(
 # Provider Configuration
 #
 
-API_CALL_HANDLERS: Dict[str, Callable] = {}
-ASYNC_API_CALL_HANDLERS: Dict[str, Callable] = {}
+API_CALL_HANDLERS: dict[str, Callable] = {}
+ASYNC_API_CALL_HANDLERS: dict[str, Callable] = {}
 
 def get_provider_handler(provider: str) -> Callable:
     """

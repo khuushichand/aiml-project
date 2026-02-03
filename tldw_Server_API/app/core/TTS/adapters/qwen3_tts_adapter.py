@@ -4,25 +4,19 @@
 # Imports
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator, Dict, Optional, Callable, Iterable, List, Tuple
 import asyncio
 import base64
 import importlib
 import inspect
 import tempfile
+from collections.abc import AsyncGenerator, Iterable
 from pathlib import Path
+from typing import Any, Callable
 
 import numpy as np
 from loguru import logger
 
-from .base import (
-    AudioFormat,
-    TTSAdapter,
-    TTSRequest,
-    TTSResponse,
-    TTSCapabilities,
-    VoiceInfo,
-)
+from ..streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
 from ..tts_exceptions import (
     TTSGenerationError,
     TTSInvalidVoiceReferenceError,
@@ -30,8 +24,15 @@ from ..tts_exceptions import (
     TTSStreamingError,
     TTSValidationError,
 )
-from ..streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
 from ..utils import parse_bool
+from .base import (
+    AudioFormat,
+    TTSAdapter,
+    TTSCapabilities,
+    TTSRequest,
+    TTSResponse,
+    VoiceInfo,
+)
 
 
 class Qwen3TTSAdapter(TTSAdapter):
@@ -108,7 +109,7 @@ class Qwen3TTSAdapter(TTSAdapter):
         "stream",
     )
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config=config)
         cfg = config or {}
         self.model = (cfg.get("model") or "auto").strip()
@@ -123,8 +124,8 @@ class Qwen3TTSAdapter(TTSAdapter):
         self.sample_rate = self._coerce_int(cfg.get("sample_rate")) or 24000
         self._backend = None
         self._backend_module = None
-        self._pipeline_builders: List[Tuple[str, Callable[[str], Any]]] = []
-        self._pipelines: Dict[str, Any] = {}
+        self._pipeline_builders: list[tuple[str, Callable[[str], Any]]] = []
+        self._pipelines: dict[str, Any] = {}
         self._pipeline_lock = asyncio.Lock()
         self._audio_normalizer = AudioNormalizer()
         self._model_aliases = {
@@ -135,7 +136,7 @@ class Qwen3TTSAdapter(TTSAdapter):
             self.MODEL_BASE_06B.lower(): self.MODEL_BASE_06B,
         }
 
-    def _coerce_int(self, value: Any) -> Optional[int]:
+    def _coerce_int(self, value: Any) -> int | None:
         try:
             if value is None:
                 return None
@@ -154,7 +155,7 @@ class Qwen3TTSAdapter(TTSAdapter):
                 provider=self.PROVIDER_KEY,
             ) from exc
 
-    def _decode_voice_clone_prompt(self, payload: Any) -> Optional[bytes]:
+    def _decode_voice_clone_prompt(self, payload: Any) -> bytes | None:
         if payload is None:
             return None
         if isinstance(payload, (bytes, bytearray)):
@@ -174,7 +175,7 @@ class Qwen3TTSAdapter(TTSAdapter):
             provider=self.PROVIDER_KEY,
         )
 
-    def _extract_voice_reference_bytes(self, voice_reference: Any) -> Optional[bytes]:
+    def _extract_voice_reference_bytes(self, voice_reference: Any) -> bytes | None:
         if voice_reference is None:
             return None
         if isinstance(voice_reference, (bytes, bytearray)):
@@ -217,7 +218,7 @@ class Qwen3TTSAdapter(TTSAdapter):
             normalized = normalized.replace("__", "_")
         return normalized
 
-    def _resolve_speaker(self, voice: Optional[str]) -> Optional[str]:
+    def _resolve_speaker(self, voice: str | None) -> str | None:
         if not voice or not isinstance(voice, str):
             return None
         if voice.startswith("custom:"):
@@ -228,7 +229,7 @@ class Qwen3TTSAdapter(TTSAdapter):
                 return speaker
         return voice.strip()
 
-    def _resolve_torch_dtype(self) -> Optional[Any]:
+    def _resolve_torch_dtype(self) -> Any | None:
         dtype = (self.dtype or "").strip().lower()
         if not dtype:
             return None
@@ -246,9 +247,9 @@ class Qwen3TTSAdapter(TTSAdapter):
         }
         return mapping.get(dtype, self.dtype)
 
-    def _build_model_kwargs(self, model_id: str) -> Dict[str, Any]:
+    def _build_model_kwargs(self, model_id: str) -> dict[str, Any]:
         dtype = self._resolve_torch_dtype()
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "device": self.device,
             "dtype": dtype,
             "torch_dtype": dtype,
@@ -305,8 +306,8 @@ class Qwen3TTSAdapter(TTSAdapter):
             return builder(model_id, **filtered_kwargs)
         return builder(**filtered_kwargs)
 
-    def _discover_pipeline_builders(self, module: Any) -> List[Tuple[str, Callable[[str], Any]]]:
-        builders: List[Tuple[str, Callable[[str], Any]]] = []
+    def _discover_pipeline_builders(self, module: Any) -> list[tuple[str, Callable[[str], Any]]]:
+        builders: list[tuple[str, Callable[[str], Any]]] = []
         seen: set[str] = set()
 
         def add_builder(name: str, builder: Callable[..., Any]) -> None:
@@ -379,7 +380,7 @@ class Qwen3TTSAdapter(TTSAdapter):
                 return True
         return False
 
-    async def _get_pipeline(self, model_id: str) -> Optional[Any]:
+    async def _get_pipeline(self, model_id: str) -> Any | None:
         if not self._pipeline_builders:
             return None
         load_id = self.model_path or model_id
@@ -393,7 +394,7 @@ class Qwen3TTSAdapter(TTSAdapter):
             return pipeline
 
     def _build_pipeline(self, model_id: str) -> Any:
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
         for name, builder in self._pipeline_builders:
             try:
                 pipeline = builder(model_id)
@@ -415,7 +416,7 @@ class Qwen3TTSAdapter(TTSAdapter):
             provider=self.PROVIDER_KEY,
         )
 
-    def _select_backend_callable(self, target: Any, candidates: Iterable[str]) -> Optional[Callable[..., Any]]:
+    def _select_backend_callable(self, target: Any, candidates: Iterable[str]) -> Callable[..., Any] | None:
         for name in candidates:
             fn = getattr(target, name, None)
             if callable(fn):
@@ -425,10 +426,10 @@ class Qwen3TTSAdapter(TTSAdapter):
     def _build_call_kwargs(
         self,
         fn: Callable[..., Any],
-        payload: Dict[str, Any],
-        alias_map: Dict[str, Tuple[str, ...]],
+        payload: dict[str, Any],
+        alias_map: dict[str, tuple[str, ...]],
         prefer_ref_path: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         try:
             sig = inspect.signature(fn)
         except Exception:
@@ -441,7 +442,7 @@ class Qwen3TTSAdapter(TTSAdapter):
         param_names = {p.name for p in params}
         accepts_kwargs = any(p.kind == p.VAR_KEYWORD for p in params)
 
-        kwargs: Dict[str, Any] = {}
+        kwargs: dict[str, Any] = {}
         for canonical, aliases in alias_map.items():
             value = payload.get(canonical)
             if value is None:
@@ -459,7 +460,7 @@ class Qwen3TTSAdapter(TTSAdapter):
                 kwargs[canonical] = value
         return kwargs
 
-    async def _invoke_backend(self, fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Any:
+    async def _invoke_backend(self, fn: Callable[..., Any], kwargs: dict[str, Any]) -> Any:
         if inspect.iscoroutinefunction(fn):
             return await fn(**kwargs)
         result = await asyncio.to_thread(fn, **kwargs)
@@ -541,7 +542,7 @@ class Qwen3TTSAdapter(TTSAdapter):
             return "voice_clone"
         return "custom_voice"
 
-    def _can_stream_transcode(self, target_format: AudioFormat) -> Tuple[bool, Optional[str]]:
+    def _can_stream_transcode(self, target_format: AudioFormat) -> tuple[bool, str | None]:
         try:
             writer = StreamingAudioWriter(
                 format=target_format.value,
@@ -743,7 +744,7 @@ class Qwen3TTSAdapter(TTSAdapter):
             language = self._resolve_language(request)
             mode = self._resolve_mode(model_id)
 
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "text": request.text,
                 "language": language,
                 "model": model_id,
@@ -755,7 +756,7 @@ class Qwen3TTSAdapter(TTSAdapter):
             }
 
             call_target = pipeline or module
-            cleanup_path: Optional[str] = None
+            cleanup_path: str | None = None
 
             if mode == "custom_voice":
                 speaker = self._resolve_speaker(request.voice)
@@ -934,7 +935,7 @@ class Qwen3TTSAdapter(TTSAdapter):
         language = self._resolve_language(request)
         mode = self._resolve_mode(model_id)
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "text": request.text,
             "language": language,
             "model": model_id,
@@ -945,7 +946,7 @@ class Qwen3TTSAdapter(TTSAdapter):
         }
 
         call_target = pipeline or module
-        cleanup_path: Optional[str] = None
+        cleanup_path: str | None = None
 
         if mode == "custom_voice":
             speaker = self._resolve_speaker(request.voice)

@@ -4,28 +4,26 @@
 # Imports
 import hashlib
 import hmac
-import secrets
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
+from typing import Any, Optional
 from uuid import uuid4
+
 #
 # 3rd-party imports
-from jose import jwt, JWTError
+from jose import JWTError, jwt
 from jose.exceptions import ExpiredSignatureError, JWTClaimsError
 from loguru import logger
-#
-# Local imports
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
     derive_hmac_key,
     derive_hmac_key_candidates,
 )
-from tldw_Server_API.app.core.AuthNZ.exceptions import (
-    InvalidTokenError,
-    TokenExpiredError,
-    ConfigurationError
-)
+from tldw_Server_API.app.core.AuthNZ.exceptions import ConfigurationError, InvalidTokenError, TokenExpiredError
+
+#
+# Local imports
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 
 #######################################################################################################################
 #
@@ -46,10 +44,10 @@ class JWTService:
 
     @staticmethod
     def _filter_additional_claims(
-        additional_claims: Optional[Dict[str, Any]],
+        additional_claims: Optional[dict[str, Any]],
         *,
         reserved: set[str],
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         """Strip reserved claim keys from additional_claims to prevent overrides."""
         if not additional_claims:
             return None
@@ -122,7 +120,7 @@ class JWTService:
         user_id: int,
         username: str,
         role: str,
-        additional_claims: Optional[Dict[str, Any]] = None
+        additional_claims: Optional[dict[str, Any]] = None
     ) -> str:
         """
         Create an access token for a user
@@ -180,7 +178,7 @@ class JWTService:
         self,
         user_id: int,
         username: str,
-        additional_claims: Optional[Dict[str, Any]] = None
+        additional_claims: Optional[dict[str, Any]] = None
     ) -> str:
         """
         Create a refresh token for a user
@@ -237,7 +235,7 @@ class JWTService:
         email: str,
         user_id: Optional[int] = None,
         expires_in_minutes: Optional[int] = None,
-        additional_claims: Optional[Dict[str, Any]] = None
+        additional_claims: Optional[dict[str, Any]] = None
     ) -> str:
         """
         Create a short-lived magic link token for passwordless login.
@@ -254,7 +252,7 @@ class JWTService:
         ttl_minutes = expires_in_minutes or int(getattr(self.settings, "MAGIC_LINK_EXPIRE_MINUTES", 15))
         expire = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "sub": str(user_id) if user_id is not None else str(email),
             "email": str(email).strip().lower(),
             "exp": expire,
@@ -287,7 +285,7 @@ class JWTService:
             logger.error(f"Failed to create magic link token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
 
-    async def verify_token_async(self, token: str, token_type: Optional[str] = None) -> Dict[str, Any]:
+    async def verify_token_async(self, token: str, token_type: Optional[str] = None) -> dict[str, Any]:
         """
         Verify and decode a JWT token with blacklist checking (async version)
 
@@ -370,7 +368,7 @@ class JWTService:
             logger.error(f"Unexpected error verifying token: {e}")
             raise InvalidTokenError(f"Token verification failed: {e}")
 
-    def verify_token(self, token: str, token_type: Optional[str] = None) -> Dict[str, Any]:
+    def verify_token(self, token: str, token_type: Optional[str] = None) -> dict[str, Any]:
         """
         Verify and decode a JWT token (sync, stateless; no blacklist checks).
 
@@ -453,7 +451,7 @@ class JWTService:
             logger.error(f"Unexpected error verifying token: {e}")
             raise InvalidTokenError(f"Token verification failed: {e}")
 
-    def decode_access_token(self, token: str) -> Dict[str, Any]:
+    def decode_access_token(self, token: str) -> dict[str, Any]:
         """
         Decode and verify an access token (SYNC, NO BLACKLIST CHECK).
 
@@ -473,7 +471,7 @@ class JWTService:
         """
         return self.verify_token(token, token_type="access")
 
-    def decode_refresh_token(self, token: str) -> Dict[str, Any]:
+    def decode_refresh_token(self, token: str) -> dict[str, Any]:
         """
         Decode and verify a refresh token (SYNC, NO BLACKLIST CHECK).
 
@@ -493,7 +491,7 @@ class JWTService:
         """
         return self.verify_token(token, token_type="refresh")
 
-    def verify_password_reset_token(self, token: str) -> Dict[str, Any]:
+    def verify_password_reset_token(self, token: str) -> dict[str, Any]:
         """
         Verify and decode a password reset token (SYNC).
 
@@ -513,7 +511,7 @@ class JWTService:
         """
         return self.verify_token(token, token_type="password_reset")
 
-    def verify_email_verification_token(self, token: str) -> Dict[str, Any]:
+    def verify_email_verification_token(self, token: str) -> dict[str, Any]:
         """
         Verify and decode an email verification token (SYNC).
 
@@ -533,7 +531,7 @@ class JWTService:
         """
         return self.verify_token(token, token_type="email_verification")
 
-    def verify_service_token(self, token: str) -> Dict[str, Any]:
+    def verify_service_token(self, token: str) -> dict[str, Any]:
         """
         Verify and decode a service account token (SYNC, NO BLACKLIST CHECK).
 
@@ -563,7 +561,7 @@ class JWTService:
         scope: str = "workflows",
         ttl_minutes: int = 60,
         schedule_id: Optional[str] = None,
-        additional_claims: Optional[Dict[str, Any]] = None,
+        additional_claims: Optional[dict[str, Any]] = None,
     ) -> str:
         """
         Create a short-lived, scoped access token ("virtual key").
@@ -585,7 +583,7 @@ class JWTService:
             Encoded JWT access token (scoped)
         """
         expire = datetime.now(timezone.utc) + timedelta(minutes=max(1, int(ttl_minutes)))
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "sub": str(user_id),
             "username": username,
             "role": role,
@@ -954,9 +952,11 @@ class JWTService:
                     old_jti = payload.get("jti")
                     old_exp = payload.get("exp")
                     if old_jti and isinstance(old_exp, (int, float)):
-                        from datetime import datetime as _dt, timezone as _tz
+                        from datetime import datetime as _dt
+                        from datetime import timezone as _tz
                         exp_dt = _dt.fromtimestamp(old_exp, tz=_tz.utc)
                         import asyncio as _asyncio
+
                         from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist as _get_bl
                         try:
                             loop = _asyncio.get_running_loop()
@@ -1064,7 +1064,8 @@ class JWTService:
                     old_jti = payload.get("jti")
                     old_exp = payload.get("exp")
                     if old_jti and isinstance(old_exp, (int, float)):
-                        from datetime import datetime as _dt, timezone as _tz
+                        from datetime import datetime as _dt
+                        from datetime import timezone as _tz
                         exp_dt = _dt.fromtimestamp(old_exp, tz=_tz.utc)
                         from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist as _get_bl
                         bl = _get_bl()
@@ -1155,7 +1156,7 @@ def create_refresh_token(user_id: int, username: str) -> str:
     return get_jwt_service().create_refresh_token(user_id, username)
 
 
-def verify_token(token: str, token_type: Optional[str] = None) -> Dict[str, Any]:
+def verify_token(token: str, token_type: Optional[str] = None) -> dict[str, Any]:
     """
     Convenience function to verify a token (SYNC, NO BLACKLIST CHECK).
 

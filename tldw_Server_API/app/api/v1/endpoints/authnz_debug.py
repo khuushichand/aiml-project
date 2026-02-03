@@ -1,24 +1,24 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, Header, Depends
-from typing import Optional, Dict, Any
+from typing import Any
 
+from fastapi import APIRouter, Depends, Header, Request
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
 from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import (
     get_key_limits,
+    is_key_over_budget,
     summarize_usage_for_key_day,
     summarize_usage_for_key_month,
-    is_key_over_budget,
 )
 
 router = APIRouter()
 
 
-async def _resolve_api_key_id(request: Request, x_api_key: Optional[str]) -> Dict[str, Any]:
+async def _resolve_api_key_id(request: Request, x_api_key: str | None) -> dict[str, Any]:
     # Prefer principal-first resolution from AuthContext, then legacy fallbacks.
     """
     Resolve an API key to its `api_key_id` and associated `user_id` for the incoming request.
@@ -78,7 +78,7 @@ async def _resolve_api_key_id(request: Request, x_api_key: Optional[str]) -> Dic
 @router.get("/authnz/debug/api-key-id", tags=["authnz-debug"])
 async def debug_api_key_id(
     request: Request,
-    X_API_KEY: Optional[str] = Header(None, alias="X-API-KEY"),
+    X_API_KEY: str | None = Header(None, alias="X-API-KEY"),
     _: AuthPrincipal = Depends(require_roles("admin")),
 ):
     """
@@ -96,7 +96,7 @@ async def debug_api_key_id(
 @router.get("/authnz/debug/budget-summary", tags=["authnz-debug"])
 async def debug_budget_summary(
     request: Request,
-    X_API_KEY: Optional[str] = Header(None, alias="X-API-KEY"),
+    X_API_KEY: str | None = Header(None, alias="X-API-KEY"),
     _: AuthPrincipal = Depends(require_roles("admin")),
 ):
     """

@@ -1,12 +1,12 @@
 # Arxiv.py
 # Description: This file contains the functions for searching and ingesting arXiv papers.
 import time
-import arxiv  # Keep this if search_arxiv is used, or for reference
+from typing import Any, Optional  # Added for type hinting
+from urllib.parse import quote_plus, urlencode
+
 from bs4 import BeautifulSoup
-from typing import Optional, List, Dict, Any, Tuple  # Added for type hinting
-from urllib.parse import urlencode, quote_plus
+
 from tldw_Server_API.app.core.http_client import fetch
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 #
 # Local Imports (ensure path is correct if this file is moved/used elsewhere)
@@ -39,7 +39,7 @@ def fetch_arxiv_pdf_url(paper_id: str) -> Optional[str]:
 
 
 def search_arxiv_custom_api(query: Optional[str], author: Optional[str], year: Optional[str], start_index: int,
-                            page_size: int) -> tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
+                            page_size: int) -> tuple[Optional[list[dict[str, Any]]], int, Optional[str]]:
     """
     Searches arXiv using the custom built URL and parses the feed.
     Returns a list of papers, total results found by the API for this query, and an error message if any.
@@ -80,7 +80,7 @@ def fetch_arxiv_xml(paper_id: str) -> Optional[str]:
         return None
 
 
-def parse_arxiv_feed(xml_content: bytes) -> List[Dict[str, Any]]:
+def parse_arxiv_feed(xml_content: bytes) -> list[dict[str, Any]]:
     try:
         soup = BeautifulSoup(xml_content, 'lxml-xml')
     except Exception as e: # Broad exception, can be narrowed to bs4.FeatureNotFound if desired
@@ -178,7 +178,7 @@ def build_query_url(query: Optional[str], author: Optional[str], year: Optional[
     return f"{base_url}{query_string}"
 
 
-def convert_xml_to_markdown(xml_content: str) -> Tuple[str, Optional[str], List[str], List[str]]:
+def convert_xml_to_markdown(xml_content: str) -> tuple[str, Optional[str], list[str], list[str]]:
     soup = BeautifulSoup(xml_content, 'xml')
     entry = soup.find('entry')
     if not entry:
@@ -213,7 +213,7 @@ def convert_xml_to_markdown(xml_content: str) -> Tuple[str, Optional[str], List[
     return markdown, title, authors, categories
 
 
-def get_arxiv_by_id(paper_id: str) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_arxiv_by_id(paper_id: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     """Fetch a single arXiv entry by its arXiv ID using export API and normalize to ArxivPaper shape.
 
     Returns (item_dict, error_message). item_dict keys match ArxivPaper schema: id, title, authors,
@@ -239,4 +239,3 @@ def get_arxiv_by_id(paper_id: str) -> tuple[Optional[Dict[str, Any]], Optional[s
 #
 # End of Arxiv.py
 #######################################################################################################################
-from tldw_Server_API.app.core.http_client import create_client

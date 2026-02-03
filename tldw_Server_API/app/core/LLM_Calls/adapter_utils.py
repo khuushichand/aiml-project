@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
-from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 
-_PROVIDER_SECTION_MAP: Dict[str, str] = {
+_PROVIDER_SECTION_MAP: dict[str, str] = {
     "openai": "openai_api",
     "anthropic": "anthropic_api",
     "cohere": "cohere_api",
@@ -35,7 +35,7 @@ _PROVIDER_SECTION_MAP: Dict[str, str] = {
 }
 
 
-def normalize_provider(provider: Optional[str]) -> str:
+def normalize_provider(provider: str | None) -> str:
     return (provider or "").strip().lower()
 
 
@@ -49,7 +49,7 @@ def resolve_provider_section(provider: str) -> str:
     )
 
 
-def ensure_app_config(app_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def ensure_app_config(app_config: dict[str, Any] | None = None) -> dict[str, Any]:
     if app_config is not None:
         return app_config
     # Prefer the chat_calls loader when tests monkeypatch it.
@@ -66,7 +66,7 @@ def ensure_app_config(app_config: Optional[Dict[str, Any]] = None) -> Dict[str, 
     return load_and_log_configs() or {}
 
 
-def resolve_provider_model(provider: str, app_config: Dict[str, Any]) -> Optional[str]:
+def resolve_provider_model(provider: str, app_config: dict[str, Any]) -> str | None:
     normalized = normalize_provider(provider)
     section = resolve_provider_section(provider)
     if section:
@@ -91,10 +91,10 @@ def resolve_provider_model(provider: str, app_config: Dict[str, Any]) -> Optiona
 
 def resolve_provider_api_key_from_config(
     provider: str,
-    app_config: Optional[Dict[str, Any]] = None,
+    app_config: dict[str, Any] | None = None,
     *,
     prefer_module_keys_in_tests: bool = True,
-) -> Optional[str]:
+) -> str | None:
     api_key, _debug = resolve_provider_api_key(
         provider,
         prefer_module_keys_in_tests=prefer_module_keys_in_tests,
@@ -115,9 +115,9 @@ def get_adapter_or_raise(provider: str):
     return adapter
 
 
-def split_system_message(messages: List[Dict[str, Any]]) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+def split_system_message(messages: list[dict[str, Any]]) -> tuple[str | None, list[dict[str, Any]]]:
     system_message = None
-    remaining: List[Dict[str, Any]] = []
+    remaining: list[dict[str, Any]] = []
     for msg in messages:
         role = msg.get("role")
         if role == "system" and system_message is None:

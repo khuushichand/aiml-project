@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable
 from urllib.parse import urljoin, urlparse
 
 import numpy as np
@@ -32,7 +33,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
 )
 
 # Global cache for local model components
-_MODEL_CACHE: Dict[str, Tuple[Any, Any, str]] = {}
+_MODEL_CACHE: dict[str, tuple[Any, Any, str]] = {}
 _MODEL_LOCK = threading.Lock()
 
 
@@ -65,7 +66,7 @@ def _as_str(value: Any, default: str) -> str:
     return s if s else default
 
 
-def _check_cancel(cancel_check: Optional[Callable[[], bool]], *, label: str) -> None:
+def _check_cancel(cancel_check: Callable[[], bool] | None, *, label: str) -> None:
     if cancel_check is None:
         return
     try:
@@ -76,7 +77,7 @@ def _check_cancel(cancel_check: Optional[Callable[[], bool]], *, label: str) -> 
         raise TranscriptionCancelled(f"Cancelled during {label}")
 
 
-def _resolve_settings() -> Dict[str, Any]:
+def _resolve_settings() -> dict[str, Any]:
     try:
         stt_cfg = get_stt_config() or {}
     except Exception:
@@ -102,7 +103,7 @@ def _resolve_settings() -> Dict[str, Any]:
     return settings
 
 
-def _resolve_audio_path(audio_path: str, base_dir: Optional[Path]) -> Path:
+def _resolve_audio_path(audio_path: str, base_dir: Path | None) -> Path:
     path_obj = Path(audio_path)
     base = Path(base_dir) if base_dir is not None else path_obj.parent
     safe_path = resolve_safe_local_path(path_obj, base)
@@ -115,7 +116,7 @@ def _load_audio(
     audio_path: Path,
     *,
     target_sample_rate: int,
-) -> Tuple[np.ndarray, int, float]:
+) -> tuple[np.ndarray, int, float]:
     try:
         audio_np, sample_rate = sf.read(str(audio_path))
     except Exception as exc:
@@ -139,7 +140,7 @@ def _load_audio(
     return audio_np, int(sample_rate), duration_seconds
 
 
-def _maybe_resample(audio_np: np.ndarray, sample_rate: int, target_sample_rate: int) -> Tuple[np.ndarray, int]:
+def _maybe_resample(audio_np: np.ndarray, sample_rate: int, target_sample_rate: int) -> tuple[np.ndarray, int]:
     if sample_rate == target_sample_rate:
         return audio_np, sample_rate
     try:
@@ -159,7 +160,7 @@ def _maybe_resample(audio_np: np.ndarray, sample_rate: int, target_sample_rate: 
         return audio_np, sample_rate
 
 
-def _coerce_hotwords(hotwords: Optional[Sequence[str] | str]) -> List[str]:
+def _coerce_hotwords(hotwords: Sequence[str] | str | None) -> list[str]:
     if hotwords is None:
         return []
     if isinstance(hotwords, str):
@@ -175,7 +176,7 @@ def _coerce_hotwords(hotwords: Optional[Sequence[str] | str]) -> List[str]:
                 # Fall through to CSV handling
                 pass
         return [part.strip() for part in raw.split(",") if part.strip()]
-    out: List[str] = []
+    out: list[str] = []
     for item in hotwords:
         s = str(item).strip()
         if s:
@@ -192,12 +193,12 @@ def _speaker_label_from_id(speaker_id: Any) -> str:
         return s or "SPEAKER_0"
 
 
-def _normalize_segments(segments: Iterable[Any], *, duration_seconds: float) -> List[Dict[str, Any]]:
+def _normalize_segments(segments: Iterable[Any], *, duration_seconds: float) -> list[dict[str, Any]]:
     segments_list = [seg for seg in segments if isinstance(seg, dict)]
     total_segments = len(segments_list)
     slice_len = duration_seconds / max(1, total_segments) if duration_seconds > 0 else 0.0
 
-    normalized: List[Dict[str, Any]] = []
+    normalized: list[dict[str, Any]] = []
     for seg in segments_list:
 
         start_raw = (
@@ -248,7 +249,7 @@ def _normalize_segments(segments: Iterable[Any], *, duration_seconds: float) -> 
             or seg.get("speakerId")
         )
 
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "start_seconds": float(max(0.0, start_s)),
             "end_seconds": float(max(start_s, end_s)),
             "Text": text,
@@ -287,7 +288,7 @@ def _extract_text_from_response(resp: Any) -> str:
     return ""
 
 
-def _count_speakers(segments: Sequence[Dict[str, Any]]) -> Optional[int]:
+def _count_speakers(segments: Sequence[dict[str, Any]]) -> int | None:
     speakers = {str(seg.get("speaker")).strip() for seg in segments if seg.get("speaker")}
     return len(speakers) if speakers else None
 
@@ -296,13 +297,13 @@ def _normalize_artifact(
     raw_resp: Any,
     *,
     duration_seconds: float,
-    language_hint: Optional[str],
+    language_hint: str | None,
     model_id: str,
     source: str,
     hotwords: Sequence[str],
-) -> Dict[str, Any]:
-    language_out: Optional[str] = None
-    segments_out: List[Dict[str, Any]] = []
+) -> dict[str, Any]:
+    language_out: str | None = None
+    segments_out: list[dict[str, Any]] = []
 
     if isinstance(raw_resp, dict):
         language_out = (
@@ -377,7 +378,7 @@ def _resolve_device(requested_device: str) -> str:
     return dev or "cpu"
 
 
-def _load_local_components(settings: Dict[str, Any]) -> Tuple[Any, Any, str]:
+def _load_local_components(settings: dict[str, Any]) -> tuple[Any, Any, str]:
     model_id = str(settings["model_id"])
     device = _resolve_device(str(settings["device"]))
     dtype_name = str(settings["dtype"])
@@ -399,7 +400,6 @@ def _load_local_components(settings: Dict[str, Any]) -> Tuple[Any, Any, str]:
                 "Install with: pip install transformers"
             ) from exc
 
-        import torch
 
         torch_dtype = _get_torch_dtype(dtype_name)
         local_only = not allow_download
@@ -435,10 +435,10 @@ def _build_processor_inputs(
     *,
     audio_np: np.ndarray,
     sample_rate: int,
-    language: Optional[str],
+    language: str | None,
     hotwords: Sequence[str],
 ) -> Any:
-    base_kwargs: Dict[str, Any] = {
+    base_kwargs: dict[str, Any] = {
         "audio": audio_np,
         "sampling_rate": sample_rate,
         "return_tensors": "pt",
@@ -474,7 +474,7 @@ def _move_inputs_to_device(inputs: Any, device: str) -> Any:
         except Exception:
             return inputs
     if isinstance(inputs, dict):
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         for k, v in inputs.items():
             if hasattr(v, "to"):
                 try:
@@ -508,11 +508,11 @@ def _transcribe_local(
     audio_np: np.ndarray,
     sample_rate: int,
     duration_seconds: float,
-    settings: Dict[str, Any],
-    language: Optional[str],
+    settings: dict[str, Any],
+    language: str | None,
     hotwords: Sequence[str],
-    cancel_check: Optional[Callable[[], bool]],
-) -> Dict[str, Any]:
+    cancel_check: Callable[[], bool] | None,
+) -> dict[str, Any]:
     _check_cancel(cancel_check, label="local model load")
     processor, model, device = _load_local_components(settings)
     _check_cancel(cancel_check, label="local preprocessing")
@@ -560,7 +560,7 @@ def _transcribe_local(
     )
     inputs = _move_inputs_to_device(inputs, device)
 
-    gen_kwargs: Dict[str, Any] = {
+    gen_kwargs: dict[str, Any] = {
         "do_sample": False,
         "max_new_tokens": int(settings.get("max_new_tokens") or 4096),
     }
@@ -610,11 +610,11 @@ def _transcribe_via_vllm_http(
     *,
     audio_path: Path,
     base_dir: Path,
-    settings: Dict[str, Any],
-    language: Optional[str],
+    settings: dict[str, Any],
+    language: str | None,
     hotwords: Sequence[str],
-    cancel_check: Optional[Callable[[], bool]],
-) -> Dict[str, Any]:
+    cancel_check: Callable[[], bool] | None,
+) -> dict[str, Any]:
     base_url = str(settings.get("vllm_base_url") or "").strip()
     if not base_url:
         raise BadRequestError("vibevoice_vllm_enabled is true but vibevoice_vllm_base_url is not set")
@@ -627,13 +627,13 @@ def _transcribe_via_vllm_http(
     if file_handle is None:
         raise BadRequestError("Audio file path rejected outside allowed base directory")
 
-    headers: Dict[str, str] = {}
+    headers: dict[str, str] = {}
     api_key = settings.get("vllm_api_key")
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
     model_id = str(settings.get("vllm_model_id") or settings.get("model_id") or "microsoft/VibeVoice-ASR")
-    data: Dict[str, Any] = {
+    data: dict[str, Any] = {
         "model": model_id,
         "response_format": "json",
     }
@@ -683,12 +683,12 @@ def is_vibevoice_available() -> bool:
 def transcribe_with_vibevoice(
     audio_path: str,
     *,
-    model_id: Optional[str] = None,
-    language: Optional[str] = None,
-    hotwords: Optional[Sequence[str] | str] = None,
-    base_dir: Optional[Path] = None,
-    cancel_check: Optional[Callable[[], bool]] = None,
-) -> Dict[str, Any]:
+    model_id: str | None = None,
+    language: str | None = None,
+    hotwords: Sequence[str] | str | None = None,
+    base_dir: Path | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
     """
     Transcribe audio via VibeVoice-ASR.
 

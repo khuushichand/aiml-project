@@ -1,7 +1,7 @@
+import json
 import os
 import re
-import json
-from typing import Optional, Dict, Any
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -29,7 +29,7 @@ def _norm_key(key: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", key.strip().lower())
 
 
-def _load_yaml(path: str) -> Optional[Dict[str, Any]]:
+def _load_yaml(path: str) -> Optional[dict[str, Any]]:
     try:
         import yaml  # type: ignore
     except Exception:
@@ -44,7 +44,7 @@ def _load_yaml(path: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _load_json(path: str) -> Optional[Dict[str, Any]]:
+def _load_json(path: str) -> Optional[dict[str, Any]]:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)

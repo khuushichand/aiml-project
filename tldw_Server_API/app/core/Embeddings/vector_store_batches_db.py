@@ -2,7 +2,8 @@ import json
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
+
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
@@ -67,7 +68,7 @@ def init_db(user_id: Optional[str]) -> None:
 
 
 def create_batch(batch_id: str, store_id: str, user_id: Optional[str], status: str = 'processing',
-                 upserted: int = 0, error: Optional[str] = None, meta: Optional[Dict[str, Any]] = None) -> None:
+                 upserted: int = 0, error: Optional[str] = None, meta: Optional[dict[str, Any]] = None) -> None:
     ts = int(time.time())
     _ensure_initialized(user_id)
     with _connect(user_id) as conn:
@@ -86,7 +87,7 @@ def create_batch(batch_id: str, store_id: str, user_id: Optional[str], status: s
 
 
 def update_batch(batch_id: str, user_id: Optional[str], status: Optional[str] = None, upserted: Optional[int] = None,
-                 error: Optional[str] = None, meta: Optional[Dict[str, Any]] = None) -> None:
+                 error: Optional[str] = None, meta: Optional[dict[str, Any]] = None) -> None:
     _ensure_initialized(user_id)
     fields = []
     values = []
@@ -115,7 +116,7 @@ def update_batch(batch_id: str, user_id: Optional[str], status: Optional[str] = 
         conn.commit()
 
 
-def get_batch(batch_id: str, user_id: Optional[str]) -> Optional[Dict[str, Any]]:
+def get_batch(batch_id: str, user_id: Optional[str]) -> Optional[dict[str, Any]]:
     _ensure_initialized(user_id)
     with _connect(user_id) as conn:
         cur = conn.execute(

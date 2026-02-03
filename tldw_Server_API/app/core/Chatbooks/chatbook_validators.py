@@ -9,12 +9,13 @@ Provides comprehensive validation and sanitization for chatbook operations
 to prevent security vulnerabilities and ensure data integrity.
 """
 
-import re
 import os
+import re
 import stat
 import zipfile
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional
+
 from loguru import logger
 
 
@@ -91,7 +92,7 @@ class ChatbookValidator:
         return False
 
     @classmethod
-    def validate_filename(cls, filename: str) -> Tuple[bool, Optional[str], str]:
+    def validate_filename(cls, filename: str) -> tuple[bool, Optional[str], str]:
         """
         Validate and sanitize a filename.
 
@@ -146,7 +147,7 @@ class ChatbookValidator:
         return True, None, sanitized
 
     @classmethod
-    def validate_file_size(cls, file_size: int, compressed: bool = True) -> Tuple[bool, Optional[str]]:
+    def validate_file_size(cls, file_size: int, compressed: bool = True) -> tuple[bool, Optional[str]]:
         """
         Validate file size.
 
@@ -167,7 +168,7 @@ class ChatbookValidator:
         return True, None
 
     @classmethod
-    def validate_zip_file(cls, file_path: str) -> Tuple[bool, Optional[str]]:
+    def validate_zip_file(cls, file_path: str) -> tuple[bool, Optional[str]]:
         """
         Comprehensive validation of a ZIP file.
 
@@ -283,8 +284,8 @@ class ChatbookValidator:
     def validate_chatbook_metadata(cls,
                                  name: str,
                                  description: str,
-                                 tags: List[str] = None,
-                                 categories: List[str] = None) -> Tuple[bool, Optional[str]]:
+                                 tags: list[str] = None,
+                                 categories: list[str] = None) -> tuple[bool, Optional[str]]:
         """
         Validate chatbook metadata.
 
@@ -339,7 +340,7 @@ class ChatbookValidator:
         return True, None
 
     @classmethod
-    def validate_media_quality(cls, media_quality: str) -> Tuple[bool, Optional[str]]:
+    def validate_media_quality(cls, media_quality: str) -> tuple[bool, Optional[str]]:
         """
         Validate media quality value.
 
@@ -355,7 +356,7 @@ class ChatbookValidator:
         return True, None
 
     @classmethod
-    def validate_author(cls, author: Optional[str]) -> Tuple[bool, Optional[str]]:
+    def validate_author(cls, author: Optional[str]) -> tuple[bool, Optional[str]]:
         """
         Validate author field.
 
@@ -424,7 +425,7 @@ class ChatbookValidator:
 
     @classmethod
     def validate_content_selections(cls,
-                                   content_selections: Dict[str, List[str]]) -> Tuple[bool, Optional[str]]:
+                                   content_selections: dict[str, list[str]]) -> tuple[bool, Optional[str]]:
         """
         Validate content selection dictionary.
 

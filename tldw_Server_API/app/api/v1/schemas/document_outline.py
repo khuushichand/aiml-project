@@ -3,8 +3,6 @@
 #
 from __future__ import annotations
 
-from typing import List
-
 from pydantic import BaseModel, Field
 
 
@@ -21,7 +19,7 @@ class DocumentOutlineResponse(BaseModel):
 
     media_id: int = Field(..., description="ID of the media item")
     has_outline: bool = Field(..., description="Whether the document has an outline")
-    entries: List[OutlineEntry] = Field(
+    entries: list[OutlineEntry] = Field(
         default_factory=list, description="List of outline entries"
     )
     total_pages: int = Field(..., ge=0, description="Total number of pages")

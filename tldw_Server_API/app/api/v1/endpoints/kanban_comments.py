@@ -6,26 +6,22 @@ Provides CRUD operations for Kanban card comments including:
 - Create, read, update, delete comments
 - List comments for a card with pagination
 """
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
-from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
-    CommentCreate,
-    CommentUpdate,
-    CommentResponse,
-    CommentsListResponse,
-    PaginationInfo,
-    DetailResponse,
-)
 from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     get_kanban_db_for_user,
     handle_kanban_db_error,
     kanban_rate_limit,
 )
-
+from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
+    CommentCreate,
+    CommentResponse,
+    CommentsListResponse,
+    CommentUpdate,
+    PaginationInfo,
+)
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
 
 router = APIRouter(tags=["Kanban Comments"])
 

@@ -1,4 +1,5 @@
 import json
+import pytest
 from datetime import datetime, timedelta
 
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
@@ -30,6 +31,7 @@ def _seed_evaluations(db: EvaluationsDatabase, rows: list[dict]) -> None:
         conn.commit()
 
 
+@pytest.mark.unit
 def test_list_evaluations_filtered_by_user_and_date(tmp_path):
     db = EvaluationsDatabase(str(tmp_path / "evals.db"))
     now = datetime.utcnow().replace(microsecond=0)
@@ -83,6 +85,7 @@ def test_list_evaluations_filtered_by_user_and_date(tmp_path):
     assert items[0]["id"] == "eval_recent_a"
 
 
+@pytest.mark.unit
 def test_count_evaluations_filtered_by_user(tmp_path):
     db = EvaluationsDatabase(str(tmp_path / "evals.db"))
     now = datetime.utcnow().replace(microsecond=0)

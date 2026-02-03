@@ -6,36 +6,35 @@ import asyncio
 import json
 import sqlite3
 from datetime import datetime, timezone
-from typing import Dict, Optional, List, Tuple
+from typing import Optional
+
 #
 # 3rd-party imports
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
-    File,
-    Form,
-    Header,
     HTTPException,
-    Query,
-    Request,
-    Response,
     status,
-    UploadFile
 )
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+
 #
 # Local Imports
-from tldw_Server_API.app.api.v1.schemas.sync_server_models import ClientChangesPayload, ServerChangesResponse, \
-    SyncLogEntry
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.api.v1.schemas.sync_server_models import (
+    ClientChangesPayload,
+    ServerChangesResponse,
+    SyncLogEntry,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+
 #
 # DB Mgmt
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import DatabaseError, ConflictError, MediaDatabase, InputError
-from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import ConflictError, DatabaseError, InputError, MediaDatabase
 from tldw_Server_API.app.core.Sync.Sync_Client import SYNC_BATCH_SIZE
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+
 #
 #
 #######################################################################################################################
@@ -172,7 +171,7 @@ async def send_changes_to_client(
         changes_raw, latest_server_id = await asyncio.to_thread(_get_changes_sync)
         # --- End Thread Pool Execution ---
 
-        changes_models: List[SyncLogEntry] = []
+        changes_models: list[SyncLogEntry] = []
         for row_dict in changes_raw: # Assuming fetchall returns list of dicts/Rows
              try:
                   # Convert row (which should be dict-like if row_factory is set) to SyncLogEntry model
@@ -213,7 +212,7 @@ class ServerSyncProcessor:
         logger.info(f"ServerSyncProcessor initialized for user '{self.user_id}', request from '{self.requesting_client_id}'.")
 
     # --- SYNCHRONOUS BATCH APPLICATION ---
-    def apply_client_changes_batch(self, changes: List[Dict]) -> Tuple[bool, List[str]]:
+    def apply_client_changes_batch(self, changes: list[dict]) -> tuple[bool, list[str]]:
         """
         Applies a batch of ordered changes received from a client within a single transaction.
         Returns (success_status, list_of_error_messages).
@@ -263,7 +262,7 @@ class ServerSyncProcessor:
         return all_applied_or_skipped, errors
 
     # --- SYNCHRONOUS SINGLE CHANGE APPLICATION ---
-    def _apply_single_client_change_sync(self, cursor: sqlite3.Cursor, change: Dict, current_server_time_str: str) -> Tuple[bool, Optional[str]]:
+    def _apply_single_client_change_sync(self, cursor: sqlite3.Cursor, change: dict, current_server_time_str: str) -> tuple[bool, Optional[str]]:
         """
         Applies a single change from a client synchronously. Handles conflict detection/resolution.
         Returns (success, error_message). Runs within the transaction from apply_client_changes_batch.
@@ -346,7 +345,7 @@ class ServerSyncProcessor:
             return False, error_msg # Return failure status and message
 
     # --- SYNCHRONOUS CONFLICT RESOLUTION ---
-    def _resolve_server_conflict_sync(self, cursor: sqlite3.Cursor, client_change: Dict, server_record_info: Optional[tuple], current_server_time_str: str) -> Tuple[bool, Optional[str]]:
+    def _resolve_server_conflict_sync(self, cursor: sqlite3.Cursor, client_change: dict, server_record_info: Optional[tuple], current_server_time_str: str) -> tuple[bool, Optional[str]]:
         """
         Resolves conflict synchronously using LWW based on parsed timestamps.
         Returns (resolved_successfully, error_message).
@@ -448,7 +447,7 @@ class ServerSyncProcessor:
                 return False, error_msg
 
     # --- SYNCHRONOUS SQL EXECUTION ---
-    def _execute_server_change_sql_sync(self, cursor: sqlite3.Cursor, entity: str, operation: str, payload: Dict, uuid: str,
+    def _execute_server_change_sql_sync(self, cursor: sqlite3.Cursor, entity: str, operation: str, payload: dict, uuid: str,
                                      client_version: int, originating_client_id: str, server_timestamp: str,
                                      force_apply: bool = False):
         """Executes SQL synchronously on server DB."""
@@ -604,7 +603,7 @@ class ServerSyncProcessor:
 
     # --- Define SYNCHRONOUS versions of helpers ---
     _server_column_cache = {}
-    def _get_table_columns_sync(self, cursor: sqlite3.Cursor, table_name: str) -> Optional[List[str]]:
+    def _get_table_columns_sync(self, cursor: sqlite3.Cursor, table_name: str) -> Optional[list[str]]:
          """Synchronous version for getting table columns."""
          if table_name in self._server_column_cache: return self._server_column_cache[table_name]
          try:
@@ -619,7 +618,7 @@ class ServerSyncProcessor:
               else: logger.error(f"[{self.user_id}] Could not retrieve columns for server table: {table_name}"); return None
          except (sqlite3.Error, ValueError) as e: logger.error(f"[{self.user_id}] Error getting columns for server table {table_name}: {e}"); return None
 
-    def _execute_server_media_keyword_sql_sync(self, cursor: sqlite3.Cursor, operation: str, payload: Dict):
+    def _execute_server_media_keyword_sql_sync(self, cursor: sqlite3.Cursor, operation: str, payload: dict):
         """Synchronous version for MediaKeywords SQL execution."""
         media_uuid = payload.get('media_uuid')
         keyword_uuid = payload.get('keyword_uuid')
@@ -644,7 +643,7 @@ class ServerSyncProcessor:
         else: raise ValueError(f"Unsupported server operation '{operation}' for MediaKeywords entity")
 
 
-    def _update_fts_manually_sync(self, cursor: sqlite3.Cursor, entity: str, payload: Dict, uuid: str):
+    def _update_fts_manually_sync(self, cursor: sqlite3.Cursor, entity: str, payload: dict, uuid: str):
          """Updates the corresponding FTS table manually on the server (sync version)."""
          if entity == 'Media':
              if 'title' in payload or 'content' in payload:

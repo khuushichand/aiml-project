@@ -2,9 +2,10 @@
 Schema helpers for normalized RAG chunk metadata.
 """
 
-from typing import Any, Dict, List, Optional, Literal
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
+
 try:
     # Pydantic v2
     from pydantic import ConfigDict, field_validator  # type: ignore
@@ -34,7 +35,7 @@ class CitationSpan(BaseModel):
     sheet_name: Optional[str] = None
     start_timestamp_ms: Optional[int] = None
     end_timestamp_ms: Optional[int] = None
-    bbox_quad: Optional[List[CitationPoint]] = None
+    bbox_quad: Optional[list[CitationPoint]] = None
 
     if ConfigDict is not None:
         model_config = ConfigDict(extra="ignore")
@@ -44,7 +45,7 @@ class CitationSpan(BaseModel):
 
     @field_validator("bbox_quad")
     @classmethod
-    def _cap_bbox_quad(cls, value: Optional[List[CitationPoint]]):
+    def _cap_bbox_quad(cls, value: Optional[list[CitationPoint]]):
         if not value:
             return value
         if len(value) > 4:
@@ -61,7 +62,7 @@ class RAGChunkMetadata(BaseModel):
     end_char: Optional[int] = None
     chunk_type: Optional[Literal["text", "table", "list", "code", "media", "heading", "vlm"]] = None
     section_path: Optional[str] = None
-    ancestry_titles: Optional[List[str]] = None
+    ancestry_titles: Optional[list[str]] = None
     language: Optional[str] = None
     code_language: Optional[str] = None
     list_style: Optional[str] = None
@@ -78,7 +79,7 @@ class RAGChunkMetadata(BaseModel):
             extra = "ignore"
 
 
-def model_dump_compat(model: BaseModel) -> Dict[str, Any]:
+def model_dump_compat(model: BaseModel) -> dict[str, Any]:
     """Return a Pydantic model as a dict without None values (v1/v2 compatible)."""
     if hasattr(model, "model_dump"):
         return model.model_dump(exclude_none=True)  # type: ignore[call-arg]

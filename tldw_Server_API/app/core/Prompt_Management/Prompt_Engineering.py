@@ -1,14 +1,15 @@
 # Prompt_Engineering.py
 # Description: Library for generating prompts
 
-from typing import Any, Dict, List, Optional
 import re
+from typing import Any, Optional
+
 from loguru import logger
 
 # Local Imports
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
-from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 
 
 class PromptGenerationError(Exception):
@@ -16,7 +17,7 @@ class PromptGenerationError(Exception):
     pass
 
 
-def _call_adapter(api_endpoint: str, request: Dict[str, Any]) -> Any:
+def _call_adapter(api_endpoint: str, request: dict[str, Any]) -> Any:
     provider = (api_endpoint or "").strip().lower()
     if not provider:
         raise PromptGenerationError("Provider name is required.")
@@ -35,7 +36,7 @@ def _call_adapter(api_endpoint: str, request: Dict[str, Any]) -> Any:
     return adapter.chat(payload)
 
 
-def _resolve_model(provider: str, app_config: Dict[str, Any]) -> Optional[str]:
+def _resolve_model(provider: str, app_config: dict[str, Any]) -> Optional[str]:
     key = f"{provider.replace('-', '_').replace('.', '_')}_api"
     model = (app_config.get(key) or {}).get("model")
     return model
@@ -570,7 +571,7 @@ def generate_prompt(api_endpoint: str, api_key: str, task: str, variables_str: s
         logger.error(f"Failed to generate prompt via chat API: {e}")
         raise PromptGenerationError(f"Failed to generate prompt: {e}") from e
 
-def extract_between_tags(tag: str, string: str, strip: bool = False) -> List[str]:
+def extract_between_tags(tag: str, string: str, strip: bool = False) -> list[str]:
     """Extract all substrings between specific XML-like tags.
 
     Args:

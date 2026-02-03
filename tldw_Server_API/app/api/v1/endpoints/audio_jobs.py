@@ -1,22 +1,20 @@
 from __future__ import annotations
 
-from typing import Optional, List, Dict, Any, Annotated
 import os
 import threading
+from typing import Annotated, Any
 
 from cachetools import LRUCache
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
+
 try:
     # Pydantic v2
     from pydantic import model_validator  # type: ignore
 except Exception:  # pragma: no cover - fallback for older environments
     model_validator = None  # type: ignore
 from loguru import logger
-from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 
-from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
     require_permissions,
@@ -24,16 +22,18 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_MAINTENANCE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+    resolve_default_transcription_model,
+)
+from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.Usage.audio_quota import (
     TIER_LIMITS,
     get_limits_for_user,
     get_user_tier,
     set_user_tier,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
-    resolve_default_transcription_model,
-)
-
 
 router = APIRouter()
 
@@ -76,19 +76,19 @@ def get_job_manager() -> JobManager:
 
 
 class SubmitAudioJobRequest(BaseModel):
-    url: Optional[str] = Field(None, description="URL to download audio from")
-    local_path: Optional[str] = Field(None, description="Server-local path to an existing audio/video file")
-    model: Optional[str] = Field(
+    url: str | None = Field(None, description="URL to download audio from")
+    local_path: str | None = Field(None, description="Server-local path to an existing audio/video file")
+    model: str | None = Field(
         None,
         description="Transcription model selector (defaults to config when omitted)",
     )
-    hotwords: Optional[str | List[str]] = Field(
+    hotwords: str | list[str] | None = Field(
         None,
         description="Optional hotwords to guide transcription (CSV/JSON string or list). Primarily used by VibeVoice-ASR.",
     )
     perform_chunking: bool = Field(True, description="Whether to chunk the transcript after STT")
     perform_analysis: bool = Field(False, description="Whether to run LLM analysis after chunking")
-    api_name: Optional[str] = Field(None, description="LLM provider key for analysis stage")
+    api_name: str | None = Field(None, description="LLM provider key for analysis stage")
 
     if model_validator is not None:
         @model_validator(mode="after")
@@ -105,7 +105,7 @@ class SubmitAudioJobRequest(BaseModel):
         from pydantic import root_validator as _rv  # type: ignore
 
         @_rv
-        def _validate_inputs(cls, values: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore[no-redef]
+        def _validate_inputs(cls, values: dict[str, Any]) -> dict[str, Any]:  # type: ignore[no-redef]
             url = (values.get("url") or "").strip()
             lp = (values.get("local_path") or "").strip()
             if not url and not lp:
@@ -117,7 +117,7 @@ class SubmitAudioJobRequest(BaseModel):
 
 class SubmitAudioJobResponse(BaseModel):
     id: int
-    uuid: Optional[str] = None
+    uuid: str | None = None
     domain: str
     queue: str
     job_type: str
@@ -145,7 +145,7 @@ async def submit_audio_job(
         if not requested_model:
             requested_model = resolve_default_transcription_model("whisper-1")
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "model": requested_model,
             "hotwords": req.hotwords,
             "perform_chunking": bool(req.perform_chunking),
@@ -191,19 +191,19 @@ async def submit_audio_job(
 
 class AudioJob(BaseModel):
     id: int
-    uuid: Optional[str]
+    uuid: str | None
     job_type: str
     status: str
     priority: int
     retry_count: int
     max_retries: int
-    owner_user_id: Optional[str]
-    available_at: Optional[str]
-    started_at: Optional[str]
-    leased_until: Optional[str]
-    created_at: Optional[str]
-    updated_at: Optional[str]
-    completed_at: Optional[str]
+    owner_user_id: str | None
+    available_at: str | None
+    started_at: str | None
+    leased_until: str | None
+    created_at: str | None
+    updated_at: str | None
+    completed_at: str | None
 
 
 _AUDIO_JOB_FIELD_MAP = getattr(AudioJob, "model_fields", None) or getattr(AudioJob, "__fields__", {})
@@ -239,7 +239,7 @@ async def get_audio_job(
 
 
 class ListAudioJobsResponse(BaseModel):
-    jobs: List[AudioJob]
+    jobs: list[AudioJob]
 
 
 @router.get(
@@ -250,8 +250,8 @@ class ListAudioJobsResponse(BaseModel):
 )
 async def list_audio_jobs_admin(
     jm: Annotated[JobManager, Depends(get_job_manager)],
-    status_filter: Optional[str] = Query(None, description="Filter by status: queued|processing|completed|failed|cancelled"),
-    owner_user_id: Optional[str] = Query(None, description="Filter by owner user id"),
+    status_filter: str | None = Query(None, description="Filter by status: queued|processing|completed|failed|cancelled"),
+    owner_user_id: str | None = Query(None, description="Filter by owner user id"),
     limit: int = Query(50, ge=1, le=200),
 ):
     try:
@@ -280,9 +280,9 @@ async def list_audio_jobs_admin(
 
 
 class AudioJobsSummary(BaseModel):
-    counts_by_status: Dict[str, int]
+    counts_by_status: dict[str, int]
     total: int
-    owner_user_id: Optional[str] = None
+    owner_user_id: str | None = None
 
 
 @router.get(
@@ -293,7 +293,7 @@ class AudioJobsSummary(BaseModel):
 )
 async def summarize_audio_jobs_admin(
     jm: Annotated[JobManager, Depends(get_job_manager)],
-    owner_user_id: Optional[str] = Query(None, description="Optional owner filter"),
+    owner_user_id: str | None = Query(None, description="Optional owner filter"),
 ):
     try:
         logger.info(
@@ -314,13 +314,13 @@ async def summarize_audio_jobs_admin(
 
 
 class AudioJobsOwnerSummaryItem(BaseModel):
-    owner_user_id: Optional[str]
+    owner_user_id: str | None
     status: str
     count: int
 
 
 class AudioJobsSummaryByOwner(BaseModel):
-    items: List[AudioJobsOwnerSummaryItem]
+    items: list[AudioJobsOwnerSummaryItem]
 
 
 @router.get(
@@ -333,7 +333,7 @@ async def summary_by_owner_admin(
     jm: Annotated[JobManager, Depends(get_job_manager)],
 ):
     try:
-        items: List[AudioJobsOwnerSummaryItem] = []
+        items: list[AudioJobsOwnerSummaryItem] = []
         logger.info("Admin summarize audio jobs by owner and status")
         summary = jm.summarize_by_owner_and_status(domain="audio")
         for entry in summary:
@@ -355,7 +355,7 @@ async def summary_by_owner_admin(
 class OwnerProcessingSummary(BaseModel):
     owner_user_id: str
     processing: int
-    limit: Optional[int]
+    limit: int | None
 
 
 @router.get(

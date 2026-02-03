@@ -10,18 +10,19 @@ Provides metrics for:
 """
 
 import time
-from typing import Dict, Any, Optional, Callable
-from functools import wraps
 from contextlib import contextmanager
-from datetime import datetime, UTC
+from datetime import UTC, datetime
+from functools import wraps
+from typing import Any, Callable, Optional
 
 try:
-    from prometheus_client import Counter, Histogram, Gauge, Info, generate_latest, REGISTRY
+    from prometheus_client import REGISTRY, Counter, Gauge, Histogram, Info, generate_latest
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
 
 from loguru import logger
+
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter, set_gauge
 
 
@@ -275,7 +276,7 @@ class EvaluationMetrics:
         provider: str,
         status: str,
         duration: float,
-        scores: Optional[Dict[str, float]] = None
+        scores: Optional[dict[str, float]] = None
     ):
         """Record evaluation metrics"""
         if not self.enabled:
@@ -444,7 +445,7 @@ class EvaluationMetrics:
                 error_type=error_type
             ).inc()
 
-    def update_user_tier_distribution(self, tier_counts: Dict[str, int]):
+    def update_user_tier_distribution(self, tier_counts: dict[str, int]):
         """Update user tier distribution"""
         if not self.enabled:
             return
@@ -463,7 +464,7 @@ class EvaluationMetrics:
             evaluation_type=evaluation_type
         ).inc(cost)
 
-    def get_health_metrics(self) -> Dict[str, Any]:
+    def get_health_metrics(self) -> dict[str, Any]:
         """Get system health metrics for monitoring"""
         if not self.enabled:
             return {"metrics_enabled": False}

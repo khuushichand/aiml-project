@@ -6,9 +6,9 @@ Scaffold only - minimal models to enable endpoint stubs.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Literal
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class OptInRequest(BaseModel):
@@ -27,10 +27,10 @@ class PersonalizationProfile(BaseModel):
 
 
 class PreferencesUpdate(BaseModel):
-    alpha: Optional[float] = None
-    beta: Optional[float] = None
-    gamma: Optional[float] = None
-    recency_half_life_days: Optional[int] = None
+    alpha: float | None = None
+    beta: float | None = None
+    gamma: float | None = None
+    recency_half_life_days: int | None = None
 
 
 class MemoryItem(BaseModel):
@@ -38,12 +38,12 @@ class MemoryItem(BaseModel):
     type: Literal["semantic", "episodic"] = "semantic"
     content: str
     pinned: bool = False
-    tags: Optional[List[str]] = None
-    timestamp: Optional[datetime] = None
+    tags: list[str] | None = None
+    timestamp: datetime | None = None
 
 
 class MemoryListResponse(BaseModel):
-    items: List[MemoryItem]
+    items: list[MemoryItem]
     total: int
     page: int = 1
     size: int = 50
@@ -52,17 +52,17 @@ class MemoryListResponse(BaseModel):
 class ExplanationSignal(BaseModel):
     name: str
     value: float
-    detail: Optional[str] = None
+    detail: str | None = None
 
 
 class ExplanationEntry(BaseModel):
     timestamp: datetime
     context: Literal["rag", "chat"]
-    signals: List[ExplanationSignal]
+    signals: list[ExplanationSignal]
 
 
 class ExplanationListResponse(BaseModel):
-    items: List[ExplanationEntry]
+    items: list[ExplanationEntry]
     total: int
 
 

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator, Dict, Optional
-
 import asyncio
 import json
 import shutil
+from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import Any
 
 import aiofiles
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from loguru import logger
+from pydantic import ValidationError
 from starlette.responses import StreamingResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.backpressure import (
@@ -21,16 +22,17 @@ from tldw_Server_API.app.api.v1.API_Deps.media_mediawiki_deps import (
 from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     ProcessedMediaWikiPage,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki.Media_Wiki import (
-    ALLOWED_MEDIAWIKI_DUMP_EXTENSIONS,
-    MAX_MEDIAWIKI_FILE_SIZE_BYTES,
-    import_mediawiki_dump as core_import_mediawiki_dump,
-)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki.Media_Wiki import (
+    ALLOWED_MEDIAWIKI_DUMP_EXTENSIONS,
+    MAX_MEDIAWIKI_FILE_SIZE_BYTES,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki.Media_Wiki import (
+    import_mediawiki_dump as core_import_mediawiki_dump,
+)
 from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
-from pydantic import ValidationError
 
 router = APIRouter()
 
@@ -63,7 +65,7 @@ def _validate_dump_filename(filename: str) -> None:
         )
 
 
-def _validate_dump_content_type(content_type: Optional[str]) -> None:
+def _validate_dump_content_type(content_type: str | None) -> None:
     """Validate dump file content type when provided."""
     if not content_type:
         return
@@ -103,7 +105,7 @@ def _validate_dump_magic_bytes(first_chunk: bytes, filename: str) -> None:
 
 async def _process_mediawiki_dump(
     *,
-    form_data: Dict[str, Any],
+    form_data: dict[str, Any],
     dump_file: UploadFile,
     store_to_db: bool,
     store_to_vector_db: bool,
@@ -231,7 +233,7 @@ async def _process_mediawiki_dump(
     dependencies=[Depends(guard_backpressure_and_quota)],
 )
 async def ingest_mediawiki_dump_endpoint(
-    form_data: Dict[str, Any] = Depends(get_mediawiki_form_data),
+    form_data: dict[str, Any] = Depends(get_mediawiki_form_data),
     dump_file: UploadFile = File(
         ...,
         description="MediaWiki XML dump file (.xml, .xml.bz2, .xml.gz).",
@@ -259,7 +261,7 @@ async def ingest_mediawiki_dump_endpoint(
     dependencies=[Depends(guard_backpressure_and_quota)],
 )
 async def process_mediawiki_dump_ephemeral_endpoint(
-    form_data: Dict[str, Any] = Depends(get_mediawiki_form_data),
+    form_data: dict[str, Any] = Depends(get_mediawiki_form_data),
     dump_file: UploadFile = File(
         ...,
         description="MediaWiki XML dump file (.xml, .xml.bz2, .xml.gz).",

@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -25,11 +25,11 @@ from tldw_Server_API.app.core.Workflows.adapters._common import (
 )
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.video._config import (
-    VideoTrimConfig,
     VideoConcatConfig,
     VideoConvertConfig,
-    VideoThumbnailConfig,
     VideoExtractFramesConfig,
+    VideoThumbnailConfig,
+    VideoTrimConfig,
 )
 
 
@@ -41,7 +41,7 @@ from tldw_Server_API.app.core.Workflows.adapters.video._config import (
     config_model=VideoTrimConfig,
     tags=["video"],
 )
-async def run_video_trim_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_video_trim_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Trim a video file to a specific time range.
 
     Config:
@@ -101,7 +101,7 @@ async def run_video_trim_adapter(config: Dict[str, Any], context: Dict[str, Any]
     config_model=VideoConcatConfig,
     tags=["video"],
 )
-async def run_video_concat_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_video_concat_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Concatenate multiple video files into one.
 
     Config:
@@ -159,7 +159,7 @@ async def run_video_concat_adapter(config: Dict[str, Any], context: Dict[str, An
     config_model=VideoConvertConfig,
     tags=["video"],
 )
-async def run_video_convert_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_video_convert_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Convert video file to a different format.
 
     Config:
@@ -220,7 +220,7 @@ async def run_video_convert_adapter(config: Dict[str, Any], context: Dict[str, A
     config_model=VideoThumbnailConfig,
     tags=["video"],
 )
-async def run_video_thumbnail_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_video_thumbnail_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate a thumbnail image from a video.
 
     Config:
@@ -290,7 +290,7 @@ async def run_video_thumbnail_adapter(config: Dict[str, Any], context: Dict[str,
     config_model=VideoExtractFramesConfig,
     tags=["video"],
 )
-async def run_video_extract_frames_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_video_extract_frames_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Extract frames from a video at specified intervals.
 
     Config:

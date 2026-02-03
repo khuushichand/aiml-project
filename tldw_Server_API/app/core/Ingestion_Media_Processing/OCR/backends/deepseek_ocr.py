@@ -4,11 +4,9 @@ import importlib.util
 import os
 import tempfile
 import threading
-from typing import Optional
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
 from tldw_Server_API.app.core.Utils.Utils import logging
-
 
 _TF_MODEL = None
 _TF_TOKENIZER = None
@@ -64,7 +62,7 @@ def _resolve_dtype():
         return None
 
 
-def _resolve_attn_impl(device: Optional[str] = None) -> str:
+def _resolve_attn_impl(device: str | None = None) -> str:
     env_val = os.getenv("DEEPSEEK_OCR_ATTN_IMPL")
     attn_impl = (env_val or "flash_attention_2").strip()
     if env_val is None and device and not device.startswith("cuda") and attn_impl == "flash_attention_2":
@@ -163,7 +161,7 @@ class DeepSeekOCRBackend(OCRBackend):
             "output_dir": os.getenv("DEEPSEEK_OCR_OUTPUT_DIR"),
         }
 
-    def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
+    def ocr_image(self, image_bytes: bytes, lang: str | None = None) -> str:
         if not self.available():
             logging.warning(
                 "DeepSeekOCRBackend not available: install transformers+torch and ensure GPU/FlashAttention if required."
@@ -225,8 +223,7 @@ def _load_transformers():
         if _TF_MODEL is not None and _TF_TOKENIZER is not None:
             return _TF_MODEL, _TF_TOKENIZER
 
-        from transformers import AutoTokenizer, AutoModel
-        import torch
+        from transformers import AutoModel, AutoTokenizer
 
         model_id = os.getenv("DEEPSEEK_OCR_MODEL_ID", "deepseek-ai/DeepSeek-OCR")
         device = _resolve_device()

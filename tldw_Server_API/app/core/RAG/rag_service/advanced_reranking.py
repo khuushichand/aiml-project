@@ -10,20 +10,22 @@ This module provides sophisticated reranking capabilities including:
 """
 
 import asyncio
-import time
+import math
 import os
-from fnmatch import fnmatch
-from typing import List, Dict, Any, Optional, Tuple, Callable, Iterable
+import time
+from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from abc import ABC, abstractmethod
-import numpy as np
-from functools import lru_cache
+from fnmatch import fnmatch
+from typing import Any, Optional
 
+import numpy as np
 from loguru import logger
+
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
-from .types import Document, DataSource
+from .types import DataSource, Document
 from .utils import get_float_env as _get_float_env
 
 
@@ -44,12 +46,12 @@ _RERANKER_TRUST_REMOTE_CODE_PATTERNS = (
 )
 
 
-def _normalize_hf_patterns(patterns: Optional[Iterable[Any]]) -> List[str]:
+def _normalize_hf_patterns(patterns: Optional[Iterable[Any]]) -> list[str]:
     if not patterns:
         return []
     if isinstance(patterns, str):
         return [p.strip() for p in patterns.split(",") if p.strip()]
-    out: List[str] = []
+    out: list[str] = []
     for p in patterns:
         if p is None:
             continue
@@ -86,7 +88,7 @@ class RerankingConfig:
     min_similarity_threshold: float = 0.3
     batch_size: int = 32
     use_gpu: bool = False
-    criteria_weights: Dict[str, float] = field(default_factory=lambda: {
+    criteria_weights: dict[str, float] = field(default_factory=lambda: {
         "relevance": 0.4,
         "recency": 0.2,
         "source_quality": 0.2,
@@ -121,7 +123,7 @@ class ScoredDocument:
     rerank_score: float
     relevance_score: float = 0.0
     diversity_score: float = 0.0
-    criteria_scores: Dict[str, float] = field(default_factory=dict)
+    criteria_scores: dict[str, float] = field(default_factory=dict)
     explanation: Optional[str] = None
 
     @property
@@ -141,15 +143,15 @@ class BaseReranker(ABC):
             config: Reranking configuration
         """
         self.config = config
-        self._cache = {}
+        self._cache: dict[str, Any] = {}
 
     @abstractmethod
     async def rerank(
         self,
         query: str,
-        documents: List[Document],
-        original_scores: Optional[List[float]] = None
-    ) -> List[ScoredDocument]:
+        documents: list[Document],
+        original_scores: Optional[list[float]] = None
+    ) -> list[ScoredDocument]:
         """
         Rerank documents based on query.
 
@@ -163,7 +165,7 @@ class BaseReranker(ABC):
         """
         pass
 
-    def _normalize_scores(self, scores: List[float]) -> List[float]:
+    def _normalize_scores(self, scores: list[float]) -> list[float]:
         """Normalize scores to [0, 1] range."""
         if not scores:
             return []
@@ -195,9 +197,9 @@ class FlashRankReranker(BaseReranker):
     async def rerank(
         self,
         query: str,
-        documents: List[Document],
-        original_scores: Optional[List[float]] = None
-    ) -> List[ScoredDocument]:
+        documents: list[Document],
+        original_scores: Optional[list[float]] = None
+    ) -> list[ScoredDocument]:
         """Rerank using FlashRank."""
         if not self._ranker or not documents:
             # Fallback to original scores
@@ -264,7 +266,7 @@ class LlamaCppReranker(BaseReranker):
         from shutil import which
         # Load env/config fallbacks lazily to avoid tight coupling
         try:
-            from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+            from tldw_Server_API.app.core.config import load_and_log_configs
             _cfg = load_and_log_configs() or {}
         except Exception:
             _cfg = {}
@@ -295,9 +297,16 @@ class LlamaCppReranker(BaseReranker):
             )
         except Exception:
             self.ngl = 0
-        self.embd_format = config.llama_embd_output_format or os.getenv("RAG_LLAMA_RERANKER_OUTPUT", _cfg.get("RAG_LLAMA_RERANKER_OUTPUT", "json+"))
+        cfg_output = _cfg.get("RAG_LLAMA_RERANKER_OUTPUT", "json+")
+        if not isinstance(cfg_output, str):
+            cfg_output = str(cfg_output)
+        env_output = os.getenv("RAG_LLAMA_RERANKER_OUTPUT")
+        self.embd_format = config.llama_embd_output_format or env_output or cfg_output
         # Pooling may vary by model family; default later if none provided
-        self.pooling = config.llama_pooling or os.getenv("RAG_LLAMA_RERANKER_POOLING", _cfg.get("RAG_LLAMA_RERANKER_POOLING", None))
+        env_pooling = os.getenv("RAG_LLAMA_RERANKER_POOLING")
+        cfg_pooling = _cfg.get("RAG_LLAMA_RERANKER_POOLING")
+        cfg_pooling_str = cfg_pooling if isinstance(cfg_pooling, str) else ""
+        self.pooling = config.llama_pooling or env_pooling or cfg_pooling_str
         try:
             self.normalize = (
                 config.llama_normalize
@@ -353,13 +362,10 @@ class LlamaCppReranker(BaseReranker):
     async def rerank(
         self,
         query: str,
-        documents: List[Document],
-        original_scores: Optional[List[float]] = None
-    ) -> List[ScoredDocument]:
+        documents: list[Document],
+        original_scores: Optional[list[float]] = None
+    ) -> list[ScoredDocument]:
         import asyncio
-        import json
-        import math
-        from shutil import which
         if not documents:
             return []
 
@@ -449,7 +455,7 @@ class LlamaCppReranker(BaseReranker):
                 for i, doc in enumerate(documents[: self.config.top_k])
             ]
 
-    def _parse_embeddings_output(self, s: str) -> Optional[List[List[float]]]:
+    def _parse_embeddings_output(self, s: str) -> Optional[list[list[float]]]:
         """Parse embeddings from llama-embedding stdout.
 
         Supports a few common shapes:
@@ -487,7 +493,7 @@ class LlamaCppReranker(BaseReranker):
             pass
 
         # Fallback: regex extract arrays of floats; keep reasonably long ones
-        arrays: List[List[float]] = []
+        arrays: list[list[float]] = []
         for m in re.finditer(r"\[(?:\s*-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\s*,\s*){8,}-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\s*\]", s):
             try:
                 vec = json.loads(m.group(0))
@@ -516,7 +522,7 @@ class TransformersCrossEncoderReranker(BaseReranker):
         if not model_id:
             # Attempt to load from global config
             try:
-                from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+                from tldw_Server_API.app.core.config import load_and_log_configs
                 _cfg = load_and_log_configs() or {}
                 model_id = _cfg.get("RAG_TRANSFORMERS_RERANKER_MODEL")
             except Exception:
@@ -525,7 +531,7 @@ class TransformersCrossEncoderReranker(BaseReranker):
         # unless explicitly overridden by request config.
         if model_id and not self._trust_remote_code:
             try:
-                from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+                from tldw_Server_API.app.core.config import load_and_log_configs
                 _cfg = load_and_log_configs() or {}
                 allowlist = _cfg.get("TRUSTED_HF_REMOTE_CODE_MODELS") or []
             except Exception:
@@ -538,14 +544,14 @@ class TransformersCrossEncoderReranker(BaseReranker):
             try:
                 # Prefer sentence-transformers CrossEncoder if available
                 try:
-                    from sentence_transformers import CrossEncoder  # type: ignore
+                    from sentence_transformers import CrossEncoder
                     self._ce = CrossEncoder(model_id, device=None if self._device == "auto" else self._device, trust_remote_code=self._trust_remote_code)
                     self._using_st = True
                     logger.info(f"Loaded CrossEncoder model via sentence-transformers: {model_id}")
                 except Exception:
                     # Fallback: raw transformers pipeline if provided
-                    from transformers import AutoTokenizer, AutoModelForSequenceClassification  # type: ignore
-                    import torch  # type: ignore
+                    import torch
+                    from transformers import AutoModelForSequenceClassification, AutoTokenizer
                     self._tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=self._trust_remote_code)
                     self._model = AutoModelForSequenceClassification.from_pretrained(model_id, trust_remote_code=self._trust_remote_code)
                     self._model.eval()
@@ -559,9 +565,9 @@ class TransformersCrossEncoderReranker(BaseReranker):
     async def rerank(
         self,
         query: str,
-        documents: List[Document],
-        original_scores: Optional[List[float]] = None
-    ) -> List[ScoredDocument]:
+        documents: list[Document],
+        original_scores: Optional[list[float]] = None
+    ) -> list[ScoredDocument]:
         if not documents:
             return []
 
@@ -581,7 +587,7 @@ class TransformersCrossEncoderReranker(BaseReranker):
         pairs = [(query, (d.content or "")[: self.config.llama_max_doc_chars if self.config.llama_max_doc_chars else None]) for d in documents]
 
         try:
-            scores: List[float]
+            scores: list[float]
             if self._using_st and self._ce is not None:
                 # sentence-transformers CrossEncoder
                 scores = list(map(float, self._ce.predict(pairs, batch_size=self.config.batch_size)))
@@ -590,7 +596,7 @@ class TransformersCrossEncoderReranker(BaseReranker):
                 tok = self._tokenizer
                 model = self._model
                 torch = self._torch
-                all_scores: List[float] = []
+                all_scores: list[float] = []
                 bs = max(1, int(self.config.batch_size))
                 for i in range(0, len(pairs), bs):
                     batch = pairs[i:i+bs]
@@ -600,8 +606,8 @@ class TransformersCrossEncoderReranker(BaseReranker):
                     with torch.no_grad():
                         if self._device != "auto":
                             enc = {k: v.to(self._device) for k, v in enc.items()}
-                        out = model(**enc)
-                        logits = out.logits
+                        model_out = model(**enc)
+                        logits = model_out.logits
                         # If single logit, apply sigmoid; if two logits, take softmax prob of class 1
                         if logits.shape[-1] == 1:
                             probs = torch.sigmoid(logits).squeeze(-1)
@@ -618,18 +624,18 @@ class TransformersCrossEncoderReranker(BaseReranker):
             except Exception:
                 pass
 
-            out: List[ScoredDocument] = []
+            scored_out: list[ScoredDocument] = []
             for i, d in enumerate(documents):
                 sc = scores[i] if i < len(scores) else float(getattr(d, "score", 0.0))
-                out.append(ScoredDocument(
+                scored_out.append(ScoredDocument(
                     document=d,
                     original_score=original_scores[i] if original_scores else d.score,
                     rerank_score=sc,
                     relevance_score=sc,
                     explanation="transformers cross-encoder"
                 ))
-            out.sort(key=lambda x: x.rerank_score, reverse=True)
-            return out[: self.config.top_k]
+            scored_out.sort(key=lambda x: x.rerank_score, reverse=True)
+            return scored_out[: self.config.top_k]
         except Exception as e:
             logger.error(f"Transformers cross-encoder reranking failed: {e}")
             return [
@@ -656,8 +662,8 @@ class Qwen3CausalLMReranker(BaseReranker):
 
     def __init__(self, config: RerankingConfig):
         super().__init__(config)
-        from transformers import AutoTokenizer, AutoModelForCausalLM  # type: ignore
-        import torch  # type: ignore
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
         model_id = config.model_name or "Qwen/Qwen3-Reranker-8B"
 
@@ -751,9 +757,9 @@ class Qwen3CausalLMReranker(BaseReranker):
     async def rerank(
         self,
         query: str,
-        documents: List[Document],
-        original_scores: Optional[List[float]] = None,
-    ) -> List[ScoredDocument]:
+        documents: list[Document],
+        original_scores: Optional[list[float]] = None,
+    ) -> list[ScoredDocument]:
         if not documents:
             return []
 
@@ -780,7 +786,7 @@ class Qwen3CausalLMReranker(BaseReranker):
             all_scores.extend(self._compute_logits(inputs))
 
         # Turn into ScoredDocument list and sort
-        out: List[ScoredDocument] = []
+        out: list[ScoredDocument] = []
         for i, d in enumerate(documents):
             sc = all_scores[i] if i < len(all_scores) else float(getattr(d, "score", 0.0))
             out.append(ScoredDocument(
@@ -795,7 +801,7 @@ class Qwen3CausalLMReranker(BaseReranker):
 
 
 # --- Compatibility helper for tests ---
-def rerank_by_similarity(documents: List[Document], top_k: int = 10) -> List[Document]:
+def rerank_by_similarity(documents: list[Document], top_k: int = 10) -> list[Document]:
     """
     Simple similarity-based rerank placeholder to satisfy unit tests that patch
     this function. Sorts by `metadata.score` or `doc.score` if present.
@@ -823,9 +829,9 @@ class DiversityReranker(BaseReranker):
     async def rerank(
         self,
         query: str,
-        documents: List[Document],
-        original_scores: Optional[List[float]] = None
-    ) -> List[ScoredDocument]:
+        documents: list[Document],
+        original_scores: Optional[list[float]] = None
+    ) -> list[ScoredDocument]:
         """
         Rerank using MMR algorithm.
 
@@ -844,7 +850,7 @@ class DiversityReranker(BaseReranker):
         remaining_indices = list(range(len(documents)))
 
         # Select first document (highest relevance)
-        first_idx = np.argmax(norm_scores)
+        first_idx = int(np.argmax(norm_scores))
         selected_indices.append(first_idx)
         selected_docs.append(ScoredDocument(
             document=documents[first_idx],
@@ -879,15 +885,16 @@ class DiversityReranker(BaseReranker):
             # Select document with highest MMR
             if mmr_scores:
                 best_idx, best_mmr, rel_score, div_score = max(mmr_scores, key=lambda x: x[1])
-                selected_indices.append(best_idx)
+                best_idx_int = int(best_idx)
+                selected_indices.append(best_idx_int)
                 selected_docs.append(ScoredDocument(
-                    document=documents[best_idx],
-                    original_score=scores[best_idx],
+                    document=documents[best_idx_int],
+                    original_score=scores[best_idx_int],
                     rerank_score=best_mmr,
                     relevance_score=rel_score,
                     diversity_score=div_score
                 ))
-                remaining_indices.remove(best_idx)
+                remaining_indices.remove(best_idx_int)
 
         return selected_docs
 
@@ -921,9 +928,9 @@ class MultiCriteriaReranker(BaseReranker):
     async def rerank(
         self,
         query: str,
-        documents: List[Document],
-        original_scores: Optional[List[float]] = None
-    ) -> List[ScoredDocument]:
+        documents: list[Document],
+        original_scores: Optional[list[float]] = None
+    ) -> list[ScoredDocument]:
         """Rerank using multiple criteria."""
         if not documents:
             return []
@@ -1014,7 +1021,7 @@ class HybridReranker(BaseReranker):
     Uses voting or weighted combination of different rerankers.
     """
 
-    def __init__(self, config: RerankingConfig, strategies: Optional[List[BaseReranker]] = None):
+    def __init__(self, config: RerankingConfig, strategies: Optional[list[BaseReranker]] = None):
         """
         Initialize hybrid reranker.
 
@@ -1044,9 +1051,9 @@ class HybridReranker(BaseReranker):
     async def rerank(
         self,
         query: str,
-        documents: List[Document],
-        original_scores: Optional[List[float]] = None
-    ) -> List[ScoredDocument]:
+        documents: list[Document],
+        original_scores: Optional[list[float]] = None
+    ) -> list[ScoredDocument]:
         """Rerank using multiple strategies and combine results."""
         if not documents:
             return []
@@ -1060,7 +1067,7 @@ class HybridReranker(BaseReranker):
         all_results = await asyncio.gather(*rerank_tasks)
 
         # Create document score map
-        doc_scores = {}
+        doc_scores: dict[int, dict[str, Any]] = {}
 
         for strategy_idx, results in enumerate(all_results):
             strategy_name = type(self.strategies[strategy_idx]).__name__
@@ -1072,7 +1079,7 @@ class HybridReranker(BaseReranker):
                 if doc_id not in doc_scores:
                     doc_scores[doc_id] = {
                         "document": scored_doc.document,
-                        "original_score": scored_doc.original_score,
+                        "original_score": float(scored_doc.original_score),
                         "weighted_scores": [],
                         "strategy_scores": {}
                     }
@@ -1081,21 +1088,33 @@ class HybridReranker(BaseReranker):
                 position_score = 1.0 / (rank + 1)
                 weighted_score = position_score * weight
 
-                doc_scores[doc_id]["weighted_scores"].append(weighted_score)
-                doc_scores[doc_id]["strategy_scores"][strategy_name] = scored_doc.rerank_score
+                entry = doc_scores[doc_id]
+                weighted_scores = entry.get("weighted_scores")
+                if isinstance(weighted_scores, list):
+                    weighted_scores.append(float(weighted_score))
+                strategy_scores = entry.get("strategy_scores")
+                if isinstance(strategy_scores, dict):
+                    strategy_scores[strategy_name] = float(scored_doc.rerank_score)
 
         # Calculate final scores
         final_scored_docs = []
 
         for doc_data in doc_scores.values():
             # Combine weighted scores
-            final_score = sum(doc_data["weighted_scores"]) / len(self.strategies)
+            weighted_scores = doc_data.get("weighted_scores")
+            weights_list = weighted_scores if isinstance(weighted_scores, list) else []
+            final_score = sum(weights_list) / len(self.strategies) if weights_list else 0.0
+            doc = doc_data.get("document")
+            if not isinstance(doc, Document):
+                continue
+            strategy_scores = doc_data.get("strategy_scores")
+            criteria_scores = strategy_scores if isinstance(strategy_scores, dict) else {}
 
             final_scored_docs.append(ScoredDocument(
-                document=doc_data["document"],
-                original_score=doc_data["original_score"],
+                document=doc,
+                original_score=float(doc_data.get("original_score", 0.0)),
                 rerank_score=final_score,
-                criteria_scores=doc_data["strategy_scores"],
+                criteria_scores=criteria_scores,
                 explanation=f"Combined from {len(self.strategies)} strategies"
             ))
 
@@ -1127,9 +1146,9 @@ class LLMReranker(BaseReranker):
     async def rerank(
         self,
         query: str,
-        documents: List[Document],
-        original_scores: Optional[List[float]] = None
-    ) -> List[ScoredDocument]:
+        documents: list[Document],
+        original_scores: Optional[list[float]] = None
+    ) -> list[ScoredDocument]:
         """Rerank using LLM for relevance scoring."""
         if not self.llm_client or not documents:
             # Fallback to original scores
@@ -1164,14 +1183,15 @@ class LLMReranker(BaseReranker):
 
         return scored_docs[:self.config.top_k]
 
-    async def _score_batch(self, query: str, documents: List[Document]) -> List[float]:
+    async def _score_batch(self, query: str, documents: list[Document]) -> list[float]:
         """Score a batch of documents using LLM.
 
         Attempts to call the shared analyze() function with a reranking instruction
         loaded from Prompts/rag. Falls back to naive scores on error.
         """
+        sgl: Optional[Any] = None
         try:
-            import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
+            import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
         except Exception:
             sgl = None
 
@@ -1215,7 +1235,7 @@ class LLMReranker(BaseReranker):
         # Also respect config.top_k to avoid excessive LLM calls
         safe_limit = max(1, min(len(documents), self.config.top_k or len(documents), max_docs_env))
 
-        scores: List[float] = []
+        scores: list[float] = []
         start_ts = time.time()
         for doc in documents[:safe_limit]:
             passage = getattr(doc, 'content', '') or ''
@@ -1241,14 +1261,15 @@ class LLMReranker(BaseReranker):
                     # Use default provider from env/config inside analyze
                     out = await asyncio.wait_for(
                         asyncio.to_thread(
-                            sgl.analyze,
-                            api_name='openai',
-                            input_data=passage,
-                            prompt=prompt,
-                            context=None,
-                            user_embedding_config=None
+                            lambda: sgl.analyze(
+                                api_name='openai',
+                                input_data=passage,
+                                prompt=prompt,
+                                context=None,
+                                user_embedding_config=None,
+                            )
                         ),
-                        timeout=per_call_timeout
+                        timeout=per_call_timeout,
                     )
                     score_val = _parse_float_score(out, default=0.5)
                 except asyncio.TimeoutError:
@@ -1379,7 +1400,7 @@ class TwoTierReranker(BaseReranker):
             # Auto-select cross-encoder model from config/env
             model_id = None
             try:
-                from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+                from tldw_Server_API.app.core.config import load_and_log_configs
                 cfg = load_and_log_configs() or {}
             except Exception:
                 cfg = {}
@@ -1403,17 +1424,31 @@ class TwoTierReranker(BaseReranker):
             self._llm = LLMReranker(llm_cfg, llm_client=self.llm_client)
 
         # Place to store calibration/sentinel info for the caller
-        self.last_metadata: Dict[str, Any] = {}
+        self.last_metadata: dict[str, Any] = {}
 
     async def rerank(
         self,
         query: str,
-        documents: List[Document],
-        original_scores: Optional[List[float]] = None
-    ) -> List[ScoredDocument]:
+        documents: list[Document],
+        original_scores: Optional[list[float]] = None
+    ) -> list[ScoredDocument]:
         if not documents:
             self.last_metadata = {"strategy": "two_tier", "reason": "no_documents"}
             return []
+
+        cross = self._cross
+        llm = self._llm
+        if cross is None or llm is None:
+            self.last_metadata = {"strategy": "two_tier", "reason": "missing_rerankers"}
+            return [
+                ScoredDocument(
+                    document=doc,
+                    original_score=original_scores[i] if original_scores else doc.score,
+                    rerank_score=original_scores[i] if original_scores else doc.score,
+                    relevance_score=original_scores[i] if original_scores else doc.score,
+                )
+                for i, doc in enumerate(documents[: self.config.top_k])
+            ]
 
         # Inject sentinel doc for calibration
         sentinel = Document(
@@ -1431,7 +1466,7 @@ class TwoTierReranker(BaseReranker):
         pool_docs.append(sentinel)
         # Stage 1: Cross-encoder fast scoring
         ce_t0 = time.time()
-        ce_results: List[ScoredDocument] = await self._cross.rerank(query, pool_docs, original_scores=None)
+        ce_results: list[ScoredDocument] = await cross.rerank(query, pool_docs, original_scores=None)
         ce_dt = time.time() - ce_t0
         try:
             from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
@@ -1440,7 +1475,7 @@ class TwoTierReranker(BaseReranker):
             pass
 
         # Track CE scores in a map, and record sentinel CE score
-        ce_scores: Dict[str, float] = {}
+        ce_scores: dict[str, float] = {}
         ce_sentinel_score: float = 0.0
         for sd in ce_results:
             did = getattr(sd.document, 'id', None) or str(id(sd.document))
@@ -1460,7 +1495,7 @@ class TwoTierReranker(BaseReranker):
         llm_input = list(shortlist_docs)
         llm_input.append(sentinel)
         llm_t0 = time.time()
-        llm_results: List[ScoredDocument] = await self._llm.rerank(query, llm_input, original_scores=None)
+        llm_results: list[ScoredDocument] = await llm.rerank(query, llm_input, original_scores=None)
         llm_dt = time.time() - llm_t0
         try:
             from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
@@ -1469,9 +1504,9 @@ class TwoTierReranker(BaseReranker):
             pass
 
         # Map LLM scores and capture sentinel
-        llm_scores: Dict[str, float] = {}
+        llm_scores: dict[str, float] = {}
         llm_sentinel_score: float = 0.0
-        llm_scored_docs: List[ScoredDocument] = []
+        llm_scored_docs: list[ScoredDocument] = []
         for sd in llm_results:
             did = getattr(sd.document, 'id', None) or str(id(sd.document))
             llm_scores[did] = float(sd.rerank_score)
@@ -1488,30 +1523,30 @@ class TwoTierReranker(BaseReranker):
 
         def _logistic(x: float) -> float:
             try:
-                return 1.0 / (1.0 + np.exp(-x))
+                return 1.0 / (1.0 + math.exp(-x))
             except Exception:
                 # Safe fallback
                 return 0.5
 
-        final_scored: List[ScoredDocument] = []
+        final_scored: list[ScoredDocument] = []
         for sd in llm_scored_docs:
             did = getattr(sd.document, 'id', None) or str(id(sd.document))
             orig = float(getattr(sd.document, 'score', 0.0) or 0.0)
             ce = float(ce_scores.get(did, orig))
-            llm = float(llm_scores.get(did, sd.rerank_score))
+            llm_score = float(llm_scores.get(did, sd.rerank_score))
             # Simple bounded normalization for orig
             try:
                 orig_n = max(0.0, min(1.0, orig))
             except Exception:
                 orig_n = 0.0
-            logit = (w0 + (w1 * orig_n) + (w2 * ce) + (w3 * llm))
+            logit = (w0 + (w1 * orig_n) + (w2 * ce) + (w3 * llm_score))
             prob = float(_logistic(logit))
             # Attach breakdown
             sd.criteria_scores = {
                 **(sd.criteria_scores or {}),
                 "orig": orig_n,
                 "ce": ce,
-                "llm": llm,
+                "llm": llm_score,
                 "calibrated_prob": prob,
             }
             sd.rerank_score = prob
@@ -1531,16 +1566,10 @@ class TwoTierReranker(BaseReranker):
 
         # Threshold gating
         # Per-request overrides take precedence over env defaults
-        threshold = (
-            self.config.min_relevance_prob
-            if getattr(self.config, 'min_relevance_prob', None) is not None
-            else _get_float_env("RAG_MIN_RELEVANCE_PROB", 0.35)
-        )
-        margin_thr = (
-            self.config.sentinel_margin
-            if getattr(self.config, 'sentinel_margin', None) is not None
-            else _get_float_env("RAG_SENTINEL_MARGIN", 0.10)
-        )
+        cfg_min = self.config.min_relevance_prob
+        threshold = cfg_min if cfg_min is not None else _get_float_env("RAG_MIN_RELEVANCE_PROB", 0.35)
+        cfg_margin = self.config.sentinel_margin
+        margin_thr = cfg_margin if cfg_margin is not None else _get_float_env("RAG_SENTINEL_MARGIN", 0.10)
         top_prob = float(out[0].rerank_score) if out else 0.0
         prob_margin = top_prob - s_prob
         gated = (top_prob < threshold) or (prob_margin < margin_thr)
@@ -1548,7 +1577,7 @@ class TwoTierReranker(BaseReranker):
         # Persist metadata for unified pipeline to consume
         self.last_metadata = {
             "strategy": "two_tier",
-            "cross_model": getattr(self._cross, 'config', None) and getattr(self._cross.config, 'model_name', None),
+            "cross_model": getattr(cross, 'config', None) and getattr(cross.config, 'model_name', None),
             "stage1_top_k": self.stage1_top_k,
             "stage2_top_k": self.stage2_top_k,
             "sentinel_scores": {"cross": s_ce, "llm": s_llm, "calibrated": s_prob},

@@ -1,23 +1,21 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.items_schemas import (
     Item,
-    ItemsListResponse,
     ItemsBulkRequest,
     ItemsBulkResponse,
     ItemsBulkResult,
+    ItemsListResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Collections_DB import ContentItemRow
-
 
 router = APIRouter(prefix="/items", tags=["items"])
 
@@ -32,7 +30,7 @@ def _domain_from_url(url: str | None) -> str:
         return ""
 
 
-def _resolve_read_at_for_status(collections_db, item_id: int, status: str) -> tuple[Optional[str], bool]:
+def _resolve_read_at_for_status(collections_db, item_id: int, status: str) -> tuple[str | None, bool]:
     current = collections_db.get_content_item(item_id)
     status_lower = status.lower()
     if status_lower == "read" and not current.read_at:
@@ -44,17 +42,17 @@ def _resolve_read_at_for_status(collections_db, item_id: int, status: str) -> tu
 
 @router.get("", response_model=ItemsListResponse, summary="Unified items list across origins")
 async def list_items(
-    ids: Optional[List[int]] = Query(None, description="Filter by item IDs"),
-    q: Optional[str] = Query(None, description="Search query (title/content)"),
-    tags: Optional[List[str]] = Query(None, description="Require these tags (names)"),
-    domain: Optional[str] = Query(None, description="Filter by domain (hostname)"),
-    date_from: Optional[str] = Query(None, description="ISO start date inclusive"),
-    date_to: Optional[str] = Query(None, description="ISO end date inclusive"),
-    status_filter: Optional[List[str]] = Query(None, description="Filter by status (e.g., saved, read)"),
-    favorite: Optional[bool] = Query(None, description="Filter by favorite flag"),
-    origin: Optional[str] = Query(None, description="Filter by origin (watchlist, reading, etc.)"),
-    job_id: Optional[int] = Query(None, description="Filter by job_id"),
-    run_id: Optional[int] = Query(None, description="Filter by run_id"),
+    ids: list[int] | None = Query(None, description="Filter by item IDs"),
+    q: str | None = Query(None, description="Search query (title/content)"),
+    tags: list[str] | None = Query(None, description="Require these tags (names)"),
+    domain: str | None = Query(None, description="Filter by domain (hostname)"),
+    date_from: str | None = Query(None, description="ISO start date inclusive"),
+    date_to: str | None = Query(None, description="ISO end date inclusive"),
+    status_filter: list[str] | None = Query(None, description="Filter by status (e.g., saved, read)"),
+    favorite: bool | None = Query(None, description="Filter by favorite flag"),
+    origin: str | None = Query(None, description="Filter by origin (watchlist, reading, etc.)"),
+    job_id: int | None = Query(None, description="Filter by job_id"),
+    run_id: int | None = Query(None, description="Filter by run_id"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
     current_user: User = Depends(get_request_user),
@@ -131,7 +129,7 @@ async def list_items(
         raise HTTPException(status_code=500, detail="items_query_failed")
 
     # Build items and apply optional domain filter in-process
-    items: List[Item] = []
+    items: list[Item] = []
     for r in rows:
         item = _media_row_to_item(r, db=db, domain_filter=domain)
         if item is not None:
@@ -219,7 +217,7 @@ def _content_item_to_schema(row: ContentItemRow) -> Item:
     )
 
 
-def _media_row_to_item(row, *, db, domain_filter: Optional[str]) -> Optional[Item]:
+def _media_row_to_item(row, *, db, domain_filter: str | None) -> Item | None:
     url = row.get("url")
     dom = _domain_from_url(url)
     if domain_filter and dom and dom != domain_filter:
@@ -287,14 +285,14 @@ async def bulk_update_items(
         raise HTTPException(status_code=422, detail="tags_required")
 
     seen: set[int] = set()
-    unique_ids: List[int] = []
+    unique_ids: list[int] = []
     for item_id in item_ids:
         if item_id in seen:
             continue
         seen.add(item_id)
         unique_ids.append(item_id)
 
-    results: List[ItemsBulkResult] = []
+    results: list[ItemsBulkResult] = []
     succeeded = 0
     failed = 0
 

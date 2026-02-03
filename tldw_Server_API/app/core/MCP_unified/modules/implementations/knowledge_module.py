@@ -9,12 +9,13 @@ Provides knowledge.search and knowledge.get by fanning out to source modules
 - Retrieval modes supported minimally (snippet|full). chunk_with_siblings deferred.
 """
 
-from typing import Dict, Any, List, Optional, Tuple
-from loguru import logger
-from datetime import datetime
 import asyncio
+from datetime import datetime
+from typing import Any, Optional
 
-from ..base import BaseModule, ModuleConfig, create_tool_definition
+from loguru import logger
+
+from ..base import BaseModule, create_tool_definition
 from ..registry import get_module_registry
 
 
@@ -36,10 +37,10 @@ class KnowledgeModule(BaseModule):
     async def on_shutdown(self) -> None:
         logger.info(f"Shutting down Knowledge module: {self.name}")
 
-    async def check_health(self) -> Dict[str, bool]:
+    async def check_health(self) -> dict[str, bool]:
         return {"initialized": True}
 
-    async def get_tools(self) -> List[Dict[str, Any]]:
+    async def get_tools(self) -> list[dict[str, Any]]:
         return [
             create_tool_definition(
                 name="knowledge.search",
@@ -84,7 +85,7 @@ class KnowledgeModule(BaseModule):
             ),
         ]
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any | None = None) -> Any:
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
@@ -96,7 +97,7 @@ class KnowledgeModule(BaseModule):
             return await self._get(args, context)
         raise ValueError(f"Unknown tool: {tool_name}")
 
-    async def _call_tool(self, tool: str, arguments: Dict[str, Any], context: Any | None) -> Any:
+    async def _call_tool(self, tool: str, arguments: dict[str, Any], context: Any | None) -> Any:
         registry = get_module_registry()
         module = await registry.find_module_for_tool(tool)
         if not module:
@@ -170,7 +171,7 @@ class KnowledgeModule(BaseModule):
             pass
         return seen
 
-    def _update_seen(self, context: Any | None, new_uris: List[str]):
+    def _update_seen(self, context: Any | None, new_uris: list[str]):
         try:
             if context and getattr(context, "metadata", None):
                 arr = list(set([str(u) for u in (context.metadata.get("seen_uris") or [])] + new_uris))
@@ -178,7 +179,7 @@ class KnowledgeModule(BaseModule):
         except Exception:
             pass
 
-    def _combine_and_sort(self, buckets: List[List[Dict[str, Any]]], order_by: str) -> List[Dict[str, Any]]:
+    def _combine_and_sort(self, buckets: list[list[dict[str, Any]]], order_by: str) -> list[dict[str, Any]]:
         items = [it for b in buckets for it in (b or [])]
         if order_by == "recent":
             items.sort(key=lambda x: (_iso_to_dt(x.get("last_modified")) or datetime.min), reverse=True)
@@ -186,14 +187,14 @@ class KnowledgeModule(BaseModule):
             items.sort(key=lambda x: float(x.get("score") or 0.0), reverse=True)
         return items
 
-    async def _search(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _search(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         query: str = args.get("query")
         limit: int = int(args.get("limit", 20))
         offset: int = int(args.get("offset", 0))
         snippet_len: int = int(args.get("snippet_length", 300))
         order_by: str = args.get("order_by", "relevance")
-        sources: List[str] = args.get("sources") or ["notes", "media"]
-        filters: Dict[str, Any] = args.get("filters") or {}
+        sources: list[str] = args.get("sources") or ["notes", "media"]
+        filters: dict[str, Any] = args.get("filters") or {}
 
         # Apply session defaults
         try:
@@ -208,7 +209,7 @@ class KnowledgeModule(BaseModule):
         seen = self._collect_seen(context)
 
         # Enforce per-source RBAC before fan-out calls
-        allowed_sources: List[str] = []
+        allowed_sources: list[str] = []
         for src in sources:
             tool = self._tool_for_source(src, "search")
             if tool is None:
@@ -268,7 +269,7 @@ class KnowledgeModule(BaseModule):
 
         results_raw = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
 
-        buckets: List[List[Dict[str, Any]]] = []
+        buckets: list[list[dict[str, Any]]] = []
         for r in results_raw:
             try:
                 if isinstance(r, dict) and isinstance(r.get("results"), list):
@@ -279,8 +280,8 @@ class KnowledgeModule(BaseModule):
         combined = self._combine_and_sort(buckets, order_by=order_by)
 
         # Dedupe by URI (skip items already seen in session/request)
-        out: List[Dict[str, Any]] = []
-        new_uris: List[str] = []
+        out: list[dict[str, Any]] = []
+        new_uris: list[str] = []
         for item in combined:
             uri = str(item.get("uri") or "")
             if not uri or uri in seen:
@@ -304,10 +305,10 @@ class KnowledgeModule(BaseModule):
             "total_estimated": len(combined),
         }
 
-    async def _get(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _get(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         source: str = args.get("source")
         idv = args.get("id")
-        retrieval: Dict[str, Any] = args.get("retrieval") or {}
+        retrieval: dict[str, Any] = args.get("retrieval") or {}
         mode = retrieval.get("mode", "snippet")
         snippet_len = int(retrieval.get("snippet_length", 300))
         # If auto and a token budget is provided, prefer chunk_with_siblings
@@ -338,7 +339,7 @@ class KnowledgeModule(BaseModule):
         # Unsupported source
         raise ValueError(f"Unsupported source for get: {source}")
 
-    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+    def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):
         if tool_name == "knowledge.search":
             q = arguments.get("query")
             if not isinstance(q, str) or not (1 <= len(q) <= 1000):

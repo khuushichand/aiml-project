@@ -4,51 +4,68 @@
 # Imports
 import asyncio
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
-from loguru import logger
 #
 # 3rd-party Libraries
 from fastapi import (
     APIRouter,
     Depends,
+    Header,  # Keep Header for expected_version
     HTTPException,
     Query,
     Request,
     Response,
     status,
-    Body,
-    Header  # Keep Header for expected_version
 )
-from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.encoders import jsonable_encoder
-#
-# Local Imports
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (  # Corrected import path if needed
-    CharactersRAGDB, InputError, ConflictError, CharactersRAGDBError
-)
-#
-# Schemas for notes
-from tldw_Server_API.app.api.v1.schemas.notes_schemas import (
-    NoteCreate, NoteUpdate, NoteResponse,
-    KeywordCreate, KeywordResponse,
-    NoteKeywordLinkResponse, KeywordsForNoteResponse, NotesForKeywordResponse,
-    DetailResponse,
-    NoteBulkCreateRequest, NoteBulkCreateItemResult, NoteBulkCreateResponse,
-    NotesListResponse, NotesExportResponse, NotesExportRequest,
-    TitleSuggestRequest, TitleSuggestResponse,
-)
+from fastapi.responses import JSONResponse, StreamingResponse
+from loguru import logger
+
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep, rbac_rate_limit
+
 # Dependency to get user-specific ChaChaNotes_DB instance
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
     resolve_chacha_user_base_dir,
 )
-from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep, rbac_rate_limit
+
+#
+# Schemas for notes
+from tldw_Server_API.app.api.v1.schemas.notes_schemas import (
+    DetailResponse,
+    KeywordCreate,
+    KeywordResponse,
+    KeywordsForNoteResponse,
+    NoteBulkCreateItemResult,
+    NoteBulkCreateRequest,
+    NoteBulkCreateResponse,
+    NoteCreate,
+    NoteKeywordLinkResponse,
+    NoteResponse,
+    NotesExportRequest,
+    NotesExportResponse,
+    NotesForKeywordResponse,
+    NotesListResponse,
+    NoteUpdate,
+    TitleSuggestRequest,
+    TitleSuggestResponse,
+)
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.Writing.note_title import generate_note_title, TitleGenOptions
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings as core_settings
+
+#
+# Local Imports
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (  # Corrected import path if needed
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
+from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+from tldw_Server_API.app.core.Writing.note_title import TitleGenOptions, generate_note_title
+
 #
 #
 #######################################################################################################################
@@ -174,8 +191,9 @@ def _validate_note_links(
 
 
 # --- CSV export helper --------------------------------------------------------
-def _notes_csv_response(notes_data: List[Dict[str, Any]], include_keywords: bool) -> StreamingResponse:
-    import io, csv
+def _notes_csv_response(notes_data: list[dict[str, Any]], include_keywords: bool) -> StreamingResponse:
+    import csv
+    import io
     output = io.StringIO()
     writer = csv.writer(output)
     headers = ["id", "title", "content", "created_at", "last_modified", "version", "client_id"]
@@ -197,13 +215,14 @@ def _notes_csv_response(notes_data: List[Dict[str, Any]], include_keywords: bool
             row.append(",".join([str(k.get("keyword")) for k in kws if isinstance(k, dict) and k.get("keyword") is not None]))
         writer.writerow(row)
     output.seek(0)
-    from datetime import datetime as _dt, timezone
+    from datetime import datetime as _dt
+    from datetime import timezone
     headers_map = {"Content-Disposition": f"attachment; filename=notes_export_{_dt.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.csv"}
     return StreamingResponse(output, media_type="text/csv; charset=utf-8", headers=headers_map)
 
 
 # --- Keyword attach helper ----------------------------------------------------
-def _attach_keywords_bulk(db: CharactersRAGDB, notes_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _attach_keywords_bulk(db: CharactersRAGDB, notes_data: list[dict[str, Any]]) -> list[dict[str, Any]]:
     note_ids = [nd.get("id") for nd in notes_data if isinstance(nd, dict) and nd.get("id")]
     if not note_ids:
         return notes_data
@@ -221,7 +240,7 @@ def _attach_keywords_bulk(db: CharactersRAGDB, notes_data: List[Dict[str, Any]])
 
 
 # --- Keyword attach helper ----------------------------------------------------
-def _attach_keywords_inline(db: CharactersRAGDB, note_dict: Dict[str, Any]) -> Dict[str, Any]:
+def _attach_keywords_inline(db: CharactersRAGDB, note_dict: dict[str, Any]) -> dict[str, Any]:
     try:
         if note_dict and note_dict.get('id'):
             note_dict['keywords'] = db.get_keywords_for_note(note_id=note_dict['id'])
@@ -245,7 +264,7 @@ def _keyword_text_from_row(row: Any) -> Optional[str]:
     return _normalize_keyword_text(row)
 
 
-def _get_or_create_keyword_row(db: CharactersRAGDB, keyword_text: Any) -> Optional[Dict[str, Any]]:
+def _get_or_create_keyword_row(db: CharactersRAGDB, keyword_text: Any) -> Optional[dict[str, Any]]:
     """Return existing keyword row or create one, handling concurrent creation."""
     text = _normalize_keyword_text(keyword_text)
     if not text:
@@ -266,8 +285,8 @@ def _get_or_create_keyword_row(db: CharactersRAGDB, keyword_text: Any) -> Option
     return db.get_keyword_by_id(kw_id)
 
 
-def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: List[str]) -> None:
-    desired: Dict[str, str] = {}
+def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: list[str]) -> None:
+    desired: dict[str, str] = {}
     for kw in keywords:
         text = _normalize_keyword_text(kw)
         if not text:
@@ -283,7 +302,7 @@ def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: List[str]) 
         logger.warning(f"Keyword sync lookup failed for note {note_id}: {err}")
         existing_rows = []
 
-    existing_by_key: Dict[str, Dict[str, Any]] = {}
+    existing_by_key: dict[str, dict[str, Any]] = {}
     for row in existing_rows:
         text = _keyword_text_from_row(row)
         if not text:
@@ -314,11 +333,11 @@ def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: List[str]) 
             logger.warning(f"Keyword attach failed for '{text}' on note {note_id}: {err}")
 
 
-def _normalize_keyword_tokens(tokens: Optional[List[str]]) -> List[str]:
+def _normalize_keyword_tokens(tokens: Optional[list[str]]) -> list[str]:
     if not tokens:
         return []
     seen: set[str] = set()
-    out: List[str] = []
+    out: list[str] = []
     for token in tokens:
         if token is None:
             continue
@@ -389,7 +408,7 @@ def handle_db_errors(e: Exception, entity_type: str = "resource"):
     tags=["notes"],
     openapi_extra={"security": []},
 )
-async def notes_health() -> Dict[str, Any]:
+async def notes_health() -> dict[str, Any]:
     """Unauthenticated health endpoint for Notes storage."""
     import os
     base_dir: Optional[Path] = None
@@ -399,7 +418,7 @@ async def notes_health() -> Dict[str, Any]:
         "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
         "components": {}
     }
-    storage_info: Dict[str, Any] = {
+    storage_info: dict[str, Any] = {
         "base_dir": None,
         "db_path": None,
         "exists": False,
@@ -620,19 +639,19 @@ async def list_notes(
 
 @router.get(
     "/search",
-    response_model=List[NoteResponse],
+    response_model=list[NoteResponse],
     summary="Search notes for the current user",
     tags=["notes"]
 )
 @router.get(
     "/search/",
-    response_model=List[NoteResponse],
+    response_model=list[NoteResponse],
     summary="Search notes for the current user",
     tags=["notes"]
 )
 async def search_notes_endpoint(  # Renamed to avoid conflict with imported search_notes
         query: Optional[str] = Query(None, min_length=1, description="Search term for notes"),
-        tokens: Optional[List[str]] = Query(None, description="Keyword tokens to filter notes"),
+        tokens: Optional[list[str]] = Query(None, description="Keyword tokens to filter notes"),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         limit: int = Query(10, ge=1, le=100, description="Number of results to return"),
         offset: int = Query(0, ge=0, description="Result offset for pagination"),
@@ -813,7 +832,7 @@ async def export_notes_post(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail="CSV export is available at /api/v1/notes/export.csv")
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for nid in note_ids:
             try:
                 nd = db.get_note_by_id(note_id=nid)
@@ -869,7 +888,7 @@ async def export_notes_post_csv(
         note_ids = payload.note_ids
         include_keywords = bool(payload.include_keywords)
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for nid in note_ids:
             try:
                 nd = db.get_note_by_id(note_id=nid)
@@ -959,7 +978,7 @@ async def update_note(
     message_supplied = _field_supplied(note_in, "message_id")
     kw_list = note_in.normalized_keywords if keywords_supplied else None
     raw_data = note_in.model_dump(exclude_unset=True)
-    update_data: Dict[str, Any] = {}
+    update_data: dict[str, Any] = {}
     if "title" in raw_data and raw_data["title"] is not None:
         update_data["title"] = raw_data["title"]
     if "content" in raw_data and raw_data["content"] is not None:
@@ -977,9 +996,9 @@ async def update_note(
     if not update_data and not keywords_supplied:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid fields provided for update.")
     try:
-        current_note: Optional[Dict[str, Any]] = None
+        current_note: Optional[dict[str, Any]] = None
 
-        def _get_current_note() -> Dict[str, Any]:
+        def _get_current_note() -> dict[str, Any]:
             nonlocal current_note
             if current_note is None:
                 current_note = db.get_note_by_id(note_id=note_id)
@@ -1104,7 +1123,7 @@ async def patch_note(
     message_supplied = _field_supplied(note_in, "message_id")
     kw_list = note_in.normalized_keywords if keywords_supplied else None
     raw_data = note_in.model_dump(exclude_unset=True)
-    update_data: Dict[str, Any] = {}
+    update_data: dict[str, Any] = {}
     if "title" in raw_data and raw_data["title"] is not None:
         update_data["title"] = raw_data["title"]
     if "content" in raw_data and raw_data["content"] is not None:
@@ -1122,9 +1141,9 @@ async def patch_note(
     if not update_data and not keywords_supplied:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid fields provided for update.")
     try:
-        current_note: Optional[Dict[str, Any]] = None
+        current_note: Optional[dict[str, Any]] = None
 
-        def _get_current_note() -> Dict[str, Any]:
+        def _get_current_note() -> dict[str, Any]:
             nonlocal current_note
             if current_note is None:
                 current_note = db.get_note_by_id(note_id=note_id)
@@ -1373,7 +1392,7 @@ async def bulk_create_notes(
         rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
         current_user: User = Depends(get_request_user)
 ):
-    results: List[NoteBulkCreateItemResult] = []
+    results: list[NoteBulkCreateItemResult] = []
     created = 0
     failed = 0
     # Enforce centralized per-request rate limit (notes.bulk_create)
@@ -1586,7 +1605,7 @@ async def get_keyword_by_text(
 
 @router.get(
     "/keywords/",
-    response_model=List[KeywordResponse],
+    response_model=list[KeywordResponse],
     summary="List all keywords for the current user",
     tags=["Keywords (for Notes)"]
 )
@@ -1659,7 +1678,7 @@ async def delete_keyword(
 
 @router.get(
     "/keywords/search/",
-    response_model=List[KeywordResponse],
+    response_model=list[KeywordResponse],
     summary="Search keywords for the current user",
     tags=["Keywords (for Notes)"]
 )

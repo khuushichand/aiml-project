@@ -2,28 +2,29 @@
 # Description: This file contains the main FastAPI application, which serves as the primary API for the tldw application.
 #
 # Imports
-import logging
 import asyncio
+import logging
 import os
-import threading
-
-#
-# 3rd-party Libraries
-import sys
-from contextlib import asynccontextmanager
-from pathlib import Path
-from loguru import logger
-from fastapi import FastAPI, WebSocket, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
-from starlette.responses import FileResponse
-from starlette.staticfiles import StaticFiles
 
 #
 # Local Imports
 #
 # Early logging configuration to keep startup output consistent
 import os as _early_os
+
+#
+# 3rd-party Libraries
+import sys
+import threading
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
+from loguru import logger
+from starlette.responses import FileResponse
+from starlette.staticfiles import StaticFiles
 
 _early_os.environ.setdefault("MCP_INHERIT_GLOBAL_LOGGER", "1")
 try:
@@ -761,10 +762,10 @@ _HAS_READING_HIGHLIGHTS = False
 _HAS_KANBAN = False
 _HAS_DATA_TABLES = False
 
-from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
-
 # Minimal test-app gating: when enabled, skip importing heavy routers
 from os import getenv as _getenv_min
+
+from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
 
 _MINIMAL_TEST_APP = _getenv_min("MINIMAL_TEST_APP", "").lower() in {"1", "true", "yes", "on"}
 # Ultra-minimal diagnostic mode: only import health endpoints
@@ -794,7 +795,8 @@ if _ULTRA_MINIMAL_APP:
 else:
     # Audio Endpoint (includes WebSocket streaming transcription)
     try:
-        from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router, ws_router as audio_ws_router
+        from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router
+        from tldw_Server_API.app.api.v1.endpoints.audio import ws_router as audio_ws_router
 
         _HAS_AUDIO = True
     except Exception as _audio_err:  # noqa: BLE001 - guard non-critical endpoints in tests
@@ -809,15 +811,17 @@ else:
         logger.warning(f"Audio jobs endpoints unavailable; skipping import: {_audio_jobs_err}")
         _HAS_AUDIO_JOBS = False
     # Chat Endpoint
-    from tldw_Server_API.app.api.v1.endpoints.chat import (
-        router as chat_router,
-        conversations_alias_router,
-    )
+    from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
+    from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
 
     # Character Endpoints
     from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
-    from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
-    from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
+    from tldw_Server_API.app.api.v1.endpoints.chat import (
+        conversations_alias_router,
+    )
+    from tldw_Server_API.app.api.v1.endpoints.chat import (
+        router as chat_router,
+    )
 
     # Metrics Endpoint
     from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
@@ -843,9 +847,9 @@ else:
     except Exception as _chunk_tpl_err:  # noqa: BLE001
         logger.warning(f"Chunking templates endpoints unavailable; skipping import: {_chunk_tpl_err}")
     # Embeddings / Vector stores / Claims
+    from tldw_Server_API.app.api.v1.endpoints.claims import router as claims_router
     from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import router as embeddings_router
     from tldw_Server_API.app.api.v1.endpoints.vector_stores_openai import router as vector_stores_router
-    from tldw_Server_API.app.api.v1.endpoints.claims import router as claims_router
 
     # Collections (stubs to anchor PRD)
     try:
@@ -929,13 +933,13 @@ else:
     # Kanban Board endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.kanban_boards import router as kanban_boards_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_lists import router as kanban_lists_router
         from tldw_Server_API.app.api.v1.endpoints.kanban_cards import router as kanban_cards_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_labels import router as kanban_labels_router
         from tldw_Server_API.app.api.v1.endpoints.kanban_checklists import router as kanban_checklists_router
         from tldw_Server_API.app.api.v1.endpoints.kanban_comments import router as kanban_comments_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_search import router as kanban_search_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_labels import router as kanban_labels_router
         from tldw_Server_API.app.api.v1.endpoints.kanban_links import router as kanban_links_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_lists import router as kanban_lists_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_search import router as kanban_search_router
 
         _HAS_KANBAN = True
     except ImportError as _kanban_err:
@@ -944,20 +948,20 @@ else:
 
     # Prompt Studio (guarded)
     try:
-        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_projects import router as prompt_studio_projects_router
-        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_prompts import router as prompt_studio_prompts_router
-        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_test_cases import (
-            router as prompt_studio_test_cases_router,
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_evaluations import (
+            router as prompt_studio_evaluations_router,
         )
         from tldw_Server_API.app.api.v1.endpoints.prompt_studio_optimization import (
             router as prompt_studio_optimization_router,
         )
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_projects import router as prompt_studio_projects_router
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_prompts import router as prompt_studio_prompts_router
         from tldw_Server_API.app.api.v1.endpoints.prompt_studio_status import router as prompt_studio_status_router
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_test_cases import (
+            router as prompt_studio_test_cases_router,
+        )
         from tldw_Server_API.app.api.v1.endpoints.prompt_studio_websocket import (
             router as prompt_studio_websocket_router,
-        )
-        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_evaluations import (
-            router as prompt_studio_evaluations_router,
         )
 
         _HAS_PROMPT_STUDIO = True
@@ -965,9 +969,9 @@ else:
         logger.warning(f"Prompt Studio endpoints unavailable; skipping import: {_ps_import_err}")
         _HAS_PROMPT_STUDIO = False
     # RAG & Workflows
+    from tldw_Server_API.app.api.v1.endpoints.feedback import router as feedback_router
     from tldw_Server_API.app.api.v1.endpoints.rag_health import router as rag_health_router
     from tldw_Server_API.app.api.v1.endpoints.rag_unified import router as rag_unified_router
-    from tldw_Server_API.app.api.v1.endpoints.feedback import router as feedback_router
 
     try:
         from tldw_Server_API.app.api.v1.endpoints.workflows import router as workflows_router
@@ -983,11 +987,10 @@ else:
 # In minimal test-app mode, import only what is needed for lightweight tests.
 if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
     # Research Endpoint (lightweight subset for tests)
-    from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
-
     # Paper Search Endpoint (provider-specific)
     from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
     from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
+    from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
 
     # Admin endpoints are used by several pytest modules; import for minimal app
     try:
@@ -1000,13 +1003,15 @@ if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
     _HAS_UNIFIED_EVALUATIONS = False
     # Minimal chat/character endpoints to support lightweight tests
     # These are relatively lightweight and safe to import under MINIMAL_TEST_APP
-    from tldw_Server_API.app.api.v1.endpoints.chat import (
-        router as chat_router,
-        conversations_alias_router,
-    )
-    from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
+    from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
+    from tldw_Server_API.app.api.v1.endpoints.chat import (
+        conversations_alias_router,
+    )
+    from tldw_Server_API.app.api.v1.endpoints.chat import (
+        router as chat_router,
+    )
 
     # Sandbox endpoint is optional; guard import so minimal startup never fails
     try:
@@ -1024,8 +1029,10 @@ if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
     # LlamaCpp endpoints for reranking tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.llamacpp import (
-            router as llamacpp_router,
             public_router as llamacpp_public_router,
+        )
+        from tldw_Server_API.app.api.v1.endpoints.llamacpp import (
+            router as llamacpp_router,
         )
     except Exception as _llama_imp_err:  # noqa: BLE001
         logger.debug(f"Skipping llamacpp import in minimal test app: {_llama_imp_err}")
@@ -1033,14 +1040,13 @@ if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
         llamacpp_public_router = None  # type: ignore[assignment]
 else:
     # Research Endpoint
-    from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
-
-    # Paper Search Endpoint (provider-specific)
-    from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
-
     # Note: Evaluations, OCR, and VLM are imported later inside route-enabled gates
     # Benchmark Endpoint
     from tldw_Server_API.app.api.v1.endpoints.benchmark_api import router as benchmark_router
+
+    # Paper Search Endpoint (provider-specific)
+    from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
+    from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
 
     # Sync Endpoint
     from tldw_Server_API.app.api.v1.endpoints.sync import router as sync_router
@@ -1058,43 +1064,48 @@ else:
         logger.warning(f"ACP endpoints unavailable at import time; deferring: {_acp_import_err}")
         acp_router = None  # type: ignore[assignment]
     # Users Endpoint (NEW)
-    from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
-    from tldw_Server_API.app.api.v1.endpoints.user_keys import router as user_keys_router
-    from tldw_Server_API.app.api.v1.endpoints.shared_keys_scoped import router as shared_keys_scoped_router
-
-    # Privilege Maps Endpoint
-    from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
-
-    ## Trash Endpoint
-    # from tldw_Server_API.app.api.v1.endpoints.trash import router as trash_router
-    # MCP Unified Endpoint (Production-ready, secure implementation)
-    from tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint import router as mcp_unified_router
-
     # Chatbooks Endpoint
     from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
 
     # Flashcards Endpoint (V5 - ChaChaNotes)
     from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
-    # Quizzes Endpoint (ChaChaNotes)
-    from tldw_Server_API.app.api.v1.endpoints.quizzes import router as quizzes_router
-    # Writing Playground Endpoint (ChaChaNotes)
-    from tldw_Server_API.app.api.v1.endpoints.writing import router as writing_router
+    from tldw_Server_API.app.api.v1.endpoints.llamacpp import (
+        public_router as llamacpp_public_router,
+    )
+    from tldw_Server_API.app.api.v1.endpoints.llamacpp import (
+        router as llamacpp_router,
+    )
 
     # LLM Providers Endpoint
     from tldw_Server_API.app.api.v1.endpoints.llm_providers import router as llm_providers_router
-    from tldw_Server_API.app.api.v1.endpoints.mlx import router as mlx_router
-    from tldw_Server_API.app.api.v1.endpoints.llamacpp import (
-        router as llamacpp_router,
-        public_router as llamacpp_public_router,
+
+    ## Trash Endpoint
+    # from tldw_Server_API.app.api.v1.endpoints.trash import router as trash_router
+    # MCP Unified Endpoint (Production-ready, secure implementation)
+    from tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint import router as mcp_unified_router
+    from tldw_Server_API.app.api.v1.endpoints.messages import (
+        public_router as messages_public_router,
     )
     from tldw_Server_API.app.api.v1.endpoints.messages import (
         router as messages_router,
-        public_router as messages_public_router,
     )
+    from tldw_Server_API.app.api.v1.endpoints.mlx import router as mlx_router
+
+    # Privilege Maps Endpoint
+    from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
+
+    # Quizzes Endpoint (ChaChaNotes)
+    from tldw_Server_API.app.api.v1.endpoints.quizzes import router as quizzes_router
     from tldw_Server_API.app.api.v1.endpoints.setup import router as setup_router
+    from tldw_Server_API.app.api.v1.endpoints.shared_keys_scoped import router as shared_keys_scoped_router
+    from tldw_Server_API.app.api.v1.endpoints.user_keys import router as user_keys_router
+    from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
 
     # Web Scraping Management Endpoints
     from tldw_Server_API.app.api.v1.endpoints.web_scraping import router as web_scraping_router
+
+    # Writing Playground Endpoint (ChaChaNotes)
+    from tldw_Server_API.app.api.v1.endpoints.writing import router as writing_router
 
     # Sandbox Endpoint (scaffold)
     try:
@@ -1106,24 +1117,26 @@ else:
         _HAS_SANDBOX = False
 
 # Metrics and Telemetry - import directly and fail fast on errors
-from tldw_Server_API.app.core.Metrics import (
-    initialize_telemetry,
-    shutdown_telemetry,
-    get_metrics_registry,
-    track_metrics,
-    OTEL_AVAILABLE,
-)
+from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
 
 # Core helpers - import directly (fail fast if missing)
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import get_cached_evaluation_manager
+from tldw_Server_API.app.core.Metrics import (
+    OTEL_AVAILABLE,
+    get_metrics_registry,
+    initialize_telemetry,
+    shutdown_telemetry,
+    track_metrics,
+)
 from tldw_Server_API.app.core.Setup.setup_manager import needs_setup
-from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
 
 # MCP Unified config validation (fail-fast hardening)
 try:
     from tldw_Server_API.app.core.MCP_unified.config import (
-        validate_config as validate_mcp_config,
         get_config as get_mcp_config,
+    )
+    from tldw_Server_API.app.core.MCP_unified.config import (
+        validate_config as validate_mcp_config,
     )
 except Exception:
     # MCP module may be optional in some minimal deployments; guard import
@@ -1314,12 +1327,12 @@ async def lifespan(app: FastAPI):
         try:
             if getattr(db_pool, "pool", None):
                 from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
-                    ensure_tool_catalogs_tables_pg,
-                    ensure_privilege_snapshots_table_pg,
                     ensure_api_keys_tables_pg,
+                    ensure_llm_provider_overrides_pg,
+                    ensure_privilege_snapshots_table_pg,
+                    ensure_tool_catalogs_tables_pg,
                     ensure_usage_tables_pg,
                     ensure_virtual_key_counters_pg,
-                    ensure_llm_provider_overrides_pg,
                 )
 
                 ok_catalogs = await ensure_tool_catalogs_tables_pg(db_pool)
@@ -1362,19 +1375,33 @@ async def lifespan(app: FastAPI):
 
         # Initialize ResourceGovernor policy loader (file or DB store)
         try:
-            from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
-                default_policy_loader as _rg_default_loader,
-                db_policy_loader as _rg_db_loader,
-                PolicyReloadConfig as _RGReloadCfg,
-                PolicyLoader as _RGPolicyLoader,
+            from tldw_Server_API.app.core.config import (
+                rg_backend as _rg_backend_sel,
             )
-            from tldw_Server_API.app.core.Resource_Governance import MemoryResourceGovernor, RedisResourceGovernor
+            from tldw_Server_API.app.core.config import (
+                rg_policy_path as _rg_policy_path,
+            )
+            from tldw_Server_API.app.core.config import (
+                rg_policy_reload_enabled as _rg_reload_enabled,
+            )
+            from tldw_Server_API.app.core.config import (
+                rg_policy_reload_interval_sec as _rg_reload_interval,
+            )
             from tldw_Server_API.app.core.config import (
                 rg_policy_store as _rg_store_sel,
-                rg_policy_reload_interval_sec as _rg_reload_interval,
-                rg_policy_reload_enabled as _rg_reload_enabled,
-                rg_policy_path as _rg_policy_path,
-                rg_backend as _rg_backend_sel,
+            )
+            from tldw_Server_API.app.core.Resource_Governance import MemoryResourceGovernor, RedisResourceGovernor
+            from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                PolicyLoader as _RGPolicyLoader,
+            )
+            from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                PolicyReloadConfig as _RGReloadCfg,
+            )
+            from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                db_policy_loader as _rg_db_loader,
+            )
+            from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                default_policy_loader as _rg_default_loader,
             )
 
             _store_mode = _rg_store_sel()
@@ -1420,6 +1447,8 @@ async def lifespan(app: FastAPI):
                         if str(_rg_fail_mode() or "").strip().lower() == "fail_closed":
                             from tldw_Server_API.app.core.Infrastructure.redis_factory import (
                                 create_async_redis_client as _create_async_redis_client,
+                            )
+                            from tldw_Server_API.app.core.Infrastructure.redis_factory import (
                                 ensure_async_client_closed as _ensure_async_client_closed,
                             )
 
@@ -1540,9 +1569,15 @@ async def lifespan(app: FastAPI):
             logger.warning(f"ResourceGovernor policy loader initialization skipped: {_rg_err}")
         try:
             from tldw_Server_API.app.core.config import (
-                rg_enabled as _rg_enabled_flag,
-                rg_policy_path as _rg_policy_path,
                 rg_backend as _rg_backend_sel,
+            )
+            from tldw_Server_API.app.core.config import (
+                rg_enabled as _rg_enabled_flag,
+            )
+            from tldw_Server_API.app.core.config import (
+                rg_policy_path as _rg_policy_path,
+            )
+            from tldw_Server_API.app.core.config import (
                 rg_policy_store as _rg_store_sel,
             )
 
@@ -1583,7 +1618,8 @@ async def lifespan(app: FastAPI):
             reset_chacha_shutdown_state,
             warm_chacha_db_for_user,
         )
-        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_auth_settings, is_single_user_mode
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_auth_settings
+        from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 
         reset_chacha_shutdown_state()
         if is_single_user_mode():
@@ -1654,8 +1690,8 @@ async def lifespan(app: FastAPI):
     async def _init_request_queue(*, deferred: bool) -> None:
         nonlocal request_queue
         try:
-            from tldw_Server_API.app.core.config import load_comprehensive_config
             from tldw_Server_API.app.core.Chat.request_queue import initialize_request_queue
+            from tldw_Server_API.app.core.config import load_comprehensive_config
 
             cfg = load_comprehensive_config()
             chat_cfg = {}
@@ -1705,8 +1741,8 @@ async def lifespan(app: FastAPI):
                     + "Rate limiter skipped (RG enabled)"
                 )
                 return
+            from tldw_Server_API.app.core.Chat.rate_limiter import RateLimitConfig, initialize_rate_limiter
             from tldw_Server_API.app.core.config import load_comprehensive_config
-            from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter, RateLimitConfig
 
             cfg = load_comprehensive_config()
             chat_cfg = {}
@@ -1732,8 +1768,8 @@ async def lifespan(app: FastAPI):
 
     async def _init_tts_service(*, deferred: bool) -> None:
         try:
-            from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
             from tldw_Server_API.app.core.config import load_comprehensive_config_with_tts
+            from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
 
             cfg_obj = load_comprehensive_config_with_tts()
             tts_cfg_dict = cfg_obj.get_tts_config() if hasattr(cfg_obj, "get_tts_config") else None
@@ -1787,8 +1823,9 @@ async def lifespan(app: FastAPI):
             if not deferred:
                 logger.info("App Startup: Running embeddings dimension sanity check (opt-in)")
             from pathlib import Path as _Path
-            from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+
             from tldw_Server_API.app.core.config import settings as _emb_settings
+            from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 
             def _check_user(user_id: str) -> list[tuple[str, int, int, str]]:
                 mms: list[tuple[str, int, int, str]] = []
@@ -1935,17 +1972,17 @@ async def lifespan(app: FastAPI):
     claims_task = None
     jobs_metrics_task = None
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
+        from tldw_Server_API.app.core.config import settings as _app_settings
         from tldw_Server_API.app.core.DB_Management.DB_Manager import (
             create_evaluations_database as _create_evals_db,
         )
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DBP
         from tldw_Server_API.app.core.RAG.rag_service.vector_stores import (
-            VectorStoreFactory as _VSF,
             create_from_settings_for_user as _create_vs_from_settings,
         )
-        from tldw_Server_API.app.core.config import settings as _app_settings
 
         def _env_flag(key: str, default: bool) -> bool:
             raw = _os.getenv(key)
@@ -2020,9 +2057,12 @@ async def lifespan(app: FastAPI):
 
     # Chatbooks cleanup worker (scheduled retention cleanup)
     try:
-        import os as _os
         import asyncio as _asyncio
-        from tldw_Server_API.app.services.chatbooks_cleanup_service import run_chatbooks_cleanup_loop as _run_chatbooks_cleanup
+        import os as _os
+
+        from tldw_Server_API.app.services.chatbooks_cleanup_service import (
+            run_chatbooks_cleanup_loop as _run_chatbooks_cleanup,
+        )
 
         _interval_sec = int(_os.getenv("CHATBOOKS_CLEANUP_INTERVAL_SEC", "0") or "0")
         if _interval_sec > 0:
@@ -2038,6 +2078,7 @@ async def lifespan(app: FastAPI):
     storage_cleanup_service = None
     try:
         import os as _os
+
         from tldw_Server_API.app.services.storage_cleanup_service import get_cleanup_service as _get_storage_cleanup
 
         _storage_cleanup_enabled = _os.getenv("STORAGE_CLEANUP_ENABLED", "true").lower() in {
@@ -2054,8 +2095,9 @@ async def lifespan(app: FastAPI):
 
     # Core Jobs worker (Chatbooks, if backend=core)
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.services.core_jobs_worker import run_chatbooks_core_jobs_worker as _run_cb_jobs
 
         _backend = (_os.getenv("CHATBOOKS_JOBS_BACKEND") or _os.getenv("TLDW_JOBS_BACKEND") or "").lower()
@@ -2080,9 +2122,12 @@ async def lifespan(app: FastAPI):
 
     # File Artifacts Jobs worker
     try:
-        import os as _os
         import asyncio as _asyncio
-        from tldw_Server_API.app.core.File_Artifacts.jobs_worker import run_file_artifacts_jobs_worker as _run_files_jobs
+        import os as _os
+
+        from tldw_Server_API.app.core.File_Artifacts.jobs_worker import (
+            run_file_artifacts_jobs_worker as _run_files_jobs,
+        )
 
         _enabled = _should_start_worker("FILES_JOBS_WORKER_ENABLED", "files")
         if _enabled:
@@ -2096,9 +2141,12 @@ async def lifespan(app: FastAPI):
 
     # Data Tables Jobs worker
     try:
-        import os as _os
         import asyncio as _asyncio
-        from tldw_Server_API.app.core.Data_Tables.jobs_worker import run_data_tables_jobs_worker as _run_data_tables_jobs
+        import os as _os
+
+        from tldw_Server_API.app.core.Data_Tables.jobs_worker import (
+            run_data_tables_jobs_worker as _run_data_tables_jobs,
+        )
 
         _enabled = _should_start_worker("DATA_TABLES_JOBS_WORKER_ENABLED", "data-tables")
         if _enabled:
@@ -2112,8 +2160,9 @@ async def lifespan(app: FastAPI):
 
     # Prompt Studio Jobs worker
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.core.Prompt_Management.prompt_studio.services.jobs_worker import (
             run_prompt_studio_jobs_worker as _run_prompt_studio_jobs,
         )
@@ -2130,8 +2179,9 @@ async def lifespan(app: FastAPI):
 
     # Privilege snapshot worker
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.services.privilege_snapshot_worker import (
             run_privilege_snapshot_worker as _run_priv_snapshot,
         )
@@ -2148,8 +2198,9 @@ async def lifespan(app: FastAPI):
 
     # Embeddings Vector Compactor (soft-delete propagation)
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.core.Embeddings.services.vector_compactor import run as _run_vec_compactor
 
         _enabled = _os.getenv("EMBEDDINGS_COMPACTOR_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
@@ -2164,8 +2215,9 @@ async def lifespan(app: FastAPI):
 
     # Audio Jobs worker (MVP)
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.services.audio_jobs_worker import run_audio_jobs_worker as _run_audio_jobs
 
         _enabled = _should_start_worker("AUDIO_JOBS_WORKER_ENABLED", "audio-jobs")
@@ -2180,8 +2232,9 @@ async def lifespan(app: FastAPI):
 
     # Audiobook Jobs worker
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.services.audiobook_jobs_worker import (
             run_audiobook_jobs_worker as _run_audiobook_jobs,
         )
@@ -2198,9 +2251,12 @@ async def lifespan(app: FastAPI):
 
     # Media Ingest Jobs worker
     try:
-        import os as _os
         import asyncio as _asyncio
-        from tldw_Server_API.app.services.media_ingest_jobs_worker import run_media_ingest_jobs_worker as _run_media_jobs
+        import os as _os
+
+        from tldw_Server_API.app.services.media_ingest_jobs_worker import (
+            run_media_ingest_jobs_worker as _run_media_jobs,
+        )
 
         _enabled = _should_start_worker("MEDIA_INGEST_JOBS_WORKER_ENABLED", "media")
         if _enabled:
@@ -2214,8 +2270,9 @@ async def lifespan(app: FastAPI):
 
     # Reading Digest Jobs worker
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.core.Collections.reading_digest_jobs_worker import (
             run_reading_digest_jobs_worker as _run_reading_digest_jobs,
         )
@@ -2234,8 +2291,9 @@ async def lifespan(app: FastAPI):
 
     # Evaluations Embeddings A/B Jobs worker
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs_worker import (
             run_embeddings_abtest_jobs_worker as _run_abtest_jobs,
         )
@@ -2256,8 +2314,9 @@ async def lifespan(app: FastAPI):
 
     # Jobs metrics gauges worker (SLO percentiles)
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.services.jobs_metrics_service import run_jobs_metrics_gauges as _run_jobs_metrics
 
         _enabled = _os.getenv("JOBS_METRICS_GAUGES_ENABLED", "true").lower() in {"true", "1", "yes", "y", "on"}
@@ -2272,8 +2331,9 @@ async def lifespan(app: FastAPI):
 
     # Event loop lag watchdog (lightweight)
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.services.loop_lag_watchdog import run_loop_lag_watchdog as _run_loop_lag_watchdog
 
         _enabled = _os.getenv("EVENT_LOOP_LAG_WATCHDOG_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
@@ -2288,8 +2348,9 @@ async def lifespan(app: FastAPI):
 
     # Jobs metrics reconcile worker (job_counters/gauges amortized refresh)
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.services.jobs_metrics_service import run_jobs_metrics_reconcile as _run_jobs_reconcile
 
         _enabled_recon = _os.getenv("JOBS_METRICS_RECONCILE_ENABLE", "false").lower() in {"true", "1", "yes", "y", "on"}
@@ -2304,8 +2365,9 @@ async def lifespan(app: FastAPI):
 
     # Jobs crypto rotate worker (optional staged rotation)
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.services.jobs_crypto_rotate_service import run_jobs_crypto_rotate as _run_jobs_crypto
 
         _enabled = _os.getenv("JOBS_CRYPTO_ROTATE_SERVICE_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
@@ -2320,8 +2382,9 @@ async def lifespan(app: FastAPI):
 
     # Jobs webhooks worker (signed callbacks)
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.services.jobs_webhooks_service import run_jobs_webhooks_worker as _run_jobs_webhooks
 
         _enabled = (_os.getenv("JOBS_WEBHOOKS_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}) and bool(
@@ -2338,8 +2401,9 @@ async def lifespan(app: FastAPI):
 
     # Workflows webhook DLQ retry worker
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.services.workflows_webhook_dlq_service import (
             run_workflows_webhook_dlq_worker as _run_wf_dlq,
         )
@@ -2356,8 +2420,9 @@ async def lifespan(app: FastAPI):
 
     # Workflows artifact GC worker
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.services.workflows_artifact_gc_service import (
             run_workflows_artifact_gc_worker as _run_wf_gc,
         )
@@ -2374,8 +2439,9 @@ async def lifespan(app: FastAPI):
 
     # Workflows DB maintenance worker (checkpoint/VACUUM)
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.services.workflows_db_maintenance import run_workflows_db_maintenance as _run_wf_maint
 
         _wf_maint_enabled = _os.getenv("WORKFLOWS_DB_MAINTENANCE_ENABLED", "false").lower() in {
@@ -2396,8 +2462,9 @@ async def lifespan(app: FastAPI):
 
     # Jobs integrity sweeper (periodic validator)
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
+
         from tldw_Server_API.app.services.jobs_integrity_service import (
             run_jobs_integrity_sweeper as _run_jobs_integrity,
         )
@@ -2415,9 +2482,12 @@ async def lifespan(app: FastAPI):
     # Claims rebuild worker (periodic)
     try:
         import asyncio as _asyncio
+
+        from tldw_Server_API.app.core.Claims_Extraction.claims_rebuild_service import (
+            get_claims_rebuild_service as _get_claims_svc,
+        )
         from tldw_Server_API.app.core.config import settings as _app_settings
         from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path as _get_media_db_path
-        from tldw_Server_API.app.core.Claims_Extraction.claims_rebuild_service import get_claims_rebuild_service as _get_claims_svc
         from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase as _MediaDB
 
         _claims_enabled = bool(_app_settings.get("CLAIMS_REBUILD_ENABLED", False))
@@ -2558,11 +2628,11 @@ async def lifespan(app: FastAPI):
     try:
         _ensure_rls = _env_os.getenv("RAG_ENSURE_PG_RLS", "").lower() in {"1", "true", "yes", "on"}
         if _ensure_rls:
-            from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
             from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig
+            from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
             from tldw_Server_API.app.core.DB_Management.backends.pg_rls_policies import (
-                ensure_prompt_studio_rls,
                 ensure_chacha_rls,
+                ensure_prompt_studio_rls,
             )
 
             _cfg = DatabaseConfig.from_env()
@@ -2785,14 +2855,17 @@ async def lifespan(app: FastAPI):
     # Preflight environment report (non-blocking)
     try:
         import os as _os
+
         from tldw_Server_API.app.core.AuthNZ.csrf_protection import global_settings as _csrf_globals
-        from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager as _get_pm
-        from tldw_Server_API.app.core.Metrics import OTEL_AVAILABLE as _OTEL
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+        from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager as _get_pm
         from tldw_Server_API.app.core.config import (
             ALLOWED_ORIGINS as _ALLOWED_ORIGINS,
+        )
+        from tldw_Server_API.app.core.config import (
             should_disable_cors as _should_disable_cors,
         )
+        from tldw_Server_API.app.core.Metrics import OTEL_AVAILABLE as _OTEL
 
         _s = _get_settings()
         _prod = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
@@ -2868,8 +2941,8 @@ async def lifespan(app: FastAPI):
 
     # Optionally wait for leases to finish (bounded wait)
     try:
-        import os as _os
         import asyncio as _asyncio
+        import os as _os
 
         _max_wait = int(_os.getenv("JOBS_SHUTDOWN_WAIT_FOR_LEASES_SEC", "0") or "0")
         if _max_wait > 0:
@@ -3061,7 +3134,9 @@ async def lifespan(app: FastAPI):
         # Stop Reading digest scheduler
         try:
             if "reading_digest_sched_task" in locals() and reading_digest_sched_task:
-                from tldw_Server_API.app.services.reading_digest_scheduler import stop_reading_digest_scheduler as _stop_rd_sched
+                from tldw_Server_API.app.services.reading_digest_scheduler import (
+                    stop_reading_digest_scheduler as _stop_rd_sched,
+                )
 
                 await _stop_rd_sched(reading_digest_sched_task)
         except Exception:
@@ -3223,7 +3298,8 @@ async def lifespan(app: FastAPI):
     # Close auth database pool (skip in test contexts to avoid closing shared pool)
     try:
         if "db_pool" in locals():
-            import os as _os, sys as _sys
+            import os as _os
+            import sys as _sys
 
             _in_pytest = bool(_os.getenv("PYTEST_CURRENT_TEST") or ("pytest" in _sys.modules))
             try:
@@ -3464,13 +3540,11 @@ async def lifespan(app: FastAPI):
 ############################# End of Test DB Handling###################
 
 # Create FastAPI app with lifespan
-from fastapi.openapi.utils import get_openapi
-
 # --- OpenAPI / Docs configuration ---
-
 # Curated tag metadata to improve /docs grouping and clarity
-
 import os as _env_os  # ensure available for _ext_url during module import
+
+from fastapi.openapi.utils import get_openapi
 
 
 # Build absolute externalDocs URLs for OpenAPI (Pydantic v2 requires absolute URLs)
@@ -3860,8 +3934,8 @@ _startup_trace("FastAPI app created")
 # Initialize shared local LLM inference manager (ollama/hf/llamafile/llamacpp)
 llm_manager = None
 try:
-    from tldw_Server_API.app.core.Local_LLM import LLMInferenceManager, LLMManagerConfig
     from tldw_Server_API.app.core.config import get_llamacpp_handler_config
+    from tldw_Server_API.app.core.Local_LLM import LLMInferenceManager, LLMManagerConfig
 
     _llama_cfg = get_llamacpp_handler_config()
     cfg_kwargs = {}
@@ -3881,8 +3955,8 @@ except Exception as _llm_init_err:  # noqa: BLE001
     logger.warning(f"Local LLM inference manager not initialized; llama.cpp endpoints will return 503: {_llm_init_err}")
 
 # Early middleware to guard workflow templates path traversal attempts
+
 from starlette.responses import JSONResponse  # noqa: E402
-import os as _os  # noqa: E402
 
 try:
     # Determine whether to enable RGSimpleMiddleware.
@@ -4110,7 +4184,7 @@ async def _display_startup_info_and_warm():
 
 # --- FIX: Add CORS Middleware ---
 # Import from config
-from tldw_Server_API.app.core.config import ALLOWED_ORIGINS, API_V1_PREFIX, should_disable_cors, route_enabled
+from tldw_Server_API.app.core.config import ALLOWED_ORIGINS, API_V1_PREFIX, route_enabled, should_disable_cors
 
 # FIXME - CORS
 if should_disable_cors():
@@ -4167,14 +4241,14 @@ except Exception as _csrf_e:
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 # Security middleware (headers + request size limit)
-from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware
-from tldw_Server_API.app.core.Security.setup_csp import SetupCSPMiddleware
-from tldw_Server_API.app.core.Security.setup_access_guard import SetupAccessGuardMiddleware
-from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware
-from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware
-from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
 from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddleware
+from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
+from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware
 from tldw_Server_API.app.core.Sandbox.middleware import SandboxArtifactTraversalGuardMiddleware
+from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware
+from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware
+from tldw_Server_API.app.core.Security.setup_access_guard import SetupAccessGuardMiddleware
+from tldw_Server_API.app.core.Security.setup_csp import SetupCSPMiddleware
 
 _TEST_MODE = _env_os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes") or bool(
     _env_os.getenv("PYTEST_CURRENT_TEST")
@@ -4429,7 +4503,8 @@ async def metrics():
     from fastapi.responses import PlainTextResponse
 
     try:
-        from prometheus_client import REGISTRY as PC_REGISTRY, generate_latest as pc_generate_latest
+        from prometheus_client import REGISTRY as PC_REGISTRY
+        from prometheus_client import generate_latest as pc_generate_latest
     except Exception:
         PC_REGISTRY = None
         pc_generate_latest = None
@@ -4477,7 +4552,8 @@ elif _MINIMAL_TEST_APP:
     app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
     # Include audio endpoints (REST + WebSocket) for e2e middleware/header tests
     try:
-        from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router, ws_router as audio_ws_router
+        from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router
+        from tldw_Server_API.app.api.v1.endpoints.audio import ws_router as audio_ws_router
 
         # Mount under /api/v1/audio to match test expectations and non-minimal routing
         app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
@@ -4679,6 +4755,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
     except Exception as _notes_min_err:
         logger.debug(f"Skipping notes router in minimal test app: {_notes_min_err}")
+    # Skills endpoints (SKILL.md management)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.skills import router as skills_router
+
+        app.include_router(skills_router, prefix=f"{API_V1_PREFIX}/skills", tags=["skills"])
+    except Exception as _skills_min_err:
+        logger.debug(f"Skipping skills router in minimal test app: {_skills_min_err}")
     # Translation endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.translate import router as translate_router
@@ -4696,13 +4779,13 @@ elif _MINIMAL_TEST_APP:
     # Kanban Board endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.kanban_boards import router as kanban_boards_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_lists import router as kanban_lists_router
         from tldw_Server_API.app.api.v1.endpoints.kanban_cards import router as kanban_cards_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_labels import router as kanban_labels_router
         from tldw_Server_API.app.api.v1.endpoints.kanban_checklists import router as kanban_checklists_router
         from tldw_Server_API.app.api.v1.endpoints.kanban_comments import router as kanban_comments_router
-        from tldw_Server_API.app.api.v1.endpoints.kanban_search import router as kanban_search_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_labels import router as kanban_labels_router
         from tldw_Server_API.app.api.v1.endpoints.kanban_links import router as kanban_links_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_lists import router as kanban_lists_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_search import router as kanban_search_router
 
         app.include_router(kanban_boards_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
         app.include_router(kanban_lists_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
@@ -4725,8 +4808,8 @@ elif _MINIMAL_TEST_APP:
         from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
 
         app.include_router(users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
-        from tldw_Server_API.app.api.v1.endpoints.user_keys import router as user_keys_router
         from tldw_Server_API.app.api.v1.endpoints.shared_keys_scoped import router as shared_keys_scoped_router
+        from tldw_Server_API.app.api.v1.endpoints.user_keys import router as user_keys_router
 
         app.include_router(user_keys_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
         app.include_router(shared_keys_scoped_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
@@ -4882,12 +4965,16 @@ elif _MINIMAL_TEST_APP:
     # LlamaCpp endpoints for reranking tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.llamacpp import (
-            router as llamacpp_router,
             public_router as llamacpp_public_router,
+        )
+        from tldw_Server_API.app.api.v1.endpoints.llamacpp import (
+            router as llamacpp_router,
+        )
+        from tldw_Server_API.app.api.v1.endpoints.messages import (
+            public_router as messages_public_router,
         )
         from tldw_Server_API.app.api.v1.endpoints.messages import (
             router as messages_router,
-            public_router as messages_public_router,
         )
 
         app.include_router(llamacpp_router, prefix=f"{API_V1_PREFIX}", tags=["llamacpp"])
@@ -5028,6 +5115,8 @@ else:
     try:
         from tldw_Server_API.app.api.v1.endpoints.voice_assistant import (
             router as voice_assistant_router,
+        )
+        from tldw_Server_API.app.api.v1.endpoints.voice_assistant import (
             ws_router as voice_assistant_ws_router,
         )
 
@@ -5338,11 +5427,11 @@ else:
     _include_if_enabled(
         "writing", writing_router, prefix=f"{API_V1_PREFIX}/writing", tags=["writing"], default_stable=True
     )
-    from tldw_Server_API.app.api.v1.endpoints.personalization import (
-        router as personalization_router,
-    )
     from tldw_Server_API.app.api.v1.endpoints.persona import (
         router as persona_router,
+    )
+    from tldw_Server_API.app.api.v1.endpoints.personalization import (
+        router as personalization_router,
     )
 
     _include_if_enabled(
@@ -5402,8 +5491,9 @@ async def health_check():
             body["rg_policy_count"] = getattr(app.state, "rg_policy_count", None)
         else:
             # Fallback to RG_POLICY_PATH (file-based) when loader not initialized
-            from pathlib import Path as _Path
             import os as _os
+            from pathlib import Path as _Path
+
             import yaml as _yaml
 
             p = _os.getenv("RG_POLICY_PATH")
@@ -5507,8 +5597,9 @@ async def readiness_check():
                     "policies": getattr(app.state, "rg_policy_count", None),
                 }
             else:
-                from pathlib import Path as _Path
                 import os as _os
+                from pathlib import Path as _Path
+
                 import yaml as _yaml
 
                 p = _os.getenv("RG_POLICY_PATH")

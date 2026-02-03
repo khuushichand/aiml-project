@@ -4,25 +4,26 @@ Metrics collection and monitoring for unified MCP
 Provides Prometheus-compatible metrics and health monitoring.
 """
 
-import time
 import asyncio
-from typing import Dict, Any, Optional, List, Tuple
-from datetime import datetime, timedelta
-from dataclasses import dataclass, field
+import time
 from collections import defaultdict, deque
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from enum import Enum
+from typing import Any, Optional
+
 from loguru import logger
 
 try:
     from prometheus_client import (
-        Counter,
-        Histogram,
-        Gauge,
-        Summary,
-        Info,
-        generate_latest,
         CONTENT_TYPE_LATEST,
-        CollectorRegistry
+        CollectorRegistry,
+        Counter,
+        Gauge,
+        Histogram,
+        Info,
+        Summary,
+        generate_latest,
     )
     PROMETHEUS_AVAILABLE = True
 except ImportError:
@@ -44,7 +45,7 @@ class MetricData:
     name: str
     type: MetricType
     value: float
-    labels: Dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
     timestamp: datetime = field(default_factory=datetime.utcnow)
     description: str = ""
 
@@ -60,8 +61,8 @@ class MetricsCollector:
         self.enable_prometheus = enable_prometheus and PROMETHEUS_AVAILABLE
 
         # Internal metrics storage
-        self._metrics: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
-        self._metric_definitions: Dict[str, MetricData] = {}
+        self._metrics: dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
+        self._metric_definitions: dict[str, MetricData] = {}
 
         # Prometheus metrics (if available)
         if self.enable_prometheus:
@@ -227,7 +228,7 @@ class MetricsCollector:
         method: str,
         duration: float,
         status: str = "success",
-        labels: Optional[Dict[str, str]] = None
+        labels: Optional[dict[str, str]] = None
     ):
         """Record an API request"""
         internal_labels = dict(labels or {})
@@ -479,7 +480,7 @@ class MetricsCollector:
             except Exception:
                 pass
 
-    def get_internal_metrics(self, period_seconds: int = 300) -> Dict[str, Any]:
+    def get_internal_metrics(self, period_seconds: int = 300) -> dict[str, Any]:
         """
         Get internal metrics for the specified period.
 
@@ -506,7 +507,7 @@ class MetricsCollector:
             first_metric = recent_metrics[0]
 
             # Group metrics by label set for detailed breakdowns
-            label_groups: Dict[Tuple[Tuple[str, str], ...], List[MetricData]] = defaultdict(list)
+            label_groups: dict[tuple[tuple[str, str], ...], list[MetricData]] = defaultdict(list)
             for metric in recent_metrics:
                 key = tuple(sorted(metric.labels.items()))
                 label_groups[key].append(metric)
@@ -576,7 +577,7 @@ class MetricsCollector:
 
         return aggregated
 
-    def _percentile(self, values: List[float], percentile: int) -> float:
+    def _percentile(self, values: list[float], percentile: int) -> float:
         """Calculate percentile of values"""
         if not values:
             return 0
@@ -638,7 +639,7 @@ class MetricsCollector:
             while metric_deque and metric_deque[0].timestamp < cutoff_time:
                 metric_deque.popleft()
 
-    def get_summary(self) -> Dict[str, Any]:
+    def get_summary(self) -> dict[str, Any]:
         """Get a summary of current metrics"""
         return {
             "total_metrics": sum(len(d) for d in self._metrics.values()),

@@ -2,23 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
 from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult, ValidationIssue
 from tldw_Server_API.app.core.Image_Generation.adapter_registry import get_registry
 from tldw_Server_API.app.core.Image_Generation.adapters.base import ImageGenRequest
 from tldw_Server_API.app.core.Image_Generation.config import get_image_generation_config
 from tldw_Server_API.app.core.Image_Generation.exceptions import ImageBackendUnavailableError, ImageGenerationError
-from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
 
 
 class ImageAdapter:
     file_type = "image"
     export_formats = {"png", "jpg", "webp"}
 
-    def normalize(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def normalize(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise FileArtifactsValidationError("image_params_invalid")
 
@@ -52,7 +52,7 @@ class ImageAdapter:
 
         return structured
 
-    def validate(self, structured: Dict[str, Any]) -> list[ValidationIssue]:
+    def validate(self, structured: dict[str, Any]) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
         config = get_image_generation_config()
 
@@ -111,7 +111,7 @@ class ImageAdapter:
 
         return issues
 
-    def export(self, structured: Dict[str, Any], *, format: str) -> ExportResult:
+    def export(self, structured: dict[str, Any], *, format: str) -> ExportResult:
         backend = structured.get("backend")
         if not backend:
             raise FileArtifactsError("image_backend_unavailable")
@@ -154,14 +154,14 @@ class ImageAdapter:
         )
 
     @staticmethod
-    def _string_or_none(value: Any) -> Optional[str]:
+    def _string_or_none(value: Any) -> str | None:
         if value is None:
             return None
         text = str(value).strip()
         return text or None
 
     @staticmethod
-    def _int_or_none(value: Any) -> Optional[int]:
+    def _int_or_none(value: Any) -> int | None:
         if value is None:
             return None
         try:
@@ -170,7 +170,7 @@ class ImageAdapter:
             raise FileArtifactsValidationError("image_params_invalid") from None
 
     @staticmethod
-    def _float_or_none(value: Any) -> Optional[float]:
+    def _float_or_none(value: Any) -> float | None:
         if value is None:
             return None
         try:
@@ -188,7 +188,7 @@ class ImageAdapter:
 
     def _validate_extra_params(
         self,
-        structured: Dict[str, Any],
+        structured: dict[str, Any],
         config,
         issues: list[ValidationIssue],
     ) -> None:

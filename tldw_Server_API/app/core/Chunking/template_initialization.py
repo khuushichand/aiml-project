@@ -4,28 +4,28 @@ Initialize built-in chunking templates in the database.
 This module loads templates from JSON files and seeds them into the database.
 """
 
+import importlib.resources as ires
 import json
 from pathlib import Path
-from typing import List, Dict, Any
-import importlib
-import importlib.resources as ires
+from typing import Any
+
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 
-def load_builtin_templates() -> List[Dict[str, Any]]:
+def load_builtin_templates() -> list[dict[str, Any]]:
     """
     Load all built-in templates from the template_library directory.
 
     Returns:
         List of template dictionaries
     """
-    templates: List[Dict[str, Any]] = []
+    templates: list[dict[str, Any]] = []
     seen_names: set[str] = set()
 
-    def _append_template(td: Dict[str, Any], src: str) -> None:
+    def _append_template(td: dict[str, Any], src: str) -> None:
         name = td.get('name')
         if not name:
             logger.error(f"Template missing 'name' field (source={src})")
@@ -81,7 +81,7 @@ def load_builtin_templates() -> List[Dict[str, Any]]:
     # Strategy 3: minimal, safe built-ins as last resort
     if not templates:
         logger.warning("No built-in chunking templates found via resources or filesystem; using minimal fallbacks")
-        minimal: List[Dict[str, Any]] = [
+        minimal: list[dict[str, Any]] = [
             {
                 'name': 'academic_paper',
                 'description': 'Template for processing academic papers',

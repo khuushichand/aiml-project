@@ -4,14 +4,15 @@
 # Imports
 import asyncio
 import base64
-import io
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
+from typing import Any, Optional
+
 #
 # Third-party Imports
 import numpy as np
 from loguru import logger
+
 #
 #######################################################################################################################
 #
@@ -130,7 +131,7 @@ class AudioProcessor:
         provider: str,
         check_duration: bool = True,
         check_quality: bool = False
-    ) -> Tuple[bool, Optional[str], Dict[str, Any]]:
+    ) -> tuple[bool, Optional[str], dict[str, Any]]:
         """
         Validate audio for a specific provider.
 
@@ -156,7 +157,6 @@ class AudioProcessor:
 
         try:
             import librosa
-            import soundfile as sf
 
             # Write to temporary file for processing
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
@@ -403,7 +403,7 @@ def process_voice_reference(
     provider: str,
     validate: bool = True,
     convert: bool = True
-) -> Tuple[Optional[bytes], Optional[str]]:
+) -> tuple[Optional[bytes], Optional[str]]:
     """
     Process voice reference audio for a specific provider.
 
@@ -458,7 +458,7 @@ async def process_voice_reference_async(
     provider: str,
     validate: bool = True,
     convert: bool = True
-) -> Tuple[Optional[bytes], Optional[str]]:
+) -> tuple[Optional[bytes], Optional[str]]:
     """
     Async-friendly variant of process_voice_reference for use in adapters.
 

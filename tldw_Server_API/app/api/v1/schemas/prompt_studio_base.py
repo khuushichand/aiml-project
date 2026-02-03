@@ -1,11 +1,12 @@
 # prompt_studio_base.py
 # Base schemas for Prompt Studio feature
 
-from typing import List, Optional, Dict, Any, Union
-from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime
 from enum import Enum
+from typing import Any, Optional
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ########################################################################################################################
 # Enums
@@ -67,7 +68,7 @@ class FieldDefinition(BaseModel):
     description: Optional[str] = Field(None, max_length=500, description="Field description")
     required: bool = Field(default=True, description="Whether field is required")
     default: Optional[Any] = Field(None, description="Default value if not required")
-    constraints: Optional[Dict[str, Any]] = Field(None, description="Additional constraints")
+    constraints: Optional[dict[str, Any]] = Field(None, description="Additional constraints")
 
 class ConstraintDefinition(BaseModel):
     """Constraint definition for signatures"""
@@ -85,7 +86,7 @@ class StandardResponse(BaseModel):
     data: Optional[Any] = None
     error: Optional[str] = None
     error_code: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = None
 
 class PaginationMetadata(BaseModel):
     """Pagination metadata for list responses"""
@@ -96,7 +97,7 @@ class PaginationMetadata(BaseModel):
 
 class ListResponse(StandardResponse):
     """Standard list response with pagination"""
-    data: List[Any]
+    data: list[Any]
     metadata: PaginationMetadata
 
 ########################################################################################################################
@@ -150,5 +151,5 @@ class ErrorResponse(BaseModel):
     success: bool = False
     error: str
     error_code: Optional[str] = None
-    details: Optional[List[ValidationError]] = None
+    details: Optional[list[ValidationError]] = None
     request_id: Optional[str] = None

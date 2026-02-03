@@ -1,35 +1,39 @@
 from __future__ import annotations
 
-from typing import Any, Optional
-from datetime import datetime
 import os
+from datetime import datetime
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
 #
 try:
     from pydantic import field_validator  # Pydantic v2
 except Exception:  # Fallback to v1 naming
     from pydantic import validator as field_validator  # type: ignore
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-    require_roles,
-    get_auth_principal,
-)
-from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
-from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditContext
-from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from fastapi.responses import StreamingResponse
 import asyncio
 import json as _json
+
+from fastapi.responses import StreamingResponse
+
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
+    require_roles,
+)
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 router = APIRouter(
     dependencies=[Depends(require_roles("admin"))],
 )
 
 
-def _is_truthy(v: Optional[str]) -> bool:
+def _is_truthy(v: str | None) -> bool:
     return str(v or "").lower() in {"1", "true", "yes", "y", "on"}
 
 
@@ -57,7 +61,7 @@ def _make_admin_user_from_principal(principal: AuthPrincipal) -> dict[str, Any]:
     }
 
 
-def _enforce_domain_scope(user: dict, domain: Optional[str]) -> None:
+def _enforce_domain_scope(user: dict, domain: str | None) -> None:
     """Optional domain-scoped RBAC enforcement.
 
     Enabled when JOBS_DOMAIN_SCOPED_RBAC=true. If JOBS_REQUIRE_DOMAIN_FILTER=true,
@@ -95,7 +99,7 @@ def _enforce_domain_scope(user: dict, domain: Optional[str]) -> None:
         return
 
 
-def _enforce_domain_scope_from_principal(principal: AuthPrincipal, domain: Optional[str]) -> None:
+def _enforce_domain_scope_from_principal(principal: AuthPrincipal, domain: str | None) -> None:
     """
     Domain-scoped RBAC enforcement using AuthPrincipal (feature-flagged path).
 
@@ -113,7 +117,7 @@ def _enforce_domain_scope_from_principal(principal: AuthPrincipal, domain: Optio
 
 def _enforce_domain_scope_unified(
     principal: AuthPrincipal,
-    domain: Optional[str],
+    domain: str | None,
 ) -> dict[str, Any]:
     """
     Unified domain-scoped RBAC enforcement for jobs admin endpoints.
@@ -133,7 +137,7 @@ def _enforce_domain_scope_unified(
     return admin_user
 
 
-def _set_pg_rls_for_user(user: dict, domain: Optional[str]) -> None:
+def _set_pg_rls_for_user(user: dict, domain: str | None) -> None:
     """Set per-request RLS context for Postgres sessions using contextvars.
 
     This avoids global env and is concurrency-safe within the request task.
@@ -150,9 +154,9 @@ class PruneRequest(BaseModel):
     statuses: list[str] = Field(default_factory=lambda: ["completed", "failed", "cancelled"], description="Statuses to prune")
     older_than_days: int = Field(ge=1, le=3650, default=30, description="Delete jobs older than N days")
     # Optional scope filters
-    domain: Optional[str] = Field(default=None, description="Limit prune to a specific domain")
-    queue: Optional[str] = Field(default=None, description="Limit prune to a specific queue")
-    job_type: Optional[str] = Field(default=None, description="Limit prune to a specific job type")
+    domain: str | None = Field(default=None, description="Limit prune to a specific domain")
+    queue: str | None = Field(default=None, description="Limit prune to a specific queue")
+    job_type: str | None = Field(default=None, description="Limit prune to a specific job type")
     dry_run: bool = Field(default=False, description="When true, return count only without deleting")
     detail_top_k: int = Field(default=0, ge=0, le=100, description="When dry_run is true, optionally compute top-K groups by count")
 
@@ -175,7 +179,7 @@ class PruneRequest(BaseModel):
 
     @field_validator("domain", "queue", "job_type", mode="before")
     @classmethod
-    def _trim_optional(cls, v: Optional[str]) -> Optional[str]:
+    def _trim_optional(cls, v: str | None) -> str | None:
         s = str(v or "").strip()
         return s or None
 
@@ -376,12 +380,12 @@ async def queue_status_endpoint(
 
 # --- Reschedule / Retry-now ---
 class RescheduleRequest(BaseModel):
-    domain: Optional[str] = None
-    queue: Optional[str] = None
-    job_type: Optional[str] = None
-    status: Optional[str] = Field(default=None, description="Optional status filter")
+    domain: str | None = None
+    queue: str | None = None
+    job_type: str | None = None
+    status: str | None = Field(default=None, description="Optional status filter")
     set_now: bool = True
-    delta_seconds: Optional[int] = None
+    delta_seconds: int | None = None
     dry_run: bool = False
 
 
@@ -408,10 +412,10 @@ async def reschedule_jobs_endpoint(
 
 
 class RetryNowRequest(BaseModel):
-    domain: Optional[str] = None
-    queue: Optional[str] = None
-    job_type: Optional[str] = None
-    job_id: Optional[int] = None
+    domain: str | None = None
+    queue: str | None = None
+    job_type: str | None = None
+    job_id: int | None = None
     only_failed: bool = True
     dry_run: bool = False
 
@@ -441,15 +445,15 @@ async def retry_now_jobs_endpoint(
 # --- Attachments ---
 class AttachmentRequest(BaseModel):
     kind: str = Field(description="log|artifact|tag")
-    content_text: Optional[str] = None
-    url: Optional[str] = None
+    content_text: str | None = None
+    url: str | None = None
 
 
 class AttachmentItem(BaseModel):
     id: int
     kind: str
-    content_text: Optional[str]
-    url: Optional[str]
+    content_text: str | None
+    url: str | None
     created_at: str
 
 
@@ -471,7 +475,7 @@ async def add_job_attachment_endpoint(
     job_id: int,
     req: AttachmentRequest,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    domain: Optional[str] = None,
+    domain: str | None = None,
 ) -> AttachmentItem:
     admin_user = _enforce_domain_scope_unified(principal, domain)
     db_url = os.getenv("JOBS_DB_URL")
@@ -494,7 +498,7 @@ async def add_job_attachment_endpoint(
 async def list_job_attachments_endpoint(
     job_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    domain: Optional[str] = None,
+    domain: str | None = None,
 ) -> list[AttachmentItem]:
     admin_user = _enforce_domain_scope_unified(principal, domain)
     db_url = os.getenv("JOBS_DB_URL")
@@ -511,8 +515,8 @@ class SlaPolicyRequest(BaseModel):
     domain: str
     queue: str
     job_type: str
-    max_queue_latency_seconds: Optional[int] = None
-    max_duration_seconds: Optional[int] = None
+    max_queue_latency_seconds: int | None = None
+    max_duration_seconds: int | None = None
     enabled: bool = True
 
 
@@ -542,9 +546,9 @@ async def upsert_sla_policy_endpoint(
 
 @router.get("/jobs/sla/policies")
 async def list_sla_policies_endpoint(
-    domain: Optional[str] = None,
-    queue: Optional[str] = None,
-    job_type: Optional[str] = None,
+    domain: str | None = None,
+    queue: str | None = None,
+    job_type: str | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> list[dict]:
     admin_user = _enforce_domain_scope_unified(principal, domain)
@@ -586,9 +590,9 @@ async def list_sla_policies_endpoint(
 class CryptoRotateRequest(BaseModel):
     old_key_b64: str
     new_key_b64: str
-    domain: Optional[str] = None
-    queue: Optional[str] = None
-    job_type: Optional[str] = None
+    domain: str | None = None
+    queue: str | None = None
+    job_type: str | None = None
     fields: list[str] = Field(default_factory=lambda: ["payload", "result"])
     limit: int = 1000
     dry_run: bool = False
@@ -632,12 +636,12 @@ async def rotate_crypto_endpoint(
 
 
 class TTLSweepRequest(BaseModel):
-    age_seconds: Optional[int] = Field(default=None, ge=1, description="Cancel/fail queued jobs older than this many seconds (created_at)")
-    runtime_seconds: Optional[int] = Field(default=None, ge=1, description="Cancel/fail processing jobs running longer than this many seconds")
+    age_seconds: int | None = Field(default=None, ge=1, description="Cancel/fail queued jobs older than this many seconds (created_at)")
+    runtime_seconds: int | None = Field(default=None, ge=1, description="Cancel/fail processing jobs running longer than this many seconds")
     action: str = Field(default="cancel", pattern="^(cancel|fail)$", description="Action to apply to matching jobs")
-    domain: Optional[str] = Field(default=None)
-    queue: Optional[str] = Field(default=None)
-    job_type: Optional[str] = Field(default=None)
+    domain: str | None = Field(default=None)
+    queue: str | None = Field(default=None)
+    job_type: str | None = Field(default=None)
 
     model_config = ConfigDict(json_schema_extra={
             "example": {
@@ -655,15 +659,15 @@ class TTLSweepRequest(BaseModel):
 
 class JobEvent(BaseModel):
     id: int
-    job_id: Optional[int] = None
-    domain: Optional[str] = None
-    queue: Optional[str] = None
-    job_type: Optional[str] = None
+    job_id: int | None = None
+    domain: str | None = None
+    queue: str | None = None
+    job_type: str | None = None
     event_type: str
     attrs: dict = Field(default_factory=dict)
-    owner_user_id: Optional[str] = None
-    request_id: Optional[str] = None
-    trace_id: Optional[str] = None
+    owner_user_id: str | None = None
+    request_id: str | None = None
+    trace_id: str | None = None
     created_at: str
 
 
@@ -671,9 +675,9 @@ class JobEvent(BaseModel):
 async def list_job_events(
     after_id: int = 0,
     limit: int = 200,
-    domain: Optional[str] = None,
-    queue: Optional[str] = None,
-    job_type: Optional[str] = None,
+    domain: str | None = None,
+    queue: str | None = None,
+    job_type: str | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> list[JobEvent]:
     """Return job events from the append-only outbox with a cursor (after_id).
@@ -758,9 +762,9 @@ async def list_job_events(
 @router.get("/jobs/events/stream")
 async def stream_job_events(
     after_id: int = 0,
-    domain: Optional[str] = None,
-    queue: Optional[str] = None,
-    job_type: Optional[str] = None,
+    domain: str | None = None,
+    queue: str | None = None,
+    job_type: str | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> StreamingResponse:
     """Server-Sent Events stream of job events from the outbox.
@@ -774,13 +778,14 @@ async def stream_job_events(
         _set_pg_rls_for_user(admin_user, domain)
     jm = JobManager(backend=backend, db_url=db_url)
 
-    from tldw_Server_API.app.core.Streaming.streams import SSEStream
+    import time as _time
+
     from tldw_Server_API.app.core.Metrics.metrics_manager import (
-        get_metrics_registry,
         MetricDefinition,
         MetricType,
+        get_metrics_registry,
     )
-    import time as _time
+    from tldw_Server_API.app.core.Streaming.streams import SSEStream
 
     nonlocal_after_id = after_id  # keep compatibility with inner mutation
     poll_interval = float(os.getenv("JOBS_EVENTS_POLL_INTERVAL", "1.0") or "1.0")
@@ -993,7 +998,7 @@ async def ttl_sweep_endpoint(
 ) -> TTLSweepResponse:
     try:
         # Correlation IDs and diagnostics
-        from tldw_Server_API.app.core.Logging.log_context import get_ps_logger, ensure_request_id, ensure_traceparent
+        from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
         rid = ensure_request_id(request)
         tp = ensure_traceparent(request)
         # Pre-parse raw to enforce RBAC and confirm header before validation
@@ -1027,7 +1032,8 @@ async def ttl_sweep_endpoint(
         req = TTLSweepRequest(**(raw or {}))
         # Capture a single reference time to avoid boundary drift between age/runtime calculations
         try:
-            from datetime import datetime, timezone as _tz
+            from datetime import datetime
+            from datetime import timezone as _tz
             ref_now = datetime.now(tz=_tz.utc)
         except Exception:
             ref_now = None
@@ -1071,9 +1077,9 @@ async def ttl_sweep_endpoint(
 
 class IntegritySweepRequest(BaseModel):
     fix: bool = Field(default=False, description="When true, attempt to repair invalid states")
-    domain: Optional[str] = Field(default=None)
-    queue: Optional[str] = Field(default=None)
-    job_type: Optional[str] = Field(default=None)
+    domain: str | None = Field(default=None)
+    queue: str | None = Field(default=None)
+    job_type: str | None = Field(default=None)
 
     model_config = ConfigDict(json_schema_extra={
             "example": {
@@ -1173,9 +1179,9 @@ class QueueStatsResponse(BaseModel):
 
 @router.get("/jobs/stats", response_model=list[QueueStatsResponse])
 async def get_jobs_stats(
-    domain: Optional[str] = None,
-    queue: Optional[str] = None,
-    job_type: Optional[str] = None,
+    domain: str | None = None,
+    queue: str | None = None,
+    job_type: str | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """Aggregate counts grouped by domain/queue/job_type for the WebUI."""
@@ -1206,7 +1212,7 @@ class ArchiveMetaResponse(BaseModel):
 @router.get("/jobs/archive/meta", response_model=ArchiveMetaResponse)
 async def get_archive_meta(
     job_id: int,
-    domain: Optional[str] = None,
+    domain: str | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> ArchiveMetaResponse:
     """Return archive compression metadata for a given job id (if archived).
@@ -1262,31 +1268,31 @@ async def get_archive_meta(
 
 class JobItem(BaseModel):
     id: int
-    uuid: Optional[str] = None
+    uuid: str | None = None
     domain: str
     queue: str
     job_type: str
     status: str
-    priority: Optional[int] = None
-    retry_count: Optional[int] = None
-    max_retries: Optional[int] = None
-    available_at: Optional[str] = None
-    created_at: Optional[str] = None
-    acquired_at: Optional[str] = None
-    started_at: Optional[str] = None
-    leased_until: Optional[str] = None
-    completed_at: Optional[str] = None
+    priority: int | None = None
+    retry_count: int | None = None
+    max_retries: int | None = None
+    available_at: str | None = None
+    created_at: str | None = None
+    acquired_at: str | None = None
+    started_at: str | None = None
+    leased_until: str | None = None
+    completed_at: str | None = None
 
 
 class JobDetailResponse(BaseModel):
     id: int
-    uuid: Optional[str] = None
+    uuid: str | None = None
     domain: str
     queue: str
     job_type: str
     status: str
-    payload: Optional[Any] = None
-    result: Optional[Any] = None
+    payload: Any | None = None
+    result: Any | None = None
     archived: bool = False
 
     model_config = ConfigDict(extra="allow")
@@ -1294,14 +1300,14 @@ class JobDetailResponse(BaseModel):
 
 @router.get("/jobs/list", response_model=list[JobItem])
 async def list_jobs_endpoint(
-    domain: Optional[str] = None,
-    queue: Optional[str] = None,
-    status: Optional[str] = None,
-    owner_user_id: Optional[str] = None,
-    job_type: Optional[str] = None,
+    domain: str | None = None,
+    queue: str | None = None,
+    status: str | None = None,
+    owner_user_id: str | None = None,
+    job_type: str | None = None,
     limit: int = 100,
-    sort_by: Optional[str] = None,
-    sort_order: Optional[str] = None,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     try:
@@ -1358,8 +1364,8 @@ class StaleGroup(BaseModel):
 
 @router.get("/jobs/stale", response_model=list[StaleGroup])
 async def stale_processing_endpoint(
-    domain: Optional[str] = None,
-    queue: Optional[str] = None,
+    domain: str | None = None,
+    queue: str | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     try:
@@ -1417,7 +1423,7 @@ async def stale_processing_endpoint(
 async def get_job_detail(
     job_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    domain: Optional[str] = None,
+    domain: str | None = None,
 ) -> JobDetailResponse:
     admin_user = _enforce_domain_scope_unified(principal, domain)
     db_url = os.getenv("JOBS_DB_URL")
@@ -1433,9 +1439,9 @@ async def get_job_detail(
 
 class BatchCancelRequest(BaseModel):
     domain: str
-    queue: Optional[str] = None
-    job_type: Optional[str] = None
-    job_id: Optional[int] = None
+    queue: str | None = None
+    job_type: str | None = None
+    job_id: int | None = None
     dry_run: bool = False
 
 
@@ -1658,8 +1664,8 @@ async def batch_cancel_endpoint(
 
 class BatchRescheduleRequest(BaseModel):
     domain: str
-    queue: Optional[str] = None
-    job_type: Optional[str] = None
+    queue: str | None = None
+    job_type: str | None = None
     delay_seconds: int = Field(ge=0, default=0)
     dry_run: bool = False
 
@@ -1803,9 +1809,9 @@ async def batch_reschedule_endpoint(
 
 class BatchRequeueQuarantinedRequest(BaseModel):
     domain: str
-    queue: Optional[str] = None
-    job_type: Optional[str] = None
-    job_id: Optional[int] = None
+    queue: str | None = None
+    job_type: str | None = None
+    job_id: int | None = None
     dry_run: bool = False
 
     model_config = ConfigDict(json_schema_extra={

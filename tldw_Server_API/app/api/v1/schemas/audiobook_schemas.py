@@ -4,7 +4,7 @@ Pydantic schemas for audiobook creation APIs.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -23,9 +23,9 @@ class SourceRef(BaseModel):
     """Reference to an input source for audiobook processing."""
 
     input_type: SourceInputType = Field(..., description="Source type for the input")
-    upload_id: Optional[str] = Field(None, description="Upload id for a file previously uploaded")
-    media_id: Optional[Union[int, str]] = Field(None, description="Existing media id to read from")
-    raw_text: Optional[str] = Field(None, description="Raw text to process directly")
+    upload_id: str | None = Field(None, description="Upload id for a file previously uploaded")
+    media_id: Union[int, str] | None = Field(None, description="Existing media id to read from")
+    raw_text: str | None = Field(None, description="Raw text to process directly")
 
     model_config = {
         "json_schema_extra": {
@@ -48,8 +48,8 @@ class ChapterSelection(BaseModel):
 
     chapter_id: str = Field(..., description="Chapter identifier")
     include: bool = Field(..., description="Include or exclude chapter")
-    voice: Optional[str] = Field(None, description="Voice override for this chapter")
-    speed: Optional[float] = Field(
+    voice: str | None = Field(None, description="Voice override for this chapter")
+    speed: float | None = Field(
         None,
         ge=0.25,
         le=4.0,
@@ -61,8 +61,8 @@ class ChapterVoiceOverride(BaseModel):
     """Voice overrides used by voice profiles."""
 
     chapter_id: str = Field(..., description="Chapter identifier")
-    voice: Optional[str] = Field(None, description="Voice override for this chapter")
-    speed: Optional[float] = Field(
+    voice: str | None = Field(None, description="Voice override for this chapter")
+    speed: float | None = Field(
         None,
         ge=0.25,
         le=4.0,
@@ -75,11 +75,11 @@ class OutputOptions(BaseModel):
 
     merge: bool = Field(True, description="Merge chapters into a single audiobook output")
     per_chapter: bool = Field(True, description="Emit per-chapter audio outputs")
-    formats: List[AudioFormat] = Field(..., description="Output audio formats")
+    formats: list[AudioFormat] = Field(..., description="Output audio formats")
 
     @field_validator("formats")
     @classmethod
-    def _validate_formats(cls, value: List[AudioFormat]) -> List[AudioFormat]:
+    def _validate_formats(cls, value: list[AudioFormat]) -> list[AudioFormat]:
         if not value:
             raise ValueError("formats must include at least one audio format")
         if len(set(value)) != len(value):
@@ -90,20 +90,20 @@ class OutputOptions(BaseModel):
 class SubtitleOptions(BaseModel):
     """Subtitle generation options."""
 
-    formats: List[SubtitleFormat] = Field(..., description="Subtitle formats to emit")
+    formats: list[SubtitleFormat] = Field(..., description="Subtitle formats to emit")
     mode: SubtitleMode = Field(..., description="Segmentation mode")
     variant: SubtitleVariant = Field(..., description="Styling variant")
-    words_per_cue: Optional[int] = Field(
+    words_per_cue: int | None = Field(
         12,
         ge=1,
         description="Words per cue for word_count mode",
     )
-    max_chars: Optional[int] = Field(None, ge=10, description="Maximum characters per cue")
-    max_lines: Optional[int] = Field(None, ge=1, description="Maximum lines per cue")
+    max_chars: int | None = Field(None, ge=10, description="Maximum characters per cue")
+    max_lines: int | None = Field(None, ge=1, description="Maximum lines per cue")
 
     @field_validator("formats")
     @classmethod
-    def _validate_formats(cls, value: List[SubtitleFormat]) -> List[SubtitleFormat]:
+    def _validate_formats(cls, value: list[SubtitleFormat]) -> list[SubtitleFormat]:
         if not value:
             raise ValueError("formats must include at least one subtitle format")
         if len(set(value)) != len(value):
@@ -115,20 +115,20 @@ class QueueOptions(BaseModel):
     """Job scheduling hints."""
 
     priority: int = Field(5, ge=1, le=10, description="Queue priority (1-10)")
-    batch_group: Optional[str] = Field(None, max_length=100, description="Optional batch group id")
+    batch_group: str | None = Field(None, max_length=100, description="Optional batch group id")
 
 
 class AudiobookJobItem(BaseModel):
     """Per-item override for batch jobs."""
 
     source: SourceRef = Field(..., description="Source reference for this item")
-    tts_provider: Optional[str] = Field(None, description="TTS provider override")
-    tts_model: Optional[str] = Field(None, description="TTS model override")
-    voice_profile_id: Optional[str] = Field(None, description="Voice profile id override")
-    chapters: Optional[List[ChapterSelection]] = Field(None, description="Per-item chapter selection")
-    output: Optional[OutputOptions] = Field(None, description="Per-item output options")
-    subtitles: Optional[SubtitleOptions] = Field(None, description="Per-item subtitle options")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    tts_provider: str | None = Field(None, description="TTS provider override")
+    tts_model: str | None = Field(None, description="TTS model override")
+    voice_profile_id: str | None = Field(None, description="Voice profile id override")
+    chapters: list[ChapterSelection] | None = Field(None, description="Per-item chapter selection")
+    output: OutputOptions | None = Field(None, description="Per-item output options")
+    subtitles: SubtitleOptions | None = Field(None, description="Per-item subtitle options")
+    metadata: dict[str, Any] | None = Field(None, description="Additional metadata")
 
 
 class AlignmentWord(BaseModel):
@@ -137,8 +137,8 @@ class AlignmentWord(BaseModel):
     word: str = Field(..., description="Word text")
     start_ms: int = Field(..., ge=0, description="Start time in milliseconds")
     end_ms: int = Field(..., ge=0, description="End time in milliseconds")
-    char_start: Optional[int] = Field(None, ge=0, description="Character offset start")
-    char_end: Optional[int] = Field(None, ge=0, description="Character offset end")
+    char_start: int | None = Field(None, ge=0, description="Character offset start")
+    char_end: int | None = Field(None, ge=0, description="Character offset end")
 
 
 class AlignmentPayload(BaseModel):
@@ -146,11 +146,11 @@ class AlignmentPayload(BaseModel):
 
     engine: AlignmentEngine = Field(..., description="Alignment engine")
     sample_rate: int = Field(..., ge=8000, description="Sample rate used by the aligner")
-    words: List[AlignmentWord] = Field(..., description="Word alignment data")
+    words: list[AlignmentWord] = Field(..., description="Word alignment data")
 
     @field_validator("words")
     @classmethod
-    def _validate_words(cls, value: List[AlignmentWord]) -> List[AlignmentWord]:
+    def _validate_words(cls, value: list[AlignmentWord]) -> list[AlignmentWord]:
         if not value:
             raise ValueError("alignment words must not be empty")
         return value
@@ -160,7 +160,7 @@ class ChapterPreview(BaseModel):
     """Chapter preview from parse output."""
 
     chapter_id: str = Field(..., description="Chapter identifier")
-    title: Optional[str] = Field(None, description="Chapter title")
+    title: str | None = Field(None, description="Chapter title")
     start_offset: int = Field(..., ge=0, description="Start offset in characters")
     end_offset: int = Field(..., ge=0, description="End offset in characters")
     word_count: int = Field(..., ge=0, description="Word count in chapter")
@@ -171,9 +171,9 @@ class AudiobookParseRequest(BaseModel):
 
     source: SourceRef = Field(..., description="Source input reference")
     detect_chapters: bool = Field(True, description="Detect chapters automatically")
-    custom_chapter_pattern: Optional[str] = Field(None, description="Custom chapter regex pattern")
-    language: Optional[str] = Field(None, description="Language code for parsing")
-    max_chars: Optional[int] = Field(None, ge=1, description="Optional text truncation limit")
+    custom_chapter_pattern: str | None = Field(None, description="Custom chapter regex pattern")
+    language: str | None = Field(None, description="Language code for parsing")
+    max_chars: int | None = Field(None, ge=1, description="Optional text truncation limit")
 
     model_config = {
         "json_schema_extra": {
@@ -192,8 +192,8 @@ class AudiobookParseResponse(BaseModel):
 
     project_id: str = Field(..., description="Project identifier")
     normalized_text: str = Field(..., description="Normalized text for processing")
-    chapters: List[ChapterPreview] = Field(..., description="Detected chapter previews")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Extracted metadata")
+    chapters: list[ChapterPreview] = Field(..., description="Detected chapter previews")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Extracted metadata")
 
     model_config = {
         "json_schema_extra": {
@@ -230,16 +230,16 @@ class AudiobookJobRequest(BaseModel):
     """Job creation payload for audiobook generation."""
 
     project_title: str = Field(..., min_length=1, max_length=200, description="Project title")
-    source: Optional[SourceRef] = Field(None, description="Single source reference")
-    items: Optional[List[AudiobookJobItem]] = Field(None, description="Batch items")
-    tts_provider: Optional[str] = Field(None, description="TTS provider override")
-    tts_model: Optional[str] = Field(None, description="TTS model override")
-    voice_profile_id: Optional[str] = Field(None, description="Voice profile id to apply")
-    chapters: Optional[List[ChapterSelection]] = Field(None, description="Chapter selection")
-    output: Optional[OutputOptions] = Field(None, description="Output options")
-    subtitles: Optional[SubtitleOptions] = Field(None, description="Subtitle options")
-    queue: Optional[QueueOptions] = Field(None, description="Queue options")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    source: SourceRef | None = Field(None, description="Single source reference")
+    items: list[AudiobookJobItem] | None = Field(None, description="Batch items")
+    tts_provider: str | None = Field(None, description="TTS provider override")
+    tts_model: str | None = Field(None, description="TTS model override")
+    voice_profile_id: str | None = Field(None, description="Voice profile id to apply")
+    chapters: list[ChapterSelection] | None = Field(None, description="Chapter selection")
+    output: OutputOptions | None = Field(None, description="Output options")
+    subtitles: SubtitleOptions | None = Field(None, description="Subtitle options")
+    queue: QueueOptions | None = Field(None, description="Queue options")
+    metadata: dict[str, Any] | None = Field(None, description="Additional metadata")
 
     model_config = {
         "json_schema_extra": {
@@ -260,7 +260,7 @@ class AudiobookJobRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_shape(self) -> "AudiobookJobRequest":
-        def _requires_subtitles(provider: Optional[str], model: Optional[str]) -> bool:
+        def _requires_subtitles(provider: str | None, model: str | None) -> bool:
             if provider:
                 return str(provider).strip().lower() == "kokoro"
             if model:
@@ -329,11 +329,11 @@ class JobProgress(BaseModel):
     """Job progress metadata."""
 
     stage: str = Field(..., description="Current pipeline stage")
-    chapter_index: Optional[int] = Field(None, ge=0, description="Zero-based chapter index")
-    chapters_total: Optional[int] = Field(None, ge=0, description="Total chapters")
-    item_index: Optional[int] = Field(None, ge=0, description="Zero-based item index (batch jobs)")
-    items_total: Optional[int] = Field(None, ge=0, description="Total items (batch jobs)")
-    percent: Optional[int] = Field(None, ge=0, le=100, description="Percent complete")
+    chapter_index: int | None = Field(None, ge=0, description="Zero-based chapter index")
+    chapters_total: int | None = Field(None, ge=0, description="Total chapters")
+    item_index: int | None = Field(None, ge=0, description="Zero-based item index (batch jobs)")
+    items_total: int | None = Field(None, ge=0, description="Total items (batch jobs)")
+    percent: int | None = Field(None, ge=0, le=100, description="Percent complete")
 
 
 class AudiobookJobStatusResponse(BaseModel):
@@ -342,8 +342,8 @@ class AudiobookJobStatusResponse(BaseModel):
     job_id: int = Field(..., description="Job identifier")
     project_id: str = Field(..., description="Project identifier")
     status: AudiobookJobStatus = Field(..., description="Job status")
-    progress: Optional[JobProgress] = Field(None, description="Progress metadata")
-    errors: List[str] = Field(default_factory=list, description="Error list")
+    progress: JobProgress | None = Field(None, description="Progress metadata")
+    errors: list[str] = Field(default_factory=list, description="Error list")
 
     model_config = {
         "json_schema_extra": {
@@ -369,11 +369,11 @@ class AudiobookProjectInfo(BaseModel):
     """Audiobook project summary."""
 
     project_db_id: int = Field(..., description="Internal project id")
-    project_id: Optional[str] = Field(None, description="External project id")
-    title: Optional[str] = Field(None, description="Project title")
-    status: Optional[str] = Field(None, description="Project status")
-    source_ref: Optional[Dict[str, Any]] = Field(None, description="Source reference metadata")
-    settings: Optional[Dict[str, Any]] = Field(None, description="Project settings")
+    project_id: str | None = Field(None, description="External project id")
+    title: str | None = Field(None, description="Project title")
+    status: str | None = Field(None, description="Project status")
+    source_ref: dict[str, Any] | None = Field(None, description="Source reference metadata")
+    settings: dict[str, Any] | None = Field(None, description="Project settings")
     created_at: str = Field(..., description="Created timestamp")
     updated_at: str = Field(..., description="Updated timestamp")
 
@@ -400,7 +400,7 @@ class AudiobookProjectInfo(BaseModel):
 class AudiobookProjectListResponse(BaseModel):
     """List response for audiobook projects."""
 
-    projects: List[AudiobookProjectInfo] = Field(..., description="Project list")
+    projects: list[AudiobookProjectInfo] = Field(..., description="Project list")
 
     model_config = {
         "json_schema_extra": {
@@ -450,12 +450,12 @@ class AudiobookChapterInfo(BaseModel):
 
     id: int = Field(..., description="Chapter id")
     chapter_index: int = Field(..., description="Zero-based chapter index")
-    title: Optional[str] = Field(None, description="Chapter title")
-    start_offset: Optional[int] = Field(None, description="Start offset in characters")
-    end_offset: Optional[int] = Field(None, description="End offset in characters")
-    voice_profile_id: Optional[str] = Field(None, description="Voice profile id")
-    speed: Optional[float] = Field(None, description="Speed override")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Chapter metadata")
+    title: str | None = Field(None, description="Chapter title")
+    start_offset: int | None = Field(None, description="Start offset in characters")
+    end_offset: int | None = Field(None, description="End offset in characters")
+    voice_profile_id: str | None = Field(None, description="Voice profile id")
+    speed: float | None = Field(None, description="Speed override")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Chapter metadata")
 
     model_config = {
         "json_schema_extra": {
@@ -477,7 +477,7 @@ class AudiobookChapterListResponse(BaseModel):
     """List response for audiobook chapters."""
 
     project_id: str = Field(..., description="Project identifier")
-    chapters: List[AudiobookChapterInfo] = Field(..., description="Chapter list")
+    chapters: list[AudiobookChapterInfo] = Field(..., description="Chapter list")
 
     model_config = {
         "json_schema_extra": {
@@ -505,8 +505,8 @@ class ArtifactInfo(BaseModel):
 
     artifact_type: AudiobookArtifactType = Field(..., description="Artifact category")
     format: str = Field(..., description="Artifact format")
-    scope: Optional[AudiobookArtifactScope] = Field(None, description="Artifact scope")
-    chapter_id: Optional[str] = Field(None, description="Chapter identifier")
+    scope: AudiobookArtifactScope | None = Field(None, description="Artifact scope")
+    chapter_id: str | None = Field(None, description="Chapter identifier")
     output_id: int = Field(..., description="Outputs table id")
     download_url: str = Field(..., description="Download URL")
 
@@ -515,7 +515,7 @@ class AudiobookArtifactsResponse(BaseModel):
     """Artifact list response."""
 
     project_id: str = Field(..., description="Project identifier")
-    artifacts: List[ArtifactInfo] = Field(..., description="Artifact list")
+    artifacts: list[ArtifactInfo] = Field(..., description="Artifact list")
 
     model_config = {
         "json_schema_extra": {
@@ -558,7 +558,7 @@ class VoiceProfileCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Profile name")
     default_voice: str = Field(..., description="Default voice id")
     default_speed: float = Field(..., ge=0.25, le=4.0, description="Default speed")
-    chapter_overrides: Optional[List[ChapterVoiceOverride]] = Field(
+    chapter_overrides: list[ChapterVoiceOverride] | None = Field(
         default_factory=list,
         description="Optional chapter overrides",
     )
@@ -596,7 +596,7 @@ class VoiceProfileResponse(VoiceProfileCreateRequest):
 class VoiceProfileListResponse(BaseModel):
     """List response for voice profiles."""
 
-    profiles: List[VoiceProfileResponse] = Field(..., description="Voice profiles")
+    profiles: list[VoiceProfileResponse] = Field(..., description="Voice profiles")
 
 
 class VoiceProfileDeleteResponse(BaseModel):
@@ -612,18 +612,18 @@ class SubtitleExportRequest(BaseModel):
     format: SubtitleFormat = Field(..., description="Subtitle format")
     mode: SubtitleMode = Field(..., description="Segmentation mode")
     variant: SubtitleVariant = Field(..., description="Styling variant")
-    alignment: Optional[AlignmentPayload] = Field(None, description="Alignment payload")
-    alignment_output_id: Optional[int] = Field(None, ge=1, description="Output id for stored alignment JSON")
-    persist: Optional[bool] = Field(None, description="Persist the generated subtitle output")
-    cache_ttl_hours: Optional[int] = Field(None, ge=1, description="Cache TTL (hours) when persisting")
-    project_id: Optional[str] = Field(None, description="External audiobook project id")
-    chapter_id: Optional[str] = Field(None, description="Chapter id for metadata linking")
-    chapter_index: Optional[int] = Field(None, ge=0, description="Chapter index for metadata linking")
-    item_index: Optional[int] = Field(None, ge=0, description="Item index for batch metadata")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata to persist")
-    words_per_cue: Optional[int] = Field(12, ge=1, description="Words per cue for word_count mode")
-    max_chars: Optional[int] = Field(None, ge=10, description="Maximum characters per cue")
-    max_lines: Optional[int] = Field(None, ge=1, description="Maximum lines per cue")
+    alignment: AlignmentPayload | None = Field(None, description="Alignment payload")
+    alignment_output_id: int | None = Field(None, ge=1, description="Output id for stored alignment JSON")
+    persist: bool | None = Field(None, description="Persist the generated subtitle output")
+    cache_ttl_hours: int | None = Field(None, ge=1, description="Cache TTL (hours) when persisting")
+    project_id: str | None = Field(None, description="External audiobook project id")
+    chapter_id: str | None = Field(None, description="Chapter id for metadata linking")
+    chapter_index: int | None = Field(None, ge=0, description="Chapter index for metadata linking")
+    item_index: int | None = Field(None, ge=0, description="Item index for batch metadata")
+    metadata: dict[str, Any] | None = Field(None, description="Additional metadata to persist")
+    words_per_cue: int | None = Field(12, ge=1, description="Words per cue for word_count mode")
+    max_chars: int | None = Field(None, ge=10, description="Maximum characters per cue")
+    max_lines: int | None = Field(None, ge=1, description="Maximum lines per cue")
 
     @model_validator(mode="after")
     def _validate_alignment_source(self) -> "SubtitleExportRequest":
@@ -654,9 +654,9 @@ class SubtitleExportRequest(BaseModel):
 class AudiobookErrorResponse(BaseModel):
     """Standard error response for audiobook endpoints."""
 
-    error_code: Optional[str] = Field(None, description="Machine-readable error code")
+    error_code: str | None = Field(None, description="Machine-readable error code")
     message: str = Field(..., description="Error message")
-    details: Optional[Dict[str, Any]] = Field(None, description="Additional error details")
+    details: dict[str, Any] | None = Field(None, description="Additional error details")
 
     model_config = {
         "json_schema_extra": {

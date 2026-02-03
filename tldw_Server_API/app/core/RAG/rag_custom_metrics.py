@@ -7,18 +7,18 @@ tailored for production use cases and business requirements.
 
 import asyncio
 import os
-import time
-import numpy as np
-from typing import List, Dict, Any, Optional, Tuple
+import statistics
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-import statistics
+from typing import Any, Optional
 
+import numpy as np
 from loguru import logger
 from sklearn.metrics.pairwise import cosine_similarity
 
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+
 # Safe import of embeddings helpers to avoid heavy deps during app import
 try:
     from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
@@ -63,15 +63,15 @@ class CustomMetricResult:
     metric_type: MetricType
     score: float  # 0.0 to 1.0
     confidence: float  # Confidence in the score
-    details: Dict[str, Any] = field(default_factory=dict)
-    suggestions: List[str] = field(default_factory=list)
+    details: dict[str, Any] = field(default_factory=dict)
+    suggestions: list[str] = field(default_factory=list)
     timestamp: datetime = field(default_factory=datetime.now)
 
 
 class RAGCustomMetrics:
     """Custom metrics evaluator for RAG systems"""
 
-    def __init__(self, embedding_config: Optional[Dict[str, Any]] = None):
+    def __init__(self, embedding_config: Optional[dict[str, Any]] = None):
         """
         Initialize custom metrics evaluator.
 
@@ -84,7 +84,7 @@ class RAGCustomMetrics:
     async def evaluate_retrieval_coverage(
         self,
         query: str,
-        retrieved_contexts: List[str],
+        retrieved_contexts: list[str],
         reference_answer: Optional[str] = None
     ) -> CustomMetricResult:
         """
@@ -133,8 +133,8 @@ class RAGCustomMetrics:
 
     async def evaluate_retrieval_diversity(
         self,
-        retrieved_contexts: List[str],
-        sources: Optional[List[str]] = None
+        retrieved_contexts: list[str],
+        sources: Optional[list[str]] = None
     ) -> CustomMetricResult:
         """
         Evaluate diversity of retrieved content.
@@ -201,7 +201,7 @@ class RAGCustomMetrics:
         self,
         query: str,
         response: str,
-        expected_elements: Optional[List[str]] = None
+        expected_elements: Optional[list[str]] = None
     ) -> CustomMetricResult:
         """
         Evaluate completeness of the generated response.
@@ -280,7 +280,7 @@ class RAGCustomMetrics:
     async def evaluate_source_attribution(
         self,
         response: str,
-        sources: List[Dict[str, Any]],
+        sources: list[dict[str, Any]],
         check_citations: bool = True
     ) -> CustomMetricResult:
         """
@@ -434,13 +434,13 @@ class RAGCustomMetrics:
     async def evaluate_all_metrics(
         self,
         query: str,
-        retrieved_contexts: List[str],
+        retrieved_contexts: list[str],
         response: str,
-        sources: Optional[List[Dict[str, Any]]] = None,
+        sources: Optional[list[dict[str, Any]]] = None,
         tokens_used: Optional[int] = None,
         estimated_cost: Optional[float] = None,
         response_time_ms: Optional[float] = None
-    ) -> Dict[str, CustomMetricResult]:
+    ) -> dict[str, CustomMetricResult]:
         """
         Evaluate all applicable custom metrics.
         """
@@ -500,7 +500,7 @@ class RAGCustomMetrics:
 
         return results
 
-    async def _extract_concepts(self, text: str) -> List[str]:
+    async def _extract_concepts(self, text: str) -> list[str]:
         """Extract key concepts from text."""
         # Simple implementation - extract noun phrases and important words
         # In production, use NLP libraries like spaCy
@@ -517,7 +517,7 @@ class RAGCustomMetrics:
         # Return unique concepts
         return list(set(concepts))[:10]  # Limit to top 10
 
-    def aggregate_metrics(self, metrics: Dict[str, CustomMetricResult]) -> Dict[str, Any]:
+    def aggregate_metrics(self, metrics: dict[str, CustomMetricResult]) -> dict[str, Any]:
         """
         Aggregate multiple metrics into summary statistics.
         """
@@ -565,8 +565,8 @@ class _LightRAGCustomMetrics(RAGCustomMetrics):
 
     async def evaluate_retrieval_diversity(
         self,
-        retrieved_contexts: List[str],
-        sources: Optional[List[str]] = None
+        retrieved_contexts: list[str],
+        sources: Optional[list[str]] = None
     ) -> CustomMetricResult:
         if not retrieved_contexts:
             return CustomMetricResult(

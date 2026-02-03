@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Tuple, Optional
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 
 
 class AuthNZPolicyStore:
@@ -18,16 +18,16 @@ class AuthNZPolicyStore:
     as documented in the PRD. If the table is missing, returns an empty policy set.
     """
 
-    def __init__(self, pool: Optional[DatabasePool] = None):
+    def __init__(self, pool: DatabasePool | None = None):
         """Initialize the policy store.
 
         Args:
             pool: Optional DatabasePool to use (for testing/DI). If not provided,
                   the global `get_db_pool()` is used on each call.
         """
-        self._pool: Optional[DatabasePool] = pool
+        self._pool: DatabasePool | None = pool
 
-    async def get_latest_policy(self) -> Tuple[int, Dict[str, Any], Dict[str, Any], float] | Tuple[int, Dict[str, Any], Dict[str, Any], Dict[str, Any], float]:
+    async def get_latest_policy(self) -> tuple[int, dict[str, Any], dict[str, Any], float] | tuple[int, dict[str, Any], dict[str, Any], dict[str, Any], float]:
         try:
             pool = self._pool or await get_db_pool()
         except Exception as e:
@@ -44,9 +44,9 @@ class AuthNZPolicyStore:
             logger.debug("AuthNZPolicyStore: rg_policies fetch failed (likely missing table): {}", e)
             return 1, {}, {}, time.time()
 
-        policies: Dict[str, Any] = {}
-        tenant: Dict[str, Any] = {}
-        route_map: Dict[str, Any] = {}
+        policies: dict[str, Any] = {}
+        tenant: dict[str, Any] = {}
+        route_map: dict[str, Any] = {}
         max_version = 1
         latest_updated: float = 0.0
 

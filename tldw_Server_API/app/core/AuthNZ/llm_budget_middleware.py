@@ -1,21 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Callable
 
+from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-import os
-from loguru import logger
-from fastapi import HTTPException
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings, get_settings_generation
-from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
-from tldw_Server_API.app.core.AuthNZ.virtual_keys import get_key_limits
 from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
+from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, get_settings_generation
+from tldw_Server_API.app.core.AuthNZ.virtual_keys import get_key_limits
 
 
 class LLMBudgetMiddleware(BaseHTTPMiddleware):

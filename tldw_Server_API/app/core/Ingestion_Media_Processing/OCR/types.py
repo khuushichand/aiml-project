@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Literal
-
+from typing import Any, Literal
 
 OCRFormat = Literal["text", "markdown", "html", "json", "unknown"]
 
@@ -10,8 +9,8 @@ OCRFormat = Literal["text", "markdown", "html", "json", "unknown"]
 @dataclass
 class OCRBlock:
     text: str
-    bbox: Optional[List[float]] = None  # [x0, y0, x1, y1] pixels or normalized
-    block_type: Optional[str] = None
+    bbox: list[float] | None = None  # [x0, y0, x1, y1] pixels or normalized
+    block_type: str | None = None
 
 
 @dataclass
@@ -24,14 +23,14 @@ class OCRTable:
 class OCRResult:
     text: str = ""
     format: OCRFormat = "text"
-    blocks: List[OCRBlock] = field(default_factory=list)
-    tables: List[OCRTable] = field(default_factory=list)
-    pages: Optional[List[Dict[str, Any]]] = None
-    raw: Optional[Any] = None
-    meta: Dict[str, Any] = field(default_factory=dict)
-    warnings: List[str] = field(default_factory=list)
+    blocks: list[OCRBlock] = field(default_factory=list)
+    tables: list[OCRTable] = field(default_factory=list)
+    pages: list[dict[str, Any]] | None = None
+    raw: Any | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "text": self.text or "",
             "format": self.format,
@@ -50,7 +49,7 @@ class OCRResult:
         }
 
 
-def normalize_ocr_format(value: Optional[str]) -> OCRFormat:
+def normalize_ocr_format(value: str | None) -> OCRFormat:
     if not value:
         return "unknown"
     v = str(value).strip().lower()

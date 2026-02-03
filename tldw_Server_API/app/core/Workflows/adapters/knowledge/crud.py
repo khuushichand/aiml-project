@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -39,7 +39,7 @@ from tldw_Server_API.app.core.Workflows.adapters.knowledge._config import (
     tags=["knowledge", "notes"],
     config_model=NotesConfig,
 )
-async def run_notes_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_notes_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Manage notes within a workflow step.
 
     Config:
@@ -137,7 +137,7 @@ async def run_notes_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
                 if current is None:
                     return {"error": "note_not_found", "note_id": note_id}
                 expected_version = current.get("version", 1)
-            update_data: Dict[str, Any] = {}
+            update_data: dict[str, Any] = {}
             title = config.get("title")
             if title is not None:
                 update_data["title"] = _render(title)
@@ -187,7 +187,7 @@ async def run_notes_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
     tags=["knowledge", "prompts"],
     config_model=PromptsConfig,
 )
-async def run_prompts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_prompts_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Manage prompts within a workflow step.
 
     Config:
@@ -346,7 +346,7 @@ async def run_prompts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
     tags=["knowledge", "collections"],
     config_model=CollectionsConfig,
 )
-async def run_collections_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_collections_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Manage reading list collections within a workflow step.
 
     Config:
@@ -564,7 +564,7 @@ async def run_collections_adapter(config: Dict[str, Any], context: Dict[str, Any
     tags=["knowledge", "chunking"],
     config_model=ChunkingConfig,
 )
-async def run_chunking_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_chunking_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Chunk text using various strategies.
 
     Config:
@@ -657,7 +657,7 @@ async def run_chunking_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
     tags=["knowledge", "extraction"],
     config_model=ClaimsExtractConfig,
 )
-async def run_claims_extract_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_claims_extract_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Extract and search claims from text within a workflow step.
 
     Config:
@@ -824,7 +824,7 @@ async def run_claims_extract_adapter(config: Dict[str, Any], context: Dict[str, 
     tags=["knowledge", "voice"],
     config_model=VoiceIntentConfig,
 )
-async def run_voice_intent_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_voice_intent_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Parse voice/text input into actionable intents.
 
     Config:
@@ -1011,7 +1011,7 @@ async def run_voice_intent_adapter(config: Dict[str, Any], context: Dict[str, An
                 parser.llm_enabled = False
 
             # Build context dict
-            parse_context: Dict[str, Any] = {}
+            parse_context: dict[str, Any] = {}
             if awaiting_confirmation:
                 parse_context["awaiting_confirmation"] = True
             if conversation_history:

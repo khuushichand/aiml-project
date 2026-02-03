@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from loguru import logger
@@ -39,9 +39,9 @@ router = APIRouter(prefix="/acp", tags=["acp"])
 
 async def _authenticate_ws(
     websocket: WebSocket,
-    token: Optional[str] = None,
-    api_key: Optional[str] = None,
-) -> Optional[int]:
+    token: str | None = None,
+    api_key: str | None = None,
+) -> int | None:
     """Authenticate a WebSocket connection. Returns user_id or None."""
     # Try JWT token first
     if token:
@@ -83,8 +83,8 @@ async def _authenticate_ws(
 async def acp_session_stream(
     websocket: WebSocket,
     session_id: str,
-    token: Optional[str] = Query(None),
-    api_key: Optional[str] = Query(None),
+    token: str | None = Query(None),
+    api_key: str | None = Query(None),
 ) -> None:
     """
     WebSocket endpoint for real-time ACP session updates.
@@ -131,7 +131,7 @@ async def acp_session_stream(
         client = await get_runner_client()
 
         # Define send callback for broadcasting
-        async def send_callback(message: Dict[str, Any]) -> None:
+        async def send_callback(message: dict[str, Any]) -> None:
             await stream.send_json(message)
 
         # Register this WebSocket with the session
@@ -185,7 +185,7 @@ async def acp_session_stream(
 async def _handle_client_message(
     client: Any,
     session_id: str,
-    data: Dict[str, Any],
+    data: dict[str, Any],
     stream: WebSocketStream,
 ) -> None:
     """Handle a message from the WebSocket client."""
@@ -445,7 +445,7 @@ async def acp_session_close(
 @router.get("/sessions/{session_id}/updates", response_model=ACPSessionUpdatesResponse)
 async def acp_session_updates(
     session_id: str,
-    limit: Optional[int] = Query(default=100, ge=1, le=1000),
+    limit: int | None = Query(default=100, ge=1, le=1000),
     user: User = Depends(get_request_user),
 ) -> ACPSessionUpdatesResponse:
     client = await get_runner_client()

@@ -5,23 +5,22 @@ Implements speaker identification using vector embeddings approach.
 """
 #
 # Imports
-import os
-import sys
-import time
-import threading
-from functools import lru_cache
 import importlib.util
+import threading
+import time
+from enum import Enum
+from functools import lru_cache
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Union, Callable, Tuple, TYPE_CHECKING, TypedDict
-import json
+from typing import TYPE_CHECKING, Any, Callable, Optional, TypedDict
+
 #
 # 3rd-Party Libraries
 from loguru import logger
-from contextlib import contextmanager
-from enum import Enum
+
 #
 # Local Imports
-from tldw_Server_API.app.core.config import loaded_config_data, DIARIZATION_CONFIG
+from tldw_Server_API.app.core.config import DIARIZATION_CONFIG, loaded_config_data
+
 #
 ######################################################################################################################
 # Type checking imports (not loaded at runtime)
@@ -131,7 +130,7 @@ class SegmentDict(TypedDict, total=False):
     speaker_label: Optional[str]
     is_padded: bool
     original_duration: float
-    speech_region: Dict[str, Any]
+    speech_region: dict[str, Any]
     # Memory-efficient fields
     start_sample: Optional[int]
     end_sample: Optional[int]
@@ -140,8 +139,8 @@ class SegmentDict(TypedDict, total=False):
 
 class DiarizationResult(TypedDict):
     """Type definition for diarization results."""
-    segments: List[Dict[str, Any]]
-    speakers: List[Dict[str, Any]]
+    segments: list[dict[str, Any]]
+    speakers: list[dict[str, Any]]
     duration: float
     num_speakers: int
     processing_time: float
@@ -162,7 +161,7 @@ DEFAULT_MEMORY_EFFICIENT = False
 DEFAULT_MAX_MEMORY_MB = 2048  # 2GB default memory limit
 
 
-def load_diarization_config() -> Dict[str, Any]:
+def load_diarization_config() -> dict[str, Any]:
     """Return the merged diarization configuration (defaults + user overrides)."""
     config = dict(DIARIZATION_CONFIG)
     if loaded_config_data:
@@ -276,10 +275,10 @@ def _lazy_import_sklearn():
     global _sklearn_modules
     if _sklearn_modules is None and _sklearn_available():
         try:
-            from sklearn.cluster import SpectralClustering, AgglomerativeClustering
-            from sklearn.preprocessing import normalize
+            from sklearn.cluster import AgglomerativeClustering, SpectralClustering
             from sklearn.metrics import silhouette_score
             from sklearn.metrics.pairwise import cosine_similarity
+            from sklearn.preprocessing import normalize
             _sklearn_modules = {
                 'SpectralClustering': SpectralClustering,
                 'AgglomerativeClustering': AgglomerativeClustering,
@@ -328,8 +327,8 @@ class DiarizationService:
         config (dict): Configuration parameters for diarization.
     """
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None,
-                 config_loader: Optional[Callable[[], Dict[str, Any]]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None,
+                 config_loader: Optional[Callable[[], dict[str, Any]]] = None):
         """Initialize the diarization service.
 
         Args:
@@ -351,15 +350,15 @@ class DiarizationService:
 
     async def propose_human_edit_boundaries(
         self,
-        transcript_entries: List[Dict[str, Any]],
+        transcript_entries: list[dict[str, Any]],
         K: int = 6,
         min_segment_size: int = 5,
         lambda_balance: float = 0.01,
         utterance_expansion_width: int = 2,
         embeddings_provider: Optional[str] = None,
         embeddings_model: Optional[str] = None,
-        embedder: Optional[Callable[[List[str]], Any]] = None,
-    ) -> Dict[str, Any]:
+        embedder: Optional[Callable[[list[str]], Any]] = None,
+    ) -> dict[str, Any]:
         """
         Propose segment boundaries for human editing using TreeSeg on transcript entries.
 
@@ -440,7 +439,7 @@ class DiarizationService:
 
         return True
 
-    def _get_default_config(self) -> Dict[str, Any]:
+    def _get_default_config(self) -> dict[str, Any]:
         """
         Provide the default configuration dictionary used by DiarizationService.
 
@@ -523,7 +522,7 @@ class DiarizationService:
             'nemo_multitalk_disable_cuda_graphs': True,
         }
 
-    def _default_config_loader(self) -> Dict[str, Any]:
+    def _default_config_loader(self) -> dict[str, Any]:
         """Default configuration loader using loaded_config_data."""
         default_config = self._get_default_config()
 
@@ -536,7 +535,7 @@ class DiarizationService:
 
         return config
 
-    def _validate_config(self, config: Dict) -> None:
+    def _validate_config(self, config: dict) -> None:
         """Validate configuration parameters.
 
         Args:
@@ -771,10 +770,10 @@ class DiarizationService:
     def diarize(
             self,
             audio_path: str,
-            transcription_segments: Optional[List[Dict]] = None,
+            transcription_segments: Optional[list[dict]] = None,
             num_speakers: Optional[int] = None,
-            progress_callback: Optional[Callable[[float, str, Optional[Dict]], None]] = None
-    ) -> Dict[str, Any]:
+            progress_callback: Optional[Callable[[float, str, Optional[dict]], None]] = None
+    ) -> dict[str, Any]:
         """
             Perform speaker diarization for an audio file and return time-aligned segments with speaker assignments.
 
@@ -985,7 +984,7 @@ class DiarizationService:
                     f"Failed to load audio file '{audio_path}': {str(e)}"
                 ) from e
 
-    def _detect_speech(self, waveform, sample_rate: int, streaming: bool = False) -> List[Dict]:
+    def _detect_speech(self, waveform, sample_rate: int, streaming: bool = False) -> list[dict]:
         """
         Detect speech regions in an audio waveform using the configured VAD, optionally in streaming mode, and fall back to a single full-span region when VAD is unavailable.
 
@@ -1003,7 +1002,7 @@ class DiarizationService:
         allow_fallback: bool = bool(self.config.get('allow_vad_fallback', True))
         backend: str = str(self.config.get('vad_backend', 'silero_hub')).strip().lower()
 
-        def _fallback_full_span() -> List[Dict]:
+        def _fallback_full_span() -> list[dict]:
             """
             Produce a single full-span speech region covering the entire waveform or raise an error if fallback is disabled.
 
@@ -1083,7 +1082,7 @@ class DiarizationService:
                 min_silence_frames = max(1, int((min_silence_secs * sample_rate) / window_size_samples))
                 pad_samples = int((speech_pad_ms / 1000.0) * sample_rate)
 
-                speech_timestamps: List[Dict[str, float]] = []
+                speech_timestamps: list[dict[str, float]] = []
                 in_speech = False
                 start_frame = 0
                 silence_run = 0
@@ -1220,9 +1219,9 @@ class DiarizationService:
     def _create_segments(
             self,
             waveform: "torch.Tensor",
-            speech_timestamps: List[Dict],
+            speech_timestamps: list[dict],
             sample_rate: int
-    ) -> List[SegmentDict]:
+    ) -> list[SegmentDict]:
         """
             Create fixed-length, overlapping speech segments from detected speech regions.
 
@@ -1364,8 +1363,8 @@ class DiarizationService:
 
     def _extract_embeddings(
             self,
-            segments: List[SegmentDict],
-            progress_callback: Optional[Callable[[float, str, Optional[Dict]], None]] = None
+            segments: list[SegmentDict],
+            progress_callback: Optional[Callable[[float, str, Optional[dict]], None]] = None
     ) -> "np.ndarray":
         """
             Compute speaker embeddings for each provided segment in batches.
@@ -1649,7 +1648,7 @@ class DiarizationService:
             # On error, assume multiple speakers for safety
             return False
 
-    def _merge_segments(self, segments: List[Dict]) -> List[Dict]:
+    def _merge_segments(self, segments: list[dict]) -> list[dict]:
         """Merge consecutive segments from the same speaker."""
         if not segments:
             return []
@@ -1680,9 +1679,9 @@ class DiarizationService:
 
     def _align_with_transcription(
             self,
-            diarization_segments: List[Dict],
-            transcription_segments: List[Dict]
-    ) -> List[Dict]:
+            diarization_segments: list[dict],
+            transcription_segments: list[dict]
+    ) -> list[dict]:
         """Align diarization results with transcription segments."""
         aligned = []
 
@@ -1716,7 +1715,7 @@ class DiarizationService:
 
         return aligned
 
-    def _calculate_speaker_stats(self, segments: List[Dict]) -> List[Dict]:
+    def _calculate_speaker_stats(self, segments: list[dict]) -> list[dict]:
         """Calculate statistics for each speaker."""
         speaker_times = {}
 
@@ -1756,10 +1755,10 @@ class DiarizationService:
 
     def _detect_overlapping_speech(
             self,
-            segments: List[Dict],
+            segments: list[dict],
             embeddings: "np.ndarray",
             primary_labels: "np.ndarray"
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
             Annotate segments that likely contain overlapping speech based on embedding similarities.
 
@@ -1864,7 +1863,7 @@ class DiarizationService:
         """
         return self.is_available
 
-    def get_requirements(self) -> Dict[str, bool]:
+    def get_requirements(self) -> dict[str, bool]:
         """Get the status of required dependencies."""
         return {
             'torch': _torch_available(),
@@ -1883,7 +1882,7 @@ def audio_diarization(
     num_speakers: Optional[int] = None,
     min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Backward compatibility wrapper for audio diarization.
 
@@ -1938,9 +1937,9 @@ def audio_diarization(
 
 
 def combine_transcription_and_diarization(
-    transcription_segments: List[Dict[str, Any]],
-    diarization_segments: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
+    transcription_segments: list[dict[str, Any]],
+    diarization_segments: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """
     Backward compatibility wrapper for combining transcription and diarization.
 

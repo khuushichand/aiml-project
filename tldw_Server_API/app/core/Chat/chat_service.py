@@ -9,73 +9,80 @@ keeping the wire behavior identical.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple, List, Callable, AsyncIterator, Iterator, Awaitable
-from fastapi import HTTPException, status
-from loguru import logger
-import base64
-import uuid as _uuid
 import asyncio
-import time
+import base64
+import inspect
 import json as _json
 import os
-import inspect
 import re
-from pathlib import Path
+import time
+import uuid as _uuid
+from collections.abc import AsyncIterator, Awaitable, Iterator
 from functools import lru_cache
+from pathlib import Path
+from typing import Any, Callable
 
-# Reuse existing helpers from chat_helpers and prompt templating
-from tldw_Server_API.app.core.Chat.chat_helpers import (
-    get_or_create_character_context,
-    get_or_create_conversation,
-)
+from fastapi import HTTPException, status
+from fastapi.encoders import jsonable_encoder
+from loguru import logger
+from starlette.responses import StreamingResponse
+
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import replace_placeholders
 from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
     map_sender_to_role,
     sanitize_sender_name,
 )
-from tldw_Server_API.app.core.Chat.message_utils import should_persist_message_role
-from tldw_Server_API.app.core.Chat.prompt_template_manager import (
-    DEFAULT_RAW_PASSTHROUGH_TEMPLATE,
-    load_template,
-    apply_template_to_string,
-)
-from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
-from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
-from tldw_Server_API.app.core.Chat.streaming_utils import (
-    CHAT_STREAM_INCLUDE_METADATA,
-    HEARTBEAT_INTERVAL as CHAT_HEARTBEAT_INTERVAL,
-    STREAMING_IDLE_TIMEOUT as CHAT_IDLE_TIMEOUT,
-    create_streaming_response_with_timeout,
-)
-from tldw_Server_API.app.core.Chat.request_queue import (
-    get_request_queue,
-    RequestPriority,
-)
-from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
-from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAPIError,
     ChatBadRequestError,
     ChatConfigurationError,
     ChatProviderError,
 )
-from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
 from tldw_Server_API.app.core.Chat.chat_exceptions import get_request_id
-from fastapi.encoders import jsonable_encoder
-from tldw_Server_API.app.core.Utils.cpu_bound_handler import process_large_json_async
-from starlette.responses import StreamingResponse
-from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
+
+# Reuse existing helpers from chat_helpers and prompt templating
+from tldw_Server_API.app.core.Chat.chat_helpers import (
+    get_or_create_character_context,
+    get_or_create_conversation,
+)
+from tldw_Server_API.app.core.Chat.message_utils import should_persist_message_role
+from tldw_Server_API.app.core.Chat.prompt_template_manager import (
+    DEFAULT_RAW_PASSTHROUGH_TEMPLATE,
+    apply_template_to_string,
+    load_template,
+)
+from tldw_Server_API.app.core.Chat.request_queue import (
+    RequestPriority,
+    get_request_queue,
+)
+from tldw_Server_API.app.core.Chat.streaming_utils import (
+    CHAT_STREAM_INCLUDE_METADATA,
+    create_streaming_response_with_timeout,
+)
+from tldw_Server_API.app.core.Chat.streaming_utils import (
+    HEARTBEAT_INTERVAL as CHAT_HEARTBEAT_INTERVAL,
+)
+from tldw_Server_API.app.core.Chat.streaming_utils import (
+    STREAMING_IDLE_TIMEOUT as CHAT_IDLE_TIMEOUT,
+)
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
+from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
+from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
+from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
+from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
+from tldw_Server_API.app.core.Utils.cpu_bound_handler import process_large_json_async
 
 _config = load_comprehensive_config()
-_chat_config: Dict[str, str] = {}
+_chat_config: dict[str, str] = {}
 if _config and _config.has_section("Chat-Module"):
     _chat_config = dict(_config.items("Chat-Module"))
 
 
-def _coerce_int(value: Optional[str], default: int) -> int:
+def _coerce_int(value: str | None, default: int) -> int:
     try:
         if value is None:
             return default
@@ -84,7 +91,7 @@ def _coerce_int(value: Optional[str], default: int) -> int:
         return default
 
 
-def _coerce_bool(value: Optional[str], default: bool) -> bool:
+def _coerce_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
@@ -139,7 +146,7 @@ def should_force_normalize_string_responses() -> bool:
 
 # --- Cached helpers (module scope) -------------------------------------------
 @lru_cache(maxsize=16)
-def _load_models_with_case_cached(provider: str) -> List[str]:
+def _load_models_with_case_cached(provider: str) -> list[str]:
     """Load provider models preserving original key casing when possible.
 
     Attempts to read the raw model_pricing.json to preserve the original
@@ -165,7 +172,7 @@ def _load_models_with_case_cached(provider: str) -> List[str]:
 
 
 @lru_cache(maxsize=1)
-def _load_alias_overrides_cached() -> Dict[str, Dict[str, str]]:
+def _load_alias_overrides_cached() -> dict[str, dict[str, str]]:
     """Load model alias overrides from env and pricing catalog.
 
     Resolution order:
@@ -277,7 +284,7 @@ def _attach_queue_future_logger(future: "asyncio.Future[Any]", request_id: str) 
 def parse_provider_model_for_metrics(
     request_data: Any,
     default_provider: str,
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     """Parse provider and model for metrics logging without mutating request_data.
 
     Accepts model strings like "anthropic/claude-opus-4.1" and an optional
@@ -324,8 +331,8 @@ def normalize_request_provider_and_model(
         # Determine provider context for alias resolution.
         # If model includes an inline provider (e.g., "anthropic/claude-sonnet"),
         # prefer that; else honor api_provider, then default_provider.
-        inline_provider: Optional[str] = None
-        inline_model_part: Optional[str] = None
+        inline_provider: str | None = None
+        inline_model_part: str | None = None
         if "/" in model_str:
             parts_for_alias = model_str.split("/", 1)
             if len(parts_for_alias) == 2:
@@ -333,7 +340,7 @@ def normalize_request_provider_and_model(
         provider_for_mapping = ((inline_provider or api_provider or default_provider) or "").strip().lower()
 
 
-        def _resolve_alias(provider: str, raw_model: str) -> Optional[str]:
+        def _resolve_alias(provider: str, raw_model: str) -> str | None:
             m = (raw_model or "").strip()
             if not m:
                 return None
@@ -421,7 +428,7 @@ def resolve_provider_and_model(
     request_data: Any,
     metrics_default_provider: str,
     normalize_default_provider: str,
-) -> Tuple[str, str, str, str, Dict[str, Any]]:
+) -> tuple[str, str, str, str, dict[str, Any]]:
     """Resolve provider/model for metrics and execution and record the decision path.
 
     Returns a 5-tuple:
@@ -464,7 +471,7 @@ def resolve_provider_and_model(
             exc,
         )
 
-    debug_info: Dict[str, Any] = {
+    debug_info: dict[str, Any] = {
         "raw": {
             "api_provider": raw_api_provider,
             "model": raw_model,
@@ -492,7 +499,7 @@ def resolve_provider_api_key(
     provider: str,
     *,
     prefer_module_keys_in_tests: bool = True,
-) -> Tuple[Optional[str], Dict[str, Any]]:
+) -> tuple[str | None, dict[str, Any]]:
     """
     Resolve the API key for a provider using env/config first, with optional test overrides.
 
@@ -503,7 +510,7 @@ def resolve_provider_api_key(
     Returns (normalized_key, debug_info).
     """
     provider_key = (provider or "").strip().lower()
-    debug_info: Dict[str, Any] = {
+    debug_info: dict[str, Any] = {
         "provider": provider_key or provider,
         "selected_source": "missing",
         "module_sources": [],
@@ -531,7 +538,7 @@ def resolve_provider_api_key(
         logger.warning(f"resolve_provider_api_key failed to load dynamic keys: {_err}")
         dynamic_keys = {}
 
-    module_keys: Dict[str, Optional[str]] = {}
+    module_keys: dict[str, str | None] = {}
     if use_module_overrides:
         try:
             schema_keys = getattr(_schemas_mod, "API_KEYS", None)
@@ -564,7 +571,7 @@ def resolve_provider_api_key(
     dynamic_value = dynamic_keys.get(provider_key)
     debug_info["dynamic_value_present"] = dynamic_value is not None
 
-    def _normalize(value: Optional[str]) -> Optional[str]:
+    def _normalize(value: str | None) -> str | None:
         if value is None:
             return None
         if isinstance(value, str) and value.strip() == "":
@@ -596,7 +603,7 @@ def resolve_provider_api_key(
     return normalized_value, debug_info
 
 
-def _resolve_base_url_override(provider: str, chat_args: Dict[str, Any]) -> Optional[str]:
+def _resolve_base_url_override(provider: str, chat_args: dict[str, Any]) -> str | None:
     base_url = chat_args.get("base_url")
     if base_url is None:
         base_url = chat_args.get("api_base_url")
@@ -632,7 +639,7 @@ def _resolve_base_url_override(provider: str, chat_args: Dict[str, Any]) -> Opti
         raise ChatBadRequestError(provider=provider_key or None, message=str(exc)) from exc
 
 
-def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
+def _build_adapter_request_from_chat_args(chat_args: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
     """Translate chat_api_call-style args into an adapter request payload."""
     from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
         ensure_app_config,
@@ -675,7 +682,7 @@ def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[st
     api_key = chat_args.get("api_key") or resolve_provider_api_key_from_config(provider, app_config)
     messages_payload = chat_args.get("messages_payload") or chat_args.get("messages") or []
 
-    request: Dict[str, Any] = {
+    request: dict[str, Any] = {
         "messages": messages_payload,
         "system_message": chat_args.get("system_message"),
         "model": model,
@@ -722,7 +729,7 @@ def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[st
         if key not in request:
             request[key] = value
 
-    internal: Dict[str, Any] = {}
+    internal: dict[str, Any] = {}
     for key in ("http_client_factory", "http_fetcher"):
         if chat_args.get(key) is not None:
             internal[key] = chat_args[key]
@@ -730,7 +737,7 @@ def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[st
     return provider, request, internal
 
 
-def _attach_internal_http_hooks(adapter: Any, request: Dict[str, Any], internal: Dict[str, Any]) -> None:
+def _attach_internal_http_hooks(adapter: Any, request: dict[str, Any], internal: dict[str, Any]) -> None:
     """Attach http_client_factory/http_fetcher only for adapters that opt in."""
     if not internal:
         return
@@ -781,17 +788,17 @@ async def perform_chat_api_call_async(**kwargs: Any) -> Any:
 
 def merge_api_keys_for_provider(
     provider: str,
-    module_keys: Optional[Dict[str, Optional[str]]],
-    dynamic_keys: Dict[str, Optional[str]],
-    requires_key_map: Dict[str, bool],
-) -> Tuple[Optional[str], Optional[str]]:
+    module_keys: dict[str, str | None] | None,
+    dynamic_keys: dict[str, str | None],
+    requires_key_map: dict[str, bool],
+) -> tuple[str | None, str | None]:
     """Merge module-level and dynamic API keys, normalizing empties to None.
 
     Returns a tuple of (raw_value, normalized_value). The raw value is the
     original string (possibly empty) used to validate presence when a provider
     requires a key. The normalized value is None if empty-string-like.
     """
-    def _normalize(value: Optional[str]) -> Optional[str]:
+    def _normalize(value: str | None) -> str | None:
         if value is None:
             return None
         if isinstance(value, str) and value.strip() == "":
@@ -817,11 +824,11 @@ def merge_api_keys_for_provider(
 def build_call_params_from_request(
     request_data: Any,
     target_api_provider: str,
-    provider_api_key: Optional[str],
-    templated_llm_payload: List[Dict[str, Any]],
-    final_system_message: Optional[str],
-    app_config: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    provider_api_key: str | None,
+    templated_llm_payload: list[dict[str, Any]],
+    final_system_message: str | None,
+    app_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Construct the cleaned argument dictionary for chat_api_call.
 
     Mirrors the transformation previously in the endpoint: renames OpenAI-style
@@ -896,16 +903,16 @@ def _sanitize_data_uris(text: str) -> str:
         return text
 
 
-def _sanitize_messages_for_token_estimate(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _sanitize_messages_for_token_estimate(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return a copy of messages with base64 image payloads replaced."""
-    sanitized: List[Dict[str, Any]] = []
+    sanitized: list[dict[str, Any]] = []
     for msg in messages or []:
         if not isinstance(msg, dict):
             continue
         msg_copy = msg.copy()
         content = msg_copy.get("content")
         if isinstance(content, list):
-            new_parts: List[Any] = []
+            new_parts: list[Any] = []
             for part in content:
                 if not isinstance(part, dict):
                     new_parts.append(part)
@@ -927,7 +934,7 @@ def _sanitize_messages_for_token_estimate(messages: List[Dict[str, Any]]) -> Lis
     return sanitized
 
 
-def _estimate_tokens_from_messages(messages: List[Dict[str, Any]]) -> int:
+def _estimate_tokens_from_messages(messages: list[dict[str, Any]]) -> int:
     """Estimate tokens from message payloads with base64 redaction."""
     try:
         sanitized = _sanitize_messages_for_token_estimate(messages)
@@ -943,7 +950,7 @@ def _extract_text_from_content(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts: List[str] = []
+        parts: list[str] = []
         for part in content:
             if isinstance(part, str):
                 if part:
@@ -978,7 +985,7 @@ def _apply_redaction_to_content(content: Any, moderation: Any, policy: Any) -> A
     if isinstance(content, str):
         return moderation.redact_text(content, policy)
     if isinstance(content, list):
-        redacted_parts: List[Any] = []
+        redacted_parts: list[Any] = []
         for part in content:
             if isinstance(part, str):
                 redacted_parts.append(moderation.redact_text(part, policy))
@@ -1009,7 +1016,7 @@ def _apply_redaction_to_content(content: Any, moderation: Any, policy: Any) -> A
     return moderation.redact_text(str(content), policy)
 
 
-def _wrap_raw_string_response(content: str, model: Optional[str]) -> Dict[str, Any]:
+def _wrap_raw_string_response(content: str, model: str | None) -> dict[str, Any]:
     """Wrap raw string responses in an OpenAI-compatible payload."""
     model_name = model or "unknown"
     return {
@@ -1031,12 +1038,12 @@ async def moderate_input_messages(
     request_data: Any,
     request: Any,
     moderation_service: Any,
-    topic_monitoring_service: Optional[Any],
+    topic_monitoring_service: Any | None,
     metrics: Any,
-    audit_service: Optional[Any],
-    audit_context: Optional[Any],
+    audit_service: Any | None,
+    audit_context: Any | None,
     client_id: str,
-    audit_event_type: Optional[Any] = None,
+    audit_event_type: Any | None = None,
 ) -> None:
     """Apply input moderation and redaction to user message text parts in-place.
 
@@ -1194,9 +1201,9 @@ async def build_context_and_messages(
     loop: Any,
     metrics: Any,
     default_save_to_db: bool,
-    final_conversation_id: Optional[str],
+    final_conversation_id: str | None,
     save_message_fn: Any,
-) -> Tuple[Dict[str, Any], Optional[int], str, bool, List[Dict[str, Any]], bool]:
+) -> tuple[dict[str, Any], int | None, str, bool, list[dict[str, Any]], bool]:
     """Resolve character/conversation context, load history, save current messages, and return LLM-ready payload.
 
     Returns (character_card, character_db_id, final_conversation_id, conversation_created, llm_payload_messages, should_persist)
@@ -1280,7 +1287,7 @@ async def build_context_and_messages(
         history_order = DEFAULT_HISTORY_MESSAGE_ORDER
     db_order = "ASC" if history_order == "asc" else "DESC"
 
-    historical_msgs: List[Dict[str, Any]] = []
+    historical_msgs: list[dict[str, Any]] = []
     if conv_id and (not conversation_created) and history_limit > 0:
         raw_hist = await loop.run_in_executor(
             None,
@@ -1379,7 +1386,7 @@ async def build_context_and_messages(
         logger.info(f"Loaded {len(historical_msgs)} historical messages for conv_id '{conv_id}'.")
 
     # Process current turn messages (persist if needed)
-    request_messages: List[Dict[str, Any]] = []
+    request_messages: list[dict[str, Any]] = []
     for msg_model in request_data.messages:
         if not should_persist_message_role(msg_model.role):
             continue
@@ -1407,7 +1414,7 @@ async def build_context_and_messages(
                 return value
             return value
 
-        def _msg_sig(msg: Dict[str, Any]) -> str:
+        def _msg_sig(msg: dict[str, Any]) -> str:
             payload = {
                 "role": msg.get("role"),
                 "content": _normalize_content(msg.get("content")),
@@ -1474,7 +1481,7 @@ async def build_context_and_messages(
                             conv_id,
                         )
 
-    current_turn: List[Dict[str, Any]] = []
+    current_turn: list[dict[str, Any]] = []
     for msg_dict in request_messages[overlap_cut:]:
         role = msg_dict.get("role")
         msg_for_db = msg_dict.copy()
@@ -1498,9 +1505,9 @@ async def build_context_and_messages(
     return character_card, character_db_id, conv_id, conversation_created, llm_payload_messages, should_persist
 
 
-def _extract_system_messages(messages: List[Dict[str, Any]]) -> List[str]:
+def _extract_system_messages(messages: list[dict[str, Any]]) -> list[str]:
     """Extract system message text content from OpenAI-style message payloads."""
-    system_messages: List[str] = []
+    system_messages: list[str] = []
     for msg in messages or []:
         if not isinstance(msg, dict):
             continue
@@ -1513,7 +1520,7 @@ def _extract_system_messages(messages: List[Dict[str, Any]]) -> List[str]:
                 system_messages.append(text_val)
             continue
         if isinstance(content, list):
-            text_parts: List[str] = []
+            text_parts: list[str] = []
             for part in content:
                 if not isinstance(part, dict):
                     continue
@@ -1527,9 +1534,9 @@ def _extract_system_messages(messages: List[Dict[str, Any]]) -> List[str]:
     return system_messages
 
 
-def _extract_system_messages_from_request(messages: List[Any]) -> List[str]:
+def _extract_system_messages_from_request(messages: list[Any]) -> list[str]:
     """Extract system messages from request model objects."""
-    system_messages: List[str] = []
+    system_messages: list[str] = []
     for msg in messages or []:
         try:
             if getattr(msg, "role", None) != "system":
@@ -1541,7 +1548,7 @@ def _extract_system_messages_from_request(messages: List[Any]) -> List[str]:
                     system_messages.append(text_val)
                 continue
             if isinstance(content, list):
-                text_parts: List[str] = []
+                text_parts: list[str] = []
                 for part in content:
                     try_type = getattr(part, "type", None)
                     if try_type is None and isinstance(part, dict):
@@ -1560,15 +1567,15 @@ def _extract_system_messages_from_request(messages: List[Any]) -> List[str]:
 
 def apply_prompt_templating(
     request_data: Any,
-    character_card: Dict[str, Any],
-    llm_payload_messages: List[Dict[str, Any]],
-) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    character_card: dict[str, Any],
+    llm_payload_messages: list[dict[str, Any]],
+) -> tuple[str | None, list[dict[str, Any]]]:
     """Compute final system message and apply content templating to payload messages.
 
     Returns (final_system_message, templated_llm_payload)
     """
     active_template = load_template(getattr(request_data, "prompt_template_name", None) or DEFAULT_RAW_PASSTHROUGH_TEMPLATE.name)
-    template_data: Dict[str, Any] = {}
+    template_data: dict[str, Any] = {}
     if character_card:
         template_data.update({k: v for k, v in character_card.items() if isinstance(v, (str, int, float))})
         template_data["char_name"] = character_card.get("name", "Character")
@@ -1586,7 +1593,7 @@ def apply_prompt_templating(
         or (payload_system_message or "")
     )
 
-    final_system_message: Optional[str] = None
+    final_system_message: str | None = None
     logger.debug(
         f"sys_msg_from_req: {sys_msg_from_req}, active_template: {active_template}, character: {character_card.get('name') if character_card else None}"
     )
@@ -1614,7 +1621,7 @@ def apply_prompt_templating(
     if final_system_message:
         llm_payload_messages = [m for m in llm_payload_messages if m.get("role") != "system"]
 
-    templated_llm_payload: List[Dict[str, Any]] = []
+    templated_llm_payload: list[dict[str, Any]] = []
     if active_template:
         for msg in llm_payload_messages:
             templated_msg_content = msg.get("content")
@@ -1649,7 +1656,7 @@ def apply_prompt_templating(
 
 
 async def _maybe_refund_streaming_rg(
-    rg_refund_cb: Optional[Callable[..., Any]],
+    rg_refund_cb: Callable[..., Any] | None,
     *,
     cancelled: bool = False,
     error: bool = True,
@@ -1668,7 +1675,7 @@ async def _maybe_refund_streaming_rg(
 async def execute_streaming_call(
     *,
     current_loop: Any,
-    cleaned_args: Dict[str, Any],
+    cleaned_args: dict[str, Any],
     selected_provider: str,
     provider: str,
     model: str,
@@ -1676,24 +1683,24 @@ async def execute_streaming_call(
     request: Any,
     metrics: Any,
     provider_manager: Any,
-    templated_llm_payload: List[Dict[str, Any]],
+    templated_llm_payload: list[dict[str, Any]],
     should_persist: bool,
     final_conversation_id: str,
-    character_card_for_context: Optional[Dict[str, Any]],
+    character_card_for_context: dict[str, Any] | None,
     chat_db: Any,
     save_message_fn: Callable[..., Any],
-    system_message_id: Optional[str] = None,
-    audit_service: Optional[Any],
-    audit_context: Optional[Any],
+    system_message_id: str | None = None,
+    audit_service: Any | None,
+    audit_context: Any | None,
     client_id: str,
     queue_execution_enabled: bool,
     enable_provider_fallback: bool,
     llm_call_func: Callable[[], Any],
     refresh_provider_params: Callable[[str], Any],
-    moderation_getter: Optional[Callable[[], Any]] = None,
-    rg_commit_cb: Optional[Callable[[int], Any]] = None,
-    rg_refund_cb: Optional[Callable[..., Any]] = None,
-    on_success: Optional[Callable[[str], Awaitable[None]]] = None,
+    moderation_getter: Callable[[], Any] | None = None,
+    rg_commit_cb: Callable[[int], Any] | None = None,
+    rg_refund_cb: Callable[..., Any] | None = None,
+    on_success: Callable[[str], Awaitable[None]] | None = None,
 ) -> StreamingResponse:
     """Execute a streaming LLM call with queue, failover, moderation, and persistence.
 
@@ -1706,9 +1713,9 @@ async def execute_streaming_call(
     llm_start_time = time.time()
     stream_metrics_recorded = False
     stream_failure_recorded = False
-    raw_stream_iter: Optional[AsyncIterator[str] | Iterator[str]] = None
+    raw_stream_iter: AsyncIterator[str] | Iterator[str] | None = None
     queue_for_exec = None
-    queue_future: Optional[asyncio.Future[Any]] = None
+    queue_future: asyncio.Future[Any] | None = None
     queue_enabled = False
     try:
         try:
@@ -1736,7 +1743,7 @@ async def execute_streaming_call(
             stream_channel: asyncio.Queue = asyncio.Queue(maxsize=stream_channel_maxsize)
             est_tokens_for_queue = estimate_tokens_from_json(request_json)
 
-            def _refresh_params_sync(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
+            def _refresh_params_sync(target_provider: str) -> tuple[dict[str, Any], str | None]:
                 """Resolve provider params inside a sync queue processor."""
                 refreshed = refresh_provider_params(target_provider)
                 if inspect.isawaitable(refreshed):
@@ -2059,11 +2066,11 @@ async def execute_streaming_call(
 
     async def save_callback(
         full_reply: str,
-        tool_calls: Optional[List[Dict[str, Any]]],
-        function_call: Optional[Dict[str, Any]],
+        tool_calls: list[dict[str, Any]] | None,
+        function_call: dict[str, Any] | None,
     ):
         nonlocal stream_metrics_recorded
-        saved_message_id: Optional[str] = None
+        saved_message_id: str | None = None
         full_reply_to_save = full_reply
         post_stream_blocked = False
         try:
@@ -2197,7 +2204,7 @@ async def execute_streaming_call(
             asst_name = sanitize_sender_name(
                 character_card_for_context.get("name") if character_card_for_context else None
             )
-            message_payload: Dict[str, Any] = {
+            message_payload: dict[str, Any] = {
                 "role": "assistant",
                 "name": asst_name,
             }
@@ -2628,7 +2635,7 @@ async def execute_streaming_call(
 async def execute_non_stream_call(
     *,
     current_loop: Any,
-    cleaned_args: Dict[str, Any],
+    cleaned_args: dict[str, Any],
     selected_provider: str,
     provider: str,
     model: str,
@@ -2636,23 +2643,23 @@ async def execute_non_stream_call(
     request: Any,
     metrics: Any,
     provider_manager: Any,
-    templated_llm_payload: List[Dict[str, Any]],
+    templated_llm_payload: list[dict[str, Any]],
     should_persist: bool,
     final_conversation_id: str,
-    character_card_for_context: Optional[Dict[str, Any]],
+    character_card_for_context: dict[str, Any] | None,
     chat_db: Any,
     save_message_fn: Callable[..., Any],
-    system_message_id: Optional[str] = None,
-    audit_service: Optional[Any],
-    audit_context: Optional[Any],
+    system_message_id: str | None = None,
+    audit_service: Any | None,
+    audit_context: Any | None,
     client_id: str,
     queue_execution_enabled: bool,
     enable_provider_fallback: bool,
     llm_call_func: Callable[[], Any],
     refresh_provider_params: Callable[[str], Any],
-    moderation_getter: Optional[Callable[[], Any]] = None,
-    on_success: Optional[Callable[[str], Awaitable[None]]] = None,
-) -> Dict[str, Any]:
+    moderation_getter: Callable[[], Any] | None = None,
+    on_success: Callable[[str], Awaitable[None]] | None = None,
+) -> dict[str, Any]:
     """Execute a non-streaming LLM call with queue, failover, moderation, and persistence.
 
     Returns the encoded payload (dict) ready to be wrapped by JSONResponse.
@@ -2835,9 +2842,9 @@ async def execute_non_stream_call(
     if isinstance(llm_response, str) and should_force_normalize_string_responses():
         llm_response = _wrap_raw_string_response(llm_response, model)
 
-    content_to_save: Optional[str] = None
-    tool_calls_to_save: Optional[Any] = None
-    function_call_to_save: Optional[Any] = None
+    content_to_save: str | None = None
+    tool_calls_to_save: Any | None = None
+    function_call_to_save: Any | None = None
     if llm_response and isinstance(llm_response, dict):
         choices = llm_response.get("choices")
         if choices and isinstance(choices, list) and len(choices) > 0:
@@ -3054,7 +3061,7 @@ async def execute_non_stream_call(
     except Exception as e:
         logger.warning(f"Moderation output processing error: {e}")
 
-    assistant_message_id: Optional[str] = None
+    assistant_message_id: str | None = None
     should_save_response = (
         should_persist
         and final_conversation_id
@@ -3064,7 +3071,7 @@ async def execute_non_stream_call(
         asst_name = sanitize_sender_name(
             character_card_for_context.get("name") if character_card_for_context else None
         )
-        message_payload: Dict[str, Any] = {"role": "assistant", "name": asst_name}
+        message_payload: dict[str, Any] = {"role": "assistant", "name": asst_name}
         if content_to_save is not None:
             message_payload["content"] = content_to_save
         if tool_calls_to_save is not None:

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import threading
-from typing import Optional, Dict, Any, List
+from typing import Any
 
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
-
 
 _PG_CORE_TABLES_ENSURED: set[int] = set()
 _PG_CORE_TABLES_ENSURED_LOCK = threading.Lock()
@@ -46,10 +45,10 @@ async def _get_orgs_teams_repo() -> AuthnzOrgsTeamsRepo:
 async def create_organization(
     *,
     name: str,
-    owner_user_id: Optional[int] = None,
-    slug: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    owner_user_id: int | None = None,
+    slug: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Create a new organization.
 
@@ -74,11 +73,11 @@ async def create_organization(
 async def list_organizations(
     limit: int = 100,
     offset: int = 0,
-    q: Optional[str] = None,
+    q: str | None = None,
     *,
-    org_ids: Optional[List[int]] = None,
+    org_ids: list[int] | None = None,
     with_total: bool = False,
-) -> List[Dict[str, Any]] | tuple[List[Dict[str, Any]], int]:
+) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], int]:
     """List organizations with optional server-side filtering and total count.
 
     When with_total=True, returns a tuple of (rows, total). Otherwise returns rows only.
@@ -98,10 +97,10 @@ async def create_team(
     *,
     org_id: int,
     name: str,
-    slug: Optional[str] = None,
-    description: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    slug: str | None = None,
+    description: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Create a team within an organization.
 
@@ -125,7 +124,7 @@ async def create_team(
     )
 
 
-async def add_team_member(*, team_id: int, user_id: int, role: str = "member") -> Dict[str, Any]:
+async def add_team_member(*, team_id: int, user_id: int, role: str = "member") -> dict[str, Any]:
     """
     Add a user to a team (idempotent).
 
@@ -135,7 +134,7 @@ async def add_team_member(*, team_id: int, user_id: int, role: str = "member") -
     return await repo.add_team_member(team_id=team_id, user_id=user_id, role=role)
 
 
-async def list_team_members(team_id: int) -> List[Dict[str, Any]]:
+async def list_team_members(team_id: int) -> list[dict[str, Any]]:
     """
     List members of a team ordered by join time.
 
@@ -145,7 +144,7 @@ async def list_team_members(team_id: int) -> List[Dict[str, Any]]:
     return await repo.list_team_members(team_id)
 
 
-async def get_team(team_id: int) -> Optional[Dict[str, Any]]:
+async def get_team(team_id: int) -> dict[str, Any] | None:
     """
     Fetch a team by ID.
 
@@ -160,7 +159,7 @@ async def get_team(team_id: int) -> Optional[Dict[str, Any]]:
     return await repo.get_team(team_id)
 
 
-async def list_memberships_for_user(user_id: int) -> List[Dict[str, Any]]:
+async def list_memberships_for_user(user_id: int) -> list[dict[str, Any]]:
     """List team memberships (and org_id) for a given user.
 
     Returns: list of {team_id, org_id, role}
@@ -173,7 +172,7 @@ async def list_memberships_for_user(user_id: int) -> List[Dict[str, Any]]:
 # Organization membership APIs
 # ============================
 
-async def add_org_member(*, org_id: int, user_id: int, role: str = "member") -> Dict[str, Any]:
+async def add_org_member(*, org_id: int, user_id: int, role: str = "member") -> dict[str, Any]:
     """
     Add a user to an organization (idempotent).
 
@@ -190,8 +189,8 @@ async def add_org_member(*, org_id: int, user_id: int, role: str = "member") -> 
 
 
 async def list_org_members(
-    *, org_id: int, limit: int = 100, offset: int = 0, role: Optional[str] = None, status: Optional[str] = None
-) -> List[Dict[str, Any]]:
+    *, org_id: int, limit: int = 100, offset: int = 0, role: str | None = None, status: str | None = None
+) -> list[dict[str, Any]]:
     """
     List members of an organization with pagination and optional filters.
 
@@ -215,7 +214,7 @@ async def list_org_members(
     )
 
 
-async def remove_org_member(*, org_id: int, user_id: int) -> Dict[str, Any]:
+async def remove_org_member(*, org_id: int, user_id: int) -> dict[str, Any]:
     """
     Remove a user from an organization.
 
@@ -232,7 +231,7 @@ async def remove_org_member(*, org_id: int, user_id: int) -> Dict[str, Any]:
     return await repo.remove_org_member(org_id=org_id, user_id=user_id)
 
 
-async def update_org_member_role(*, org_id: int, user_id: int, role: str) -> Optional[Dict[str, Any]]:
+async def update_org_member_role(*, org_id: int, user_id: int, role: str) -> dict[str, Any] | None:
     """
     Update an organization member's role.
 
@@ -251,7 +250,7 @@ async def update_org_member_role(*, org_id: int, user_id: int, role: str) -> Opt
     return await repo.update_org_member_role(org_id=org_id, user_id=user_id, role=role)
 
 
-async def update_team_member_role(*, team_id: int, user_id: int, role: str) -> Optional[Dict[str, Any]]:
+async def update_team_member_role(*, team_id: int, user_id: int, role: str) -> dict[str, Any] | None:
     """
     Update a team member's role.
 
@@ -267,7 +266,7 @@ async def update_team_member_role(*, team_id: int, user_id: int, role: str) -> O
     return await repo.update_team_member_role(team_id=team_id, user_id=user_id, role=role)
 
 
-async def list_org_memberships_for_user(user_id: int) -> List[Dict[str, Any]]:
+async def list_org_memberships_for_user(user_id: int) -> list[dict[str, Any]]:
     """
     List organization memberships for a given user.
 
@@ -281,7 +280,7 @@ async def list_org_memberships_for_user(user_id: int) -> List[Dict[str, Any]]:
     return await repo.list_org_memberships_for_user(user_id)
 
 
-async def remove_team_member(*, team_id: int, user_id: int) -> Dict[str, Any]:
+async def remove_team_member(*, team_id: int, user_id: int) -> dict[str, Any]:
     """
     Remove a user from a team.
 

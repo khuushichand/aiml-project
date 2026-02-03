@@ -67,6 +67,16 @@ class OptionsErrorBoundary extends React.Component<
   componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
     this.setState({ errorInfo })
     console.error("[OptionsErrorBoundary] Caught error:", error, errorInfo)
+    if (typeof window !== "undefined" && (window as any).__tldw_e2e_debug) {
+      console.error(
+        "[OptionsErrorBoundary] componentStack:",
+        errorInfo?.componentStack || "(no stack)"
+      )
+      ;(window as any).__tldw_last_error_boundary = {
+        message: error?.message || String(error),
+        componentStack: errorInfo?.componentStack || ""
+      }
+    }
   }
 
   handleReset = (): void => {
@@ -129,6 +139,16 @@ class SidepanelErrorBoundary extends React.Component<
   componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
     this.setState({ errorInfo })
     console.error("[SidepanelErrorBoundary] Caught error:", error, errorInfo)
+    if (typeof window !== "undefined" && (window as any).__tldw_e2e_debug) {
+      console.error(
+        "[SidepanelErrorBoundary] componentStack:",
+        errorInfo?.componentStack || "(no stack)"
+      )
+      ;(window as any).__tldw_last_error_boundary = {
+        message: error?.message || String(error),
+        componentStack: errorInfo?.componentStack || ""
+      }
+    }
   }
 
   handleReset = (): void => {

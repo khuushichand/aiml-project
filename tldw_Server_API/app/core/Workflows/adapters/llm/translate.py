@@ -6,14 +6,12 @@ This adapter handles text translation using LLM.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
-
-from loguru import logger
+from typing import Any
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters._common import extract_openai_content
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.llm._config import TranslateConfig
 
 
@@ -25,7 +23,7 @@ from tldw_Server_API.app.core.Workflows.adapters.llm._config import TranslateCon
     tags=["translation", "language"],
     config_model=TranslateConfig,
 )
-async def run_translate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_translate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Translate text using configured chat provider (best-effort), or no-op in test.
 
     Config:

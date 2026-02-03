@@ -9,24 +9,24 @@ import asyncio
 import re
 import time
 import types
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 from tldw_Server_API.app.core.exceptions import AdapterError
 from tldw_Server_API.app.core.Metrics import start_async_span as _start_span
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry, get_adapter
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     resolve_artifacts_dir,
 )
+from tldw_Server_API.app.core.Workflows.adapters._registry import get_adapter, registry
 from tldw_Server_API.app.core.Workflows.adapters.control._config import (
-    PromptConfig,
+    BranchConfig,
     DelayConfig,
     LogConfig,
-    BranchConfig,
     MapConfig,
     ParallelConfig,
+    PromptConfig,
 )
 
 
@@ -38,7 +38,7 @@ from tldw_Server_API.app.core.Workflows.adapters.control._config import (
     tags=["core", "template"],
     config_model=PromptConfig,
 )
-async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_prompt_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Render a prompt using the sandboxed Jinja engine.
 
     Config:
@@ -130,7 +130,7 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     tags=["control", "utility"],
     config_model=DelayConfig,
 )
-async def run_delay_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_delay_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Simple delay step; waits for the specified milliseconds.
 
     Config:
@@ -159,7 +159,7 @@ async def run_delay_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
     tags=["control", "debug"],
     config_model=LogConfig,
 )
-async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_log_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Log a templated message; useful for debugging pipelines.
 
     Config:
@@ -221,7 +221,7 @@ async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     tags=["control", "conditional"],
     config_model=BranchConfig,
 )
-async def run_branch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_branch_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Evaluate a simple boolean condition and select the next step.
 
     Config:
@@ -236,7 +236,7 @@ async def run_branch_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     is_true = rendered in {"1", "true", "yes", "on"}
     next_id = str(config.get("true_next") if is_true else config.get("false_next") or "").strip()
     # Do not force if not provided; engine will fall back to natural order
-    out: Dict[str, Any] = {"branch": "true" if is_true else "false"}
+    out: dict[str, Any] = {"branch": "true" if is_true else "false"}
     if next_id:
         out["__next__"] = next_id
     # Trace decision as a child span for better visibility
@@ -261,7 +261,7 @@ async def run_branch_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     tags=["control", "parallel"],
     config_model=MapConfig,
 )
-async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_map_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Fan-out over a list of items and apply a simple step to each item.
 
     Config:
@@ -300,7 +300,7 @@ async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     concurrency = max(1, int(config.get("concurrency", 4)))
     sem = asyncio.Semaphore(concurrency)
 
-    async def _run_one(idx: int, item: Any) -> Dict[str, Any]:
+    async def _run_one(idx: int, item: Any) -> dict[str, Any]:
         async with sem:
             # Honour cancellation before running each sub-step
             try:
@@ -345,7 +345,7 @@ async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     tags=["control", "parallel"],
     config_model=ParallelConfig,
 )
-async def run_parallel_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_parallel_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Execute multiple steps in parallel.
 
     Config:
@@ -368,7 +368,7 @@ async def run_parallel_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
     results: list = [None] * len(steps)
     errors: list = []
 
-    async def run_step(idx: int, step_config: Dict[str, Any]) -> None:
+    async def run_step(idx: int, step_config: dict[str, Any]) -> None:
         async with semaphore:
             if callable(context.get("is_cancelled")) and context["is_cancelled"]():
                 return

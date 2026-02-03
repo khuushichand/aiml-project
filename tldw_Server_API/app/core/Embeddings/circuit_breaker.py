@@ -3,14 +3,14 @@
 # Provides fault tolerance and prevents cascading failures
 
 import asyncio
-import time
-from datetime import datetime, timedelta
-from enum import Enum
-from typing import Any, Callable, Dict, Optional, TypeVar, Union
-from functools import wraps
 import threading
+import time
+from enum import Enum
+from functools import wraps
+from typing import Any, Callable, Optional, TypeVar
 
 from loguru import logger
+
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter, set_gauge
 
 # Type variables for generic typing
@@ -94,7 +94,7 @@ class CircuitBreaker:
             f"recovery_timeout={recovery_timeout}s"
         )
 
-    def _metric_labels(self, operation: str) -> Dict[str, str]:
+    def _metric_labels(self, operation: str) -> dict[str, str]:
         return {
             "category": self.category,
             "service": self.service,
@@ -331,7 +331,7 @@ class CircuitBreaker:
             self._transition_to_closed()
             logger.info(f"Circuit breaker '{self.name}' manually reset")
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Get circuit breaker status"""
         with self._lock:
             return {
@@ -402,7 +402,7 @@ class CircuitBreakerRegistry:
     """Registry for managing multiple circuit breakers"""
 
     def __init__(self):
-        self._breakers: Dict[str, CircuitBreaker] = {}
+        self._breakers: dict[str, CircuitBreaker] = {}
         self._lock = threading.Lock()
 
     def register(self, breaker: CircuitBreaker):
@@ -414,7 +414,7 @@ class CircuitBreakerRegistry:
         """Get circuit breaker by name"""
         return self._breakers.get(name)
 
-    def get_all_status(self) -> Dict[str, Dict[str, Any]]:
+    def get_all_status(self) -> dict[str, dict[str, Any]]:
         """Get status of all circuit breakers"""
         with self._lock:
             return {

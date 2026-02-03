@@ -11,8 +11,9 @@ All functions fail open when the ledger or AuthNZ DB is unavailable.
 """
 
 import asyncio
-from datetime import datetime, timezone, date, time as dtime
-from typing import Any, Optional
+from datetime import date, datetime, timezone
+from datetime import time as dtime
+from typing import Any
 
 from loguru import logger
 
@@ -28,12 +29,12 @@ except Exception:  # pragma: no cover - safe fallback
 
 _WORKFLOWS_CATEGORY = "workflows_runs"
 
-_workflows_daily_ledger: Optional["ResourceDailyLedger"] = None  # type: ignore[name-defined]
+_workflows_daily_ledger: "ResourceDailyLedger" | None = None  # type: ignore[name-defined]
 _workflows_daily_ledger_lock = asyncio.Lock()
 _workflows_backfill_done: set[str] = set()
 
 
-async def get_workflows_daily_ledger() -> Optional["ResourceDailyLedger"]:
+async def get_workflows_daily_ledger() -> "ResourceDailyLedger" | None:
     """Lazily initialize the shared ResourceDailyLedger for workflows."""
     global _workflows_daily_ledger
     if ResourceDailyLedger is None:
@@ -67,7 +68,7 @@ async def backfill_legacy_runs_to_ledger(
     user_id: str,
     entity_scope: str,
     entity_value: str,
-    day_utc: Optional[str] = None,
+    day_utc: str | None = None,
 ) -> None:
     """
     Best-effort migration helper: mirror today's legacy run totals into the ledger.
@@ -147,7 +148,7 @@ async def record_workflow_run(
     entity_value: str,
     run_id: str,
     units: int = 1,
-    occurred_at: Optional[datetime] = None,
+    occurred_at: datetime | None = None,
 ) -> bool:
     """
     Shadow-write a workflow run into the daily ledger.

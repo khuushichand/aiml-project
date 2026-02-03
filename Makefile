@@ -177,6 +177,16 @@ bench-full:
 	$(MAKE) monitoring-down
 
 # -----------------------------------------------------------------------------
+# Lint (changed files only)
+# -----------------------------------------------------------------------------
+.PHONY: lint-changed
+
+BASE ?=
+
+lint-changed:
+	@bash Helper_Scripts/Testing-related/lint-changed.sh $(BASE)
+
+# -----------------------------------------------------------------------------
 # Chat Streaming Load Harness (Scenario A starter)
 # -----------------------------------------------------------------------------
 .PHONY: load-chat-stream

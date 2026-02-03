@@ -2,17 +2,20 @@
 # Description: This file contains functions for reading and writing plaintext files.
 #
 # Import necessary libraries
-import re
 import json
+import re
 import time
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Any, Optional
+
+import html2text
+
 #
 # External Imports
 from bs4 import BeautifulSoup, Comment
 from docx2txt import docx2txt
-import html2text
 from pypandoc import convert_file
+
 try:
     from defusedxml import ElementTree as DET  # type: ignore
     from defusedxml.common import DefusedXmlException  # type: ignore
@@ -23,14 +26,15 @@ except Exception:  # pragma: no cover - defusedxml optional dependency
     DefusedXmlException = Exception  # type: ignore
 #
 # Local Imports
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
-from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
     open_safe_local_path,
     resolve_safe_local_path,
 )
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from tldw_Server_API.app.core.Utils.Utils import logging
+
 #
 #######################################################################################################################
 #
@@ -129,7 +133,7 @@ def _xml_to_text_simple(element):
 def convert_document_to_text(
     file_path: Path,
     base_dir: Optional[Path] = None,
-) -> Tuple[str, str, Dict[str, Any]]:
+) -> tuple[str, str, dict[str, Any]]:
     """
     Converts various document formats to plain text and extracts basic metadata.
 
@@ -319,7 +323,7 @@ def convert_document_to_text(
 def process_document_content( # Renamed from _process_single_document for clarity
     doc_path: Path,
     perform_chunking: bool,
-    chunk_options: Optional[Dict[str, Any]],
+    chunk_options: Optional[dict[str, Any]],
     perform_analysis: bool,
     summarize_recursively: bool,
     api_name: Optional[str],
@@ -328,9 +332,9 @@ def process_document_content( # Renamed from _process_single_document for clarit
     system_prompt: Optional[str],
     title_override: Optional[str] = None,
     author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    keywords: Optional[list[str]] = None,
     base_dir: Optional[Path] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Reads/converts various document formats, chunks (optional), analyses (optional).
     Handles .txt, .md, .html, .xml, .docx, .rtf (requires pandoc).
@@ -372,7 +376,7 @@ def process_document_content( # Renamed from _process_single_document for clarit
                 "db_message": None,
             }
         doc_path_obj = safe_path
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "status": "Pending",
         "input_ref": str(doc_path_obj), # Will be overwritten by endpoint with original ref
         "processing_source": str(doc_path_obj), # Actual file processed
@@ -484,7 +488,7 @@ def process_document_content( # Renamed from _process_single_document for clarit
             result["analysis_details"]["custom_prompt_used"] = custom_prompt
             result["analysis_details"]["system_prompt_used"] = system_prompt
 
-            chunk_summaries: List[str] = []
+            chunk_summaries: list[str] = []
             # Re-initialize or update result["chunks"] if chunk metadata needs to be updated
             analyzed_chunks_for_result = []
 

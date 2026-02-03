@@ -10,16 +10,16 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from typing import Optional
 from datetime import date, datetime, timezone
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
-from .pricing_catalog import get_pricing_catalog
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.Metrics import increment_counter
+
+from .pricing_catalog import get_pricing_catalog
 
 try:  # pragma: no cover - ledger optional during upgrades/tests
     from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import (  # type: ignore
@@ -30,12 +30,12 @@ except Exception:  # pragma: no cover - safe fallback
     LedgerEntry = None  # type: ignore
     ResourceDailyLedger = None  # type: ignore
 
-_tokens_daily_ledger: Optional["ResourceDailyLedger"] = None  # type: ignore[name-defined]
+_tokens_daily_ledger: "ResourceDailyLedger" | None = None  # type: ignore[name-defined]
 _tokens_daily_ledger_lock = asyncio.Lock()
 _tokens_legacy_backfill_done: set[str] = set()
 
 
-async def _get_tokens_daily_ledger() -> Optional["ResourceDailyLedger"]:
+async def _get_tokens_daily_ledger() -> "ResourceDailyLedger" | None:
     global _tokens_daily_ledger
     if ResourceDailyLedger is None or LedgerEntry is None:
         return None
@@ -59,7 +59,7 @@ async def backfill_legacy_tokens_to_ledger(
     *,
     entity_scope: str,
     entity_value: str,
-    day_utc: Optional[str] = None,
+    day_utc: str | None = None,
 ) -> None:
     """
     Best-effort migration helper: mirror today's tokens usage from ``llm_usage_log``
@@ -162,8 +162,8 @@ def compute_costs(provider: str, model: str, prompt_tokens: int, completion_toke
 
 async def log_llm_usage(
     *,
-    user_id: Optional[int],
-    key_id: Optional[int],
+    user_id: int | None,
+    key_id: int | None,
     endpoint: str,
     operation: str,
     provider: str,
@@ -172,10 +172,10 @@ async def log_llm_usage(
     latency_ms: int,
     prompt_tokens: int,
     completion_tokens: int,
-    total_tokens: Optional[int] = None,
+    total_tokens: int | None = None,
     currency: str = "USD",
-    request_id: Optional[str] = None,
-    estimated: Optional[bool] = None,
+    request_id: str | None = None,
+    estimated: bool | None = None,
 ) -> None:
     """
     Insert a single llm_usage_log row. Computes costs if needed.

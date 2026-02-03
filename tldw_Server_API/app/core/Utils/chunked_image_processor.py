@@ -5,7 +5,9 @@
 import asyncio
 import base64
 import io
-from typing import AsyncIterator, Optional, Tuple
+from collections.abc import AsyncIterator
+from typing import Optional
+
 from loguru import logger
 
 try:
@@ -30,7 +32,7 @@ MAX_IMAGE_PIXELS = 16777216  # 16 megapixels max
 async def process_image_chunked(
     image_data: bytes,
     mime_type: str,
-    max_size: Optional[Tuple[int, int]] = None
+    max_size: Optional[tuple[int, int]] = None
 ) -> AsyncIterator[bytes]:
     """
     Process image in chunks to avoid loading entire image into memory.
@@ -166,7 +168,7 @@ async def validate_and_process_image_stream(
     image_stream: AsyncIterator[bytes],
     mime_type: str,
     max_size_bytes: int
-) -> Tuple[bool, Optional[bytes], str]:
+) -> tuple[bool, Optional[bytes], str]:
     """
     Validate and process an image stream.
 
@@ -228,7 +230,7 @@ class StreamingImageProcessor:
         self,
         image_url: str,
         max_size_bytes: int
-    ) -> Tuple[bool, Optional[bytes], Optional[str], str]:
+    ) -> tuple[bool, Optional[bytes], Optional[str], str]:
         """
         Process an image from a data URL with streaming.
 
@@ -296,7 +298,7 @@ class StreamingImageProcessor:
         image_urls: list[str],
         max_size_bytes: int,
         max_concurrent: int = 3
-    ) -> list[Tuple[bool, Optional[bytes], Optional[str], str]]:
+    ) -> list[tuple[bool, Optional[bytes], Optional[str], str]]:
         """
         Process multiple images concurrently with memory management.
 

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import asyncio as _asyncio
-from typing import Dict, Any, List, Optional, Tuple, Union
+from dataclasses import dataclass
+from typing import Any
 
 from loguru import logger
 
 
-def _levenshtein(seq_a: List[str], seq_b: List[str]) -> int:
+def _levenshtein(seq_a: list[str], seq_b: list[str]) -> int:
     """Compute Levenshtein edit distance between two token sequences."""
     n, m = len(seq_a), len(seq_b)
     if n == 0:
@@ -58,10 +58,10 @@ def word_error_rate(hyp: str, ref: str) -> float:
 class OCREvalItem:
     id: str
     # Source can be a PDF path or bytes, or pre-extracted text for offline testing
-    pdf_path: Optional[str] = None
-    pdf_bytes: Optional[bytes] = None
-    extracted_text: Optional[str] = None
-    ground_truth_text: Optional[str] = None
+    pdf_path: str | None = None
+    pdf_bytes: bytes | None = None
+    extracted_text: str | None = None
+    ground_truth_text: str | None = None
 
 
 class OCREvaluator:
@@ -87,11 +87,11 @@ class OCREvaluator:
 
     async def evaluate(
         self,
-        items: List[Dict[str, Any]],
-        metrics: Optional[List[str]] = None,
-        ocr_options: Optional[Dict[str, Any]] = None,
-        thresholds: Optional[Dict[str, float]] = None,
-    ) -> Dict[str, Any]:
+        items: list[dict[str, Any]],
+        metrics: list[str] | None = None,
+        ocr_options: dict[str, Any] | None = None,
+        thresholds: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
         """
         Evaluate OCR performance for a batch of items.
 
@@ -105,7 +105,7 @@ class OCREvaluator:
         """
         want = set([m.lower() for m in (metrics or ["cer", "wer", "coverage", "page_coverage"])])
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         macro = {
             "cer": [],
             "wer": [],
@@ -114,10 +114,11 @@ class OCREvaluator:
         }
 
         # Lazy import to avoid heavy imports when unused
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf
-        import io
+
         import pymupdf
+
         from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import get_backend as get_ocr_backend
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf
 
         for raw in items:
             item = OCREvalItem(
@@ -128,12 +129,12 @@ class OCREvaluator:
                 ground_truth_text=raw.get("ground_truth_text"),
             )
 
-            per: Dict[str, Any] = {"id": item.id}
-            ocr_info: Dict[str, Any] = {}
+            per: dict[str, Any] = {"id": item.id}
+            ocr_info: dict[str, Any] = {}
 
             # Determine hypothesis text
             hyp_text: str = item.extracted_text or ""
-            page_texts: List[str] = []
+            page_texts: list[str] = []
             if not hyp_text:
                 if item.pdf_path or item.pdf_bytes:
                     try:
@@ -178,8 +179,8 @@ class OCREvaluator:
                                 total_pages = len(doc)
                                 ocr_pages = 0
                                 # Small concurrency
-                                from concurrent.futures import ThreadPoolExecutor, as_completed
                                 import os as _os
+                                from concurrent.futures import ThreadPoolExecutor, as_completed
                                 try:
                                     concurrency_env = int((_os.getenv("OCR_PAGE_CONCURRENCY") or "1"))
                                 except Exception:
@@ -320,7 +321,7 @@ class OCREvaluator:
 
             # Threshold-based pass/fail
             passed = None
-            failed_reasons: List[str] = []
+            failed_reasons: list[str] = []
             if thresholds:
                 if "max_cer" in thresholds and "cer" in per and per["cer"] is not None:
                     if per["cer"] > float(thresholds["max_cer"]):
@@ -342,7 +343,7 @@ class OCREvaluator:
             results.append(per)
 
         # Summaries
-        def _avg(xs: List[float]) -> Optional[float]:
+        def _avg(xs: list[float]) -> float | None:
             return round(sum(xs) / len(xs), 6) if xs else None
 
         total = len(results)

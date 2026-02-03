@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any
 
 from loguru import logger
 
@@ -22,13 +22,13 @@ class AuthnzSessionsRepo:
     db_pool: DatabasePool
 
     @staticmethod
-    def _normalize_datetime_for_postgres(dt: Optional[datetime]) -> Optional[datetime]:
+    def _normalize_datetime_for_postgres(dt: datetime | None) -> datetime | None:
         """Strip timezone info for PostgreSQL TIMESTAMP columns (not TIMESTAMPTZ)."""
         if dt is None:
             return None
         return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
 
-    def _normalize_session_details(self, details: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_session_details(self, details: dict[str, Any]) -> dict[str, Any]:
         """
         Normalize datetime fields across backends so callers always
         see ``expires_at`` and ``refresh_expires_at`` as datetime objects
@@ -55,12 +55,12 @@ class AuthnzSessionsRepo:
         encrypted_token: str,
         encrypted_refresh: str,
         expires_at: datetime,
-        refresh_expires_at: Optional[datetime],
+        refresh_expires_at: datetime | None,
         ip_address: str,
         user_agent: str,
         device_id: str,
-        access_jti: Optional[str],
-        refresh_jti: Optional[str],
+        access_jti: str | None,
+        refresh_jti: str | None,
     ) -> int:
         """
         Insert a new session row and return its ``id``.
@@ -139,15 +139,15 @@ class AuthnzSessionsRepo:
         self,
         *,
         session_id: int,
-        revoked_by: Optional[int],
-        reason: Optional[str],
-    ) -> Optional[Dict[str, Any]]:
+        revoked_by: int | None,
+        reason: str | None,
+    ) -> dict[str, Any] | None:
         """
         Mark a single session as revoked and return its details for blacklist use.
         """
         try:
             async with self.db_pool.transaction() as conn:
-                session_details: Optional[Dict[str, Any]] = None
+                session_details: dict[str, Any] | None = None
 
                 if hasattr(conn, "fetchrow"):
                     session_row = await conn.fetchrow(
@@ -218,7 +218,7 @@ class AuthnzSessionsRepo:
         self,
         *,
         user_id: int,
-        except_session_id: Optional[int] = None,
+        except_session_id: int | None = None,
     ) -> int:
         """
         Mark all sessions for a user as revoked (optionally excluding one).
@@ -291,7 +291,7 @@ class AuthnzSessionsRepo:
     async def fetch_session_token_metadata_for_user(
         self,
         user_id: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Fetch session token metadata for a user.
 
@@ -324,7 +324,7 @@ class AuthnzSessionsRepo:
                     (user_id,),
                 )
                 sqlite_rows = await cursor.fetchall()
-                sessions: List[Dict[str, Any]] = []
+                sessions: list[dict[str, Any]] = []
                 for row in sqlite_rows:
                     sessions.append(
                         self._normalize_session_details(
@@ -346,7 +346,7 @@ class AuthnzSessionsRepo:
 
     async def has_revoked_session_for_token_hash_candidates(
         self,
-        token_hash_candidates: List[str],
+        token_hash_candidates: list[str],
     ) -> bool:
         """
         Return True if any revoked session exists for the provided token hashes.
@@ -434,8 +434,8 @@ class AuthnzSessionsRepo:
         self,
         *,
         user_id: int,
-        revoked_by: Optional[int],
-        reason: Optional[str],
+        revoked_by: int | None,
+        reason: str | None,
     ) -> int:
         """
         Mark all sessions for a user as revoked with audit metadata.
@@ -488,7 +488,7 @@ class AuthnzSessionsRepo:
             )
             raise
 
-    async def get_active_sessions_for_user(self, user_id: int) -> List[Dict[str, Any]]:
+    async def get_active_sessions_for_user(self, user_id: int) -> list[dict[str, Any]]:
         """
         Return active sessions for a user, ordered by last activity.
         """
@@ -537,7 +537,7 @@ class AuthnzSessionsRepo:
                         raise
 
                 rows = await cursor.fetchall()
-                sessions: List[Dict[str, Any]] = []
+                sessions: list[dict[str, Any]] = []
                 for row in rows:
                     sessions.append(
                         {
@@ -640,7 +640,7 @@ class AuthnzSessionsRepo:
     async def fetch_session_for_validation_by_id(
         self,
         session_id: int,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Fetch an active, non-expired session joined with user state by session id.
 
@@ -713,7 +713,7 @@ class AuthnzSessionsRepo:
     async def fetch_session_for_validation_by_token_hash(
         self,
         token_hash: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Fetch an active, non-expired session joined with user state by token hash.
 
@@ -820,13 +820,13 @@ class AuthnzSessionsRepo:
         session_id: int,
         access_token_hash: str,
         refresh_token_hash: str,
-        access_jti: Optional[str],
-        refresh_jti: Optional[str],
-        access_expires_at: Optional[datetime],
-        refresh_expires_at: Optional[datetime],
+        access_jti: str | None,
+        refresh_jti: str | None,
+        access_expires_at: datetime | None,
+        refresh_expires_at: datetime | None,
         encrypted_access_token: str,
         encrypted_refresh_token: str,
-    ) -> Optional[int]:
+    ) -> int | None:
         """
         Update a newly created session with finalized token hashes and encrypted tokens.
 
@@ -836,7 +836,7 @@ class AuthnzSessionsRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                session_row: Optional[Any] = None
+                session_row: Any | None = None
 
                 if hasattr(conn, "fetchrow"):
                     # Normalize datetimes for PostgreSQL TIMESTAMP columns
@@ -921,8 +921,8 @@ class AuthnzSessionsRepo:
 
     async def find_active_session_by_refresh_hash_candidates(
         self,
-        refresh_hash_candidates: List[str],
-    ) -> Optional[Dict[str, Any]]:
+        refresh_hash_candidates: list[str],
+    ) -> dict[str, Any] | None:
         """
         Locate an active session by trying multiple refresh_token_hash candidates.
 
@@ -980,12 +980,12 @@ class AuthnzSessionsRepo:
         *,
         session_id: int,
         new_access_hash: str,
-        access_jti: Optional[str],
+        access_jti: str | None,
         expires_at: datetime,
         encrypted_access_token: str,
         refresh_hash_update: str,
-        refresh_jti: Optional[str],
-        refresh_expires_at: Optional[datetime],
+        refresh_jti: str | None,
+        refresh_expires_at: datetime | None,
         encrypted_refresh_token: str,
     ) -> None:
         """

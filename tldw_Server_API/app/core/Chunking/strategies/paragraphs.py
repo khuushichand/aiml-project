@@ -4,11 +4,12 @@ Paragraph-based chunking strategy.
 Splits text into chunks based on paragraph boundaries.
 """
 
-from typing import List, Optional, Any, Dict
 import re
+from typing import Any
+
 from loguru import logger
 
-from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
+from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
 from ..exceptions import InvalidInputError, ProcessingError
 
 # Maximum text size for paragraph chunking (50MB) - prevents DoS with ReDoS patterns
@@ -34,7 +35,7 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
               text: str,
               max_size: int = 2,
               overlap: int = 0,
-              **options) -> List[str]:
+              **options) -> list[str]:
         """
         Chunk text by paragraphs.
 
@@ -113,7 +114,7 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
                            text: str,
                            max_size: int = 2,
                            overlap: int = 0,
-                           **options) -> List[ChunkResult]:
+                           **options) -> list[ChunkResult]:
         """
         Chunk text by paragraphs and return with metadata using accurate source offsets.
 
@@ -148,7 +149,7 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
             # Build paragraph spans directly from the original text
             # Use simple linear-time pattern: two or more newlines (avoids ReDoS with \s*)
             sep = re.compile(r"\n{2,}")
-            spans: List[tuple[int, int]] = []
+            spans: list[tuple[int, int]] = []
             pos = 0
             n = len(text)
 
@@ -188,7 +189,7 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
             logger.debug(f"Detected {len(spans)} paragraph spans")
 
             # Window the paragraph spans according to max_size/overlap
-            results: List[ChunkResult] = []
+            results: list[ChunkResult] = []
             align_text_to_source = bool(options.get("align_text_to_source", True))
             text_len = len(text)
             step = max(1, max_size - overlap)
@@ -234,7 +235,7 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
             logger.error(f"Error during paragraph chunking: {e}")
             raise ProcessingError(f"Failed to chunk by paragraphs: {str(e)}")
 
-    def validate_options(self, options: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_options(self, options: dict[str, Any]) -> dict[str, Any]:
         """
         Validate and normalize options for paragraph chunking.
 

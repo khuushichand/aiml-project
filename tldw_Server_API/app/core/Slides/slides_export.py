@@ -9,9 +9,10 @@ import re
 import shutil
 import tempfile
 import zipfile
+from collections.abc import Iterable
 from html import escape
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -180,7 +181,7 @@ def _get_slide_value(slide: Any, key: str, default: Any = None) -> Any:
     return getattr(slide, key, default)
 
 
-def _sorted_slides(slides: Iterable[Any]) -> List[Any]:
+def _sorted_slides(slides: Iterable[Any]) -> list[Any]:
     return sorted(list(slides), key=lambda s: int(_get_slide_value(s, "order", 0)))
 
 
@@ -242,7 +243,7 @@ def _normalize_pdf_margin_value(value: Any, *, key: str, default_value: str, def
     raise SlidesExportInputError(f"pdf_margin_{key}_invalid")
 
 
-def _normalize_pdf_options(options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _normalize_pdf_options(options: dict[str, Any] | None) -> dict[str, Any]:
     opts = options or {}
     if not isinstance(opts, dict):
         raise SlidesExportInputError("pdf_options_invalid")
@@ -256,7 +257,7 @@ def _normalize_pdf_options(options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if margin_opts and not isinstance(margin_opts, dict):
         raise SlidesExportInputError("pdf_margin_invalid")
 
-    pdf_options: Dict[str, Any] = {}
+    pdf_options: dict[str, Any] = {}
     if width is not None or height is not None:
         if width is None or height is None:
             raise SlidesExportInputError("pdf_width_height_required")
@@ -310,7 +311,7 @@ def _resolve_pdf_limits() -> tuple[int, int]:
     return max_slides, max_bytes
 
 
-def _extract_images(slide: Any) -> List[Dict[str, Any]]:
+def _extract_images(slide: Any) -> list[dict[str, Any]]:
     metadata = _get_slide_value(slide, "metadata", {}) or {}
     if not isinstance(metadata, dict):
         return []
@@ -329,7 +330,7 @@ def _escape_markdown_alt(text: str) -> str:
     return value
 
 
-def _render_image_html(image: Dict[str, Any]) -> str:
+def _render_image_html(image: dict[str, Any]) -> str:
     alt = escape(str(image.get("alt") or ""))
     attrs = f' alt="{alt}"'
     width = image.get("width")
@@ -342,14 +343,14 @@ def _render_image_html(image: Dict[str, Any]) -> str:
     return f"<img src=\"{src}\"{attrs} />"
 
 
-def _render_images_html(images: List[Dict[str, Any]]) -> str:
+def _render_images_html(images: list[dict[str, Any]]) -> str:
     if not images:
         return ""
     rendered = "\n".join(_render_image_html(image) for image in images)
     return f"<div class=\"slide-images\">\n{rendered}\n</div>"
 
 
-def _render_image_markdown(image: Dict[str, Any]) -> str:
+def _render_image_markdown(image: dict[str, Any]) -> str:
     alt = str(image.get("alt") or "")
     alt = _escape_markdown_alt(alt.replace("\r", " ").replace("\n", " ").strip())
     src = f"data:{image['mime']};base64,{image['data_b64']}"
@@ -370,7 +371,7 @@ def _sanitize_markdown(markdown_text: str) -> str:
     )
 
 
-def _sanitize_custom_css(css_text: Optional[str]) -> Optional[str]:
+def _sanitize_custom_css(css_text: str | None) -> str | None:
     if not css_text:
         return None
     if re.search(r"@import", css_text, flags=re.IGNORECASE):
@@ -389,7 +390,7 @@ def _sanitize_custom_css(css_text: Optional[str]) -> Optional[str]:
     return cleaned or None
 
 
-def _resolve_assets_dir(assets_dir: Optional[Path | str]) -> Path:
+def _resolve_assets_dir(assets_dir: Path | str | None) -> Path:
     if assets_dir:
         return Path(assets_dir).expanduser().resolve()
     env_path = os.getenv("SLIDES_REVEALJS_ASSETS_DIR")
@@ -403,7 +404,7 @@ def _resolve_assets_dir(assets_dir: Optional[Path | str]) -> Path:
     return (Path(__file__).resolve().parent / "revealjs").resolve()
 
 
-def _find_license_file(assets_dir: Path) -> Optional[Path]:
+def _find_license_file(assets_dir: Path) -> Path | None:
     candidates = [
         assets_dir / "LICENSE.revealjs.txt",
         assets_dir / "LICENSE",
@@ -416,7 +417,7 @@ def _find_license_file(assets_dir: Path) -> Optional[Path]:
     return None
 
 
-def _find_notice_file(assets_dir: Path) -> Optional[Path]:
+def _find_notice_file(assets_dir: Path) -> Path | None:
     candidates = [
         assets_dir / "NOTICE.revealjs.txt",
         assets_dir / "NOTICE",
@@ -445,7 +446,7 @@ def _validate_reveal_assets(assets_dir: Path, theme: str) -> None:
 
 
 def _render_sections(slides: Iterable[Any]) -> str:
-    sections: List[str] = []
+    sections: list[str] = []
     for slide in _sorted_slides(slides):
         layout = escape(str(_get_slide_value(slide, "layout", "content")))
         title = _get_slide_value(slide, "title")
@@ -514,9 +515,9 @@ def export_presentation_bundle(
     title: str,
     slides: Iterable[Any],
     theme: str,
-    settings: Optional[Dict[str, Any]],
-    custom_css: Optional[str],
-    assets_dir: Optional[Path | str] = None,
+    settings: dict[str, Any] | None,
+    custom_css: str | None,
+    assets_dir: Path | str | None = None,
 ) -> bytes:
     resolved_assets = _resolve_assets_dir(assets_dir)
     _validate_reveal_assets(resolved_assets, theme)
@@ -557,10 +558,10 @@ def export_presentation_markdown(
     title: str,
     slides: Iterable[Any],
     theme: str,
-    marp_theme: Optional[str] = None,
+    marp_theme: str | None = None,
 ) -> str:
     resolved_theme = marp_theme or _REVEAL_THEME_TO_MARP.get(theme, "default")
-    lines: List[str] = [
+    lines: list[str] = [
         "---",
         "marp: true",
         f"theme: {resolved_theme}",
@@ -605,10 +606,10 @@ def export_presentation_pdf(
     title: str,
     slides: Iterable[Any],
     theme: str,
-    settings: Optional[Dict[str, Any]],
-    custom_css: Optional[str],
-    assets_dir: Optional[Path | str] = None,
-    pdf_options: Optional[Dict[str, Any]] = None,
+    settings: dict[str, Any] | None,
+    custom_css: str | None,
+    assets_dir: Path | str | None = None,
+    pdf_options: dict[str, Any] | None = None,
 ) -> bytes:
     slides_list = list(slides)
     max_slides, max_html_bytes = _resolve_pdf_limits()
@@ -678,5 +679,5 @@ def export_presentation_pdf(
     return pdf_bytes
 
 
-def export_presentation_json(payload: Dict[str, Any]) -> str:
+def export_presentation_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=True, indent=2)

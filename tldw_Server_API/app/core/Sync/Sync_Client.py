@@ -2,18 +2,26 @@
 import json
 import os
 import sqlite3  # For specific error types
-from typing import List, Dict, Optional, Tuple
+from typing import Optional
+
 #
 # Third-Party Imports
 from loguru import logger
+
 #
 # Local Imports
 try:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, ConflictError, DatabaseError, InputError
+    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+        ConflictError,
+        DatabaseError,
+        InputError,
+        MediaDatabase,
+    )
 except ImportError:
     logger.error("Could not import the 'Media_DB' library. Make sure Media_DB.py is accessible.")
-from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError, EgressPolicyError
+from tldw_Server_API.app.core.exceptions import EgressPolicyError, NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.http_client import fetch
+
 #
 #######################################################################################################################
 #
@@ -33,7 +41,7 @@ SYNC_BATCH_SIZE = 50 # How many changes to send/receive at once
 SYNC_INTERVAL_SECONDS = 60 # How often to run the sync cycle automatically
 
 
-def _extract_http_status_error(exc: Exception) -> Optional[Tuple[int, str]]:
+def _extract_http_status_error(exc: Exception) -> Optional[tuple[int, str]]:
     resp = getattr(exc, "response", None)
     status = getattr(resp, "status_code", None)
     if status is None:
@@ -284,7 +292,7 @@ class ClientSyncEngine:
         # Let transport errors be caught by run_sync_cycle
 
 
-    def _apply_remote_changes_batch(self, changes: List[Dict]) -> bool:
+    def _apply_remote_changes_batch(self, changes: list[dict]) -> bool:
         """
         Applies a batch of ordered changes received from the server within a single transaction.
         Returns True if the entire batch was applied successfully (or skipped idempotently), False otherwise.
@@ -328,7 +336,7 @@ class ClientSyncEngine:
 
         return all_applied_or_skipped
 
-    def _apply_single_change(self, cursor: sqlite3.Cursor, change: Dict):
+    def _apply_single_change(self, cursor: sqlite3.Cursor, change: dict):
         """
         Applies a single change record. Raises ConflictError if optimistic lock fails.
         This is called within the transaction managed by _apply_remote_changes_batch.
@@ -400,7 +408,7 @@ class ClientSyncEngine:
                                      authoritative_timestamp, force_apply=False)
 
 
-    def _resolve_conflict(self, cursor: sqlite3.Cursor, change: Dict, conflict_error: ConflictError) -> bool:
+    def _resolve_conflict(self, cursor: sqlite3.Cursor, change: dict, conflict_error: ConflictError) -> bool:
         """
         Attempts to resolve a conflict based on the chosen strategy (LWW).
         Returns True if resolved (applied or skipped), False if resolution failed.
@@ -436,7 +444,7 @@ class ClientSyncEngine:
             logger.error(f"Error during LWW conflict resolution for {entity} {entity_uuid}: {e}", exc_info=True)
             return False # Resolution failed
 
-    def _execute_change_sql(self, cursor: sqlite3.Cursor, entity: str, operation: str, payload: Dict, uuid: str,
+    def _execute_change_sql(self, cursor: sqlite3.Cursor, entity: str, operation: str, payload: dict, uuid: str,
                             remote_version: int, client_id: str, timestamp: str, force_apply: bool = False):
         """
         Generates and executes SQL to apply a single change operation locally.
@@ -675,7 +683,7 @@ class ClientSyncEngine:
         elif not main_sql:
             logger.debug(f"No Main SQL generated or needed execution for {entity} {uuid} (Op: {operation})")
 
-    def _execute_media_keyword_sql(self, cursor: sqlite3.Cursor, operation: str, payload: Dict):
+    def _execute_media_keyword_sql(self, cursor: sqlite3.Cursor, operation: str, payload: dict):
         """Handles SQL execution specifically for the MediaKeywords junction table."""
         media_uuid = payload.get('media_uuid')
         keyword_uuid = payload.get('keyword_uuid')
@@ -724,7 +732,7 @@ class ClientSyncEngine:
     # --- Helper to get table columns (cached for efficiency) ---
     _column_cache = {}
 
-    def _get_table_columns(self, cursor: sqlite3.Cursor, table_name: str) -> Optional[List[str]]:
+    def _get_table_columns(self, cursor: sqlite3.Cursor, table_name: str) -> Optional[list[str]]:
         """Gets column names for a table, using a simple cache."""
         if table_name in self._column_cache:
             return self._column_cache[table_name]

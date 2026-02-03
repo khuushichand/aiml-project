@@ -4,13 +4,14 @@ HTTP/WebSocket guard helpers for MCP Unified.
 
 from __future__ import annotations
 
-import json
-from typing import Mapping, Optional
+from collections.abc import Mapping
+
 from fastapi import HTTPException, Request
 from loguru import logger
 
 from ..config import get_config
-from .ip_filter import enforce_ip_allowlist as _enforce_ip_allowlist, get_ip_access_controller
+from .ip_filter import enforce_ip_allowlist as _enforce_ip_allowlist
+from .ip_filter import get_ip_access_controller
 
 
 async def enforce_request_body_limit(request: Request) -> None:
@@ -64,7 +65,7 @@ def enforce_client_certificate(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Client certificate required")
 
 
-def enforce_client_certificate_headers(headers: Mapping[str, str], remote_addr: Optional[str] = None) -> None:
+def enforce_client_certificate_headers(headers: Mapping[str, str], remote_addr: str | None = None) -> None:
     """
     Enforce client certificate headers for WebSocket connections.
     """
@@ -82,7 +83,7 @@ def enforce_client_certificate_headers(headers: Mapping[str, str], remote_addr: 
         raise HTTPException(status_code=403, detail="Client certificate required")
 
 
-def _is_client_certificate_valid(headers: Mapping[str, str], remote_addr: Optional[str] = None) -> bool:
+def _is_client_certificate_valid(headers: Mapping[str, str], remote_addr: str | None = None) -> bool:
     """
     Inspect headers for client certificate verification results.
 
@@ -94,7 +95,7 @@ def _is_client_certificate_valid(headers: Mapping[str, str], remote_addr: Option
     header_name = (cfg.client_cert_header or "x-ssl-client-verify").lower()
     expected_value = (cfg.client_cert_header_value or "").strip().lower()
 
-    header_value: Optional[str] = None
+    header_value: str | None = None
     for key, value in headers.items():
         if key.lower() == header_name:
             header_value = value

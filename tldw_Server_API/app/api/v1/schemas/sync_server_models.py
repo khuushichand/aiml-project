@@ -2,10 +2,12 @@
 # Description: This file contains the models used for the sync server API.
 #
 # Imports
-from typing import List, Optional
+from typing import Optional
+
 #
 # 3rd-party Libraries
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
 #
 # Local Imports
 #
@@ -53,7 +55,7 @@ class ClientChangesPayload(BaseModel):
     Corresponds to the request body for the /sync/send endpoint.
     """
     client_id: str = Field(..., description="The unique ID of the client device sending these changes.")
-    changes: List[SyncLogEntry] = Field(..., description="A list of sync log entries representing local changes made on the client.")
+    changes: list[SyncLogEntry] = Field(..., description="A list of sync log entries representing local changes made on the client.")
     last_processed_server_id: int = Field(0, description="The 'change_id' of the last entry received from the server that this client successfully processed. Helps server determine delta.")
 
     model_config = ConfigDict(
@@ -82,7 +84,7 @@ class ServerChangesResponse(BaseModel):
     The response sent by the server containing changes for the client.
     Corresponds to the response body for the /sync/get endpoint.
     """
-    changes: List[SyncLogEntry] = Field(..., description="A list of sync log entries from the server's perspective for the requesting user, filtered to exclude changes originating from the requesting client.")
+    changes: list[SyncLogEntry] = Field(..., description="A list of sync log entries from the server's perspective for the requesting user, filtered to exclude changes originating from the requesting client.")
     latest_change_id: int = Field(..., description="The highest 'change_id' currently present in the user's sync log on the server. Used by the client to know the server's current state.")
 
     model_config = ConfigDict(

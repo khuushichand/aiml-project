@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-from typing import Optional
 
 from loguru import logger
 
@@ -23,7 +22,7 @@ from tldw_Server_API.app.core.Jobs.worker_utils import coerce_int as _coerce_int
 from tldw_Server_API.app.core.Jobs.worker_utils import jobs_manager_from_env as _jobs_manager
 
 
-async def run_reading_digest_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_reading_digest_jobs_worker(stop_event: asyncio.Event | None = None) -> None:
     """Run the reading digest jobs worker loop.
 
     Args:
@@ -43,7 +42,7 @@ async def run_reading_digest_jobs_worker(stop_event: Optional[asyncio.Event] = N
         renew_threshold_seconds=renew_threshold,
     )
     sdk = WorkerSDK(_jobs_manager(), cfg)
-    _stop_watcher_task: Optional[asyncio.Task[None]] = None
+    _stop_watcher_task: asyncio.Task[None] | None = None
 
     if stop_event is not None:
         async def _watch_stop() -> None:

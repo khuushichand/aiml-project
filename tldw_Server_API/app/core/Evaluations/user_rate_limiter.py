@@ -13,19 +13,20 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
 # Import configuration management
 from tldw_Server_API.app.core.Evaluations.config_manager import (
-    get_config,
     get_rate_limit_config,
 )
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 # Optional Resource Governor integration (gated by global RG_ENABLED/config)
 try:  # pragma: no cover - RG is optional
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
     from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
         MemoryResourceGovernor,
         RedisResourceGovernor,
@@ -36,7 +37,6 @@ try:  # pragma: no cover - RG is optional
         PolicyReloadConfig,
         default_policy_loader,
     )
-    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
 except Exception:  # pragma: no cover - safe fallback when RG not installed
     MemoryResourceGovernor = None  # type: ignore
     RedisResourceGovernor = None  # type: ignore
@@ -175,7 +175,7 @@ class UserRateLimiter:
         self._init_database()
 
         # In-memory cache for rate limit data (with TTL)
-        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._cache: dict[str, dict[str, Any]] = {}
         self._cache_ttl = 60  # seconds
 
     def _init_database(self):
@@ -244,7 +244,7 @@ class UserRateLimiter:
         is_batch: bool = False,
         tokens_requested: int = 0,
         estimated_cost: float = 0.0
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> tuple[bool, dict[str, Any]]:
         """
         Check if user can make request based on their tier limits.
 
@@ -294,7 +294,7 @@ class UserRateLimiter:
                     # Best-effort only; never block allow path.
                     pass
 
-                metadata: Dict[str, Any] = {
+                metadata: dict[str, Any] = {
                     "policy_id": rg_decision.get("policy_id", policy_id),
                     "rate_limit_source": "resource_governor",
                 }
@@ -490,7 +490,7 @@ class UserRateLimiter:
         endpoint: str,
         is_batch: bool,
         config: RateLimitConfig
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> tuple[bool, dict[str, Any]]:
         """Check per-minute rate limits."""
         now = datetime.now(timezone.utc)
         minute_ago = now - timedelta(minutes=1)
@@ -552,7 +552,7 @@ class UserRateLimiter:
         tokens_requested: int,
         estimated_cost: float,
         config: RateLimitConfig
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> tuple[bool, dict[str, Any]]:
         """Check daily usage limits."""
         today = datetime.now(timezone.utc).date()
         day_str = str(today)
@@ -649,7 +649,7 @@ class UserRateLimiter:
         user_id: str,
         estimated_cost: float,
         config: RateLimitConfig,
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> tuple[bool, dict[str, Any]]:
         """Check daily cost limits only (RG handles evaluations/tokens)."""
         try:
             cost = float(estimated_cost or 0.0)
@@ -753,9 +753,9 @@ class UserRateLimiter:
         self,
         user_id: str,
         config: RateLimitConfig,
-        minute_metadata: Dict[str, Any],
-        daily_metadata: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        minute_metadata: dict[str, Any],
+        daily_metadata: dict[str, Any]
+    ) -> dict[str, Any]:
         """Generate rate limit headers for response."""
         return {
             "headers": {
@@ -781,7 +781,7 @@ class UserRateLimiter:
         user_id: str,
         new_tier: UserTier,
         expires_at: Optional[datetime] = None,
-        custom_limits: Optional[Dict[str, Any]] = None
+        custom_limits: Optional[dict[str, Any]] = None
     ) -> bool:
         """
         Upgrade a user's tier.
@@ -853,7 +853,7 @@ class UserRateLimiter:
             logger.error(f"Failed to upgrade user tier: {e}")
             return False
 
-    async def get_usage_summary(self, user_id: str) -> Dict[str, Any]:
+    async def get_usage_summary(self, user_id: str) -> dict[str, Any]:
         """
         Get usage summary for a user.
 
@@ -981,7 +981,7 @@ _rg_evals_init_error_logged = False
 _rg_evals_fallback_logged = False
 
 
-def _rg_evals_context() -> Dict[str, str]:
+def _rg_evals_context() -> dict[str, str]:
     policy_path = os.getenv(
         "RG_POLICY_PATH",
         "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
@@ -1114,7 +1114,7 @@ async def _maybe_enforce_with_rg_evaluations(
     tokens_requested: int,
     estimated_cost: float,
     policy_id: str,
-) -> Optional[Dict[str, object]]:
+) -> Optional[dict[str, object]]:
     """
     Optionally enforce Evaluations request limits via ResourceGovernor.
 
@@ -1126,7 +1126,7 @@ async def _maybe_enforce_with_rg_evaluations(
         return None
     op_id = f"evals-{user_id}-{time.time_ns()}"
     try:
-        categories: Dict[str, Dict[str, int]] = {
+        categories: dict[str, dict[str, int]] = {
             "evaluations": {"units": 1},
         }
         try:

@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.RAG.rag_service.document_grader import (
     GradingResult,
     GradingBatchResult,
     grade_and_filter_documents,
+    _resolve_grading_config,
 )
 
 
@@ -44,7 +45,7 @@ class TestGradingConfig:
         """Test that default values are set correctly."""
         config = GradingConfig()
 
-        assert config.provider == "openai"
+        assert config.provider is None
         assert config.model is None
         assert config.batch_size == 5
         assert config.timeout_seconds == 30.0
@@ -71,6 +72,18 @@ class TestGradingConfig:
         assert config.fallback_to_score is False
         assert config.fallback_min_score == 0.5
         assert config.temperature == 0.2
+
+    def test_resolve_grading_config_fallbacks(self):
+        """Test config resolution falls back to default provider."""
+        with patch(
+            "tldw_Server_API.app.core.config.load_and_log_configs",
+            return_value={},
+        ):
+            provider, model, temperature = _resolve_grading_config()
+
+        assert provider == "openai"
+        assert model is None
+        assert temperature == 0.1
 
 
 class TestDocumentGrader:

@@ -2,11 +2,13 @@
 #
 #
 # Imports
-from typing import Optional, Dict, Any, List
+from typing import Any, Optional
+
 #
 # # 3rd-Party Libraries
 from fastapi import Query
 from pydantic import BaseModel
+
 #
 # Local Imports
 from tldw_Server_API.app.core.Third_Party.Arxiv import ARXIV_DEFAULT_PAGE_SIZE
@@ -28,8 +30,8 @@ class ArxivPaper(BaseModel):
 
 
 class ArxivSearchResponse(BaseModel):
-    query_echo: Dict[str, Any]
-    items: List[ArxivPaper]
+    query_echo: dict[str, Any]
+    items: list[ArxivPaper]
     total_results: int
     page: int
     results_per_page: int
@@ -75,18 +77,18 @@ class SemanticScholarPaper(BaseModel):
     abstract: Optional[str] = None
     year: Optional[int] = None
     citationCount: Optional[int] = None
-    authors: Optional[List[SemanticScholarAuthor]] = []
+    authors: Optional[list[SemanticScholarAuthor]] = []
     venue: Optional[str] = None
     openAccessPdf: Optional[SemanticScholarOpenAccessPdf] = None
     url: Optional[str] = None # Link to Semantic Scholar page
-    publicationTypes: Optional[List[str]] = None
+    publicationTypes: Optional[list[str]] = None
     publicationDate: Optional[str] = None # Typically YYYY-MM-DD
-    externalIds: Optional[Dict[str, str]] = None # e.g., {"DOI": "...", "ArXiv": "..."}
+    externalIds: Optional[dict[str, str]] = None # e.g., {"DOI": "...", "ArXiv": "..."}
 
 
 class SemanticScholarSearchResponse(BaseModel):
-    query_echo: Dict[str, Any]
-    items: List[SemanticScholarPaper]
+    query_echo: dict[str, Any]
+    items: list[SemanticScholarPaper]
     total_results: int
     offset: int
     limit: int

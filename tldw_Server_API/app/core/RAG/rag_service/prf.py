@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
@@ -26,7 +26,7 @@ class PRFConfig:
     """Configuration for pseudo-relevance feedback term mining."""
 
     max_terms: int = 10
-    sources: List[str] = field(default_factory=lambda: ["keywords", "entities", "numbers"])
+    sources: list[str] = field(default_factory=lambda: ["keywords", "entities", "numbers"])
     alpha: float = 0.3
     top_n: int = 8
 
@@ -46,23 +46,23 @@ class PRFConfig:
         self.alpha = alpha_val
 
 
-def _tokenize(text: str) -> List[str]:
+def _tokenize(text: str) -> list[str]:
     """Simple tokenizer for PRF term extraction."""
     if not text:
         return []
     return re.findall(r"[A-Za-z0-9_]{3,}", text.lower())
 
 
-def _extract_numbers(text: str) -> List[str]:
+def _extract_numbers(text: str) -> list[str]:
     """Extract numeric-like tokens (years, counts, percentages, amounts)."""
     if not text:
         return []
     return re.findall(r"\d[\d,._%]*", text)
 
 
-def _extract_entities(doc: Document) -> List[str]:
+def _extract_entities(doc: Document) -> list[str]:
     """Extract simple entity-like tokens from document metadata."""
-    entities: List[str] = []
+    entities: list[str] = []
     try:
         meta = getattr(doc, "metadata", {}) or {}
         title = str(meta.get("title") or "")[:200]
@@ -77,9 +77,9 @@ def _extract_entities(doc: Document) -> List[str]:
 
 async def apply_prf(
     query: str,
-    documents: List[Document],
-    config: Optional[PRFConfig] = None,
-) -> Tuple[str, Dict[str, Any]]:
+    documents: list[Document],
+    config: PRFConfig | None = None,
+) -> tuple[str, dict[str, Any]]:
     """
     Compute a simple PRF-based expanded query from top documents.
 
@@ -102,8 +102,8 @@ async def apply_prf(
 
     try:
         seeds = documents[: cfg.top_n]
-        term_counts: Dict[str, int] = {}
-        term_score_sums: Dict[str, float] = {}
+        term_counts: dict[str, int] = {}
+        term_score_sums: dict[str, float] = {}
 
         use_keywords = "keywords" in cfg.sources
         use_entities = "entities" in cfg.sources
@@ -144,7 +144,7 @@ async def apply_prf(
         max_count = max(term_counts.values())
         max_score_sum = max(term_score_sums.values()) if term_score_sums else 0.0
 
-        term_scores: Dict[str, float] = {}
+        term_scores: dict[str, float] = {}
         for term, count in term_counts.items():
             prf_score = float(count) / float(max_count) if max_count > 0 else 0.0
             if max_score_sum > 0.0:
@@ -171,7 +171,7 @@ async def apply_prf(
             }
 
         expanded_query = f"{query} {' '.join(selected)}".strip()
-        meta: Dict[str, Any] = {
+        meta: dict[str, Any] = {
             "enabled": True,
             "base_query": query,
             "expanded_query": expanded_query,

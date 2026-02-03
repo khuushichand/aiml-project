@@ -5,9 +5,11 @@ Provides abstract interfaces and common functionality for all chunking strategie
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Protocol, Union, Generator
+from collections.abc import Generator
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, Optional, Protocol
+
 from loguru import logger
 
 
@@ -43,7 +45,7 @@ class ChunkMetadata:
     char_count: Optional[int] = None  # Add for compatibility
     sentence_count: Optional[int] = None  # Add for compatibility
     method: Optional[str] = None  # Add chunking method used
-    options: Optional[Dict[str, Any]] = field(default=None)  # Add options used
+    options: Optional[dict[str, Any]] = field(default=None)  # Add options used
 
     def __post_init__(self):
         """Calculate derived fields if not provided."""
@@ -65,7 +67,7 @@ class ChunkingStrategy(Protocol):
               text: str,
               max_size: int,
               overlap: int = 0,
-              **options) -> List[str]:
+              **options) -> list[str]:
         """
         Chunk text according to the strategy.
 
@@ -84,7 +86,7 @@ class ChunkingStrategy(Protocol):
                            text: str,
                            max_size: int,
                            overlap: int = 0,
-                           **options) -> List[ChunkResult]:
+                           **options) -> list[ChunkResult]:
         """
         Chunk text and return with metadata.
 
@@ -214,7 +216,7 @@ class BaseChunkingStrategy(ABC):
               text: str,
               max_size: int,
               overlap: int = 0,
-              **options) -> List[str]:
+              **options) -> list[str]:
         """
         Chunk text according to the strategy.
 
@@ -233,7 +235,7 @@ class BaseChunkingStrategy(ABC):
                            text: str,
                            max_size: int,
                            overlap: int = 0,
-                           **options) -> List[ChunkResult]:
+                           **options) -> list[ChunkResult]:
         """
         Chunk text and return with metadata.
 
@@ -296,7 +298,7 @@ class BaseChunkingStrategy(ABC):
 
         return results
 
-    def validate_options(self, options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def validate_options(self, options: Optional[dict[str, Any]]) -> dict[str, Any]:
         """
         Validate and normalize options for chunking strategies.
 

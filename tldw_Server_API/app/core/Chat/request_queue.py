@@ -5,14 +5,15 @@
 import asyncio
 import json
 import time
-from dataclasses import dataclass, field
-from enum import IntEnum
-from heapq import heappush, heappop
-from typing import Any, Dict, Optional, Callable, Tuple
-from loguru import logger
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from dataclasses import dataclass, field
+from enum import IntEnum
 from functools import partial
+from heapq import heappop, heappush
+from typing import Any, Callable, Optional
+
+from loguru import logger
 
 #######################################################################################################################
 #
@@ -37,8 +38,8 @@ class QueuedRequest:
     estimated_tokens: int = field(compare=False, default=0)
     # Optional processor for actual work execution
     processor: Optional[Callable[..., Any]] = field(compare=False, default=None)
-    processor_args: Tuple[Any, ...] = field(compare=False, default_factory=tuple)
-    processor_kwargs: Dict[str, Any] = field(compare=False, default_factory=dict)
+    processor_args: tuple[Any, ...] = field(compare=False, default_factory=tuple)
+    processor_kwargs: dict[str, Any] = field(compare=False, default_factory=dict)
     streaming: bool = field(compare=False, default=False)
     # For streaming jobs, a channel to emit provider chunks (bytes or str). Sentinel None indicates end.
     stream_channel: Optional[asyncio.Queue] = field(compare=False, default=None)
@@ -487,8 +488,8 @@ class RequestQueue:
         estimated_tokens: int = 0,
         *,
         processor: Optional[Callable[..., Any]] = None,
-        processor_args: Tuple[Any, ...] = (),
-        processor_kwargs: Optional[Dict[str, Any]] = None,
+        processor_args: tuple[Any, ...] = (),
+        processor_kwargs: Optional[dict[str, Any]] = None,
         streaming: bool = False,
         stream_channel: Optional[asyncio.Queue] = None,
     ) -> asyncio.Future:
@@ -553,7 +554,7 @@ class RequestQueue:
 
         return future
 
-    def get_queue_status(self) -> Dict[str, Any]:
+    def get_queue_status(self) -> dict[str, Any]:
         """
         Get current queue status.
 
@@ -694,8 +695,8 @@ class RateLimitedQueue(RequestQueue):
         estimated_tokens: int = 0,
         *,
         processor: Optional[Callable[..., Any]] = None,
-        processor_args: Tuple[Any, ...] = (),
-        processor_kwargs: Optional[Dict[str, Any]] = None,
+        processor_args: tuple[Any, ...] = (),
+        processor_kwargs: Optional[dict[str, Any]] = None,
         streaming: bool = False,
         stream_channel: Optional[asyncio.Queue] = None,
     ) -> asyncio.Future:

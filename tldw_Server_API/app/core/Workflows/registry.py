@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import builtins
 from dataclasses import dataclass
-from typing import Dict, List
 
 
 @dataclass
@@ -14,7 +14,7 @@ class StepTypeRegistry:
     """Static step type registry for v0.1 stub."""
 
     def __init__(self) -> None:
-        self._steps: Dict[str, StepType] = {
+        self._steps: dict[str, StepType] = {
             "media_ingest": StepType("media_ingest", "Ingest and process media (download, extract, chunk, index)"),
             "prompt": StepType("prompt", "Render a templated prompt without calling an LLM"),
             "llm": StepType("llm", "Invoke an LLM chat completion and return text/output"),
@@ -148,7 +148,7 @@ class StepTypeRegistry:
             "literature_review": StepType("literature_review", "Generate literature review summary"),
         }
 
-    def list(self) -> List[StepType]:
+    def list(self) -> builtins.list[StepType]:
         return list(self._steps.values())
 
     def has(self, name: str) -> bool:

@@ -11,14 +11,12 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime, timezone
-from typing import Optional
 
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import StoragePathValidationError
-
 
 MIN_INTERVAL_SECONDS = 60
 
@@ -89,7 +87,7 @@ async def _purge_expired_exports_for_user(user_id: int, now_iso: str) -> tuple[i
         return cleared, files_deleted
 
 
-async def start_file_artifacts_export_gc_scheduler() -> Optional[asyncio.Task]:
+async def start_file_artifacts_export_gc_scheduler() -> asyncio.Task | None:
     """Start the file export GC scheduler task or return None if disabled."""
     enabled = os.getenv("FILES_EXPORT_GC_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     if not enabled:

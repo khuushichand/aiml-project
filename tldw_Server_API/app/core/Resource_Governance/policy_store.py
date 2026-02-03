@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Protocol, Tuple
+from typing import Any, Protocol
 
 
 class PolicyStore(Protocol):
-    async def get_latest_policy(self) -> Tuple[int, Dict[str, Any], Dict[str, Any], float]:
+    async def get_latest_policy(self) -> tuple[int, dict[str, Any], dict[str, Any], float]:
         """
         Return (version, policies, tenant, updated_at_epoch_seconds).
 
@@ -18,7 +18,7 @@ class PolicyStore(Protocol):
 @dataclass(frozen=True)
 class PolicyRecord:
     id: str
-    payload: Dict[str, Any]
+    payload: dict[str, Any]
     version: int
     updated_at: datetime
 
@@ -30,11 +30,11 @@ def utc_now() -> datetime:
 class InMemoryPolicyStore:
     """Simple in-memory store, useful for tests and bootstrapping."""
 
-    def __init__(self, version: int, policies: Dict[str, Any], tenant: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, version: int, policies: dict[str, Any], tenant: dict[str, Any] | None = None) -> None:
         self._version = int(version)
         self._policies = dict(policies)
         self._tenant = dict(tenant or {})
         self._updated_at = utc_now().timestamp()
 
-    async def get_latest_policy(self) -> Tuple[int, Dict[str, Any], Dict[str, Any], float]:
+    async def get_latest_policy(self) -> tuple[int, dict[str, Any], dict[str, Any], float]:
         return self._version, dict(self._policies), dict(self._tenant), float(self._updated_at)

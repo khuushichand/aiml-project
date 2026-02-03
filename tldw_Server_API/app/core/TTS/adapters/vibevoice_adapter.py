@@ -3,41 +3,37 @@
 #
 # Imports
 import asyncio
-import os
-import json
-import re
 import gc
-from typing import Optional, Dict, Any, AsyncGenerator, Set, List, Tuple
+import os
+import re
+from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import Any, Optional
+
+import numpy as np
+
 #
 # Third-party Imports
 import torch
-import numpy as np
 from loguru import logger
+
+from ..tts_exceptions import (
+    TTSGenerationError,
+    TTSGPUError,
+    TTSInsufficientMemoryError,
+    TTSModelLoadError,
+    TTSModelNotFoundError,
+    TTSProviderInitializationError,
+    TTSProviderNotConfiguredError,
+)
+from ..tts_resource_manager import get_resource_manager
+from ..tts_validation import validate_tts_request
+from ..utils import parse_bool
+
 #
 # Local Imports
-from .base import (
-    TTSAdapter,
-    TTSCapabilities,
-    TTSRequest,
-    TTSResponse,
-    AudioFormat,
-    VoiceInfo,
-    ProviderStatus
-)
-from ..tts_exceptions import (
-    TTSProviderNotConfiguredError,
-    TTSProviderInitializationError,
-    TTSModelNotFoundError,
-    TTSModelLoadError,
-    TTSGenerationError,
-    TTSResourceError,
-    TTSInsufficientMemoryError,
-    TTSGPUError
-)
-from ..tts_validation import validate_tts_request
-from ..tts_resource_manager import get_resource_manager
-from ..utils import parse_bool
+from .base import AudioFormat, ProviderStatus, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse, VoiceInfo
+
 #
 #######################################################################################################################
 #
@@ -74,7 +70,7 @@ class VibeVoiceAdapter(TTSAdapter):
     # Voice presets loaded from files
     VOICE_PRESETS = {}
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config)
 
         # Model variant selection (1.5B or 7B)
@@ -570,8 +566,8 @@ class VibeVoiceAdapter(TTSAdapter):
         formatted_text: str,
         voice_reference_path: Optional[str],
         primary_voice: str,
-        speakers_to_voices: Optional[Dict[str, str]] = None,
-    ) -> List[str]:
+        speakers_to_voices: Optional[dict[str, str]] = None,
+    ) -> list[str]:
         """Build ordered voice sample list aligned to speakers in formatted_text.
 
         speakers_to_voices: mapping of speaker id (str or int) to either a voice id in available_voices
@@ -584,14 +580,14 @@ class VibeVoiceAdapter(TTSAdapter):
         num_speakers = len(unique_speakers) if unique_speakers else 1
 
         # Collect available files from voices dir
-        available_voice_files: List[str] = []
+        available_voice_files: list[str] = []
         if self.voices_dir.exists():
             for ext in (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"):
                 for p in self.voices_dir.glob(f"*{ext}"):
                     available_voice_files.append(str(p))
 
         # Normalize provided mapping
-        mapping: Dict[int, str] = {}
+        mapping: dict[int, str] = {}
         if speakers_to_voices:
             for k, v in speakers_to_voices.items():
                 try:
@@ -603,7 +599,7 @@ class VibeVoiceAdapter(TTSAdapter):
                 mapping[idx] = v
 
         # Build voice samples list
-        voice_samples: List[str] = [None] * num_speakers  # type: ignore
+        voice_samples: list[str] = [None] * num_speakers  # type: ignore
         # Fill from mapping first
         for idx, val in mapping.items():
             if 0 <= idx < num_speakers:
@@ -848,7 +844,7 @@ class VibeVoiceAdapter(TTSAdapter):
         voice: str,
         speaker_id: int,
         voice_reference_path: Optional[str] = None,
-        gen_config: Optional[Dict[str, Any]] = None
+        gen_config: Optional[dict[str, Any]] = None
     ) -> AsyncGenerator[bytes, None]:
         """Stream audio from VibeVoice model"""
         if not self.model or not self.processor:
@@ -858,10 +854,7 @@ class VibeVoiceAdapter(TTSAdapter):
             )
 
         # Import StreamingAudioWriter
-        from tldw_Server_API.app.core.TTS.streaming_audio_writer import (
-            StreamingAudioWriter,
-            AudioNormalizer
-        )
+        from tldw_Server_API.app.core.TTS.streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
 
         normalizer = AudioNormalizer()
         writer = StreamingAudioWriter(
@@ -1009,7 +1002,7 @@ class VibeVoiceAdapter(TTSAdapter):
         voice: str,
         speaker_id: int,
         voice_reference_path: Optional[str] = None,
-        gen_config: Optional[Dict[str, Any]] = None
+        gen_config: Optional[dict[str, Any]] = None
     ) -> bytes:
         """Generate complete audio from VibeVoice"""
         all_audio = b""
@@ -1022,7 +1015,7 @@ class VibeVoiceAdapter(TTSAdapter):
         request: TTSRequest,
         voice: str,
         speaker_id: int
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Prepare input for VibeVoice with speaker settings"""
         # Ensure text is formatted as expected by VibeVoiceProcessor
         text = self.preprocess_text(request.text)
@@ -1052,10 +1045,11 @@ class VibeVoiceAdapter(TTSAdapter):
         """
         try:
             import tempfile
-            from pathlib import Path
-            from tldw_Server_API.app.core.TTS.audio_utils import process_voice_reference_async
-            import soundfile as sf
+
             import librosa
+            import soundfile as sf
+
+            from tldw_Server_API.app.core.TTS.audio_utils import process_voice_reference_async
 
             # Process voice reference for VibeVoice requirements
             processed_audio, error = await process_voice_reference_async(
@@ -1139,7 +1133,7 @@ class VibeVoiceAdapter(TTSAdapter):
         logger.warning(f"Voice {voice_id} not found, using default speaker_1")
         return "speaker_1"
 
-    def _parse_multi_speaker_text(self, text: str) -> Tuple[str, Optional[Dict[int, str]]]:
+    def _parse_multi_speaker_text(self, text: str) -> tuple[str, Optional[dict[int, str]]]:
         """Parse text for multi-speaker markers and return cleaned text with speaker mapping."""
         # Pattern to match various speaker formats
         # Supports: [1]:, [Speaker1]:, Speaker 1:, etc.
@@ -1314,7 +1308,7 @@ class VibeVoiceAdapter(TTSAdapter):
         except Exception as e:
             logger.debug(f"Could not update memory stats: {e}")
 
-    def get_memory_usage(self) -> Dict[str, float]:
+    def get_memory_usage(self) -> dict[str, float]:
         """Get current memory usage statistics."""
         self._update_memory_stats()
         return self._memory_stats.copy()

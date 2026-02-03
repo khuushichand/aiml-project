@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional, Sequence, Tuple
+from collections.abc import Iterable, Mapping, MutableMapping, Sequence
+from typing import Any
 
 from fastapi import Request
 from loguru import logger
@@ -22,17 +23,16 @@ from loguru import logger
 from tldw_Server_API.app.core.config import config
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
 
-
 CacheClient = Any  # Redis-like interface (setex/get/delete/sadd/smembers/expire/scan).
 
 
 # TTL and enable flag come from central configuration.
 CACHE_TTL: int = int(config.get("CACHE_TTL", 300))
 _REDIS_ENABLED: bool = bool(config.get("REDIS_ENABLED", False))
-_CACHE_CLIENT: Optional[CacheClient] = None
+_CACHE_CLIENT: CacheClient | None = None
 
 
-def get_cache_client() -> Optional[CacheClient]:
+def get_cache_client() -> CacheClient | None:
     """
     Return a Redis client when enabled and reachable, otherwise None.
 
@@ -69,7 +69,7 @@ def get_cache_client() -> Optional[CacheClient]:
 def build_cache_key_from_request(
     request: Request,
     *,
-    exclude_keys: Optional[Iterable[str]] = None,
+    exclude_keys: Iterable[str] | None = None,
 ) -> str:
     """
     Build a stable cache key from the request URL and query params.
@@ -91,7 +91,7 @@ def build_cache_key(
     path: str,
     query_params: Mapping[str, Any],
     *,
-    exclude_keys: Optional[Iterable[str]] = None,
+    exclude_keys: Iterable[str] | None = None,
 ) -> str:
     """
     Build a stable cache key from path and query parameters.
@@ -101,7 +101,7 @@ def build_cache_key(
     """
     exclude = set(exclude_keys or ())
     exclude.update({"token"})
-    params: Dict[str, Any] = {k: v for k, v in query_params.items() if k not in exclude}
+    params: dict[str, Any] = {k: v for k, v in query_params.items() if k not in exclude}
     frozen = frozenset(params.items())
     return f"cache:{path}:{hash(frozen)}"
 
@@ -137,7 +137,7 @@ def generate_etag(payload: Any) -> str:
     return hashlib.md5(serialized.encode("utf-8")).hexdigest()
 
 
-def parse_if_none_match(header_value: Optional[str]) -> Sequence[str]:
+def parse_if_none_match(header_value: str | None) -> Sequence[str]:
     """
     Parse an If-None-Match header into a list of candidate ETags.
 
@@ -160,7 +160,7 @@ def parse_if_none_match(header_value: Optional[str]) -> Sequence[str]:
     return etags
 
 
-def is_not_modified(current_etag: str, if_none_match: Optional[str]) -> bool:
+def is_not_modified(current_etag: str, if_none_match: str | None) -> bool:
     """
     Return True when the provided If-None-Match header matches current_etag.
     """
@@ -171,8 +171,8 @@ def cache_response(
     key: str,
     payload: Any,
     *,
-    client: Optional[CacheClient] = None,
-    media_id: Optional[int] = None,
+    client: CacheClient | None = None,
+    media_id: int | None = None,
 ) -> str:
     """
     Cache a response payload under the given key and return its ETag.
@@ -203,8 +203,8 @@ def cache_response(
 def get_cached_response(
     key: str,
     *,
-    client: Optional[CacheClient] = None,
-) -> Optional[Tuple[str, Any]]:
+    client: CacheClient | None = None,
+) -> tuple[str, Any] | None:
     """
     Retrieve a cached payload and its ETag for the given key.
 
@@ -240,7 +240,7 @@ def get_cached_response(
 def invalidate_media_cache(
     media_id: int,
     *,
-    client: Optional[CacheClient] = None,
+    client: CacheClient | None = None,
 ) -> None:
     """
     Invalidate cache entries related to a specific media item.

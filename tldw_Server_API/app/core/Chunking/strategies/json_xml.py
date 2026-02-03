@@ -7,11 +7,13 @@ Handles structured data formats while preserving structure and relationships.
 import json
 import re
 import xml.etree.ElementTree as ET
+from typing import Any, Optional
 from xml.etree.ElementTree import ParseError
-from typing import List, Dict, Any, Optional, Tuple, Generator
+
 from loguru import logger
 
-from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
+from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
+
 
 # Local helpers to read optional configuration from config.txt / env
 def _get_chunking_bool(key: str, default: bool) -> bool:
@@ -42,8 +44,8 @@ def _get_chunking_str(key: str, default: str) -> str:
     except (ImportError, AttributeError, KeyError, ValueError) as e:
         logger.debug(f"_get_chunking_str: config lookup failed for '{key}', using default='{default}': {e}")
         return default
-from ..exceptions import InvalidInputError, ChunkingError
-from ..security_logger import get_security_logger, SecurityEventType
+from ..exceptions import InvalidInputError
+from ..security_logger import get_security_logger
 
 # Precompiled XML security patterns (ASCII-only)
 _DOCTYPE_SYSTEM_RE = re.compile(r'<!DOCTYPE\s+[^>]*\bSYSTEM\b', re.IGNORECASE)
@@ -79,7 +81,7 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
               text: str,
               max_size: int,
               overlap: int = 0,
-              **options) -> List[str]:
+              **options) -> list[str]:
         """
         Chunk JSON data.
 
@@ -174,7 +176,7 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
                             text: str,
                             max_size: int,
                             overlap: int = 0,
-                            **options) -> List[ChunkResult]:
+                            **options) -> list[ChunkResult]:
         """Chunk JSON and return metadata with source offsets aligned to the original text.
 
         Note: `output_format` affects metadata only. Chunk text is always sourced
@@ -227,9 +229,9 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
             logger.warning(f"Overlap {overlap} >= max_size {max_size}. Setting to 0.")
             overlap = 0
 
-        results: List[ChunkResult] = []
+        results: list[ChunkResult] = []
 
-        def _emit_chunks(spans: List[Tuple[int, int]], method_opts: Dict[str, Any]) -> None:
+        def _emit_chunks(spans: list[tuple[int, int]], method_opts: dict[str, Any]) -> None:
             step = max(1, max_size - overlap)
             idx = 0
             for i in range(0, len(spans), step):
@@ -283,7 +285,7 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
             pairs = self._scan_top_level_object_pairs(text)
             key_map = {p.get('key'): p for p in pairs if p.get('key') is not None}
 
-            def _emit_pair_chunks(pair_spans: List[Tuple[int, int]], note: Dict[str, Any]) -> None:
+            def _emit_pair_chunks(pair_spans: list[tuple[int, int]], note: dict[str, Any]) -> None:
                 _emit_chunks(pair_spans, {**note, 'chunkable_key': chunkable_key, 'preserve_metadata': preserve_metadata})
 
             if chunkable_key in json_data:
@@ -318,9 +320,9 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
             f"Got: {type(json_data).__name__}"
         )
 
-    def _scan_top_level_array_spans(self, text: str) -> List[Tuple[int, int]]:
+    def _scan_top_level_array_spans(self, text: str) -> list[tuple[int, int]]:
         """Return spans of top-level array elements in the original JSON text."""
-        spans: List[Tuple[int, int]] = []
+        spans: list[tuple[int, int]] = []
         n = len(text)
         i = 0
         while i < n and text[i].isspace():
@@ -387,9 +389,9 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
             i += 1
         return spans
 
-    def _scan_top_level_object_pairs(self, text: str) -> List[Dict[str, Any]]:
+    def _scan_top_level_object_pairs(self, text: str) -> list[dict[str, Any]]:
         """Return spans for top-level key/value pairs in the original JSON text."""
-        pairs: List[Dict[str, Any]] = []
+        pairs: list[dict[str, Any]] = []
         n = len(text)
         i = 0
         while i < n and text[i].isspace():
@@ -402,7 +404,7 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
         esc = False
         pair_start: Optional[int] = None
         last_non_ws: Optional[int] = None
-        key_buf: Optional[List[str]] = None
+        key_buf: Optional[list[str]] = None
         reading_key = False
         current_key: Optional[str] = None
         expecting_key = True
@@ -513,10 +515,10 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
         return pairs
 
     def _chunk_json_list(self,
-                        json_list: List[Any],
+                        json_list: list[Any],
                         max_size: int,
                         overlap: int,
-                        **options) -> List[List[Any]]:
+                        **options) -> list[list[Any]]:
         """
         Chunk a JSON array.
 
@@ -546,10 +548,10 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
         return chunks
 
     def _chunk_json_dict(self,
-                        json_dict: Dict[str, Any],
+                        json_dict: dict[str, Any],
                         max_size: int,
                         overlap: int,
-                        **options) -> List[Dict[str, Any]]:
+                        **options) -> list[dict[str, Any]]:
         """
         Chunk a JSON object.
 
@@ -640,9 +642,9 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
 
 
     def _chunk_dict_by_keys(self,
-                           data_dict: Dict[str, Any],
+                           data_dict: dict[str, Any],
                            max_size: int,
-                           overlap: int) -> List[Dict[str, Any]]:
+                           overlap: int) -> list[dict[str, Any]]:
         """
         Chunk a dictionary by its keys.
 
@@ -718,7 +720,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
               text: str,
               max_size: int,
               overlap: int = 0,
-              **options) -> List[str]:
+              **options) -> list[str]:
         """
         Chunk XML data.
 
@@ -749,6 +751,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
             # Try to use defusedxml if available (most secure)
             try:
                 import defusedxml.ElementTree as DefusedET
+
                 # Import the common submodule explicitly to reference exception types
                 from defusedxml import common as defused_common
 
@@ -819,7 +822,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
                             text: str,
                             max_size: int,
                             overlap: int = 0,
-                            **options) -> List[ChunkResult]:
+                            **options) -> list[ChunkResult]:
         """Chunk XML data and return results with source offsets."""
         if not self.validate_parameters(text, max_size, overlap):
             return []
@@ -875,7 +878,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
 
         # Map element content to source spans using rolling search for stability.
         cursor = 0
-        element_entries: List[Tuple[str, str, ET.Element, int, int]] = []
+        element_entries: list[tuple[str, str, ET.Element, int, int]] = []
         for path, raw_text, elem in elements_raw:
             raw = raw_text
             if not raw:
@@ -900,8 +903,8 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
             logger.warning(f"Overlap {overlap} >= total elements. Setting to 0.")
             overlap = 0
 
-        chunks: List[List[Tuple[str, str, ET.Element, int, int]]] = []
-        current_chunk: List[Tuple[str, str, ET.Element, int, int]] = []
+        chunks: list[list[tuple[str, str, ET.Element, int, int]]] = []
+        current_chunk: list[tuple[str, str, ET.Element, int, int]] = []
         current_word_count = 0
 
         for entry in element_entries:
@@ -926,7 +929,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
         if current_chunk:
             chunks.append(current_chunk)
 
-        results: List[ChunkResult] = []
+        results: list[ChunkResult] = []
         for idx, chunk in enumerate(chunks):
             start_char = min(e[3] for e in chunk)
             end_char = max(e[4] for e in chunk)
@@ -956,7 +959,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
 
     def _extract_xml_elements(self,
                              element: ET.Element,
-                             path: str = "") -> List[Tuple[str, str, ET.Element]]:
+                             path: str = "") -> list[tuple[str, str, ET.Element]]:
         """
         Recursively extract XML elements with paths.
 
@@ -994,7 +997,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
 
     def _extract_xml_elements_with_raw(self,
                                        element: ET.Element,
-                                       path: str = "") -> List[Tuple[str, str, ET.Element]]:
+                                       path: str = "") -> list[tuple[str, str, ET.Element]]:
         """Extract XML elements preserving raw text for offset mapping."""
         results = []
         current_path = f"{path}/{element.tag}" if path else element.tag
@@ -1013,10 +1016,10 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
         return results
 
     def _chunk_xml_elements(self,
-                           elements: List[Tuple[str, str, ET.Element]],
+                           elements: list[tuple[str, str, ET.Element]],
                            max_size: int,
                            overlap: int,
-                           **options) -> List[List[Tuple[str, str, ET.Element]]]:
+                           **options) -> list[list[tuple[str, str, ET.Element]]]:
         """
         Chunk XML elements by content size.
 
@@ -1068,7 +1071,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
         return chunks
 
     def _elements_to_text(self,
-                         elements: List[Tuple[str, str, ET.Element]],
+                         elements: list[tuple[str, str, ET.Element]],
                          include_paths: bool) -> str:
         """
         Convert XML elements to text representation.
@@ -1091,9 +1094,9 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
         return '\n'.join(lines)
 
     def _elements_to_xml(self,
-                        elements: List[Tuple[str, str, ET.Element]],
+                        elements: list[tuple[str, str, ET.Element]],
                         root_tag: str,
-                        root_attrib: Dict[str, str]) -> str:
+                        root_attrib: dict[str, str]) -> str:
         """
         Reconstruct XML from elements, preserving hierarchy based on path.
 
@@ -1109,8 +1112,8 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
         new_root = ET.Element(root_tag, root_attrib)
 
         # Track added elements and path-to-element mapping
-        orig_to_new: Dict[ET.Element, ET.Element] = {}
-        path_to_element: Dict[str, ET.Element] = {root_tag: new_root}
+        orig_to_new: dict[ET.Element, ET.Element] = {}
+        path_to_element: dict[str, ET.Element] = {root_tag: new_root}
 
         for path, content, elem in elements:
             is_tail = path.endswith("[tail]")

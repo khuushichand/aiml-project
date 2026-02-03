@@ -6,33 +6,34 @@ Topic Monitoring API (Phase 1)
 Permission-gated endpoints requiring SYSTEM_LOGS to manage watchlists, alerts, and notifications.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from loguru import logger
-import os
-import json
 import asyncio
+import json
+import os
 from pathlib import Path
 
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from loguru import logger
+
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_permissions
-from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.api.v1.schemas.monitoring_schemas import (
-    Watchlist,
-    WatchlistListResponse,
-    WatchlistUpsertResponse,
-    WatchlistDeleteResponse,
-    WatchlistsReloadResponse,
-    AlertsListResponse,
     AlertItem,
+    AlertsListResponse,
     MarkReadResponse,
     NotificationSettings,
     NotificationSettingsUpdate,
     NotificationTestRequest,
     NotificationTestResponse,
     RecentNotificationsResponse,
+    Watchlist,
+    WatchlistDeleteResponse,
+    WatchlistListResponse,
+    WatchlistsReloadResponse,
+    WatchlistUpsertResponse,
 )
-from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
-from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicMonitoringDB, TopicAlert
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
+from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicAlert, TopicMonitoringDB
 from tldw_Server_API.app.core.Monitoring.notification_service import get_notification_service
+from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 
 # Cached TopicMonitoringDB instance (initialized on first use).

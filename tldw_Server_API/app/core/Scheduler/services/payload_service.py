@@ -3,17 +3,18 @@ Stateless payload management service.
 Handles large payloads with external storage and compression.
 """
 
-import json
 import gzip
-import pickle
-from typing import Any, Optional, Dict
-from pathlib import Path
 import hashlib
+import json
+import pickle
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Optional
+
 from loguru import logger
 
-from ..base.queue_backend import QueueBackend
 from ..base.exceptions import PayloadError
+from ..base.queue_backend import QueueBackend
 from ..config import SchedulerConfig
 
 
@@ -244,7 +245,7 @@ class PayloadService:
         shard = payload_ref[:2]
         return self.storage_path / shard / f"{payload_ref}.payload"
 
-    async def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> dict[str, Any]:
         """
         Get payload storage statistics.
 
@@ -271,7 +272,7 @@ class PayloadService:
             'retention_days': self.config.payload_retention_days
         }
 
-    def prepare_payload(self, payload: Any) -> Dict[str, Any]:
+    def prepare_payload(self, payload: Any) -> dict[str, Any]:
         """
         Prepare payload for task creation.
 

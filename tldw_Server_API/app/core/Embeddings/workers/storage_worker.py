@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, List, Optional
+from typing import Any
 
 from tldw_Server_API.app.core.Embeddings.workers.base_worker import BaseWorker, WorkerConfig
 
@@ -17,10 +17,10 @@ class StorageWorker(BaseWorker):
         self,
         *,
         collection: Any,
-        ids: List[str],
-        embeddings: List[List[float]],
-        documents: Optional[List[str]] = None,
-        metadatas: Optional[List[dict]] = None,
+        ids: list[str],
+        embeddings: list[list[float]],
+        documents: list[str] | None = None,
+        metadatas: list[dict] | None = None,
     ) -> None:
         """Store embeddings batch with upsert fallback logic."""
         if hasattr(collection, "upsert"):

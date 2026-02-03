@@ -9,23 +9,23 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone, timedelta
+import smtplib
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 from urllib.parse import urlparse
 
-from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
-from tldw_Server_API.app.core.exceptions import (
-    SecurityAlertWebhookError,
-    SecurityAlertEmailError,
-    SecurityAlertFileError,
-)
-import smtplib
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.AuthNZ.monitoring import update_security_alert_metrics
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.exceptions import (
+    SecurityAlertEmailError,
+    SecurityAlertFileError,
+    SecurityAlertWebhookError,
+)
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 
 _SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
@@ -33,7 +33,7 @@ _SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 class SecurityAlertDispatcher:
     """Dispatch security alerts to configured sinks."""
 
-    def __init__(self, settings: Optional[Settings] = None) -> None:
+    def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self.enabled = getattr(self.settings, "SECURITY_ALERTS_ENABLED", False)
         self.min_severity = getattr(
@@ -53,7 +53,7 @@ class SecurityAlertDispatcher:
         raw_headers = getattr(
             self.settings, "SECURITY_ALERT_WEBHOOK_HEADERS", None
         ) or ""
-        self.webhook_headers: Dict[str, str] = self._parse_headers(raw_headers)
+        self.webhook_headers: dict[str, str] = self._parse_headers(raw_headers)
         recipients = getattr(self.settings, "SECURITY_ALERT_EMAIL_TO", "") or ""
         self.email_recipients = [
             email.strip() for email in recipients.split(",") if email.strip()
@@ -75,22 +75,22 @@ class SecurityAlertDispatcher:
             self.settings, "SECURITY_ALERT_SMTP_TIMEOUT", 10
         )
         self._file_lock = asyncio.Lock()
-        self._last_dispatch_time: Optional[datetime] = None
-        self._last_dispatch_success: Optional[bool] = None
-        self._last_dispatch_error: Optional[str] = None
-        self._last_sink_status: Dict[str, Optional[bool]] = {
+        self._last_dispatch_time: datetime | None = None
+        self._last_dispatch_success: bool | None = None
+        self._last_dispatch_error: str | None = None
+        self._last_sink_status: dict[str, bool | None] = {
             "file": None,
             "webhook": None,
             "email": None,
         }
-        self._last_sink_errors: Dict[str, Optional[str]] = {
+        self._last_sink_errors: dict[str, str | None] = {
             "file": None,
             "webhook": None,
             "email": None,
         }
         self._dispatch_count = 0
-        self._last_validation_time: Optional[datetime] = None
-        self._last_validation_errors: Optional[list[str]] = None
+        self._last_validation_time: datetime | None = None
+        self._last_validation_errors: list[str] | None = None
         try:
             self.file_min_severity = self._normalize_threshold(
                 getattr(self.settings, "SECURITY_ALERT_FILE_MIN_SEVERITY", None)
@@ -104,7 +104,7 @@ class SecurityAlertDispatcher:
         except ValueError as threshold_error:
             raise ValueError(f"Security alert severity configuration error: {threshold_error}") from threshold_error
         self.backoff_seconds = max(0, int(getattr(self.settings, "SECURITY_ALERT_BACKOFF_SECONDS", 30)))
-        self._sink_backoff: Dict[str, datetime] = {}
+        self._sink_backoff: dict[str, datetime] = {}
 
         if self.file_path:
             try:
@@ -113,7 +113,7 @@ class SecurityAlertDispatcher:
                 logger.debug(f"Security alert log path setup failed: {exc}")
 
     @staticmethod
-    def _parse_headers(raw_headers: str) -> Dict[str, str]:
+    def _parse_headers(raw_headers: str) -> dict[str, str]:
         if not raw_headers:
             return {}
         try:
@@ -134,7 +134,7 @@ class SecurityAlertDispatcher:
         )
         return sev_value >= threshold_value
 
-    def _normalize_threshold(self, value: Optional[str]) -> Optional[str]:
+    def _normalize_threshold(self, value: str | None) -> str | None:
         if not value:
             return None
         normalized = value.strip().lower()
@@ -142,7 +142,7 @@ class SecurityAlertDispatcher:
             raise ValueError(f"Invalid severity threshold '{value}'")
         return normalized
 
-    def _severity_passes(self, severity: str, threshold: Optional[str]) -> bool:
+    def _severity_passes(self, severity: str, threshold: str | None) -> bool:
         if not threshold:
             return True
         return _SEVERITY_ORDER.get(severity, 0) >= _SEVERITY_ORDER[threshold]
@@ -222,7 +222,7 @@ class SecurityAlertDispatcher:
         message: str,
         *,
         severity: str = "high",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> bool:
         """Dispatch a security alert."""
         severity = (severity or "high").lower()
@@ -249,12 +249,12 @@ class SecurityAlertDispatcher:
 
         current_time = datetime.now(timezone.utc)
 
-        sink_status: Dict[str, Optional[bool]] = {
+        sink_status: dict[str, bool | None] = {
             "file": None,
             "webhook": None,
             "email": None,
         }
-        sink_errors: Dict[str, Optional[str]] = {
+        sink_errors: dict[str, str | None] = {
             "file": None,
             "webhook": None,
             "email": None,
@@ -348,11 +348,11 @@ class SecurityAlertDispatcher:
             and bool(self.smtp_host)
         )
 
-    async def _write_file(self, record: Dict[str, Any]) -> None:
+    async def _write_file(self, record: dict[str, Any]) -> None:
         async with self._file_lock:
             await asyncio.to_thread(self._write_file_sync, record)
 
-    def _write_file_sync(self, record: Dict[str, Any]) -> None:
+    def _write_file_sync(self, record: dict[str, Any]) -> None:
         if not self.file_path:
             return
         try:
@@ -363,7 +363,7 @@ class SecurityAlertDispatcher:
                 f"File sink failed for path {self.file_path}: {exc}"
             ) from exc
 
-    async def _send_webhook(self, record: Dict[str, Any]) -> None:
+    async def _send_webhook(self, record: dict[str, Any]) -> None:
         headers = {"Content-Type": "application/json", **self.webhook_headers}
         resp = await afetch(
             method="POST",
@@ -385,10 +385,10 @@ class SecurityAlertDispatcher:
                 f"Security alert webhook failed with HTTP {resp.status_code}: {body}"
             )
 
-    async def _send_email(self, record: Dict[str, Any]) -> None:
+    async def _send_email(self, record: dict[str, Any]) -> None:
         await asyncio.to_thread(self._send_email_sync, record)
 
-    def _send_email_sync(self, record: Dict[str, Any]) -> None:
+    def _send_email_sync(self, record: dict[str, Any]) -> None:
         if not self._can_send_email():
             return
 
@@ -437,7 +437,7 @@ class SecurityAlertDispatcher:
                 f"SMTP delivery failed to {self.email_recipients} via {self.smtp_host}:{self.smtp_port}: {exc}"
             ) from exc
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Return current dispatcher configuration and dispatch metadata."""
         return {
             "enabled": self.enabled,
@@ -462,7 +462,7 @@ class SecurityAlertDispatcher:
         }
 
 
-_dispatcher: Optional[SecurityAlertDispatcher] = None
+_dispatcher: SecurityAlertDispatcher | None = None
 
 
 def get_security_alert_dispatcher() -> SecurityAlertDispatcher:

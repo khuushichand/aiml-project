@@ -7,23 +7,25 @@ transforming user input with probability, grouping, and token-budget controls.
 
 from __future__ import annotations
 
+import os
 import random
 import re
 import warnings
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple, Union
-import os
+from typing import Any, Union
 
 from loguru import logger
 
+from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter
-from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Templating.template_renderer import (
     TemplateContext,
     TemplateEnv,
+)
+from tldw_Server_API.app.core.Templating.template_renderer import (
     render as render_template,
 )
-from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.Utils.Utils import logging
 
 
 def _truthy_env(name: str, default: bool = False) -> bool:
@@ -54,7 +56,7 @@ def _has_template_syntax(text: str) -> bool:
         return False
 
 
-def _build_template_context(extra: Optional[Dict[str, Any]] = None) -> TemplateContext:
+def _build_template_context(extra: dict[str, Any] | None = None) -> TemplateContext:
     tz = os.getenv("TEMPLATE_DEFAULT_TZ")
     if not tz:
         try:
@@ -96,7 +98,7 @@ class _SafeMatch:
         return self._m.end(*args)
 
 
-def parse_user_dict_markdown_file(file_path: str) -> Dict[str, str]:
+def parse_user_dict_markdown_file(file_path: str) -> dict[str, str]:
     """
     Parse a user-defined dictionary from a markdown-style file.
 
@@ -110,9 +112,9 @@ def parse_user_dict_markdown_file(file_path: str) -> Dict[str, str]:
     preserve internal whitespace until the terminator is reached.
     """
     logger.debug(f"Parsing user dictionary file: {file_path}")
-    replacement_dict: Dict[str, str] = {}
-    current_key: Optional[str] = None
-    current_value_lines: List[str] = []
+    replacement_dict: dict[str, str] = {}
+    current_key: str | None = None
+    current_value_lines: list[str] = []
 
     new_key_pattern = re.compile(r"^\s*([^:\n]+?)\s*:(.*)$")
     termination_pattern = re.compile(r"^\s*---@@@---\s*$")
@@ -186,8 +188,8 @@ class ChatDictionary:
         key: str,
         content: str,
         probability: int = 100,
-        group: Optional[str] = None,
-        timed_effects: Optional[Dict[str, int]] = None,
+        group: str | None = None,
+        timed_effects: dict[str, int] | None = None,
         max_replacements: int = 1,
     ):
         self.key_raw = key
@@ -196,7 +198,7 @@ class ChatDictionary:
         self.probability = probability
         self.group = group
         self.timed_effects = timed_effects or {"sticky": 0, "cooldown": 0, "delay": 0}
-        self.last_triggered: Optional[datetime] = None
+        self.last_triggered: datetime | None = None
         self.max_replacements = max_replacements
 
     @staticmethod
@@ -214,7 +216,7 @@ class ChatDictionary:
         return self.key in text
 
 
-def apply_strategy(entries: List[ChatDictionary], strategy: str = "sorted_evenly") -> List[ChatDictionary]:
+def apply_strategy(entries: list[ChatDictionary], strategy: str = "sorted_evenly") -> list[ChatDictionary]:
     """
     Sort entries according to the requested strategy.
 
@@ -233,12 +235,12 @@ def apply_strategy(entries: List[ChatDictionary], strategy: str = "sorted_evenly
     return entries
 
 
-def filter_by_probability(entries: List[ChatDictionary]) -> List[ChatDictionary]:
+def filter_by_probability(entries: list[ChatDictionary]) -> list[ChatDictionary]:
     """Filter entries by applying their probability thresholds."""
     return [entry for entry in entries if random.randint(1, 100) <= entry.probability]
 
 
-def group_scoring(entries: List[ChatDictionary]) -> List[ChatDictionary]:
+def group_scoring(entries: list[ChatDictionary]) -> list[ChatDictionary]:
     """
     Apply group scoring rules, selecting the best entry per named group while
     allowing all ungrouped entries to pass through.
@@ -247,11 +249,11 @@ def group_scoring(entries: List[ChatDictionary]) -> List[ChatDictionary]:
     if not entries:
         return []
 
-    grouped_entries: Dict[Optional[str], List[ChatDictionary]] = {}
+    grouped_entries: dict[str | None, list[ChatDictionary]] = {}
     for entry in entries:
         grouped_entries.setdefault(entry.group, []).append(entry)
 
-    selected_entries: List[ChatDictionary] = []
+    selected_entries: list[ChatDictionary] = []
     for group_name, grouped in grouped_entries.items():
         if not grouped:
             continue
@@ -290,7 +292,7 @@ def apply_timed_effects(entry: ChatDictionary, current_time: datetime) -> bool:
     return True
 
 
-def calculate_token_usage(entries: List[ChatDictionary]) -> int:
+def calculate_token_usage(entries: list[ChatDictionary]) -> int:
     """Estimate total token usage for the provided entries."""
     total_tokens = 0
     for entry in entries:
@@ -303,12 +305,12 @@ class TokenBudgetExceededWarning(Warning):
     """Warning raised when the dictionary content exceeds the configured budget."""
 
 
-def enforce_token_budget(entries: List[ChatDictionary], max_tokens: int) -> List[ChatDictionary]:
+def enforce_token_budget(entries: list[ChatDictionary], max_tokens: int) -> list[ChatDictionary]:
     """
     Trim entries to respect the token budget. Entries are assumed to be sorted
     by priority before this function executes.
     """
-    filtered_entries: List[ChatDictionary] = []
+    filtered_entries: list[ChatDictionary] = []
     current_tokens = 0
 
     for entry in entries:
@@ -330,12 +332,12 @@ def enforce_token_budget(entries: List[ChatDictionary], max_tokens: int) -> List
     return filtered_entries
 
 
-def match_whole_words(entries: List[ChatDictionary], text: str) -> List[ChatDictionary]:
+def match_whole_words(entries: list[ChatDictionary], text: str) -> list[ChatDictionary]:
     """
     For plain-string keys, perform whole-word matching (case-insensitive) against
     the provided text. Regex keys are assumed to have matched earlier.
     """
-    matched_entries: List[ChatDictionary] = []
+    matched_entries: list[ChatDictionary] = []
     text_lower = text.lower()
 
     for entry in entries:
@@ -350,7 +352,7 @@ def match_whole_words(entries: List[ChatDictionary], text: str) -> List[ChatDict
     return matched_entries
 
 
-def alert_token_budget_exceeded(entries: List[ChatDictionary], max_tokens: int) -> None:
+def alert_token_budget_exceeded(entries: list[ChatDictionary], max_tokens: int) -> None:
     """Emit a metric when token usage approaches the configured budget."""
     total_tokens = calculate_token_usage(entries)
     if total_tokens > max_tokens:
@@ -360,7 +362,7 @@ def alert_token_budget_exceeded(entries: List[ChatDictionary], max_tokens: int) 
         log_counter("chat_dict_token_budget_exceeded", labels={"max_tokens": str(max_tokens)})
 
 
-def apply_replacement_once(text: str, entry: ChatDictionary) -> Tuple[str, int]:
+def apply_replacement_once(text: str, entry: ChatDictionary) -> tuple[str, int]:
     """
     Apply a single pass replacement for the provided entry. Returns the new text
     plus the number of replacements performed in that pass.
@@ -424,7 +426,7 @@ def apply_replacement_once(text: str, entry: ChatDictionary) -> Tuple[str, int]:
 
 def process_user_input(
     user_input: str,
-    entries: Optional[List[ChatDictionary]] = None,
+    entries: list[ChatDictionary] | None = None,
     max_tokens: int = 500,
     strategy: str = "sorted_evenly",
 ) -> str:
@@ -443,7 +445,7 @@ def process_user_input(
     try:
         logging.debug("Chat Dictionary: Starting processing of user input.")
 
-        matched_entries: List[ChatDictionary] = []
+        matched_entries: list[ChatDictionary] = []
         temp_user_input = user_input
 
         # 1. Match entries (regex first, then whole-word for literal keys)
@@ -482,7 +484,7 @@ def process_user_input(
         current_time = datetime.now()
 
         # 4. Timed effects
-        active_timed_entries: List[ChatDictionary] = []
+        active_timed_entries: list[ChatDictionary] = []
         try:
             logging.debug("Chat Dictionary: Applying timed effects.")
             for entry in matched_entries:

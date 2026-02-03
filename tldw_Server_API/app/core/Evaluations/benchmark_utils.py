@@ -6,17 +6,18 @@ and other standardized benchmarks. Works with the existing evaluation
 system rather than replacing it.
 """
 
+import ast
 import json
 import re
-from typing import Dict, Any, List, Optional, Union, Tuple
-import ast
+from typing import Any, Union
+
 from loguru import logger
 
 logger = logger
 
 
 # Multiple Choice Utilities
-def parse_multiple_choice_answer(response: str, choices: List[str] = None) -> str:
+def parse_multiple_choice_answer(response: str, choices: list[str] = None) -> str:
     """
     Parse multiple choice answer from model response.
 
@@ -66,7 +67,7 @@ def parse_multiple_choice_answer(response: str, choices: List[str] = None) -> st
     return "UNKNOWN"
 
 
-def score_multiple_choice(predicted: str, correct: Union[str, int], choices: List[str] = None) -> float:
+def score_multiple_choice(predicted: str, correct: Union[str, int], choices: list[str] = None) -> float:
     """
     Score multiple choice answer.
 
@@ -94,8 +95,8 @@ def score_multiple_choice(predicted: str, correct: Union[str, int], choices: Lis
     return 1.0 if predicted == correct else 0.0
 
 
-def create_mmlu_evaluation_data(question: str, choices: List[str], correct_answer: Union[str, int],
-                               category: str = None) -> Dict[str, Any]:
+def create_mmlu_evaluation_data(question: str, choices: list[str], correct_answer: Union[str, int],
+                               category: str = None) -> dict[str, Any]:
     """
     Create evaluation data for MMLU question using existing custom metric format.
 
@@ -146,7 +147,7 @@ Respond with: SCORE: X.X EXPLANATION: [explanation]""",
 
 
 # Function Calling Utilities
-def parse_function_call(response: str) -> Dict[str, Any]:
+def parse_function_call(response: str) -> dict[str, Any]:
     """
     Parse function call from model response.
 
@@ -238,7 +239,7 @@ def parse_function_call(response: str) -> Dict[str, Any]:
         return {}
 
 
-def validate_function_call(predicted: Dict[str, Any], expected: Dict[str, Any],
+def validate_function_call(predicted: dict[str, Any], expected: dict[str, Any],
                           strict_params: bool = False) -> float:
     """
     Validate function call against expected call.
@@ -309,8 +310,8 @@ def _values_equivalent(val1: Any, val2: Any) -> bool:
     return str(val1).lower().strip() == str(val2).lower().strip()
 
 
-def create_function_calling_evaluation_data(query: str, expected_call: Dict[str, Any],
-                                           available_functions: List[Dict[str, Any]]) -> Dict[str, Any]:
+def create_function_calling_evaluation_data(query: str, expected_call: dict[str, Any],
+                                           available_functions: list[dict[str, Any]]) -> dict[str, Any]:
     """
     Create evaluation data for function calling test using existing custom metric format.
 
@@ -365,8 +366,8 @@ Respond with: SCORE: X.X EXPLANATION: [explanation]""",
 
 
 # Code Generation Utilities
-def create_code_generation_evaluation_data(problem: str, test_cases: List[Dict[str, Any]],
-                                         language: str = "python") -> Dict[str, Any]:
+def create_code_generation_evaluation_data(problem: str, test_cases: list[dict[str, Any]],
+                                         language: str = "python") -> dict[str, Any]:
     """
     Create evaluation data for code generation problems.
 
@@ -429,7 +430,7 @@ class BaseEvaluation:
         self.description = description
         self.metadata = {}
 
-    def format_for_custom_metric(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+    def format_for_custom_metric(self, input_data: dict[str, Any]) -> dict[str, Any]:
         """Format evaluation data for CustomMetricRequest."""
         raise NotImplementedError("Subclasses must implement format_for_custom_metric")
 
@@ -451,7 +452,7 @@ class MultipleChoiceEvaluation(BaseEvaluation):
         self.num_choices = num_choices
         self.require_reasoning = require_reasoning
 
-    def format_for_custom_metric(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+    def format_for_custom_metric(self, input_data: dict[str, Any]) -> dict[str, Any]:
         """Format multiple choice question for evaluation."""
         question = input_data.get("question", "")
         choices = input_data.get("choices", [])
@@ -540,7 +541,7 @@ class CodeGenerationEvaluation(BaseEvaluation):
         self.language = language
         self.run_tests = run_tests
 
-    def format_for_custom_metric(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+    def format_for_custom_metric(self, input_data: dict[str, Any]) -> dict[str, Any]:
         """Format code generation task for evaluation."""
         problem = input_data.get("problem", "")
         test_cases = input_data.get("test_cases", [])
@@ -638,7 +639,7 @@ class InstructionFollowingEvaluation(BaseEvaluation):
     def __init__(self, name: str = "instruction_following"):
         super().__init__(name, "Instruction following evaluation")
 
-    def format_for_custom_metric(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+    def format_for_custom_metric(self, input_data: dict[str, Any]) -> dict[str, Any]:
         """Format instruction following task for evaluation."""
         instruction = input_data.get("instruction", "")
         constraints = input_data.get("constraints", [])
@@ -692,7 +693,7 @@ Respond with: SCORE: X.X EXPLANATION: [constraint-by-constraint analysis]"""
         """Return response as-is for constraint checking."""
         return response
 
-    def score(self, response: str, constraints: List[Dict[str, Any]]) -> float:
+    def score(self, response: str, constraints: list[dict[str, Any]]) -> float:
         """Score based on constraint satisfaction."""
         if not constraints:
             return 1.0 if response else 0.0
@@ -708,7 +709,7 @@ class HonestyEvaluation(BaseEvaluation):
     def __init__(self, name: str = "honesty"):
         super().__init__(name, "Honesty and consistency evaluation")
 
-    def format_for_custom_metric(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+    def format_for_custom_metric(self, input_data: dict[str, Any]) -> dict[str, Any]:
         """Format honesty evaluation task."""
         question = input_data.get("question", "")
         variations = input_data.get("variations", [])
@@ -791,7 +792,7 @@ class NextTokenCapture:
         self.top_k = top_k
 
     def format_request(self, prompt: str, max_tokens: int = 1,
-                      temperature: float = 1.0, logprobs: bool = True) -> Dict[str, Any]:
+                      temperature: float = 1.0, logprobs: bool = True) -> dict[str, Any]:
         """Format a request to capture next token logprobs.
 
         Args:
@@ -816,7 +817,7 @@ class NextTokenCapture:
             }
         }
 
-    def parse_logprobs(self, response: Dict[str, Any]) -> Dict[str, Any]:
+    def parse_logprobs(self, response: dict[str, Any]) -> dict[str, Any]:
         """Parse API response to extract token probabilities.
 
         Args:
@@ -905,7 +906,7 @@ class NextTokenCapture:
 
         return result
 
-    def analyze_distribution(self, logprobs_data: Dict[str, Any]) -> Dict[str, Any]:
+    def analyze_distribution(self, logprobs_data: dict[str, Any]) -> dict[str, Any]:
         """Analyze the probability distribution of tokens.
 
         Args:
@@ -956,8 +957,8 @@ class NextTokenCapture:
 
         return analysis
 
-    def format_display(self, prompt: str, logprobs_data: Dict[str, Any],
-                      analysis: Dict[str, Any]) -> str:
+    def format_display(self, prompt: str, logprobs_data: dict[str, Any],
+                      analysis: dict[str, Any]) -> str:
         """Format the results for display.
 
         Args:
@@ -1000,8 +1001,8 @@ class NextTokenCapture:
 
 
 # Generic Benchmark Utilities
-def calculate_accuracy_by_category(results: List[Dict[str, Any]],
-                                 category_field: str = "category") -> Dict[str, Dict[str, float]]:
+def calculate_accuracy_by_category(results: list[dict[str, Any]],
+                                 category_field: str = "category") -> dict[str, dict[str, float]]:
     """
     Calculate accuracy statistics by category.
 
@@ -1045,7 +1046,7 @@ def calculate_accuracy_by_category(results: List[Dict[str, Any]],
     return final_stats
 
 
-def _calculate_std(values: List[float]) -> float:
+def _calculate_std(values: list[float]) -> float:
     """Calculate standard deviation."""
     if len(values) <= 1:
         return 0.0
@@ -1055,7 +1056,7 @@ def _calculate_std(values: List[float]) -> float:
     return variance ** 0.5
 
 
-def format_benchmark_summary(results: List[Dict[str, Any]], benchmark_name: str) -> str:
+def format_benchmark_summary(results: list[dict[str, Any]], benchmark_name: str) -> str:
     """
     Format benchmark results into a readable summary.
 
@@ -1104,7 +1105,7 @@ Score Distribution:
 
 
 # Dataset Loading Utilities
-def load_dataset_from_json(file_path: str) -> List[Dict[str, Any]]:
+def load_dataset_from_json(file_path: str) -> list[dict[str, Any]]:
     """Load dataset from JSON file."""
     with open(file_path, 'r') as f:
         data = json.load(f)
@@ -1122,7 +1123,7 @@ def load_dataset_from_json(file_path: str) -> List[Dict[str, Any]]:
     return [data]
 
 
-def load_dataset_from_jsonl(file_path: str) -> List[Dict[str, Any]]:
+def load_dataset_from_jsonl(file_path: str) -> list[dict[str, Any]]:
     """Load dataset from JSONL file."""
     data = []
     with open(file_path, 'r') as f:
@@ -1132,7 +1133,7 @@ def load_dataset_from_jsonl(file_path: str) -> List[Dict[str, Any]]:
     return data
 
 
-def load_dataset_from_url(url: str, format: str = "auto") -> List[Dict[str, Any]]:
+def load_dataset_from_url(url: str, format: str = "auto") -> list[dict[str, Any]]:
     """Load dataset from URL using centralized HTTP client."""
     from tldw_Server_API.app.core.http_client import fetch, fetch_json
 

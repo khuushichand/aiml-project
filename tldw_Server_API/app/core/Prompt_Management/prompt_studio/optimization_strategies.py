@@ -1,20 +1,18 @@
 # optimization_strategies.py
 # Additional optimization strategies for Prompt Studio
 
-import json
 import random
-import asyncio
-from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
+from typing import Any, Optional
+
 import numpy as np
-from scipy import stats
 from loguru import logger
+
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.Logging.log_context import log_context
 
 from .prompt_executor import PromptExecutor
 from .test_runner import TestRunner
-from .types_common import MetricType
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 
 ########################################################################################################################
 # Hyperparameter Optimizer
@@ -44,12 +42,12 @@ class HyperparameterOptimizer:
     async def optimize(
         self,
         prompt_id: int,
-        test_case_ids: List[int],
-        base_model_config: Dict[str, Any],
+        test_case_ids: list[int],
+        base_model_config: dict[str, Any],
         max_iterations: int = 20,
-        params_to_optimize: Optional[List[str]] = None,
+        params_to_optimize: Optional[list[str]] = None,
         optimization_id: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Optimize hyperparameters using Bayesian optimization.
 
@@ -121,7 +119,7 @@ class HyperparameterOptimizer:
                 "improvement": best_score - observations[0][1]
             }
 
-    def _sample_random_params(self, params_to_optimize: List[str]) -> Dict[str, Any]:
+    def _sample_random_params(self, params_to_optimize: list[str]) -> dict[str, Any]:
         """Sample random parameters from search space."""
         params = {}
 
@@ -138,8 +136,8 @@ class HyperparameterOptimizer:
 
         return params
 
-    def _get_next_params(self, observations: List[Tuple[Dict, float]],
-                        params_to_optimize: List[str]) -> Dict[str, Any]:
+    def _get_next_params(self, observations: list[tuple[dict, float]],
+                        params_to_optimize: list[str]) -> dict[str, Any]:
         """
         Use acquisition function to get next parameters to try.
         Simplified Expected Improvement approach.
@@ -187,9 +185,9 @@ class HyperparameterOptimizer:
         candidates.sort(key=lambda x: x[1], reverse=True)
         return candidates[0][0]
 
-    async def _evaluate_params(self, prompt_id: int, test_case_ids: List[int],
-                              base_model_config: Dict[str, Any],
-                              params: Dict[str, Any]) -> float:
+    async def _evaluate_params(self, prompt_id: int, test_case_ids: list[int],
+                              base_model_config: dict[str, Any],
+                              params: dict[str, Any]) -> float:
         """Evaluate parameters on test cases."""
         # Merge parameters
         model_config = base_model_config.copy()
@@ -209,7 +207,7 @@ class HyperparameterOptimizer:
 
         return np.mean(scores) if scores else 0.0
 
-    def _has_converged(self, observations: List[Tuple[Dict, float]]) -> bool:
+    def _has_converged(self, observations: list[tuple[dict, float]]) -> bool:
         """Check if optimization has converged."""
         if len(observations) < 10:
             return False
@@ -236,11 +234,11 @@ class IterativeRefinementOptimizer:
     async def optimize(
         self,
         prompt_id: int,
-        test_case_ids: List[int],
-        model_config: Dict[str, Any],
+        test_case_ids: list[int],
+        model_config: dict[str, Any],
         max_iterations: int = 10,
         optimization_id: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Iteratively refine prompt based on errors.
 
@@ -330,7 +328,7 @@ class IterativeRefinementOptimizer:
                 "iteration_history": iteration_history
             }
 
-    def _analyze_errors(self, test_runs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _analyze_errors(self, test_runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Analyze test runs to identify error patterns."""
         errors = []
 
@@ -349,7 +347,7 @@ class IterativeRefinementOptimizer:
         return errors
 
     async def _generate_refinement(self, prompt_id: int,
-                                  errors: List[Dict[str, Any]]) -> Optional[str]:
+                                  errors: list[dict[str, Any]]) -> Optional[str]:
         """Generate refinement based on error analysis."""
         # Get current prompt
         prompt = self._get_prompt(prompt_id)
@@ -419,8 +417,8 @@ Suggest specific refinements to fix these errors:"""
 
         return new_prompt_id
 
-    async def _evaluate_prompt(self, prompt_id: int, test_case_ids: List[int],
-                              model_config: Dict[str, Any]) -> float:
+    async def _evaluate_prompt(self, prompt_id: int, test_case_ids: list[int],
+                              model_config: dict[str, Any]) -> float:
         """Evaluate prompt and return average score."""
         scores = []
 
@@ -436,7 +434,7 @@ Suggest specific refinements to fix these errors:"""
 
         return np.mean(scores) if scores else 0.0
 
-    def _get_prompt(self, prompt_id: int) -> Dict[str, Any]:
+    def _get_prompt(self, prompt_id: int) -> dict[str, Any]:
         """Get prompt from database."""
         conn = self.db.get_connection()
         cursor = conn.cursor()
@@ -462,11 +460,11 @@ class GeneticOptimizer:
         self.test_runner = test_runner
         self.executor = PromptExecutor(db)
 
-    async def optimize(self, prompt_id: int, test_case_ids: List[int],
-                       model_config: Dict[str, Any],
+    async def optimize(self, prompt_id: int, test_case_ids: list[int],
+                       model_config: dict[str, Any],
                        population_size: int = 10,
                        generations: int = 10,
-                       mutation_rate: float = 0.1) -> Dict[str, Any]:
+                       mutation_rate: float = 0.1) -> dict[str, Any]:
         """
         Optimize prompt using genetic algorithm.
 
@@ -556,7 +554,7 @@ class GeneticOptimizer:
         }
 
     async def _initialize_population(self, prompt_id: int,
-                                    size: int) -> List[Dict[str, Any]]:
+                                    size: int) -> list[dict[str, Any]]:
         """Initialize population with variations of base prompt."""
         prompt = self._get_prompt(prompt_id)
         population = []
@@ -574,7 +572,7 @@ class GeneticOptimizer:
 
         return population
 
-    async def _generate_variation(self, prompt: Dict[str, Any]) -> Dict[str, Any]:
+    async def _generate_variation(self, prompt: dict[str, Any]) -> dict[str, Any]:
         """Generate a variation of the prompt."""
         variation_prompt = f"""Create a variation of this user prompt that maintains the same goal but uses different wording or structure:
 
@@ -602,9 +600,9 @@ Variation:"""
                 "system_prompt": prompt.get("system_prompt", "")
             }
 
-    async def _evaluate_fitness(self, individual: Dict[str, Any],
-                               test_case_ids: List[int],
-                               model_config: Dict[str, Any],
+    async def _evaluate_fitness(self, individual: dict[str, Any],
+                               test_case_ids: list[int],
+                               model_config: dict[str, Any],
                                base_prompt_id: Optional[int]) -> float:
         """Evaluate fitness of an individual."""
         # Create temporary prompt (link to base prompt's project when available)
@@ -624,15 +622,15 @@ Variation:"""
 
         return np.mean(scores) if scores else 0.0
 
-    def _tournament_select(self, fitness_scores: List[Tuple[Dict, float]],
-                          tournament_size: int = 3) -> Dict[str, Any]:
+    def _tournament_select(self, fitness_scores: list[tuple[dict, float]],
+                          tournament_size: int = 3) -> dict[str, Any]:
         """Tournament selection."""
         tournament = random.sample(fitness_scores, min(tournament_size, len(fitness_scores)))
         tournament.sort(key=lambda x: x[1], reverse=True)
         return tournament[0][0]
 
-    async def _crossover(self, parent1: Dict[str, Any],
-                        parent2: Dict[str, Any]) -> Dict[str, Any]:
+    async def _crossover(self, parent1: dict[str, Any],
+                        parent2: dict[str, Any]) -> dict[str, Any]:
         """Crossover two individuals."""
         # Simple approach: combine parts of prompts
         crossover_prompt = f"""Combine the best aspects of these two user prompts into a new one:
@@ -662,7 +660,7 @@ Combined user prompt:"""
             logger.debug(f"_crossover failed to call LLM; returning parent1. error={e}")
             return parent1.copy()
 
-    async def _mutate(self, individual: Dict[str, Any]) -> Dict[str, Any]:
+    async def _mutate(self, individual: dict[str, Any]) -> dict[str, Any]:
         """Mutate an individual."""
         mutation_prompt = f"""Make a small random change to this user prompt while keeping its core purpose:
 
@@ -697,7 +695,7 @@ Mutated user prompt:"""
                 "system_prompt": individual.get("system_prompt", "")
             }
 
-    def _has_converged_genetic(self, history: List[Dict[str, Any]]) -> bool:
+    def _has_converged_genetic(self, history: list[dict[str, Any]]) -> bool:
         """Check if population has converged."""
         if len(history) < 5:
             return False
@@ -706,7 +704,7 @@ Mutated user prompt:"""
         recent_best = [h["best_score"] for h in history[-5:]]
         return np.std(recent_best) < 0.001
 
-    async def _individual_to_prompt(self, individual: Dict[str, Any],
+    async def _individual_to_prompt(self, individual: dict[str, Any],
                                    base_prompt_id: Optional[int]) -> int:
         """Convert individual to prompt in database."""
         conn = self.db.get_connection()
@@ -751,7 +749,7 @@ Mutated user prompt:"""
 
         return prompt_id
 
-    def _get_prompt(self, prompt_id: int) -> Dict[str, Any]:
+    def _get_prompt(self, prompt_id: int) -> dict[str, Any]:
         """Get prompt from database."""
         conn = self.db.get_connection()
         cursor = conn.cursor()

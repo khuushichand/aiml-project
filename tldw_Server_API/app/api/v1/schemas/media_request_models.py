@@ -5,15 +5,14 @@
 import re
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Literal
+from typing import Any, Literal, Optional
+
 #
 # 3rd-party imports
-from fastapi import HTTPException
-from pydantic import BaseModel, Field, validator, computed_field, field_validator, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 from pydantic_core.core_schema import ValidationInfo
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki.Media_Wiki import load_mediawiki_import_config
-
 
 #
 # Local Imports
@@ -30,8 +29,8 @@ class MediaItemResponse(BaseModel):
     source: dict
     processing: dict
     content: dict
-    keywords: List[str]
-    timestamps: List[str]
+    keywords: list[str]
+    timestamps: list[str]
 
     model_config = ConfigDict()
 
@@ -49,10 +48,10 @@ class MediaItem(BaseModel):
     content_preview: Optional[str]
     author: str
     date: Optional[datetime]
-    keywords: List[str]
+    keywords: list[str]
 
 class MediaSearchResponse(BaseModel):
-    results: List[MediaItem]
+    results: list[MediaItem]
     pagination: PaginationInfo
 
 class MediaUpdateRequest(BaseModel):
@@ -61,12 +60,12 @@ class MediaUpdateRequest(BaseModel):
     author: Optional[str] = Field(None, max_length=255, description="Author (max 255 chars)")
     analysis: Optional[str] = Field(None, max_length=100000, description="Analysis (max 100KB)")
     prompt: Optional[str] = Field(None, max_length=10000, description="Prompt (max 10KB)")
-    keywords: Optional[List[str]] = Field(None, max_length=50, description="Keywords (max 50)")
+    keywords: Optional[list[str]] = Field(None, max_length=50, description="Keywords (max 50)")
 
 
 class MediaKeywordsUpdateRequest(BaseModel):
     """Request payload for updating media keywords (add/remove/set)."""
-    keywords: List[str] = Field(..., description="Keywords to apply")
+    keywords: list[str] = Field(..., description="Keywords to apply")
     mode: Literal["add", "remove", "set"] = Field(
         "add",
         description="Update mode: add/remove/set (set replaces all keywords).",
@@ -77,7 +76,7 @@ class VersionCreateRequest(BaseModel):
     content: str = Field(..., max_length=5000000, description="Content (max 5MB)")
     prompt: str = Field(..., max_length=10000, description="Prompt (max 10KB)")
     analysis_content: str = Field(..., max_length=100000, description="Analysis content (max 100KB)")
-    safe_metadata: Optional[Dict[str, Any]] = Field(None, description="Optional safe metadata JSON to store with this version.")
+    safe_metadata: Optional[dict[str, Any]] = Field(None, description="Optional safe metadata JSON to store with this version.")
 
 class VersionResponse(BaseModel):
     id: int
@@ -92,14 +91,14 @@ class SearchRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     query: Optional[str] = Field(None, max_length=1000, description="Search query (max 1000 chars)")
-    fields: List[str] = ["title", "content"]
+    fields: list[str] = ["title", "content"]
     exact_phrase: Optional[str] = None
-    media_types: Optional[List[str]] = None
-    date_range: Optional[Dict[str, datetime]] = None
-    must_have: Optional[List[str]] = None
-    must_not_have: Optional[List[str]] = None
+    media_types: Optional[list[str]] = None
+    date_range: Optional[dict[str, datetime]] = None
+    must_have: Optional[list[str]] = None
+    must_not_have: Optional[list[str]] = None
     sort_by: Optional[str] = "relevance"
-    boost_fields: Optional[Dict[str, float]] = None
+    boost_fields: Optional[dict[str, float]] = None
 
 
 class ProcessCodeForm(BaseModel):
@@ -110,7 +109,7 @@ class ProcessCodeForm(BaseModel):
     dependency so tests can exercise validation directly.
     """
 
-    urls: Optional[List[str]] = None
+    urls: Optional[list[str]] = None
     perform_chunking: bool = True
     # Supports 'code' (structure-aware) and 'lines' (simple line windowing)
     chunk_method: Optional[str] = Field(
@@ -134,14 +133,14 @@ class MetadataFilter(BaseModel):
     value: str = Field(..., description="Value to match")
 
 class MetadataSearchRequest(BaseModel):
-    filters: Optional[List[MetadataFilter]] = Field(None, description="List of metadata filters")
+    filters: Optional[list[MetadataFilter]] = Field(None, description="List of metadata filters")
     match_mode: Literal['all','any'] = Field('all', description="Combine filters with AND/OR")
     group_by_media: bool = Field(True, description="Group results by media (latest matching version per media)")
     page: int = Field(1, ge=1)
     per_page: int = Field(20, ge=1, le=100)
 
 class MetadataPatchRequest(BaseModel):
-    safe_metadata: Dict[str, Any] = Field(..., description="Safe metadata JSON to set or merge")
+    safe_metadata: dict[str, Any] = Field(..., description="Safe metadata JSON to set or merge")
     merge: bool = Field(True, description="Merge with existing metadata if present")
     new_version: bool = Field(False, description="Create a new version with updated metadata")
 
@@ -149,7 +148,7 @@ class AdvancedVersionUpsertRequest(BaseModel):
     content: Optional[str] = Field(None, description="Optional content; if omitted and new_version=true, uses latest content")
     prompt: Optional[str] = Field(None, description="Optional prompt; if omitted and new_version=true, uses latest prompt")
     analysis_content: Optional[str] = Field(None, description="Optional analysis; if omitted and new_version=true, uses latest analysis")
-    safe_metadata: Optional[Dict[str, Any]] = Field(None, description="Optional safe metadata JSON to set or merge")
+    safe_metadata: Optional[dict[str, Any]] = Field(None, description="Optional safe metadata JSON to set or merge")
     merge: bool = Field(True, description="Merge safe metadata when updating or creating new version")
     new_version: bool = Field(True, description="Create a new version (default). If false, only safe_metadata may be updated in place")
 
@@ -190,7 +189,7 @@ class ChunkingOptions(BaseModel):
     )
     # Hierarchical options (flattened into chunks for indexing)
     hierarchical_chunking: Optional[bool] = Field(False, description="Enable hierarchical parsing and flattening to leaf chunks")
-    hierarchical_template: Optional[Dict[str, Any]] = Field(None, description="Custom boundary rules: {'boundaries': [{'kind','pattern','flags'}]}")
+    hierarchical_template: Optional[dict[str, Any]] = Field(None, description="Custom boundary rules: {'boundaries': [{'kind','pattern','flags'}]}")
 
     @field_validator('chunk_method', mode='before')
     @classmethod
@@ -313,7 +312,7 @@ class AddMediaForm(ChunkingOptions, AudioVideoOptions, PdfOptions):
 
     # --- Input Sources ---
     # Note: 'files' is handled separately by FastAPI's File() parameter
-    urls: Optional[List[str]] = Field(None, description="List of URLs of the media items to add")
+    urls: Optional[list[str]] = Field(None, description="List of URLs of the media items to add")
 
     # --- Common Optional Fields ---
     title: Optional[str] = Field(None, max_length=500, description="Optional title (max 500 chars)")
@@ -373,7 +372,7 @@ class AddMediaForm(ChunkingOptions, AudioVideoOptions, PdfOptions):
     # --- Computed Fields / Validators ---
     @computed_field
     @property
-    def keywords(self) -> List[str]:
+    def keywords(self) -> list[str]:
         """Parses the comma-separated keywords string into a list."""
         if not self.keywords_str:
             return []
@@ -459,16 +458,16 @@ class MediaItemProcessResponse(BaseModel):
     input_ref: str # The original URL or filename provided by the user
     processing_source: str # The actual path or URL used by the processor, e.g., temp file path
     media_type: (Literal['video', 'audio', 'document', 'pdf', 'ebook', 'email']) # 'video', 'pdf', 'audio', etc.
-    metadata: Dict[str, Any] # Extracted info like title, author, duration, etc.
+    metadata: dict[str, Any] # Extracted info like title, author, duration, etc.
     content: str # The main extracted text or full transcript
-    segments: Optional[List[Dict[str, Any]]] # For timestamped transcripts, if applicable
-    chunks: Optional[List[Dict[str, Any]]] # If chunking happened within the processor
+    segments: Optional[list[dict[str, Any]]] # For timestamped transcripts, if applicable
+    chunks: Optional[list[dict[str, Any]]] # If chunking happened within the processor
     analysis: Optional[str] # The generated analysis, if analysis was performed
-    analysis_details: Optional[Dict[str, Any]] # e.g., whisper model used, summarization prompt
-    claims: Optional[List[Dict[str, Any]]] = Field(None, description="Extracted factual claims, if enabled")
-    claims_details: Optional[Dict[str, Any]] = Field(None, description="Metadata about the claims extraction process")
+    analysis_details: Optional[dict[str, Any]] # e.g., whisper model used, summarization prompt
+    claims: Optional[list[dict[str, Any]]] = Field(None, description="Extracted factual claims, if enabled")
+    claims_details: Optional[dict[str, Any]] = Field(None, description="Metadata about the claims extraction process")
     error: Optional[str] # Detailed error message if status != 'Success'
-    warnings: Optional[List[str]] # For non-critical issues
+    warnings: Optional[list[str]] # For non-critical issues
     model_config = ConfigDict(
         extra="forbid"  # Disallow extra fields not defined in the model
     )
@@ -520,7 +519,7 @@ class VideoIngestRequest(BaseModel):
     # You can rename / remove / add fields as you prefer:
     mode: str = "persist"  # "ephemeral" or "persist"
 
-    urls: Optional[List[str]] = None  # e.g., YouTube, Vimeo, local-file references
+    urls: Optional[list[str]] = None  # e.g., YouTube, Vimeo, local-file references
 
     transcription_model: str = "distil-large-v3"
     diarize: bool = False
@@ -624,7 +623,7 @@ class AudioIngestRequest(BaseModel):
     # Normal audio vs. podcast
     is_podcast: bool = False
 
-    urls: Optional[List[str]] = None
+    urls: Optional[list[str]] = None
     transcription_model: str = "distil-large-v3"
     diarize: bool = False
     keep_timestamps: bool = True
@@ -679,20 +678,20 @@ class WebScrapingRequest(BaseModel):
     custom_titles: Optional[str] = None
     system_prompt: Optional[str] = None
     temperature: float = 0.7
-    custom_cookies: Optional[List[Dict[str, Any]]] = None
+    custom_cookies: Optional[list[dict[str, Any]]] = None
     mode: str = "persist"  # or "ephemeral"
     user_agent: Optional[str] = None
-    custom_headers: Optional[Dict[str, str]] = None
+    custom_headers: Optional[dict[str, str]] = None
     crawl_strategy: Optional[str] = None
     include_external: Optional[bool] = None
     score_threshold: Optional[float] = None
 
 class IngestWebContentRequest(BaseModel):
     # Core fields
-    urls: List[str]                      # Usually 1+ URLs.
-    titles: Optional[List[str]] = None
-    authors: Optional[List[str]] = None
-    keywords: Optional[List[str]] = None
+    urls: list[str]                      # Usually 1+ URLs.
+    titles: Optional[list[str]] = None
+    authors: Optional[list[str]] = None
+    keywords: Optional[list[str]] = None
 
     # Advanced scraping selection
     scrape_method: ScrapeMethod = ScrapeMethod.INDIVIDUAL
@@ -720,7 +719,7 @@ class IngestWebContentRequest(BaseModel):
     chunk_overlap: int = 200
     # Hierarchical chunking (flattened) support
     hierarchical_chunking: Optional[bool] = False
-    hierarchical_template: Optional[Dict[str, Any]] = None
+    hierarchical_template: Optional[dict[str, Any]] = None
     use_cookies: bool = False
     cookies: Optional[str] = None
     perform_confabulation_check_of_analysis: bool = False
@@ -795,7 +794,7 @@ class ProcessedMediaWikiPage(BaseModel):
     page_id: Optional[int] = None
     revision_id: Optional[int] = None
     timestamp: Optional[str] = None # ISO format
-    chunks: List[Dict[str, Any]] = []
+    chunks: list[dict[str, Any]] = []
     media_id: Optional[int] = None # Populated if stored to DB
     message: Optional[str] = None
     status: str = "Pending"

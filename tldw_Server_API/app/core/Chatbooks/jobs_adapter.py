@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Iterable, List, Optional
+from collections.abc import Iterable
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Chatbooks.chatbook_models import ExportStatus, ImportStatus
-
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 _CHATBOOKS_DOMAIN = "chatbooks"
 
@@ -32,7 +32,7 @@ def _jobs_manager() -> JobManager:
     return JobManager(backend=backend, db_url=db_url)
 
 
-def _job_id_from_row(job: Dict[str, Any]) -> Optional[str]:
+def _job_id_from_row(job: dict[str, Any]) -> str | None:
     payload = job.get("payload") or {}
     candidate = payload.get("chatbooks_job_id") or job.get("uuid") or job.get("id")
     if candidate is None:
@@ -40,7 +40,7 @@ def _job_id_from_row(job: Dict[str, Any]) -> Optional[str]:
     return str(candidate)
 
 
-def _map_export_status(status: Optional[str]) -> Optional[ExportStatus]:
+def _map_export_status(status: str | None) -> ExportStatus | None:
     status = str(status or "").lower()
     if status == "queued":
         return ExportStatus.PENDING
@@ -57,7 +57,7 @@ def _map_export_status(status: Optional[str]) -> Optional[ExportStatus]:
     return None
 
 
-def _map_import_status(status: Optional[str]) -> Optional[ImportStatus]:
+def _map_import_status(status: str | None) -> ImportStatus | None:
     status = str(status or "").lower()
     if status == "queued":
         return ImportStatus.PENDING
@@ -78,13 +78,13 @@ class ChatbooksJobsAdapter:
     def __init__(
         self,
         *,
-        owner_user_id: Optional[str],
+        owner_user_id: str | None,
     ) -> None:
         self._owner_user_id = str(owner_user_id) if owner_user_id is not None else None
         _warn_legacy_flag("JOBS_ADAPTER_READ_LEGACY_CHATBOOKS")
         self._jm = _jobs_manager()
 
-    def apply_export_status(self, job, job_row: Optional[Dict[str, Any]] = None) -> None:
+    def apply_export_status(self, job, job_row: dict[str, Any] | None = None) -> None:
         if job_row is None:
             job_row = self._get_job(job.job_id, job_type="export")
         if job_row is None:
@@ -93,7 +93,7 @@ class ChatbooksJobsAdapter:
         if mapped and job.status not in {ExportStatus.COMPLETED, ExportStatus.FAILED}:
             job.status = mapped
 
-    def apply_import_status(self, job, job_row: Optional[Dict[str, Any]] = None) -> None:
+    def apply_import_status(self, job, job_row: dict[str, Any] | None = None) -> None:
         if job_row is None:
             job_row = self._get_job(job.job_id, job_type="import")
         if job_row is None:
@@ -108,7 +108,7 @@ class ChatbooksJobsAdapter:
         job_ids: Iterable[str],
         job_type: str,
         limit: int,
-    ) -> Dict[str, Dict[str, Any]]:
+    ) -> dict[str, dict[str, Any]]:
         wanted = {str(job_id) for job_id in job_ids if job_id}
         if not wanted:
             return {}
@@ -120,14 +120,14 @@ class ChatbooksJobsAdapter:
             job_type=job_type,
             limit=max(limit, len(wanted)),
         )
-        mapping: Dict[str, Dict[str, Any]] = {}
+        mapping: dict[str, dict[str, Any]] = {}
         for job in jobs:
             cid = _job_id_from_row(job)
             if cid and cid in wanted:
                 mapping[cid] = job
         return mapping
 
-    def _get_job(self, job_id: str, job_type: str) -> Optional[Dict[str, Any]]:
+    def _get_job(self, job_id: str, job_type: str) -> dict[str, Any] | None:
         job = None
         if job_id:
             try:
@@ -160,7 +160,7 @@ class ChatbooksJobsAdapter:
                 return candidate
         return None
 
-    def _is_match(self, job: Optional[Dict[str, Any]], job_id: str, job_type: str) -> bool:
+    def _is_match(self, job: dict[str, Any] | None, job_id: str, job_type: str) -> bool:
         if not job:
             return False
         if str(job.get("domain")) != _CHATBOOKS_DOMAIN:

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -37,7 +37,7 @@ from tldw_Server_API.app.core.Workflows.adapters.text._config import (
     tags=["text", "nlp"],
     config_model=KeywordExtractConfig,
 )
-async def run_keyword_extract_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_keyword_extract_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Extract keywords from text content.
 
     Config:
@@ -131,7 +131,7 @@ Text:
     tags=["text", "nlp"],
     config_model=SentimentAnalyzeConfig,
 )
-async def run_sentiment_analyze_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_sentiment_analyze_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Analyze sentiment of text content.
 
     Config:
@@ -207,7 +207,7 @@ Text: {text[:3000]}"""
     tags=["text", "nlp"],
     config_model=LanguageDetectConfig,
 )
-async def run_language_detect_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_language_detect_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Detect the language of text content.
 
     Config:
@@ -267,7 +267,7 @@ async def run_language_detect_adapter(config: Dict[str, Any], context: Dict[str,
     tags=["text", "nlp"],
     config_model=TopicModelConfig,
 )
-async def run_topic_model_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_topic_model_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Extract topics from text content.
 
     Config:
@@ -347,7 +347,7 @@ Text:
     tags=["text", "nlp"],
     config_model=EntityExtractConfig,
 )
-async def run_entity_extract_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_entity_extract_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Extract named entities from text content.
 
     Config:
@@ -450,7 +450,7 @@ Example:
     tags=["text", "utility"],
     config_model=TokenCountConfig,
 )
-async def run_token_count_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_token_count_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Count tokens in text using various tokenizers.
 
     Config:

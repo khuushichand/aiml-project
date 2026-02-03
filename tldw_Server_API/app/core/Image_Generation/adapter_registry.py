@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
-from typing import Any, Dict, Optional, Type
+from typing import Any
 
 from loguru import logger
 
@@ -15,12 +15,12 @@ from tldw_Server_API.app.core.Image_Generation.config import get_image_generatio
 class ImageAdapterRegistry:
     """Registry for image generation adapters."""
 
-    DEFAULT_ADAPTERS: Dict[str, str] = {
+    DEFAULT_ADAPTERS: dict[str, str] = {
         "stable_diffusion_cpp": "tldw_Server_API.app.core.Image_Generation.adapters.stable_diffusion_cpp_adapter.StableDiffusionCppAdapter",
         "swarmui": "tldw_Server_API.app.core.Image_Generation.adapters.swarmui_adapter.SwarmUIAdapter",
     }
 
-    def __init__(self, config_override: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, config_override: dict[str, Any] | None = None) -> None:
         config = get_image_generation_config()
         default_backend = config.default_backend
         enabled_backends = list(config.enabled_backends)
@@ -31,8 +31,8 @@ class ImageAdapterRegistry:
                 enabled_backends = self._parse_list(config_override.get("enabled_backends"))
         self._default_backend = default_backend
         self._enabled_backends = enabled_backends
-        self._adapters: Dict[str, ImageGenerationAdapter] = {}
-        self._adapter_specs: Dict[str, Any] = self.DEFAULT_ADAPTERS.copy()
+        self._adapters: dict[str, ImageGenerationAdapter] = {}
+        self._adapter_specs: dict[str, Any] = self.DEFAULT_ADAPTERS.copy()
 
     def register_adapter(self, name: str, adapter: Any) -> None:
         self._adapter_specs[name] = adapter
@@ -50,7 +50,7 @@ class ImageAdapterRegistry:
             return []
         return [name for name in names if name in self._enabled_backends]
 
-    def _resolve_adapter_class(self, spec: Any) -> Type[ImageGenerationAdapter]:
+    def _resolve_adapter_class(self, spec: Any) -> type[ImageGenerationAdapter]:
         if isinstance(spec, str):
             module_path, _, class_name = spec.rpartition(".")
             if not module_path:
@@ -64,7 +64,7 @@ class ImageAdapterRegistry:
             return False
         return name in self._enabled_backends
 
-    def resolve_backend(self, requested: Optional[str]) -> Optional[str]:
+    def resolve_backend(self, requested: str | None) -> str | None:
         name = (requested or self._default_backend or "").strip()
         if not name:
             return None
@@ -74,7 +74,7 @@ class ImageAdapterRegistry:
             return None
         return name
 
-    def get_adapter(self, name: str) -> Optional[ImageGenerationAdapter]:
+    def get_adapter(self, name: str) -> ImageGenerationAdapter | None:
         if name in self._adapters:
             return self._adapters[name]
 
@@ -92,7 +92,7 @@ class ImageAdapterRegistry:
             logger.error("Failed to initialize image adapter for '%s': %s", name, exc)
             return None
 
-    def get_adapter_class(self, name: str) -> Optional[Type[ImageGenerationAdapter]]:
+    def get_adapter_class(self, name: str) -> type[ImageGenerationAdapter] | None:
         spec = self._adapter_specs.get(name)
         if not spec:
             logger.debug("No image adapter spec registered for backend '%s'", name)
@@ -121,7 +121,7 @@ class ImageAdapterRegistry:
         return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-_registry: Optional[ImageAdapterRegistry] = None
+_registry: ImageAdapterRegistry | None = None
 
 
 def get_registry() -> ImageAdapterRegistry:

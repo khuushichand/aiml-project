@@ -2,43 +2,46 @@
 # Description: Handles user authentication and identification based on application mode.
 #
 # Imports
-import hmac
 import os
+from typing import Any, Optional, Union
 from uuid import UUID
-from typing import Optional, List, Dict, Any, Union
+
 #
 # 3rd-Party Libraries
-from fastapi import Depends, HTTPException, status, Header, Request
-from pydantic import BaseModel, ValidationError, Field
-#
-# Local Imports
-# New unified settings
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from fastapi import Depends, Header, HTTPException, Request, status
+
+# Utils
+from loguru import logger
+from pydantic import BaseModel, Field, ValidationError
+
+# API Dependencies
+from tldw_Server_API.app.api.v1.API_Deps.v1_endpoint_deps import oauth2_scheme
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
     is_single_user_ip_allowed,
     resolve_client_ip,
 )
+
 # New JWT service
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
-from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
-from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
-from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
+from tldw_Server_API.app.core.AuthNZ.org_rbac import apply_scoped_permissions
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     list_memberships_for_user,
     list_org_memberships_for_user,
 )
-from tldw_Server_API.app.core.AuthNZ.org_rbac import apply_scoped_permissions
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
-from tldw_Server_API.app.core.exceptions import InactiveUserError
+from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+
+#
+# Local Imports
+# New unified settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-# Utils
-from loguru import logger
-# API Dependencies
-from tldw_Server_API.app.api.v1.API_Deps.v1_endpoint_deps import oauth2_scheme
-from tldw_Server_API.app.core.config import settings as app_settings
+from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
+from tldw_Server_API.app.core.exceptions import InactiveUserError
 
 #######################################################################################################################
 
@@ -171,10 +174,10 @@ def _enrich_user_with_rbac(
     return roles, perms, is_admin_flag
 
 
-def _coerce_int_list(raw: Any) -> List[int]:
+def _coerce_int_list(raw: Any) -> list[int]:
     if not isinstance(raw, (list, tuple, set)):
         return []
-    out: List[int] = []
+    out: list[int] = []
     for value in raw:
         try:
             out.append(int(value))
@@ -183,7 +186,7 @@ def _coerce_int_list(raw: Any) -> List[int]:
     return out
 
 
-def _normalize_active_id(raw: Any, ids: List[int]) -> Optional[int]:
+def _normalize_active_id(raw: Any, ids: list[int]) -> Optional[int]:
     if raw is None:
         return ids[0] if len(ids) == 1 else None
     try:
@@ -209,8 +212,8 @@ class User(BaseModel):
     # Optional tenant field for multi-tenant-aware endpoints/tests
     tenant_id: Optional[str] = None
     # RBAC/claims exposure
-    roles: List[str] = Field(default_factory=list)
-    permissions: List[str] = Field(default_factory=list)
+    roles: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
     is_admin: bool = False
 
     # Convenience properties for downstream code that expects int ids
@@ -674,8 +677,8 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
     except Exception:
         pass
 
-    team_ids: List[int] = []
-    org_ids: List[int] = []
+    team_ids: list[int] = []
+    org_ids: list[int] = []
     active_team_id: Optional[int] = None
     active_org_id: Optional[int] = None
     try:
@@ -1084,11 +1087,11 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
 
         user_obj = User(**user_data)
 
-        team_ids: List[int] = []
-        org_ids: List[int] = []
+        team_ids: list[int] = []
+        org_ids: list[int] = []
         active_team_id: Optional[int] = None
         active_org_id: Optional[int] = None
-        memberships: List[Dict[str, Any]] = []
+        memberships: list[dict[str, Any]] = []
         try:
             memberships = await list_memberships_for_user(int(user_id))
         except Exception as memberships_exc:

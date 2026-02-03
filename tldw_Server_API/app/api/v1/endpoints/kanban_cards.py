@@ -10,54 +10,53 @@ Provides CRUD operations for Kanban cards including:
 - Reorder cards within a list
 - Search cards
 """
-from typing import Optional, List
 from datetime import datetime
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Header, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
-    KanbanDB,
-    KanbanDBError,
-    InputError,
-    ConflictError,
-    NotFoundError,
-)
-from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
-    CardCreate,
-    CardUpdate,
-    CardResponse,
-    CardWithDetailsResponse,
-    CardsListResponse,
-    CardMoveRequest,
-    CardCopyRequest,
-    CardSearchRequest,
-    CardSearchResponse,
-    ReorderRequest,
-    ReorderResponse,
-    PaginationInfo,
-    DetailResponse,
-    BulkMoveCardsRequest,
-    BulkMoveCardsResponse,
-    BulkArchiveCardsRequest,
-    BulkArchiveCardsResponse,
-    BulkUnarchiveCardsResponse,
-    BulkDeleteCardsRequest,
-    BulkDeleteCardsResponse,
-    BulkLabelCardsRequest,
-    BulkLabelCardsResponse,
-    FilteredCardsResponse,
-    CardCopyWithChecklistsRequest,
-    ActivitiesListResponse,
-    ActivityResponse,
-)
 from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     get_kanban_db_for_user,
     handle_kanban_db_error,
     kanban_rate_limit,
 )
 from tldw_Server_API.app.api.v1.endpoints._kanban_utils import to_db_timestamp
-
+from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
+    ActivitiesListResponse,
+    ActivityResponse,
+    BulkArchiveCardsRequest,
+    BulkArchiveCardsResponse,
+    BulkDeleteCardsRequest,
+    BulkDeleteCardsResponse,
+    BulkLabelCardsRequest,
+    BulkLabelCardsResponse,
+    BulkMoveCardsRequest,
+    BulkMoveCardsResponse,
+    BulkUnarchiveCardsResponse,
+    CardCopyRequest,
+    CardCopyWithChecklistsRequest,
+    CardCreate,
+    CardMoveRequest,
+    CardResponse,
+    CardSearchRequest,
+    CardSearchResponse,
+    CardsListResponse,
+    CardUpdate,
+    CardWithDetailsResponse,
+    DetailResponse,
+    FilteredCardsResponse,
+    PaginationInfo,
+    ReorderRequest,
+    ReorderResponse,
+)
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
+    ConflictError,
+    InputError,
+    KanbanDB,
+    KanbanDBError,
+    NotFoundError,
+)
 
 router = APIRouter(tags=["Kanban Cards"])
 

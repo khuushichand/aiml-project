@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import base64
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from tldw_Server_API.app.core.Character_Chat.modules import character_db
 from tldw_Server_API.app.core.Character_Chat.modules.character_utils import get_character_list_for_ui
@@ -20,7 +20,6 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Utils.Utils import logging
-
 
 _FIELD_ALIASES = {
     "description": ("description",),
@@ -39,9 +38,9 @@ _FIELD_ALIASES = {
 }
 
 
-def _extract_canonical_fields(character_data: Dict[str, Any]) -> Dict[str, Any]:
+def _extract_canonical_fields(character_data: dict[str, Any]) -> dict[str, Any]:
     """Translate incoming payload keys to the canonical DB field names."""
-    canonical: Dict[str, Any] = {}
+    canonical: dict[str, Any] = {}
 
     if "name" in character_data:
         canonical["name"] = character_data["name"]
@@ -69,9 +68,9 @@ def _extract_canonical_fields(character_data: Dict[str, Any]) -> Dict[str, Any]:
 
 def save_character(
     db: CharactersRAGDB,
-    character_data: Dict[str, Any],
-    expected_version: Optional[int] = None,
-) -> Optional[int]:
+    character_data: dict[str, Any],
+    expected_version: int | None = None,
+) -> int | None:
     """Create or update a character card via the shared Character_Chat helpers."""
     log_counter("save_character_attempt")
     start_time = time.time()
@@ -152,11 +151,11 @@ def save_character(
         return None
 
 
-def load_characters(db: CharactersRAGDB) -> Dict[str, Dict[str, Any]]:
+def load_characters(db: CharactersRAGDB) -> dict[str, dict[str, Any]]:
     """Return all character cards keyed by name with base64-encoded images."""
     log_counter("load_characters_attempt")
     start_time = time.time()
-    characters_map: Dict[str, Dict[str, Any]] = {}
+    characters_map: dict[str, dict[str, Any]] = {}
 
     try:
         all_cards = db.list_character_cards(limit=10_000)
@@ -190,7 +189,7 @@ def load_characters(db: CharactersRAGDB) -> Dict[str, Dict[str, Any]]:
         return {}
 
 
-def get_character_names(db: CharactersRAGDB) -> List[str]:
+def get_character_names(db: CharactersRAGDB) -> list[str]:
     """Return a sorted list of character names."""
     log_counter("get_character_names_attempt")
     start_time = time.time()

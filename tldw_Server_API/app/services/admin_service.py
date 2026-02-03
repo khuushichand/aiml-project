@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
-from loguru import logger
 import json as _json
+from typing import Any
 
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 
@@ -12,9 +11,9 @@ async def update_api_key_metadata(
     *,
     user_id: int,
     key_id: int,
-    rate_limit: Optional[int] = None,
-    allowed_ips: Optional[list[str]] = None,
-) -> Dict[str, Any]:
+    rate_limit: int | None = None,
+    allowed_ips: list[str] | None = None,
+) -> dict[str, Any]:
     """Update per-key limits/metadata for an API key and return normalized row.
 
     Handles Postgres and SQLite parameterization and returns a dict suitable for

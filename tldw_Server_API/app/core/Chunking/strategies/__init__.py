@@ -3,20 +3,21 @@ Chunking strategies for different text processing methods.
 Each strategy implements the ChunkingStrategy protocol from base.py.
 """
 
-from typing import Dict, Type, Any
+from typing import Any, Dict, Type
+
 from ..base import ChunkingStrategy
+from .fixed_size import FixedSizeChunkingStrategy
+from .json_xml import JSONChunkingStrategy, XMLChunkingStrategy
+from .semantic import SemanticChunkingStrategy
+from .sentences import SentenceChunkingStrategy
+from .structure_aware import StructureAwareChunkingStrategy
+from .tokens import TokenChunkingStrategy
 
 # Import strategies as they are implemented
 from .words import WordChunkingStrategy
-from .sentences import SentenceChunkingStrategy
-from .tokens import TokenChunkingStrategy
-from .structure_aware import StructureAwareChunkingStrategy
-from .semantic import SemanticChunkingStrategy
-from .json_xml import JSONChunkingStrategy, XMLChunkingStrategy
-from .fixed_size import FixedSizeChunkingStrategy
 
 # Strategy registry will be populated as strategies are implemented
-STRATEGY_REGISTRY: Dict[str, Type[ChunkingStrategy]] = {
+STRATEGY_REGISTRY: dict[str, type[ChunkingStrategy]] = {
     'words': WordChunkingStrategy,
     'sentences': SentenceChunkingStrategy,
     'tokens': TokenChunkingStrategy,
@@ -27,7 +28,7 @@ STRATEGY_REGISTRY: Dict[str, Type[ChunkingStrategy]] = {
     'fixed_size': FixedSizeChunkingStrategy,
 }
 
-def get_strategy(name: str) -> Type[ChunkingStrategy]:
+def get_strategy(name: str) -> type[ChunkingStrategy]:
     """
     Get a chunking strategy by name.
 

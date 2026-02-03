@@ -1,30 +1,33 @@
 # tldw_Server_API/app/api/v1/API_Deps/Prompts_DB_Deps.py
 #
 # Imports
-import threading
-from pathlib import Path
-from typing import Dict, Optional, Tuple
 import os
+import threading
 import uuid as _uuid
-from fastapi import Request
+from pathlib import Path
+from typing import Optional
+
+from cachetools import LRUCache  # Assuming cachetools is available
+
 #
 # Third-party imports
-from fastapi import Depends, HTTPException, status
-from cachetools import LRUCache # Assuming cachetools is available
+from fastapi import Depends, HTTPException, Request, status
 from loguru import logger
+
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Prompt_Management.Prompts_Interop import (
+    ConflictError,
+    DatabaseError,
+    InputError,
+    PromptsDatabase,
+    SchemaError,
+)
 
 #
 # Local Imports
-from tldw_Server_API.app.core.Prompt_Management.Prompts_Interop import (
-    initialize_interop as initialize_prompts_interop,
-    shutdown_interop as shutdown_prompts_interop,
-    get_db_instance as get_prompts_db_instance_from_interop,
-    is_initialized as is_prompts_interop_initialized,
-    PromptsDatabase, DatabaseError, SchemaError, InputError, ConflictError
-)
-from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
 #
 ########################################################################################################################
 #
@@ -62,8 +65,8 @@ def _get_prompts_db_path_for_user(user_id: int, salt: Optional[str] = None) -> P
 
 # --- Main Dependency Function ---
 
-_user_db_instances: Dict[Tuple[int, str], PromptsDatabase] = {}
-_user_db_locks: Dict[Tuple[int, str], threading.Lock] = {}
+_user_db_instances: dict[tuple[int, str], PromptsDatabase] = {}
+_user_db_locks: dict[tuple[int, str], threading.Lock] = {}
 
 async def get_prompts_db_for_user(
         current_user: User = Depends(get_request_user),

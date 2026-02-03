@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -24,7 +24,7 @@ from tldw_Server_API.app.core.Workflows.adapters.integration._config import Emai
     tags=["integration", "email"],
     config_model=EmailSendConfig,
 )
-async def run_email_send_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_email_send_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Send email via SMTP.
 
     Config:
@@ -42,10 +42,11 @@ async def run_email_send_adapter(config: Dict[str, Any], context: Dict[str, Any]
       - sent: bool
       - message_id: str
     """
-    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
     import smtplib
-    from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
 
     # Email validation pattern
     EMAIL_PATTERN = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')

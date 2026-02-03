@@ -4,8 +4,8 @@ Exposes manager, configs, and exceptions for convenient imports while
 deferring heavy submodule imports until first access.
 """
 
-from typing import TYPE_CHECKING, Any
 import importlib
+from typing import TYPE_CHECKING, Any
 
 __all__ = [
     "LLMInferenceManager",
@@ -44,18 +44,34 @@ def __getattr__(name: str) -> Any:
     return getattr(module, attr)
 
 if TYPE_CHECKING:  # for static type checkers
-    from .LLM_Inference_Manager import LLMInferenceManager as LLMInferenceManager
-    from .LLM_Inference_Schemas import (
-        LLMManagerConfig as LLMManagerConfig,
-        OllamaConfig as OllamaConfig,
-        HuggingFaceConfig as HuggingFaceConfig,
-        LlamafileConfig as LlamafileConfig,
-        LlamaCppConfig as LlamaCppConfig,
+    from .LLM_Inference_Exceptions import (
+        InferenceError as InferenceError,
     )
     from .LLM_Inference_Exceptions import (
         LLMInferenceLibError as LLMInferenceLibError,
-        ModelNotFoundError as ModelNotFoundError,
+    )
+    from .LLM_Inference_Exceptions import (
         ModelDownloadError as ModelDownloadError,
+    )
+    from .LLM_Inference_Exceptions import (
+        ModelNotFoundError as ModelNotFoundError,
+    )
+    from .LLM_Inference_Exceptions import (
         ServerError as ServerError,
-        InferenceError as InferenceError,
+    )
+    from .LLM_Inference_Manager import LLMInferenceManager as LLMInferenceManager
+    from .LLM_Inference_Schemas import (
+        HuggingFaceConfig as HuggingFaceConfig,
+    )
+    from .LLM_Inference_Schemas import (
+        LlamaCppConfig as LlamaCppConfig,
+    )
+    from .LLM_Inference_Schemas import (
+        LlamafileConfig as LlamafileConfig,
+    )
+    from .LLM_Inference_Schemas import (
+        LLMManagerConfig as LLMManagerConfig,
+    )
+    from .LLM_Inference_Schemas import (
+        OllamaConfig as OllamaConfig,
     )

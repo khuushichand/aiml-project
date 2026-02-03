@@ -6,14 +6,13 @@ Currently includes:
 """
 from __future__ import annotations
 
-from typing import Any, Optional
-
+from typing import Any
 
 TRUTHY_STRINGS = {"1", "true", "yes", "y", "on"}
 FALSY_STRINGS = {"0", "false", "no", "n", "off", "none", "null", ""}
 
 
-def parse_bool(value: Any, default: Optional[bool] = False) -> bool:
+def parse_bool(value: Any, default: bool | None = False) -> bool:
     """Parse a value into a boolean in a tolerant, explicit way.
 
     Behavior:

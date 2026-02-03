@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -32,7 +32,7 @@ class AuthNZPolicyAdmin:
     Provides upsert/list/get/delete and tenant config helpers.
     """
 
-    def __init__(self, db_pool: Optional[DatabasePool] = None) -> None:
+    def __init__(self, db_pool: DatabasePool | None = None) -> None:
         self.db_pool = db_pool
         self._initialized = False
 
@@ -71,7 +71,7 @@ class AuthNZPolicyAdmin:
             logger.error(f"AuthNZPolicyAdmin.initialize failed: {e}")
             raise
 
-    async def upsert_policy(self, policy_id: str, payload: Dict[str, Any], version: Optional[int] = None) -> None:
+    async def upsert_policy(self, policy_id: str, payload: dict[str, Any], version: int | None = None) -> None:
         if not self._initialized:
             await self.initialize()
         is_pg = await is_postgres_backend()
@@ -89,7 +89,7 @@ class AuthNZPolicyAdmin:
                     row = await self.db_pool.fetchone("SELECT version FROM rg_policies WHERE id = ?", policy_id)
 
                 if row is None:
-                    current: Optional[int] = None
+                    current: int | None = None
                     new_version = expected
                 else:
                     if isinstance(row, dict):
@@ -134,7 +134,7 @@ class AuthNZPolicyAdmin:
         except Exception:
             return 1
 
-    async def get_policy(self, policy_id: str) -> Optional[Dict[str, Any]]:
+    async def get_policy(self, policy_id: str) -> dict[str, Any] | None:
         if not self._initialized:
             await self.initialize()
         try:
@@ -156,7 +156,7 @@ class AuthNZPolicyAdmin:
             logger.error(f"AuthNZPolicyAdmin.get_policy failed: {e}")
             raise
 
-    async def get_policy_record(self, policy_id: str) -> Optional[Dict[str, Any]]:
+    async def get_policy_record(self, policy_id: str) -> dict[str, Any] | None:
         """
         Return full record including id, version, updated_at, and payload.
         """
@@ -210,12 +210,12 @@ class AuthNZPolicyAdmin:
             logger.error(f"AuthNZPolicyAdmin.get_policy_record failed: {e}")
             raise
 
-    async def list_policies(self) -> List[Dict[str, Any]]:
+    async def list_policies(self) -> list[dict[str, Any]]:
         if not self._initialized:
             await self.initialize()
         try:
             rows = await self.db_pool.fetchall("SELECT id, version, updated_at FROM rg_policies ORDER BY id")
-            out: List[Dict[str, Any]] = []
+            out: list[dict[str, Any]] = []
             for r in rows:
                 rid = r["id"] if isinstance(r, dict) else r[0]
                 ver = int(r["version"] if isinstance(r, dict) else r[1] or 1)
@@ -235,7 +235,7 @@ class AuthNZPolicyAdmin:
             logger.error(f"AuthNZPolicyAdmin.list_policies failed: {e}")
             raise
 
-    async def delete_policy(self, policy_id: str, version: Optional[int] = None) -> int:
+    async def delete_policy(self, policy_id: str, version: int | None = None) -> int:
         if not self._initialized:
             await self.initialize()
         try:
@@ -275,8 +275,8 @@ class AuthNZPolicyAdmin:
             logger.error(f"AuthNZPolicyAdmin.delete_policy failed: {e}")
             raise
 
-    async def set_tenant_config(self, tenant_payload: Dict[str, Any], version: Optional[int] = None) -> None:
+    async def set_tenant_config(self, tenant_payload: dict[str, Any], version: int | None = None) -> None:
         await self.upsert_policy("tenant", tenant_payload, version)
 
-    async def get_tenant_config(self) -> Optional[Dict[str, Any]]:
+    async def get_tenant_config(self) -> dict[str, Any] | None:
         return await self.get_policy("tenant")

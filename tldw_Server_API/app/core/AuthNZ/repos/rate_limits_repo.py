@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
@@ -261,7 +261,7 @@ class AuthnzRateLimitsRepo:
         self,
         *,
         identifier: str,
-    ) -> Tuple[str, ...]:
+    ) -> tuple[str, ...]:
         """
         Return a tuple of distinct endpoints seen for an identifier in ``rate_limits``.
         """
@@ -290,7 +290,7 @@ class AuthnzRateLimitsRepo:
         self,
         *,
         identifier: str,
-        endpoint: Optional[str] = None,
+        endpoint: str | None = None,
     ) -> int:
         """
         Delete ``rate_limits`` rows for an identifier (optionally scoped to an endpoint).
@@ -366,7 +366,7 @@ class AuthnzRateLimitsRepo:
         cutoff: datetime,
         rate_threshold: int,
         limit: int = 20,
-    ) -> Tuple[Dict[str, Any], ...]:
+    ) -> tuple[dict[str, Any], ...]:
         """
         Return aggregated rate-limit buckets that exceed the given threshold.
 
@@ -403,7 +403,7 @@ class AuthnzRateLimitsRepo:
                 int(limit),
             )
 
-            results: list[Dict[str, Any]] = []
+            results: list[dict[str, Any]] = []
             for r in rows_raw or []:
                 try:
                     if isinstance(r, dict):
@@ -446,7 +446,7 @@ class AuthnzRateLimitsRepo:
         now: datetime,
         lockout_threshold: int,
         lockout_duration_minutes: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Increment the failed-attempt counter and, if necessary, record a lockout.
 
@@ -526,7 +526,7 @@ class AuthnzRateLimitsRepo:
                     attempt_count = int(row[0]) if row else 1
 
                 is_locked = attempt_count >= lockout_threshold
-                lockout_expires: Optional[datetime] = None
+                lockout_expires: datetime | None = None
 
                 if is_locked:
                     lockout_expires = now + timedelta(minutes=lockout_duration_minutes)
@@ -569,7 +569,7 @@ class AuthnzRateLimitsRepo:
         *,
         identifier: str,
         now: datetime,
-    ) -> Optional[datetime]:
+    ) -> datetime | None:
         """
         Return the active lockout expiry for an identifier, pruning expired rows.
         """

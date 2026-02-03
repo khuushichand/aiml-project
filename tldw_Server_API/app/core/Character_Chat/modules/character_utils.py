@@ -6,12 +6,11 @@ including placeholder replacement and UI-related helper functions.
 """
 
 import re
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any, Optional
 
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError
-
 
 # Default placeholder names used across Character_Chat helpers
 DEFAULT_CHARACTER_NAME = "Character"
@@ -53,8 +52,8 @@ def replace_placeholders(text: Optional[str], char_name: Optional[str], user_nam
     return processed_text
 
 
-def replace_user_placeholder(history: List[Tuple[Optional[str], Optional[str]]], user_name: Optional[str]) -> List[
-    Tuple[Optional[str], Optional[str]]]:
+def replace_user_placeholder(history: list[tuple[Optional[str], Optional[str]]], user_name: Optional[str]) -> list[
+    tuple[Optional[str], Optional[str]]]:
     """Replace {{user}} placeholders in chat history with the actual user name.
 
     Args:
@@ -103,7 +102,7 @@ def extract_character_id_from_ui_choice(choice: str) -> int:
         raise ValueError(f"Could not parse character ID from: '{character_id_str}' (derived from '{choice}')")
 
 
-def get_character_list_for_ui(db: CharactersRAGDB, limit: int = 1000) -> List[Dict[str, Any]]:
+def get_character_list_for_ui(db: CharactersRAGDB, limit: int = 1000) -> list[dict[str, Any]]:
     """Fetches a simplified list of characters suitable for UI display.
 
     Retrieves character IDs and names from the database, sorts them by name

@@ -35,19 +35,23 @@ import os
 import re
 import threading
 import time
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field, is_dataclass
-from datetime import date, datetime, time as time_t, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from datetime import time as time_t
 from decimal import Decimal
 from enum import Enum
+from io import StringIO
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Union
+from typing import Any, Optional, Union
 from uuid import uuid4
+
 #
 # 3rd-Party Imports
 import aiosqlite
-from io import StringIO
 from loguru import logger
+
 #
 # Local Imports
 try:
@@ -85,7 +89,7 @@ try:
 except Exception:
     _HAS_MSVCRT = False
 
-_FALLBACK_LOCKS: Dict[str, threading.Lock] = {}
+_FALLBACK_LOCKS: dict[str, threading.Lock] = {}
 _FALLBACK_LOCKS_LOCK = threading.Lock()
 
 
@@ -448,12 +452,12 @@ class AuditEvent:
     # Risk and compliance
     risk_score: int = 0  # 0-100
     pii_detected: bool = False
-    compliance_flags: List[str] = field(default_factory=list)
+    compliance_flags: list[str] = field(default_factory=list)
 
     # Additional metadata
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage"""
         normalized_metadata = _normalize_json_value(self.metadata)
         normalized_flags = _normalize_json_value(self.compliance_flags)
@@ -524,10 +528,10 @@ class PIIDetector:
     PII_PATTERNS = {k: re.compile(v) for k, v in DEFAULT_PATTERNS.items()}
 
     def __init__(self, *,
-                 overrides: Optional[Dict[str, Union[str, List[str]]]] = None,
+                 overrides: Optional[dict[str, Union[str, list[str]]]] = None,
                  use_rag_patterns: bool = False):
         # Compile patterns
-        pat_map: Dict[str, List[re.Pattern]] = {}
+        pat_map: dict[str, list[re.Pattern]] = {}
         for name, raw in self.DEFAULT_PATTERNS.items():
             try:
                 flags = re.IGNORECASE if name in {"api_key"} else 0
@@ -538,7 +542,8 @@ class PIIDetector:
         # Optional: merge from RAG detector patterns
         if use_rag_patterns:
             try:
-                from tldw_Server_API.app.core.RAG.rag_service.security_filters import PIIDetector as RAGPII, PIIType
+                from tldw_Server_API.app.core.RAG.rag_service.security_filters import PIIDetector as RAGPII
+                from tldw_Server_API.app.core.RAG.rag_service.security_filters import PIIType
                 rag = RAGPII()
                 # Map known types to our keys
                 mapping = {
@@ -576,14 +581,14 @@ class PIIDetector:
                 except Exception as e:
                     logger.debug(f"Audit PII: failed to compile override for {name}: {e}")
 
-        self._patterns: Dict[str, List[re.Pattern]] = pat_map
+        self._patterns: dict[str, list[re.Pattern]] = pat_map
 
-    def detect(self, text: str) -> Dict[str, List[str]]:
+    def detect(self, text: str) -> dict[str, list[str]]:
         """Detect PII in text"""
         if not text:
             return {}
 
-        found: Dict[str, List[str]] = {}
+        found: dict[str, list[str]] = {}
         for pii_type, patterns in self._patterns.items():
             for pattern in patterns:
                 matches = pattern.findall(text)
@@ -673,12 +678,12 @@ class RiskScorer:
         "unauthorized_access": 10,
     }
 
-    def __init__(self, action_bonus_overrides: Optional[Dict[str, int]] = None,
+    def __init__(self, action_bonus_overrides: Optional[dict[str, int]] = None,
                  *,
-                 high_risk_ops_override: Optional[Union[List[str], str]] = None,
-                 suspicious_thresholds_override: Optional[Dict[str, Union[int, bool]]] = None) -> None:
+                 high_risk_ops_override: Optional[Union[list[str], str]] = None,
+                 suspicious_thresholds_override: Optional[dict[str, Union[int, bool]]] = None) -> None:
         # Merge overrides from settings, then supplied overrides
-        merged: Dict[str, int] = dict(self.DEFAULT_ACTION_RISK_BONUS)
+        merged: dict[str, int] = dict(self.DEFAULT_ACTION_RISK_BONUS)
         try:
             cfg = _app_settings.get("AUDIT_ACTION_RISK_BONUS", None)
             if isinstance(cfg, dict):
@@ -701,11 +706,11 @@ class RiskScorer:
                         merged[key] = max(0, min(100, val))
                 except Exception:
                     continue
-        self.action_risk_bonus: Dict[str, int] = merged
+        self.action_risk_bonus: dict[str, int] = merged
 
         # High-risk operations list (lowercase exact substring check)
-        def _parse_ops(value: Union[List[str], str, None]) -> Set[str]:
-            out: Set[str] = set()
+        def _parse_ops(value: Union[list[str], str, None]) -> set[str]:
+            out: set[str] = set()
             if value is None:
                 return out
             if isinstance(value, str):
@@ -723,10 +728,10 @@ class RiskScorer:
         except Exception:
             ops_from_settings = set()
         ops_from_arg = _parse_ops(high_risk_ops_override)
-        self.high_risk_operations: Set[str] = set(map(str.lower, default_ops)) | ops_from_settings | ops_from_arg
+        self.high_risk_operations: set[str] = set(map(str.lower, default_ops)) | ops_from_settings | ops_from_arg
 
         # Suspicious thresholds (numeric or boolean toggles)
-        def _merge_thresholds(base: Dict[str, Union[int, bool]], val: Optional[Dict[str, Union[int, bool]]]) -> Dict[str, Union[int, bool]]:
+        def _merge_thresholds(base: dict[str, Union[int, bool]], val: Optional[dict[str, Union[int, bool]]]) -> dict[str, Union[int, bool]]:
             merged_thr = dict(base)
             if isinstance(val, dict):
                 for k, v in val.items():
@@ -749,7 +754,7 @@ class RiskScorer:
         except Exception:
             pass
         thresholds = _merge_thresholds(thresholds, suspicious_thresholds_override)
-        self.suspicious_thresholds: Dict[str, Union[int, bool]] = thresholds
+        self.suspicious_thresholds: dict[str, Union[int, bool]] = thresholds
 
     def calculate_risk_score(self, event: AuditEvent) -> int:
         """Calculate risk score for an event (0-100)"""
@@ -820,7 +825,7 @@ class RiskScorer:
 
         # Normalize metadata to dict for risk calculations
         # Handles dict (normal), str (JSON-serialized), or fallback to empty
-        metadata: Dict[str, Any] = {}
+        metadata: dict[str, Any] = {}
         raw_metadata = event.metadata
         if isinstance(raw_metadata, dict):
             metadata = raw_metadata
@@ -994,7 +999,7 @@ class UnifiedAuditService:
                 extra_scan = [str(s).strip() for s in raw if str(s).strip()]
         except Exception:
             pass
-        self._pii_scan_fields: List[str] = list(dict.fromkeys(default_scan + extra_scan))
+        self._pii_scan_fields: list[str] = list(dict.fromkeys(default_scan + extra_scan))
         self.risk_scorer = RiskScorer() if enable_risk_scoring else None
 
         # Prepared schemas for inserts/exports
@@ -1003,7 +1008,7 @@ class UnifiedAuditService:
         self._csv_headers = list(self._event_columns)
 
         # Event buffer
-        self.event_buffer: List[AuditEvent] = []
+        self.event_buffer: list[AuditEvent] = []
         self.buffer_lock = asyncio.Lock()
 
         # Background tasks
@@ -1019,7 +1024,7 @@ class UnifiedAuditService:
 
         # Ad-hoc flush tasks created for high-risk/buffer-full conditions
         # Tracked so they can be awaited during graceful shutdown
-        self._flush_futures: Set[asyncio.Task] = set()
+        self._flush_futures: set[asyncio.Task] = set()
         self._flush_futures_lock = asyncio.Lock()  # Protects _flush_futures set
 
         # Statistics
@@ -1052,7 +1057,7 @@ class UnifiedAuditService:
         if start_background_tasks and not self._test_mode:
             await self.start_background_tasks()
 
-    def _build_event_columns(self) -> List[str]:
+    def _build_event_columns(self) -> list[str]:
         columns = [
             "event_id", "timestamp", "category", "event_type", "severity",
         ]
@@ -1068,7 +1073,7 @@ class UnifiedAuditService:
         ])
         return columns
 
-    def _build_event_insert_sql(self, columns: List[str]) -> str:
+    def _build_event_insert_sql(self, columns: list[str]) -> str:
         placeholders = ", ".join(f":{col}" for col in columns)
         return f"INSERT OR IGNORE INTO audit_events ({', '.join(columns)}) VALUES ({placeholders})"
 
@@ -1558,7 +1563,7 @@ class UnifiedAuditService:
                     rows = await cur.fetchmany(1000)
                     if not rows:
                         break
-                    records: List[Dict[str, Any]] = []
+                    records: list[dict[str, Any]] = []
                     for row in rows:
                         data = dict(row)
                         event_type_val = data.get("event_type") or AuditEventType.SYSTEM_START.value
@@ -1730,7 +1735,7 @@ class UnifiedAuditService:
             category=event.category,
         )
 
-    def _ensure_record_tenant_ids(self, records: List[Dict[str, Any]]) -> None:
+    def _ensure_record_tenant_ids(self, records: list[dict[str, Any]]) -> None:
         if not self._shared_mode:
             return
         for record in records:
@@ -1744,10 +1749,10 @@ class UnifiedAuditService:
     def _apply_user_filter(
         self,
         query: str,
-        params: List[Any],
+        params: list[Any],
         user_id: Optional[str],
         allow_cross_tenant: bool,
-    ) -> tuple[str, List[Any]]:
+    ) -> tuple[str, list[Any]]:
         if self._shared_mode:
             if user_id:
                 query += " AND tenant_user_id = ?"
@@ -1765,8 +1770,8 @@ class UnifiedAuditService:
         *,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
-        event_types: Optional[List[AuditEventType]] = None,
-        categories: Optional[List[AuditEventCategory]] = None,
+        event_types: Optional[list[AuditEventType]] = None,
+        categories: Optional[list[AuditEventCategory]] = None,
         user_id: Optional[str] = None,
         request_id: Optional[str] = None,
         correlation_id: Optional[str] = None,
@@ -1776,10 +1781,10 @@ class UnifiedAuditService:
         method: Optional[str] = None,
         min_risk_score: Optional[int] = None,
         allow_cross_tenant: bool = False,
-    ) -> tuple[str, List[Any]]:
+    ) -> tuple[str, list[Any]]:
         """Build the core WHERE clause and params for audit event queries."""
         query = "FROM audit_events WHERE 1=1"
-        params: List[Any] = []
+        params: list[Any] = []
 
         start_iso = _normalize_datetime_filter(start_time)
         if start_iso:
@@ -1830,7 +1835,7 @@ class UnifiedAuditService:
 
         return query, params
 
-    def _cursor_from_row(self, row: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    def _cursor_from_row(self, row: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
         """Extract keyset cursor values from a row dict."""
         ts_val = row.get("timestamp")
         if isinstance(ts_val, datetime):
@@ -1848,8 +1853,8 @@ class UnifiedAuditService:
         *,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
-        event_types: Optional[List[AuditEventType]] = None,
-        categories: Optional[List[AuditEventCategory]] = None,
+        event_types: Optional[list[AuditEventType]] = None,
+        categories: Optional[list[AuditEventCategory]] = None,
         user_id: Optional[str] = None,
         request_id: Optional[str] = None,
         correlation_id: Optional[str] = None,
@@ -1862,7 +1867,7 @@ class UnifiedAuditService:
         limit: int = 100,
         cursor_ts: Optional[str] = None,
         cursor_event_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Query audit events using keyset pagination for stable exports."""
         base_query, params = self._build_events_query(
             start_time=start_time,
@@ -2005,7 +2010,7 @@ class UnifiedAuditService:
         self._replay_task = None
 
         # Await any outstanding ad-hoc flushes first to avoid contention
-        futures_snapshot: List[asyncio.Task] = []
+        futures_snapshot: list[asyncio.Task] = []
         try:
             async with self._flush_futures_lock:
                 futures_snapshot = list(self._flush_futures)
@@ -2015,7 +2020,7 @@ class UnifiedAuditService:
             self._flush_futures.clear()
 
         if futures_snapshot:
-            same_loop_futures: List[asyncio.Task] = []
+            same_loop_futures: list[asyncio.Task] = []
             for fut in futures_snapshot:
                 fut_loop = _task_loop(fut)
                 if fut_loop is None or fut_loop is current_loop:
@@ -2118,7 +2123,7 @@ class UnifiedAuditService:
         tokens_used: Optional[int] = None,
         estimated_cost: Optional[float] = None,
         result_count: Optional[int] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> str:
         """
         Log an audit event.
@@ -2296,14 +2301,14 @@ class UnifiedAuditService:
     async def _fetch_existing_event_ids(
         self,
         db: aiosqlite.Connection,
-        event_ids: List[str],
+        event_ids: list[str],
         *,
         chunk_size: int = 500,
-    ) -> Set[str]:
+    ) -> set[str]:
         """Return existing event_ids in the DB for the supplied list."""
         if not event_ids:
             return set()
-        existing: Set[str] = set()
+        existing: set[str] = set()
         for i in range(0, len(event_ids), chunk_size):
             chunk = event_ids[i:i + chunk_size]
             placeholders = ",".join("?" * len(chunk))
@@ -2316,13 +2321,13 @@ class UnifiedAuditService:
     async def _filter_new_events(
         self,
         db: aiosqlite.Connection,
-        events: List[AuditEvent],
-    ) -> List[AuditEvent]:
+        events: list[AuditEvent],
+    ) -> list[AuditEvent]:
         """Filter events to those not already persisted (de-duplicated by event_id)."""
         if not events:
             return []
-        seen: Set[str] = set()
-        deduped: List[AuditEvent] = []
+        seen: set[str] = set()
+        deduped: list[AuditEvent] = []
         for event in events:
             if not event.event_id or event.event_id in seen:
                 continue
@@ -2435,13 +2440,13 @@ class UnifiedAuditService:
             return False
         return True
 
-    def _append_events_to_fallback(self, fb_path: Path, events: List[AuditEvent]) -> None:
+    def _append_events_to_fallback(self, fb_path: Path, events: list[AuditEvent]) -> None:
         """Write events to the fallback JSONL file."""
         with fb_path.open("a", encoding="utf-8") as fb:
             for ev in events:
                 fb.write(json.dumps(ev.to_dict(), ensure_ascii=False) + "\n")
 
-    async def _update_daily_stats(self, db: aiosqlite.Connection, events: List[AuditEvent]):
+    async def _update_daily_stats(self, db: aiosqlite.Connection, events: list[AuditEvent]):
         """Update daily statistics"""
         from collections import defaultdict
 
@@ -2705,7 +2710,7 @@ class UnifiedAuditService:
                     except Exception:
                         return AuditSeverity.INFO
 
-            def _record_to_event(record: Dict[str, Any]) -> Optional[AuditEvent]:
+            def _record_to_event(record: dict[str, Any]) -> Optional[AuditEvent]:
                 ts = _parse_timestamp(record.get("timestamp"))
                 if ts is None:
                     return None
@@ -2781,8 +2786,8 @@ class UnifiedAuditService:
 
             async def _flush_chunk(
                 db: aiosqlite.Connection,
-                records_chunk: List[Dict[str, Any]],
-                stats_events: List[AuditEvent],
+                records_chunk: list[dict[str, Any]],
+                stats_events: list[AuditEvent],
                 use_db_lock: bool,
             ) -> int:
                 if not records_chunk:
@@ -2791,8 +2796,8 @@ class UnifiedAuditService:
                 async def _do_write() -> int:
                     record_ids = [str(r.get("event_id")) for r in records_chunk if r.get("event_id")]
                     existing_ids = await self._fetch_existing_event_ids(db, record_ids)
-                    seen: Set[str] = set()
-                    filtered_records: List[Dict[str, Any]] = []
+                    seen: set[str] = set()
+                    filtered_records: list[dict[str, Any]] = []
                     for record in records_chunk:
                         event_id = record.get("event_id")
                         if not event_id:
@@ -2809,8 +2814,8 @@ class UnifiedAuditService:
                     self._ensure_record_tenant_ids(filtered_records)
                     await db.executemany(self._event_insert_sql, filtered_records)
                     if stats_events:
-                        filtered_stats: List[AuditEvent] = []
-                        stats_seen: Set[str] = set()
+                        filtered_stats: list[AuditEvent] = []
+                        stats_seen: set[str] = set()
                         for ev in stats_events:
                             if not ev.event_id:
                                 continue
@@ -2842,9 +2847,9 @@ class UnifiedAuditService:
             ) -> int:
                 """Replay lines in a streaming fashion, rewriting only unprocessed lines."""
                 nonlocal inserted, had_error, wrote_temp
-                records_chunk: List[Dict[str, Any]] = []
-                stats_events: List[AuditEvent] = []
-                lines_chunk: List[str] = []
+                records_chunk: list[dict[str, Any]] = []
+                stats_events: list[AuditEvent] = []
+                lines_chunk: list[str] = []
 
                 try:
                     with fb_path.open("r", encoding="utf-8") as src, temp_path.open("w", encoding="utf-8") as dst:
@@ -2947,8 +2952,8 @@ class UnifiedAuditService:
         self,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
-        event_types: Optional[List[AuditEventType]] = None,
-        categories: Optional[List[AuditEventCategory]] = None,
+        event_types: Optional[list[AuditEventType]] = None,
+        categories: Optional[list[AuditEventCategory]] = None,
         user_id: Optional[str] = None,
         request_id: Optional[str] = None,
         correlation_id: Optional[str] = None,
@@ -2960,7 +2965,7 @@ class UnifiedAuditService:
         limit: int = 100,
         offset: int = 0,
         allow_cross_tenant: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Query audit events with filters"""
         self._touch()
         base_query, params = self._build_events_query(
@@ -2995,8 +3000,8 @@ class UnifiedAuditService:
         self,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
-        event_types: Optional[List[AuditEventType]] = None,
-        categories: Optional[List[AuditEventCategory]] = None,
+        event_types: Optional[list[AuditEventType]] = None,
+        categories: Optional[list[AuditEventCategory]] = None,
         user_id: Optional[str] = None,
         request_id: Optional[str] = None,
         correlation_id: Optional[str] = None,
@@ -3039,8 +3044,8 @@ class UnifiedAuditService:
         *,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
-        event_types: Optional[List[AuditEventType]] = None,
-        categories: Optional[List[AuditEventCategory]] = None,
+        event_types: Optional[list[AuditEventType]] = None,
+        categories: Optional[list[AuditEventCategory]] = None,
         user_id: Optional[str] = None,
         request_id: Optional[str] = None,
         correlation_id: Optional[str] = None,
@@ -3088,7 +3093,7 @@ class UnifiedAuditService:
             max_rows = self.non_stream_max_rows
 
         # Fixed CSV header schema for consistency across export paths
-        CSV_HEADERS: List[str] = list(self._csv_headers)
+        CSV_HEADERS: list[str] = list(self._csv_headers)
 
         def _maybe_load_json(value: Any) -> Any:
             if value is None:
@@ -3102,7 +3107,7 @@ class UnifiedAuditService:
                     return value
             return value
 
-        def _deserialize_row(row: Dict[str, Any]) -> Dict[str, Any]:
+        def _deserialize_row(row: dict[str, Any]) -> dict[str, Any]:
             out = dict(row)
             out["metadata"] = _maybe_load_json(out.get("metadata"))
             out["compliance_flags"] = _maybe_load_json(out.get("compliance_flags"))
@@ -3113,7 +3118,7 @@ class UnifiedAuditService:
             limit: int,
             cursor_ts: Optional[str],
             cursor_event_id: Optional[str],
-        ) -> List[Dict[str, Any]]:
+        ) -> list[dict[str, Any]]:
             return await self._query_events_keyset(
                 start_time=start_time,
                 end_time=end_time,
@@ -3320,7 +3325,7 @@ class UnifiedAuditService:
             return written
 
         # Otherwise, gather rows in chunks to return content in-memory
-        all_rows: List[Dict[str, Any]] = []
+        all_rows: list[dict[str, Any]] = []
         cursor_ts = None
         cursor_event_id = None
         written = 0
@@ -3374,7 +3379,7 @@ class UnifiedAuditService:
             return rows_written
 
         # CSV export with fixed header schema
-        def _rows_to_csv(rows: List[Dict[str, Any]]) -> str:
+        def _rows_to_csv(rows: list[dict[str, Any]]) -> str:
             from io import StringIO
             buf = StringIO()
             writer = csv.DictWriter(buf, fieldnames=CSV_HEADERS, extrasaction="ignore")
@@ -3457,7 +3462,7 @@ class UnifiedAuditService:
         else:
             return AuditSeverity.INFO
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get current statistics"""
         return {
             "events_logged": self.stats["events_logged"],
@@ -3477,7 +3482,7 @@ class UnifiedAuditService:
         *,
         user_id: Optional[str] = None,
         allow_cross_tenant: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Aggregate recent security-related audit stats for health checks.
 
         Args:
@@ -3493,9 +3498,9 @@ class UnifiedAuditService:
         start_iso = start_time.isoformat()
         cat = AuditEventCategory.SECURITY.value
 
-        async def _summarize(db: aiosqlite.Connection) -> Dict[str, Any]:
+        async def _summarize(db: aiosqlite.Connection) -> dict[str, Any]:
             tenant_clause = ""
-            tenant_params: List[Any] = []
+            tenant_params: list[Any] = []
             if self._shared_mode:
                 if user_id:
                     tenant_clause = " AND tenant_user_id = ?"
@@ -3504,7 +3509,7 @@ class UnifiedAuditService:
                     tenant_clause = " AND 1=0"
             user_field = "tenant_user_id" if self._shared_mode else "context_user_id"
 
-            def _params(*base: Any) -> List[Any]:
+            def _params(*base: Any) -> list[Any]:
                 return list(base) + tenant_params
 
             # Total security events in window
@@ -3556,7 +3561,7 @@ class UnifiedAuditService:
                 unique_security_users = int(row[0]) if row else 0
 
             # Top IPs observed for security events
-            top_failing_ips: List[str] = []
+            top_failing_ips: list[str] = []
             async with db.execute(
                 """
                 SELECT context_ip_address, COUNT(*) AS cnt
@@ -3586,7 +3591,7 @@ class UnifiedAuditService:
         async with self._read_db() as db:
             return await _summarize(db)
 
-    def decode_row_fields(self, row: Dict[str, Any]) -> Dict[str, Any]:
+    def decode_row_fields(self, row: dict[str, Any]) -> dict[str, Any]:
         """Return a copy of a row dict with JSON fields decoded.
 
         Decodes `metadata` and `compliance_flags` if they are JSON strings.

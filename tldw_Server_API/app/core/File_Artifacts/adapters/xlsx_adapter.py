@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 from io import BytesIO
-from typing import Any, ClassVar, Dict, List
+from typing import Any, ClassVar
 
-from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult, ValidationIssue
 from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
+from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult, ValidationIssue
 
 
 class XlsxAdapter:
     file_type = "xlsx"
     export_formats: ClassVar[set[str]] = {"xlsx"}
 
-    def normalize(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def normalize(self, payload: dict[str, Any]) -> dict[str, Any]:
         if "sheets" not in payload and "columns" in payload and "rows" in payload:
             payload = {
                 "sheets": [
@@ -45,8 +45,8 @@ class XlsxAdapter:
             )
         return {"sheets": normalized_sheets}
 
-    def validate(self, structured: Dict[str, Any]) -> List[ValidationIssue]:
-        issues: List[ValidationIssue] = []
+    def validate(self, structured: dict[str, Any]) -> list[ValidationIssue]:
+        issues: list[ValidationIssue] = []
         sheets = structured.get("sheets")
         if not isinstance(sheets, list) or not sheets:
             issues.append(ValidationIssue(code="sheets_required", message="sheets must be a non-empty list", path="sheets"))
@@ -92,7 +92,7 @@ class XlsxAdapter:
                     )
         return issues
 
-    def export(self, structured: Dict[str, Any], *, format: str) -> ExportResult:
+    def export(self, structured: dict[str, Any], *, format: str) -> ExportResult:
         if format != "xlsx":
             raise FileArtifactsValidationError("unsupported_format")
         try:

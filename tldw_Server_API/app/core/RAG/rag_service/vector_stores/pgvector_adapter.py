@@ -6,16 +6,18 @@ Notes:
 - Stores each logical collection in a separate table named vs_<sanitized_collection> with a vector column.
 - Requires pgvector extension installed in the target database.
 """
-from typing import List, Dict, Any, Optional, Tuple
-from loguru import logger
-from prometheus_client import Histogram, Counter
 import asyncio
 import re
+from typing import Any, Optional, cast
 
-from .base import VectorStoreAdapter, VectorStoreConfig, VectorSearchResult
+from loguru import logger
+from prometheus_client import Counter, Histogram
+
+from .base import VectorSearchResult, VectorStoreAdapter, VectorStoreConfig
 
 try:
-    from pgvector.psycopg import register_vector as _register_pgvector, Vector as _PgVector
+    from pgvector.psycopg import Vector as _PgVector
+    from pgvector.psycopg import register_vector as _register_pgvector
 except Exception:  # pragma: no cover - optional dependency
     _register_pgvector = None
     _PgVector = None
@@ -52,11 +54,11 @@ class PGVectorAdapter(VectorStoreAdapter):
     )
     def __init__(self, config: VectorStoreConfig):
         super().__init__(config)
-        self._conn = None  # Single connection fallback
-        self._pool = None  # psycopg_pool.ConnectionPool when available
-        self._driver = None  # 'psycopg' or 'psycopg2'
+        self._conn: Optional[Any] = None  # Single connection fallback
+        self._pool: Optional[Any] = None  # psycopg_pool.ConnectionPool when available
+        self._driver: Optional[str] = None  # 'psycopg_pool' | 'psycopg' | 'psycopg2'
         self._ef_search = int(self.config.connection_params.get('hnsw_ef_search', 64))
-        self._vector_cls = None  # pgvector.Vector when available
+        self._vector_cls: Optional[type] = None  # pgvector.Vector when available
 
     async def initialize(self) -> None:
         if self._initialized:
@@ -67,19 +69,19 @@ class PGVectorAdapter(VectorStoreAdapter):
             try:
                 import psycopg
                 try:
-                    from psycopg_pool import ConnectionPool  # type: ignore
-                    self._pool = ConnectionPool(dsn=dsn, min_size=1, max_size=int(self.config.connection_params.get('pool_size', 5)))
+                    from psycopg_pool import ConnectionPool
+                    self._pool = ConnectionPool(conninfo=dsn, min_size=1, max_size=int(self.config.connection_params.get('pool_size', 5)))
                     self._driver = 'psycopg_pool'
                 except Exception:
                     # Fallback to single psycopg connection
                     self._conn = await asyncio.get_event_loop().run_in_executor(
                         None,
-                        lambda: psycopg.connect(dsn)  # type: ignore
+                        lambda: psycopg.connect(dsn)
                     )
                     self._driver = 'psycopg'
             except Exception:
                 # Final fallback: psycopg2 single connection
-                import psycopg2  # type: ignore
+                import psycopg2
                 self._conn = await asyncio.get_event_loop().run_in_executor(
                     None,
                     lambda: psycopg2.connect(dsn)
@@ -98,7 +100,7 @@ class PGVectorAdapter(VectorStoreAdapter):
             self._pool = None
             self._initialized = False
 
-    def _build_dsn(self, params: Dict[str, Any]) -> str:
+    def _build_dsn(self, params: dict[str, Any]) -> str:
         # Support both DSN and discrete params
         if params.get('dsn'):
             return str(params['dsn'])
@@ -146,10 +148,11 @@ class PGVectorAdapter(VectorStoreAdapter):
             logger.debug(f"pgvector registration failed: {exc}")
             self._vector_cls = None
 
-    def _serialize_vector(self, vector: List[float]) -> str:
+    def _serialize_vector(self, vector: list[float]) -> str:
         """Serialize a python list into a pgvector literal."""
-        if self._vector_cls is not None and isinstance(vector, self._vector_cls):  # type: ignore[arg-type]
-            vector = list(vector)
+        vector_obj: Any = vector
+        if self._vector_cls is not None and isinstance(vector_obj, self._vector_cls):
+            vector = list(cast(Any, vector_obj))
         if not isinstance(vector, (list, tuple)):
             raise TypeError("query_vector must be a sequence of floats")
         parts = []
@@ -191,7 +194,7 @@ class PGVectorAdapter(VectorStoreAdapter):
             self._ef_search,
         )
 
-    async def _query(self, sql: str, params: Optional[tuple] = None) -> List[tuple]:
+    async def _query(self, sql: str, params: Optional[tuple] = None) -> list[tuple]:
         def _run(pool, single, ef):
             ctx = pool if pool is not None else single
             with ctx as conn:
@@ -223,7 +226,7 @@ class PGVectorAdapter(VectorStoreAdapter):
             self._ef_search,
         )
 
-    async def create_collection(self, collection_name: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+    async def create_collection(self, collection_name: str, metadata: Optional[dict[str, Any]] = None) -> None:
         tbl = self._sanitize_collection(collection_name)
         dim = int(self.config.embedding_dim)
         metric = self.config.distance_metric or 'cosine'
@@ -261,7 +264,7 @@ class PGVectorAdapter(VectorStoreAdapter):
         tbl = self._sanitize_collection(collection_name)
         await self._exec(f"DROP TABLE IF EXISTS {tbl}")
 
-    async def list_collections(self) -> List[str]:
+    async def list_collections(self) -> list[str]:
         sql = "SELECT tablename FROM pg_tables WHERE tablename LIKE %s"
         rows = await self._query(sql, ('vs_%',))
         collections = []
@@ -275,10 +278,10 @@ class PGVectorAdapter(VectorStoreAdapter):
     async def upsert_vectors(
         self,
         collection_name: str,
-        ids: List[str],
-        vectors: List[List[float]],
-        documents: List[str],
-        metadatas: List[Dict[str, Any]]
+        ids: list[str],
+        vectors: list[list[float]],
+        documents: list[str],
+        metadatas: list[dict[str, Any]]
     ) -> None:
         self._validate_vectors(vectors)
         tbl = self._sanitize_collection(collection_name)
@@ -313,7 +316,7 @@ class PGVectorAdapter(VectorStoreAdapter):
         except Exception as e:
             logger.debug("pgvector.upsert: metrics increment failed", exc_info=e)
 
-    async def delete_vectors(self, collection_name: str, ids: List[str]) -> None:
+    async def delete_vectors(self, collection_name: str, ids: list[str]) -> None:
         tbl = self._sanitize_collection(collection_name)
         def _batch(pool, single, ef):
             ctx = pool if pool is not None else single
@@ -336,7 +339,7 @@ class PGVectorAdapter(VectorStoreAdapter):
         except Exception as e:
             logger.debug("pgvector.delete_vectors: metrics increment failed", exc_info=e)
 
-    async def delete_by_filter(self, collection_name: str, filter: Dict[str, Any]) -> int:
+    async def delete_by_filter(self, collection_name: str, filter: dict[str, Any]) -> int:
         """Delete rows matching a JSONB metadata filter; returns affected row count."""
         tbl = self._sanitize_collection(collection_name)
         if filter and isinstance(filter, dict) and len(filter) > 0:
@@ -374,7 +377,7 @@ class PGVectorAdapter(VectorStoreAdapter):
             return 0
 
     # Adapter-specific helper: list vectors with pagination
-    def _build_where_from_filter(self, filt: Dict[str, Any]) -> Tuple[str, List[Any]]:
+    def _build_where_from_filter(self, filt: dict[str, Any]) -> tuple[str, list[Any]]:
         # Prefer JSON containment for simple equality maps (no operators, no nested dict/list values)
         if (
             isinstance(filt, dict)
@@ -386,30 +389,30 @@ class PGVectorAdapter(VectorStoreAdapter):
             return ' WHERE metadata @> %s', [_json.dumps(filt)]
 
         # Fallback: build explicit predicates (supports $and/$or and operators)
-        def handle_node(node) -> Tuple[List[str], List[Any]]:
+        def handle_node(node) -> tuple[list[str], list[Any]]:
             if not isinstance(node, dict):
                 return [], []
-            local_clauses: List[str] = []
-            local_params: List[Any] = []
+            local_clauses: list[str] = []
+            local_params: list[Any] = []
             for k, v in node.items():
                 if k == '$and' and isinstance(v, list):
                     sub_parts = [handle_node(x) for x in v]
                     sub_sql = [f"({ ' AND '.join(p[0]) })" for p in sub_parts if p[0]]
-                    sub_params: List[Any] = []
+                    sub_params_and: list[Any] = []
                     for p in sub_parts:
-                        sub_params.extend(p[1])
+                        sub_params_and.extend(p[1])
                     if sub_sql:
                         local_clauses.append(' AND '.join(sub_sql))
-                        local_params.extend(sub_params)
+                        local_params.extend(sub_params_and)
                 elif k == '$or' and isinstance(v, list):
                     sub_parts = [handle_node(x) for x in v]
                     sub_sql = [f"({ ' AND '.join(p[0]) })" for p in sub_parts if p[0]]
-                    sub_params: List[Any] = []
+                    sub_params_or: list[Any] = []
                     for p in sub_parts:
-                        sub_params.extend(p[1])
+                        sub_params_or.extend(p[1])
                     if sub_sql:
                         local_clauses.append(' OR '.join(sub_sql))
-                        local_params.extend(sub_params)
+                        local_params.extend(sub_params_or)
                 else:
                     field = str(k)
                     if isinstance(v, dict):
@@ -441,7 +444,7 @@ class PGVectorAdapter(VectorStoreAdapter):
             return ' WHERE ' + ' AND '.join(clauses), params
         return '', []
 
-    async def list_vectors_paginated(self, collection_name: str, limit: int, offset: int, filter: Optional[Dict[str, Any]] = None, order_by: Optional[str] = None, order_dir: str = 'asc') -> Dict[str, Any]:
+    async def list_vectors_paginated(self, collection_name: str, limit: int, offset: int, filter: Optional[dict[str, Any]] = None, order_by: Optional[str] = None, order_dir: str = 'asc') -> dict[str, Any]:
         tbl = self._sanitize_collection(collection_name)
         if filter and isinstance(filter, dict) and len(filter) > 0:
             where_sql, params = self._build_where_from_filter(filter)
@@ -474,7 +477,7 @@ class PGVectorAdapter(VectorStoreAdapter):
         return {'items': items, 'total': total}
 
     # Adapter-specific helper: list vectors including embeddings for duplication
-    async def list_vectors_with_embeddings_paginated(self, collection_name: str, limit: int, offset: int, filter: Optional[Dict[str, Any]] = None, order_by: Optional[str] = None, order_dir: str = 'asc') -> Dict[str, Any]:
+    async def list_vectors_with_embeddings_paginated(self, collection_name: str, limit: int, offset: int, filter: Optional[dict[str, Any]] = None, order_by: Optional[str] = None, order_dir: str = 'asc') -> dict[str, Any]:
         tbl = self._sanitize_collection(collection_name)
         if filter and isinstance(filter, dict) and len(filter) > 0:
             where_sql, params = self._build_where_from_filter(filter)
@@ -515,47 +518,6 @@ class PGVectorAdapter(VectorStoreAdapter):
         total = int(cnt_rows[0][0]) if cnt_rows else 0
         return {'items': items, 'total': total}
 
-    async def get_index_info(self, collection_name: str) -> Dict[str, Any]:
-        tbl = self._sanitize_collection(collection_name)
-        rows = await self._query(
-            "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = %s",
-            (tbl,),
-        )
-        index_type = 'none'
-        index_name = None
-        ops = None
-        for name, definition in rows:
-            defn = str(definition or '').lower()
-            if ' using hnsw ' in defn and 'embedding' in defn:
-                index_type = 'hnsw'
-                index_name = name
-                if 'vector_cosine_ops' in defn:
-                    ops = 'vector_cosine_ops'
-                elif 'vector_l2_ops' in defn:
-                    ops = 'vector_l2_ops'
-                elif 'vector_ip_ops' in defn:
-                    ops = 'vector_ip_ops'
-                break
-            if ' using ivfflat ' in defn and 'embedding' in defn:
-                index_type = 'ivfflat'
-                index_name = name
-                if 'vector_cosine_ops' in defn:
-                    ops = 'vector_cosine_ops'
-                elif 'vector_l2_ops' in defn:
-                    ops = 'vector_l2_ops'
-                elif 'vector_ip_ops' in defn:
-                    ops = 'vector_ip_ops'
-                # keep checking in case hnsw exists
-        return {
-            'table': tbl,
-            'index_type': index_type,
-            'index_name': index_name,
-            'ops': ops,
-            'dimension': self.config.embedding_dim,
-            'metric': self.config.distance_metric,
-            'ef_search': self._ef_search,
-        }
-
     def set_ef_search(self, value: int) -> int:
         try:
             self._ef_search = max(1, int(value))
@@ -571,7 +533,7 @@ class PGVectorAdapter(VectorStoreAdapter):
         m: int = 16,
         ef_construction: int = 200,
         lists: int = 100
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Drop existing ANN index on embedding and create the specified one.
 
         index_type: 'hnsw' | 'ivfflat' | 'drop'
@@ -620,7 +582,7 @@ class PGVectorAdapter(VectorStoreAdapter):
         return await self.get_index_info(collection_name)
 
     # Adapter-specific helper: get a single vector by id
-    async def get_vector(self, collection_name: str, vector_id: str) -> Optional[Dict[str, Any]]:
+    async def get_vector(self, collection_name: str, vector_id: str) -> Optional[dict[str, Any]]:
         tbl = self._sanitize_collection(collection_name)
         rows = await self._query(
             f"SELECT id, content, metadata FROM {tbl} WHERE id=%s",
@@ -638,11 +600,11 @@ class PGVectorAdapter(VectorStoreAdapter):
     async def search(
         self,
         collection_name: str,
-        query_vector: List[float],
+        query_vector: list[float],
         k: int = 10,
-        filter: Optional[Dict[str, Any]] = None,
+        filter: Optional[dict[str, Any]] = None,
         include_metadata: bool = True
-    ) -> List[VectorSearchResult]:
+    ) -> list[VectorSearchResult]:
         tbl = self._sanitize_collection(collection_name)
         metric = self.config.distance_metric or 'cosine'
         use_native_vector = self._vector_cls is not None
@@ -659,13 +621,18 @@ class PGVectorAdapter(VectorStoreAdapter):
         # Build WHERE using rich filter support (equality, $and/$or, $in, numeric cmp)
         vector_param: Any
         if use_native_vector:
-            if isinstance(query_vector, self._vector_cls):  # type: ignore[arg-type]
-                vector_param = query_vector
+            vector_cls = self._vector_cls
+            vector_obj: Any = query_vector
+            if vector_cls is not None:
+                if isinstance(vector_obj, vector_cls):
+                    vector_param = vector_obj
+                else:
+                    vector_param = vector_cls(query_vector)
             else:
-                vector_param = self._vector_cls(query_vector)  # type: ignore[call-arg]
+                vector_param = self._serialize_vector(query_vector)
         else:
             vector_param = self._serialize_vector(query_vector)
-        params: List[Any] = [vector_param]
+        params: list[Any] = [vector_param]
         if filter and isinstance(filter, dict) and len(filter) > 0:
             where_sql, where_params = self._build_where_from_filter(filter)
             sql += where_sql
@@ -674,7 +641,7 @@ class PGVectorAdapter(VectorStoreAdapter):
         params.append(int(k))
         with self._H_QUERY_LAT.labels(collection=tbl).time():
             rows = await self._query(sql, tuple(params))
-        results: List[VectorSearchResult] = []
+        results: list[VectorSearchResult] = []
         for rid, content, metadata, distance in rows:
             # Convert distance to similarity in [0,1] by heuristic
             try:
@@ -692,14 +659,14 @@ class PGVectorAdapter(VectorStoreAdapter):
 
     async def multi_search(
         self,
-        collection_patterns: List[str],
-        query_vector: List[float],
+        collection_patterns: list[str],
+        query_vector: list[float],
         k: int = 10,
-        filter: Optional[Dict[str, Any]] = None
-    ) -> List[VectorSearchResult]:
+        filter: Optional[dict[str, Any]] = None
+    ) -> list[VectorSearchResult]:
         # Fetch matching tables and aggregate results
         all_tables = await self.list_collections()
-        results: List[VectorSearchResult] = []
+        results: list[VectorSearchResult] = []
         for pattern in collection_patterns:
             regex = re.compile('^' + pattern.replace('*', '.*') + '$')
             for tbl in all_tables:
@@ -709,7 +676,7 @@ class PGVectorAdapter(VectorStoreAdapter):
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:k]
 
-    async def get_collection_stats(self, collection_name: str) -> Dict[str, Any]:
+    async def get_collection_stats(self, collection_name: str) -> dict[str, Any]:
         tbl = self._sanitize_collection(collection_name)
         rows = await self._query(f"SELECT COUNT(*) FROM {tbl}")
         count = int(rows[0][0]) if rows else 0
@@ -730,7 +697,7 @@ class PGVectorAdapter(VectorStoreAdapter):
         except Exception:
             pass
 
-    async def get_index_info(self, collection_name: str) -> Dict[str, Any]:
+    async def get_index_info(self, collection_name: str) -> dict[str, Any]:
         tbl = self._sanitize_collection(collection_name)
         # Identify index type on embedding column
         try:
@@ -768,9 +735,9 @@ class PGVectorAdapter(VectorStoreAdapter):
             self._conn = None
         await super().close()
 
-    async def health(self) -> Dict[str, Any]:
+    async def health(self) -> dict[str, Any]:
         ok = False
-        info: Dict[str, Any] = {"driver": self._driver or "unknown"}
+        info: dict[str, Any] = {"driver": self._driver or "unknown"}
         # Include basic pool stats when psycopg_pool is available
         try:
             if self._pool is not None:
@@ -799,7 +766,7 @@ class PGVectorAdapter(VectorStoreAdapter):
 
 class JsonDumper:
     @staticmethod
-    def dumps(obj: Dict[str, Any]) -> str:
+    def dumps(obj: dict[str, Any]) -> str:
         # Avoid importing json at module top as a micro-optimization
         import json as _json
         try:

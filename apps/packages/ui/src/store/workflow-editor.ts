@@ -35,6 +35,7 @@ import type {
   WorkflowEdge,
   WorkflowNodeData,
   WorkflowStepType,
+  WorkflowStepSchema,
   EditorUIState,
   EditorTool,
   SidebarPanel,
@@ -47,6 +48,13 @@ import type {
   ServerWorkflowDefinition,
   ValidationIssue
 } from "@/types/workflow-editor"
+import {
+  BASE_STEP_REGISTRY,
+  buildStepRegistry,
+  humanizeStepType,
+  type StepRegistry
+} from "@/components/WorkflowEditor/step-registry"
+import { getWorkflowStepTypes } from "@/services/tldw/workflows"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage Keys
@@ -88,6 +96,15 @@ interface ValidationState {
   issues: ValidationIssue[]
 }
 
+type StepTypesStatus = "idle" | "loading" | "ready" | "error"
+
+interface StepTypesState {
+  stepRegistry: StepRegistry
+  stepSchemas: Record<string, WorkflowStepSchema>
+  stepTypesStatus: StepTypesStatus
+  stepTypesError: string | null
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Actions Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -119,6 +136,10 @@ interface CanvasActions {
   saveWorkflow: () => ServerWorkflowDefinition
   setWorkflowMeta: (name: string, description: string) => void
   clearCanvas: () => void
+}
+
+interface StepTypesActions {
+  loadStepTypes: (force?: boolean) => Promise<void>
 }
 
 interface UIActions {
@@ -184,12 +205,14 @@ export type WorkflowEditorState = CanvasState &
   ExecutionState &
   HistoryState &
   ValidationState &
+  StepTypesState &
   CanvasActions &
   UIActions &
   ExecutionActions &
   HistoryActions &
   ValidationActions &
-  PersistenceActions
+  PersistenceActions &
+  StepTypesActions
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Initial State
@@ -240,12 +263,20 @@ const initialValidationState: ValidationState = {
   issues: []
 }
 
+const initialStepTypesState: StepTypesState = {
+  stepRegistry: BASE_STEP_REGISTRY,
+  stepSchemas: {},
+  stepTypesStatus: "idle",
+  stepTypesError: null
+}
+
 const initialState = {
   ...initialCanvasState,
   ...initialUIState,
   ...initialExecutionState,
   ...initialHistoryState,
-  ...initialValidationState
+  ...initialValidationState,
+  ...initialStepTypesState
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -256,13 +287,14 @@ const generateId = () =>
   `node-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
 
 const createDefaultStepData = (type: WorkflowStepType): WorkflowNodeData => {
-  const labels: Record<WorkflowStepType, string> = {
+  const labels: Record<string, string> = {
     prompt: "LLM Prompt",
     rag_search: "RAG Search",
     media_ingest: "Media Ingest",
     branch: "Branch",
     map: "Map",
     wait_for_human: "Human Approval",
+    wait_for_approval: "Approval",
     webhook: "Webhook",
     tts: "Text to Speech",
     stt_transcribe: "Transcribe",
@@ -273,7 +305,7 @@ const createDefaultStepData = (type: WorkflowStepType): WorkflowNodeData => {
   }
 
   return {
-    label: labels[type] || type,
+    label: labels[type] || humanizeStepType(String(type)),
     stepType: type,
     config: {},
     isExpanded: false
@@ -325,6 +357,45 @@ const saveToStorage = async <T>(key: string, value: T): Promise<void> => {
 export const useWorkflowEditorStore = createWithEqualityFn<WorkflowEditorState>()(
   (set, get) => ({
     ...initialState,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Step Types (Server-Driven)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    loadStepTypes: async (force = false) => {
+      const status = get().stepTypesStatus
+      if (status === "loading") return
+      if (!force && status === "ready") return
+
+      set({
+        stepTypesStatus: "loading",
+        stepTypesError: null
+      })
+
+      try {
+        const steps = await getWorkflowStepTypes(force)
+        const registry = buildStepRegistry(steps)
+        const schemas: Record<string, WorkflowStepSchema> = {}
+        for (const step of steps) {
+          if (!step?.name) continue
+          schemas[step.name] = step.schema || {}
+        }
+        set({
+          stepRegistry: registry,
+          stepSchemas: schemas,
+          stepTypesStatus: "ready"
+        })
+      } catch (error) {
+        console.warn("Failed to load workflow step types", error)
+        set({
+          stepRegistry: buildStepRegistry([]),
+          stepSchemas: {},
+          stepTypesStatus: "error",
+          stepTypesError:
+            error instanceof Error ? error.message : "Failed to load step types"
+        })
+      }
+    },
 
     // ─────────────────────────────────────────────────────────────────────────
     // Canvas Actions

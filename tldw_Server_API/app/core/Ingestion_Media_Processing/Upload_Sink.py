@@ -6,12 +6,12 @@ import copy
 import html
 import mimetypes
 import os
-import shutil
 import stat
 import tempfile
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import List, Optional, Dict, Set, Union, Tuple
+from typing import Optional, Union
+
 #
 # 3rd-party Libraries
 try:
@@ -26,13 +26,13 @@ try:
     import yara  # type: ignore
 except ImportError:  # yara rules are optional; disable malware scanning if missing
     yara = None
-import zipfile
 import tarfile
+import zipfile
+
 #
 # Local Imports (adjust path as per your project structure)
-from tldw_Server_API.app.core.config import loaded_config_data, MAGIC_FILE_PATH
+from tldw_Server_API.app.core.config import MAGIC_FILE_PATH, loaded_config_data
 from tldw_Server_API.app.core.Utils.Utils import logging
-
 
 # If the above import fails in a different context, fallback to standard logging:
 # import logging
@@ -42,7 +42,7 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 class FileValidationError(Exception):
     """Custom exception for critical validation/setup errors."""
 
-    def __init__(self, message, issues: Optional[List[str]] = None):
+    def __init__(self, message, issues: Optional[list[str]] = None):
         super().__init__(message)
         self.issues = issues if issues is not None else [message]
 
@@ -50,7 +50,7 @@ class FileValidationError(Exception):
 class ValidationResult:
     """Holds the outcome of a file validation process."""
 
-    def __init__(self, is_valid: bool, issues: Optional[List[str]] = None,
+    def __init__(self, is_valid: bool, issues: Optional[list[str]] = None,
                  file_path: Optional[Path] = None,
                  detected_mime_type: Optional[str] = None,
                  detected_extension: Optional[str] = None):
@@ -75,13 +75,13 @@ class ValidationResult:
 media_config = loaded_config_data.get('media_processing', {}) if loaded_config_data else {}
 
 # Additional extension sets for specialized categories
-CODE_FILE_EXTENSIONS: Set[str] = {
+CODE_FILE_EXTENSIONS: set[str] = {
     '.py', '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx',
     '.cs', '.java', '.kt', '.kts', '.swift', '.rs', '.go',
     '.rb', '.php', '.pl', '.lua', '.sql', '.yaml',
     '.yml', '.toml', '.ini', '.cfg', '.conf', '.ts', '.tsx', '.jsx', '.js',
 }
-CODE_MIME_TYPES: Set[str] = {
+CODE_MIME_TYPES: set[str] = {
     'text/plain', 'text/markdown',
     # Python
     'text/x-python', 'application/x-python-code',
@@ -219,11 +219,11 @@ EXT_TO_MEDIA_TYPE_KEY = {
     '.cfg': 'code', '.conf': 'code', '.ts': 'code', '.tsx': 'code', '.jsx': 'code',
 }
 
-def _extension_candidates(filename: Union[str, Path]) -> List[str]:
+def _extension_candidates(filename: Union[str, Path]) -> list[str]:
     """Return suffix candidates (longest to shortest) for a filename/path."""
     path_obj = Path(filename)
     suffixes = [suffix.lower() for suffix in path_obj.suffixes if suffix]
-    candidates: List[str] = []
+    candidates: list[str] = []
     for idx in range(len(suffixes)):
         candidate = ''.join(suffixes[idx:])
         if candidate:
@@ -240,19 +240,19 @@ def _resolve_media_type_key(filename: Union[str, Path]) -> Optional[str]:
     return None
 
 
-HTML_DANGEROUS_TAGS: Set[str] = {"script", "style", "noscript"}
+HTML_DANGEROUS_TAGS: set[str] = {"script", "style", "noscript"}
 
 
 class _HTMLBlockStripper(HTMLParser):
     """Strip specified tag blocks and optionally remove all tags without regex."""
 
-    def __init__(self, drop_tags: Set[str], keep_tags: bool, strip_comments: bool = True) -> None:
+    def __init__(self, drop_tags: set[str], keep_tags: bool, strip_comments: bool = True) -> None:
         super().__init__(convert_charrefs=False)
         self._drop_tags = {tag.lower() for tag in drop_tags}
         self._keep_tags = keep_tags
         self._strip_comments = strip_comments
-        self._drop_stack: List[str] = []
-        self._parts: List[str] = []
+        self._drop_stack: list[str] = []
+        self._parts: list[str] = []
 
     def get_output(self) -> str:
         return "".join(self._parts)
@@ -263,7 +263,7 @@ class _HTMLBlockStripper(HTMLParser):
     def _format_start_tag(
         self,
         tag: str,
-        attrs: List[Tuple[str, Optional[str]]],
+        attrs: list[tuple[str, Optional[str]]],
         self_closing: bool = False,
     ) -> str:
         parts = [f"<{tag}"]
@@ -275,7 +275,7 @@ class _HTMLBlockStripper(HTMLParser):
         parts.append(" />" if self_closing else ">")
         return "".join(parts)
 
-    def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
         tag_lower = tag.lower()
         if tag_lower in self._drop_tags:
             self._drop_stack.append(tag_lower)
@@ -287,7 +287,7 @@ class _HTMLBlockStripper(HTMLParser):
         else:
             self._append(" ")
 
-    def handle_startendtag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
         if tag.lower() in self._drop_tags or self._drop_stack:
             return
         if self._keep_tags:
@@ -342,7 +342,7 @@ class _HTMLBlockStripper(HTMLParser):
             self._append(f"<?{data}>")
 
 
-def _drop_html_blocks(html_content: str, drop_tags: Set[str]) -> str:
+def _drop_html_blocks(html_content: str, drop_tags: set[str]) -> str:
     """Remove dangerous tag blocks and comments while preserving other markup."""
     parser = _HTMLBlockStripper(drop_tags=drop_tags, keep_tags=True, strip_comments=True)
     parser.feed(html_content)
@@ -350,7 +350,7 @@ def _drop_html_blocks(html_content: str, drop_tags: Set[str]) -> str:
     return parser.get_output()
 
 
-def _strip_html_tags(html_content: str, drop_tags: Set[str]) -> str:
+def _strip_html_tags(html_content: str, drop_tags: set[str]) -> str:
     """Strip all HTML tags and comments to plain text."""
     parser = _HTMLBlockStripper(drop_tags=drop_tags, keep_tags=False, strip_comments=True)
     parser.feed(html_content)
@@ -359,7 +359,7 @@ def _strip_html_tags(html_content: str, drop_tags: Set[str]) -> str:
 
 
 class FileValidator:
-    def __init__(self, yara_rules_path: Optional[str] = None, custom_media_configs: Optional[Dict] = None):
+    def __init__(self, yara_rules_path: Optional[str] = None, custom_media_configs: Optional[dict] = None):
         self.magic_available = bool(puremagic)
         # Optional python-magic fallback when puremagic is unavailable
         self.python_magic_available = False
@@ -400,7 +400,7 @@ class FileValidator:
                 "Install 'puremagic' or 'python-magic' for stronger detection."
             )
 
-        self._custom_media_configs: Dict[str, Dict] = {}
+        self._custom_media_configs: dict[str, dict] = {}
         if custom_media_configs:
             for media_type, config_val in custom_media_configs.items():
                 key = media_type.lower()
@@ -426,7 +426,7 @@ class FileValidator:
         if self.compiled_yara_rules is None:
             logging.warning("Yara rules not loaded. Yara scanning will be disabled for this validator instance.")
 
-    def _scan_file_with_yara(self, file_path: Path) -> Tuple[bool, List[str]]:
+    def _scan_file_with_yara(self, file_path: Path) -> tuple[bool, list[str]]:
         if not self.yara_available or not self.compiled_yara_rules:
             return True, []
         try:
@@ -444,11 +444,11 @@ class FileValidator:
             logging.error(f"Unexpected error scanning file {file_path} with Yara: {e}")
             return False, [f"Unexpected Yara scanning error: {e}"]
 
-    def get_media_config(self, media_type_key: Optional[str]) -> Optional[Dict]:
+    def get_media_config(self, media_type_key: Optional[str]) -> Optional[dict]:
         if not media_type_key:
             return None
         key = media_type_key.lower()
-        merged: Dict = {}
+        merged: dict = {}
         base_cfg = DEFAULT_MEDIA_TYPE_CONFIG.get(key)
         if base_cfg:
             merged.update(base_cfg)
@@ -462,11 +462,11 @@ class FileValidator:
             file_path: Union[str, Path],
             original_filename: Optional[str] = None,
             media_type_key: Optional[str] = None,
-            allowed_extensions_override: Optional[Set[str]] = None,
-            allowed_mimetypes_override: Optional[Set[str]] = None,
+            allowed_extensions_override: Optional[set[str]] = None,
+            allowed_mimetypes_override: Optional[set[str]] = None,
             max_size_mb_override: Optional[Union[int, float]] = None
     ) -> ValidationResult:
-        issues: List[str] = []
+        issues: list[str] = []
         current_file_path = Path(file_path)
 
         # Determine original filename if not provided
@@ -483,7 +483,7 @@ class FileValidator:
             return ValidationResult(False, issues, current_file_path, detected_extension=disk_file_ext)
 
         # 1a. Centralized blocked extensions guard (defense-in-depth)
-        BLOCKED_EXTENSIONS: Set[str] = {
+        BLOCKED_EXTENSIONS: set[str] = {
             '.exe', '.bat', '.cmd', '.com', '.scr', '.vbs', '.vbe',
             '.ws', '.wsf', '.wsc', '.wsh', '.ps1', '.ps1xml', '.ps2', '.ps2xml',
             '.psc1', '.psc2', '.msh', '.msh1', '.msh2', '.mshxml', '.msh1xml',
@@ -492,7 +492,7 @@ class FileValidator:
             '.msi', '.dmg', '.pkg', '.deb', '.rpm', '.appimage', '.snap'
         }
 
-        def _first_blocked(candidates: List[str]) -> Optional[str]:
+        def _first_blocked(candidates: list[str]) -> Optional[str]:
             for c in candidates:
                 # Allow .js when explicitly validating as code
                 if media_type_key == 'code' and c == '.js':
@@ -561,7 +561,7 @@ class FileValidator:
         claimed_candidates = _extension_candidates(_original_filename)
         claimed_ext_display = claimed_candidates[0] if claimed_candidates else None
         claimed_ext_display_str = claimed_ext_display or "<none>"
-        ext_allowed_lower: Set[str] = set()
+        ext_allowed_lower: set[str] = set()
         if final_allowed_extensions:
             ext_allowed_lower = {ext.lower() for ext in final_allowed_extensions}
             if not claimed_candidates:
@@ -698,7 +698,7 @@ class FileValidator:
     ) -> ValidationResult:
         """Validates an archive file and its contents."""
         archive_path_obj = Path(archive_path)
-        issues: List[str] = []
+        issues: list[str] = []
 
         # Get config for "archive" type
         archive_config = self.get_media_config("archive")
@@ -1012,7 +1012,7 @@ class FileValidator:
         logging.info(f"Archive '{archive_path_obj.name}' and its contents validated successfully.")
         return ValidationResult(True, file_path=archive_path_obj)
 
-    def sanitize_html_content(self, html_content: str, config: Optional[Dict] = None) -> str:
+    def sanitize_html_content(self, html_content: str, config: Optional[dict] = None) -> str:
         # Sanitizer using bleach with restricted protocols; otherwise strip tags.
         # Explicitly remove script/style/noscript contents and comments before cleaning to prevent code leakage.
         try:
@@ -1086,7 +1086,7 @@ class FileValidator:
                 # As a last resort, return the original content
                 return html_content
 
-    def sanitize_xml_content(self, xml_content: str, config: Optional[Dict] = None) -> str:
+    def sanitize_xml_content(self, xml_content: str, config: Optional[dict] = None) -> str:
         # Guarded XML parse using defusedxml; optionally strip comments/PIs.
         try:
             from defusedxml import ElementTree as DET  # type: ignore

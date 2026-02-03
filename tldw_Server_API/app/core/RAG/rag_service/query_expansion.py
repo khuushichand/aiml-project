@@ -11,18 +11,16 @@ search recall and precision, including:
 - Semantic similarity-based expansion
 """
 
-import re
 import asyncio
-from typing import List, Dict, Any, Optional, Set, Tuple
-from dataclasses import dataclass, field
+import re
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from enum import Enum
-from functools import lru_cache
-import json
+from typing import Any, Optional
 
 from loguru import logger
 
-from .types import RetrieverStrategy, SearchResult, Document, DataSource
+from .types import DataSource, RetrieverStrategy, SearchResult
 
 
 class ExpansionStrategy(Enum):
@@ -41,13 +39,13 @@ class ExpansionStrategy(Enum):
 class ExpandedQuery:
     """Represents an expanded query with variations."""
     original_query: str
-    variations: List[str]
-    synonyms: Dict[str, List[str]]
-    keywords: List[str]
-    entities: List[str]
-    acronym_expansions: Dict[str, List[str]] = field(default_factory=dict)
-    domain_terms: Dict[str, List[str]] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    variations: list[str]
+    synonyms: dict[str, list[str]]
+    keywords: list[str]
+    entities: list[str]
+    acronym_expansions: dict[str, list[str]] = field(default_factory=dict)
+    domain_terms: dict[str, list[str]] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class QueryExpansionStrategy(ABC):
@@ -75,7 +73,7 @@ class SynonymExpansion(QueryExpansionStrategy):
     In production, you'd use WordNet, ConceptNet, or a custom thesaurus.
     """
 
-    def __init__(self, synonym_dict: Optional[Dict[str, List[str]]] = None):
+    def __init__(self, synonym_dict: Optional[dict[str, list[str]]] = None):
         """
         Initialize synonym expansion.
 
@@ -84,7 +82,7 @@ class SynonymExpansion(QueryExpansionStrategy):
         """
         self.synonym_dict = synonym_dict or self._get_default_synonyms()
 
-    def _get_default_synonyms(self) -> Dict[str, List[str]]:
+    def _get_default_synonyms(self) -> dict[str, list[str]]:
         """Get default synonym dictionary for common terms."""
         return {
             # Technical terms
@@ -165,7 +163,7 @@ class MultiQueryGeneration(QueryExpansionStrategy):
     This simulates what an LLM might do to rephrase queries.
     """
 
-    def __init__(self, generation_templates: Optional[List[str]] = None):
+    def __init__(self, generation_templates: Optional[list[str]] = None):
         """
         Initialize multi-query generation.
 
@@ -174,7 +172,7 @@ class MultiQueryGeneration(QueryExpansionStrategy):
         """
         self.templates = generation_templates or self._get_default_templates()
 
-    def _get_default_templates(self) -> List[str]:
+    def _get_default_templates(self) -> list[str]:
         """Get default query generation templates."""
         return [
             "What is {query}",
@@ -238,7 +236,7 @@ class MultiQueryGeneration(QueryExpansionStrategy):
             metadata={"strategy": "multi_query_generation"}
         )
 
-    def _extract_key_phrases(self, query: str) -> List[str]:
+    def _extract_key_phrases(self, query: str) -> list[str]:
         """Extract key phrases from query."""
         # Simple implementation - in production, use NLP
         phrases = []
@@ -252,7 +250,7 @@ class MultiQueryGeneration(QueryExpansionStrategy):
 
         return phrases[:5]
 
-    def _extract_entities(self, query: str) -> List[str]:
+    def _extract_entities(self, query: str) -> list[str]:
         """Extract named entities from query."""
         # Simple pattern matching - in production, use NER
         entities = []
@@ -315,7 +313,7 @@ class AcronymExpansion(QueryExpansionStrategy):
         "iaas": ["infrastructure as a service"],
     }
 
-    def __init__(self, custom_acronyms: Optional[Dict[str, List[str]]] = None):
+    def __init__(self, custom_acronyms: Optional[dict[str, list[str]]] = None):
         """
         Initialize acronym expansion.
 
@@ -401,7 +399,7 @@ class DomainExpansion(QueryExpansionStrategy):
         "fine-tuning": ["adaptation", "customization", "specialization"],
     }
 
-    def __init__(self, custom_terms: Optional[Dict[str, List[str]]] = None):
+    def __init__(self, custom_terms: Optional[dict[str, list[str]]] = None):
         """
         Initialize domain expansion.
 
@@ -524,28 +522,28 @@ async def expand_acronyms(query: str) -> str:
     return query
 
 
-async def expand_synonyms(query: str) -> List[str]:
+async def expand_synonyms(query: str) -> list[str]:
     """Return a small list of synonym-based variations for compatibility."""
     expander = SynonymExpansion()
     expanded = await expander.expand(query)
     return expanded.variations or []
 
 
-async def domain_specific_expansion(query: str) -> List[str]:
+async def domain_specific_expansion(query: str) -> list[str]:
     """Return domain-specific variations for compatibility."""
     expander = DomainExpansion()
     expanded = await expander.expand(query)
     return expanded.variations or []
 
 
-async def entity_recognition_expansion(query: str) -> List[str]:
+async def entity_recognition_expansion(query: str) -> list[str]:
     """Return entity-based variations for compatibility."""
     expander = EntityExpansion()
     expanded = await expander.expand(query)
     return expanded.variations or []
 
 
-async def multi_strategy_expansion(query: str, strategies: Optional[List[str]] = None, corpus: Optional[str] = None) -> str:
+async def multi_strategy_expansion(query: str, strategies: Optional[list[str]] = None, corpus: Optional[str] = None) -> str:
     """Combined quick expansion used by unified pipeline tests.
 
     Returns a simple string that concatenates the first available expansion.
@@ -569,8 +567,8 @@ async def multi_strategy_expansion(query: str, strategies: Optional[List[str]] =
                     synmap = get_corpus_synonyms(corpus)
                 except Exception:
                     synmap = {}
-                expander = SynonymExpansion(synmap if synmap else None)
-                expanded = await expander.expand(query)
+                syn_expander = SynonymExpansion(synmap if synmap else None)
+                expanded = await syn_expander.expand(query)
                 syns = expanded.variations or []
             else:
                 syns = await expand_synonyms(query)
@@ -586,8 +584,8 @@ async def multi_strategy_expansion(query: str, strategies: Optional[List[str]] =
                     dom_terms = get_corpus_synonyms(corpus)
                 except Exception:
                     dom_terms = {}
-                expander = DomainExpansion(custom_terms=dom_terms if dom_terms else None)
-                expanded = await expander.expand(query)
+                dom_expander = DomainExpansion(custom_terms=dom_terms if dom_terms else None)
+                expanded = await dom_expander.expand(query)
                 dom = expanded.variations or []
             else:
                 dom = await domain_specific_expansion(query)
@@ -604,7 +602,7 @@ class HybridQueryExpansion(QueryExpansionStrategy):
     Combines multiple expansion strategies for comprehensive query expansion.
     """
 
-    def __init__(self, strategies: Optional[List[QueryExpansionStrategy]] = None):
+    def __init__(self, strategies: Optional[list[QueryExpansionStrategy]] = None):
         """
         Initialize hybrid expansion.
 
@@ -720,7 +718,7 @@ class QueryExpansionRetriever(RetrieverStrategy):
     async def retrieve(
         self,
         query: str,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: Optional[dict[str, Any]] = None,
         top_k: int = 10
     ) -> SearchResult:
         """
@@ -766,7 +764,7 @@ class QueryExpansionRetriever(RetrieverStrategy):
 
     def _merge_results(
         self,
-        results: List[SearchResult],
+        results: list[SearchResult],
         original_query: str,
         expanded: ExpandedQuery
     ) -> SearchResult:
@@ -783,7 +781,7 @@ class QueryExpansionRetriever(RetrieverStrategy):
         """
         if self.merge_strategy == "intersection":
             # Only keep documents that appear in multiple results
-            doc_counts = {}
+            doc_counts: dict[str, int] = {}
             for result in results:
                 for doc in result.documents:
                     doc_counts[doc.id] = doc_counts.get(doc.id, 0) + 1

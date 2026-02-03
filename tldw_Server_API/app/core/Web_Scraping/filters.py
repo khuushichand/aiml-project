@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Optional, Set, Dict, Tuple
-from urllib.parse import urlparse
 import asyncio
 import time
+from dataclasses import dataclass
+from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
+
 from loguru import logger
 
 try:
@@ -31,7 +31,7 @@ class URLFilter:
 class FilterChain:
     """Apply a sequence of filters (AND semantics)."""
 
-    def __init__(self, filters: Optional[List[URLFilter]] = None) -> None:
+    def __init__(self, filters: list[URLFilter] | None = None) -> None:
         self.filters = list(filters or [])
 
     def add(self, f: URLFilter) -> "FilterChain":
@@ -49,8 +49,8 @@ class FilterChain:
 class DomainFilter(URLFilter):
     """Allow/deny domains (optionally including subdomains)."""
 
-    allowed: Optional[Set[str]] = None
-    blocked: Optional[Set[str]] = None
+    allowed: set[str] | None = None
+    blocked: set[str] | None = None
     include_subdomains: bool = True
 
     def _host(self, url: str) -> str:
@@ -142,8 +142,8 @@ class URLPatternFilter(URLFilter):
     - If `include_patterns` is empty, default allow (subject to excludes).
     """
 
-    include_patterns: Optional[List[str]] = None
-    exclude_patterns: Optional[List[str]] = None
+    include_patterns: list[str] | None = None
+    exclude_patterns: list[str] | None = None
 
     def apply(self, url: str) -> bool:
         s = (url or "").lower()
@@ -183,9 +183,9 @@ class RobotsFilter:
         self.backend = backend
         self.timeout = float(timeout)
         # host -> (RobotFileParser|None, fetched_at_epoch_seconds)
-        self._cache: Dict[str, Tuple[Optional[RobotFileParser], float]] = {}
+        self._cache: dict[str, tuple[RobotFileParser | None, float]] = {}
         # Lock to avoid stampede on first fetch per host
-        self._locks: Dict[str, asyncio.Lock] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
 
     def _robots_url_for(self, target_url: str) -> str:
         p = urlparse(target_url)
@@ -197,7 +197,7 @@ class RobotsFilter:
         except Exception:
             return ""
 
-    async def _fetch_parser(self, url: str) -> Optional[RobotFileParser]:
+    async def _fetch_parser(self, url: str) -> RobotFileParser | None:
         host = self._host(url)
         if not host:
             return None

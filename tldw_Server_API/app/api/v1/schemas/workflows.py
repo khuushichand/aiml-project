@@ -1,69 +1,70 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class WorkflowInputSchema(BaseModel):
     # Free-form for v0.1 stub
-    params: Dict[str, Any] = Field(default_factory=dict)
+    params: dict[str, Any] = Field(default_factory=dict)
 
 
 class StepConfig(BaseModel):
     id: str = Field(..., description="Step identifier")
-    name: Optional[str] = None
+    name: str | None = None
     type: str = Field(..., description="Step type name")
-    config: Dict[str, Any] = Field(default_factory=dict)
-    retry: Optional[int] = 0
-    timeout_seconds: Optional[float] = 300
-    on_success: Optional[str] = None
-    on_failure: Optional[str] = None
-    on_timeout: Optional[str] = None
+    config: dict[str, Any] = Field(default_factory=dict)
+    retry: int | None = 0
+    timeout_seconds: float | None = 300
+    on_success: str | None = None
+    on_failure: str | None = None
+    on_timeout: str | None = None
 
 
 class WorkflowRagSearchConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str = Field(..., min_length=1)
-    sources: Optional[List[str]] = None
-    search_mode: Optional[Literal["fts", "vector", "hybrid"]] = None
-    hybrid_alpha: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    top_k: Optional[int] = Field(default=None, ge=1, le=100)
-    min_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    expand_query: Optional[bool] = None
-    expansion_strategies: Optional[List[Literal["acronym", "synonym", "domain", "entity"]]] = None
-    spell_check: Optional[bool] = None
-    enable_cache: Optional[bool] = None
-    cache_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    adaptive_cache: Optional[bool] = None
-    cache_ttl: Optional[int] = Field(default=None, ge=0)
-    enable_table_processing: Optional[bool] = None
-    table_method: Optional[Literal["markdown", "html", "hybrid"]] = None
-    include_sibling_chunks: Optional[bool] = None
-    sibling_window: Optional[int] = Field(default=None, ge=0, le=20)
-    enable_parent_expansion: Optional[bool] = None
-    include_parent_document: Optional[bool] = None
-    parent_max_tokens: Optional[int] = Field(default=None, ge=1, le=8192)
-    enable_reranking: Optional[bool] = None
-    reranking_strategy: Optional[Literal["flashrank", "cross_encoder", "hybrid", "none"]] = None
-    rerank_top_k: Optional[int] = Field(default=None, ge=1, le=100)
-    enable_citations: Optional[bool] = None
-    citation_style: Optional[Literal["apa", "mla", "chicago", "harvard", "ieee"]] = None
-    include_page_numbers: Optional[bool] = None
-    enable_chunk_citations: Optional[bool] = None
-    enable_generation: Optional[bool] = None
-    generation_model: Optional[str] = Field(default=None, max_length=128)
-    generation_prompt: Optional[str] = Field(default=None, max_length=8192)
-    max_generation_tokens: Optional[int] = Field(default=None, ge=1, le=8192)
-    enable_security_filter: Optional[bool] = None
-    detect_pii: Optional[bool] = None
-    redact_pii: Optional[bool] = None
-    sensitivity_level: Optional[Literal["public", "internal", "confidential", "restricted"]] = None
-    content_filter: Optional[bool] = None
-    timeout_seconds: Optional[int] = Field(default=None, ge=1, le=3600)
-    highlight_results: Optional[bool] = None
-    highlight_query_terms: Optional[bool] = None
-    track_cost: Optional[bool] = None
+    sources: list[str] | None = None
+    search_mode: Literal["fts", "vector", "hybrid"] | None = None
+    hybrid_alpha: float | None = Field(default=None, ge=0.0, le=1.0)
+    top_k: int | None = Field(default=None, ge=1, le=100)
+    min_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    expand_query: bool | None = None
+    expansion_strategies: list[Literal["acronym", "synonym", "domain", "entity"]] | None = None
+    spell_check: bool | None = None
+    enable_cache: bool | None = None
+    cache_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    adaptive_cache: bool | None = None
+    cache_ttl: int | None = Field(default=None, ge=0)
+    enable_table_processing: bool | None = None
+    table_method: Literal["markdown", "html", "hybrid"] | None = None
+    include_sibling_chunks: bool | None = None
+    sibling_window: int | None = Field(default=None, ge=0, le=20)
+    enable_parent_expansion: bool | None = None
+    include_parent_document: bool | None = None
+    parent_max_tokens: int | None = Field(default=None, ge=1, le=8192)
+    enable_reranking: bool | None = None
+    reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "none"] | None = None
+    rerank_top_k: int | None = Field(default=None, ge=1, le=100)
+    enable_citations: bool | None = None
+    citation_style: Literal["apa", "mla", "chicago", "harvard", "ieee"] | None = None
+    include_page_numbers: bool | None = None
+    enable_chunk_citations: bool | None = None
+    enable_generation: bool | None = None
+    generation_model: str | None = Field(default=None, max_length=128)
+    generation_prompt: str | None = Field(default=None, max_length=8192)
+    max_generation_tokens: int | None = Field(default=None, ge=1, le=8192)
+    enable_security_filter: bool | None = None
+    detect_pii: bool | None = None
+    redact_pii: bool | None = None
+    sensitivity_level: Literal["public", "internal", "confidential", "restricted"] | None = None
+    content_filter: bool | None = None
+    timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
+    highlight_results: bool | None = None
+    highlight_query_terms: bool | None = None
+    track_cost: bool | None = None
 
     @field_validator("query", mode="before")
     @classmethod
@@ -123,14 +124,14 @@ class WorkflowRagSearchConfig(BaseModel):
 class WorkflowDefinitionCreate(BaseModel):
     name: str
     version: int = 1
-    description: Optional[str] = None
-    tags: List[str] = Field(default_factory=list)
-    inputs: Dict[str, Any] = Field(default_factory=dict)
+    description: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    inputs: dict[str, Any] = Field(default_factory=dict)
     # Optional completion webhook configuration. Accepts either a URL string or
     # an object with fields like {"url": str, "include_outputs": bool}.
-    on_completion_webhook: Optional[Dict[str, Any] | str] = None
-    steps: List[StepConfig]
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    on_completion_webhook: dict[str, Any] | str | None = None
+    steps: list[StepConfig]
+    metadata: dict[str, Any] = Field(default_factory=dict)
     visibility: Literal["private"] = "private"
 
 
@@ -138,18 +139,18 @@ class WorkflowDefinitionResponse(BaseModel):
     id: int
     name: str
     version: int
-    description: Optional[str]
-    tags: List[str]
+    description: str | None
+    tags: list[str]
     is_active: bool
 
 
 class RunRequest(BaseModel):
-    inputs: Dict[str, Any] = Field(default_factory=dict)
-    idempotency_key: Optional[str] = None
-    session_id: Optional[str] = None
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str | None = None
+    session_id: str | None = None
     # Scoped secrets are injected into the execution context but never persisted.
     # Keys are provider/module specific (e.g., api keys), values are strings.
-    secrets: Optional[Dict[str, str]] = Field(default_factory=dict)
+    secrets: dict[str, str] | None = Field(default_factory=dict)
     # Per-run validation behavior for safety checks (e.g., artifact scope)
     # 'block' rejects on validation failure; 'non-block' logs/warns and proceeds.
     validation_mode: Literal["block", "non-block"] = "block"
@@ -157,48 +158,48 @@ class RunRequest(BaseModel):
 
 class AdhocRunRequest(BaseModel):
     definition: WorkflowDefinitionCreate
-    inputs: Dict[str, Any] = Field(default_factory=dict)
-    idempotency_key: Optional[str] = None
-    session_id: Optional[str] = None
-    secrets: Optional[Dict[str, str]] = Field(default_factory=dict)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str | None = None
+    session_id: str | None = None
+    secrets: dict[str, str] | None = Field(default_factory=dict)
     validation_mode: Literal["block", "non-block"] = "block"
 
 
 class WorkflowRunResponse(BaseModel):
-    id: Optional[str] = None
+    id: str | None = None
     run_id: str
-    workflow_id: Optional[int] = None
-    user_id: Optional[str] = None
+    workflow_id: int | None = None
+    user_id: str | None = None
     status: str
-    status_reason: Optional[str] = None
-    inputs: Dict[str, Any] = Field(default_factory=dict)
-    outputs: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    definition_version: Optional[int] = None
-    validation_mode: Optional[str] = None
+    status_reason: str | None = None
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    outputs: dict[str, Any] | None = None
+    error: str | None = None
+    definition_version: int | None = None
+    validation_mode: str | None = None
 
 
 class EventResponse(BaseModel):
     event_seq: int
     event_type: str
-    payload: Dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
     created_at: str
 
 
 # Listing schemas (lighter than full run response)
 class WorkflowRunListItem(BaseModel):
     run_id: str
-    workflow_id: Optional[int] = None
-    user_id: Optional[str] = None
+    workflow_id: int | None = None
+    user_id: str | None = None
     status: str
-    status_reason: Optional[str] = None
-    definition_version: Optional[int] = None
-    created_at: Optional[str] = None
-    started_at: Optional[str] = None
-    ended_at: Optional[str] = None
+    status_reason: str | None = None
+    definition_version: int | None = None
+    created_at: str | None = None
+    started_at: str | None = None
+    ended_at: str | None = None
 
 
 class WorkflowRunListResponse(BaseModel):
-    runs: List[WorkflowRunListItem]
-    next_offset: Optional[int] = None
-    next_cursor: Optional[str] = None
+    runs: list[WorkflowRunListItem]
+    next_offset: int | None = None
+    next_cursor: str | None = None

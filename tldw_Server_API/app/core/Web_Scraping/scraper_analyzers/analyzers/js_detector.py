@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import random
-from typing import Any, Dict
+from typing import Any
 
 from bs4 import BeautifulSoup
 
@@ -11,7 +11,8 @@ except ImportError:  # pragma: no cover - optional dependency guard
     CurlCffiSession = None
 
 try:
-    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    from playwright.sync_api import sync_playwright
 except ImportError:  # pragma: no cover - optional dependency guard
     PlaywrightTimeoutError = TimeoutError  # type: ignore[misc,assignment]
     sync_playwright = None
@@ -35,7 +36,7 @@ def _extract_visible_text(html_content: str) -> str:
     return "\n".join(chunk for chunk in chunks if chunk)
 
 
-def analyze_js_rendering(url: str) -> Dict[str, Any]:
+def analyze_js_rendering(url: str) -> dict[str, Any]:
     """
     Determine if JavaScript is required to render the main content for the URL.
     """

@@ -4,10 +4,9 @@ Semantic_Scholar.py
 Adapter for the Semantic Scholar API using the centralized HTTP client.
 """
 
-from typing import List, Dict, Any, Optional, Tuple
-import time
-from tldw_Server_API.app.core.http_client import fetch_json
+from typing import Any, Optional
 
+from tldw_Server_API.app.core.http_client import fetch_json
 
 FIELDS_OF_STUDY_CHOICES = [
     "Computer Science", "Medicine", "Chemistry", "Biology", "Materials Science",
@@ -34,21 +33,21 @@ def search_papers_semantic_scholar(
     query: str,
     offset: int = 0,
     limit: int = 10,
-    fields_of_study: Optional[List[str]] = None,
-    publication_types: Optional[List[str]] = None,
+    fields_of_study: Optional[list[str]] = None,
+    publication_types: Optional[list[str]] = None,
     year_range: Optional[str] = None,
-    venue: Optional[List[str]] = None,
+    venue: Optional[list[str]] = None,
     min_citations: Optional[int] = None,
     open_access_only: bool = False,
     fields_to_return: str = DEFAULT_SEARCH_FIELDS,
-) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     """Search for papers using the Semantic Scholar API with filters."""
     if not query or not query.strip():
         return {"total": 0, "offset": offset, "next": offset, "data": []}, None
 
     try:
         url = f"{SEMANTIC_SCHOLAR_API_BASE_URL}/paper/search"
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "query": query,
             "offset": offset,
             "limit": limit,
@@ -88,7 +87,7 @@ def search_papers_semantic_scholar(
 def get_paper_details_semantic_scholar(
     paper_id: str,
     fields_to_return: str = DEFAULT_SEARCH_FIELDS,
-) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     """Get detailed information about a specific paper."""
     if not paper_id or not paper_id.strip():
         return None, "Paper ID cannot be empty."
@@ -102,7 +101,7 @@ def get_paper_details_semantic_scholar(
         return None, f"Unexpected error fetching paper details (ID: {paper_id}): {e}"
 
 
-def format_paper_info(paper: Dict[str, Any]) -> str:
+def format_paper_info(paper: dict[str, Any]) -> str:
     """Format paper information for display."""
     authors = ", ".join([author["name"] for author in paper.get("authors", [])])
     year = f"Year: {paper.get('year', 'N/A')}"

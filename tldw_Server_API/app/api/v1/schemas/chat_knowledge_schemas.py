@@ -1,4 +1,5 @@
-from typing import List, Optional, Literal
+from typing import Literal, Optional
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -6,7 +7,7 @@ class KnowledgeSaveRequest(BaseModel):
     conversation_id: str = Field(..., description="Conversation to backlink")
     message_id: Optional[str] = Field(None, description="Optional message ID to backlink")
     snippet: str = Field(..., min_length=1, description="Snippet content to save")
-    tags: Optional[List[str]] = Field(None, description="Optional tags to attach as keywords")
+    tags: Optional[list[str]] = Field(None, description="Optional tags to attach as keywords")
     make_flashcard: bool = Field(False, description="If true, also create a flashcard from the snippet")
     export_to: Literal["none", "notion", "wiki"] = Field(
         "none",
@@ -15,7 +16,7 @@ class KnowledgeSaveRequest(BaseModel):
 
     @field_validator("tags")
     @classmethod
-    def _normalize_tags(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+    def _normalize_tags(cls, value: Optional[list[str]]) -> Optional[list[str]]:
         if value is None:
             return None
         cleaned = []

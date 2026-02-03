@@ -2,14 +2,16 @@
 # Description: Manages user-specific database instances based on application mode.
 #
 # Imports
-import threading
 import os
+import threading
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from loguru import logger
-from typing import Dict, Optional, AsyncGenerator
+from typing import Optional
 
 # 3rd-party Libraries
-from fastapi import Header, HTTPException, status, Depends, Request
+from fastapi import Depends, HTTPException, Request, status
+from loguru import logger
+
 try:
     from cachetools import LRUCache
     _HAS_CACHETOOLS = True
@@ -19,15 +21,20 @@ except ImportError:
 
 # Local Imports
 # Import the settings dictionary
-from tldw_Server_API.app.core.config import settings
 # Import the primary user identification dependency and User model
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-# Import the specific Database class
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, DatabaseError, SchemaError # Adjust import path
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
-from tldw_Server_API.app.core.DB_Management.DB_Manager import get_content_backend_instance
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.DB_Manager import get_content_backend_instance
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+# Import the specific Database class
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (  # Adjust import path
+    DatabaseError,
+    MediaDatabase,
+    SchemaError,
+)
+from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
 
 #######################################################################################################################
 
@@ -43,7 +50,7 @@ if _HAS_CACHETOOLS:
     logger.info(f"Using LRUCache for user DB instances (maxsize={MAX_CACHED_DB_INSTANCES}).")
 else:
     # Keyed by user ID (int)
-    _user_db_instances: Dict[int, MediaDatabase] = {} # Fallback to standard dict
+    _user_db_instances: dict[int, MediaDatabase] = {} # Fallback to standard dict
 
 _user_db_lock = threading.Lock() # Protects access to _user_db_instances
 

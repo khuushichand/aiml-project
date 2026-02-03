@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -24,15 +24,15 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template
 from tldw_Server_API.app.core.Workflows.adapters._common import extract_openai_content
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.content._config import (
-    FlashcardGenerateConfig,
-    QuizGenerateConfig,
-    OutlineGenerateConfig,
-    MindmapGenerateConfig,
-    GlossaryExtractConfig,
-    SlidesGenerateConfig,
-    ReportGenerateConfig,
-    NewsletterGenerateConfig,
     DiagramGenerateConfig,
+    FlashcardGenerateConfig,
+    GlossaryExtractConfig,
+    MindmapGenerateConfig,
+    NewsletterGenerateConfig,
+    OutlineGenerateConfig,
+    QuizGenerateConfig,
+    ReportGenerateConfig,
+    SlidesGenerateConfig,
 )
 
 
@@ -44,7 +44,7 @@ from tldw_Server_API.app.core.Workflows.adapters.content._config import (
     tags=["content", "education"],
     config_model=FlashcardGenerateConfig,
 )
-async def run_flashcard_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_flashcard_generate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate flashcards from content using LLM."""
     if callable(context.get("is_cancelled")) and context["is_cancelled"]():
         return {"__status__": "cancelled"}
@@ -122,7 +122,7 @@ async def run_flashcard_generate_adapter(config: Dict[str, Any], context: Dict[s
     tags=["content", "education"],
     config_model=QuizGenerateConfig,
 )
-async def run_quiz_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_quiz_generate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate quiz questions from content using LLM."""
     if callable(context.get("is_cancelled")) and context["is_cancelled"]():
         return {"__status__": "cancelled"}
@@ -187,7 +187,7 @@ async def run_quiz_generate_adapter(config: Dict[str, Any], context: Dict[str, A
     tags=["content", "generation"],
     config_model=OutlineGenerateConfig,
 )
-async def run_outline_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_outline_generate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate a hierarchical outline from content."""
     if callable(context.get("is_cancelled")) and context["is_cancelled"]():
         return {"__status__": "cancelled"}
@@ -241,7 +241,7 @@ async def run_outline_generate_adapter(config: Dict[str, Any], context: Dict[str
     tags=["content", "extraction"],
     config_model=GlossaryExtractConfig,
 )
-async def run_glossary_extract_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_glossary_extract_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Extract key terms and definitions from content."""
     if callable(context.get("is_cancelled")) and context["is_cancelled"]():
         return {"__status__": "cancelled"}
@@ -291,7 +291,7 @@ async def run_glossary_extract_adapter(config: Dict[str, Any], context: Dict[str
     tags=["content", "visualization"],
     config_model=MindmapGenerateConfig,
 )
-async def run_mindmap_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_mindmap_generate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate a mindmap structure from content."""
     if callable(context.get("is_cancelled")) and context["is_cancelled"]():
         return {"__status__": "cancelled"}
@@ -345,7 +345,7 @@ async def run_mindmap_generate_adapter(config: Dict[str, Any], context: Dict[str
     tags=["content", "generation"],
     config_model=SlidesGenerateConfig,
 )
-async def run_slides_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_slides_generate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate slide deck structure.
 
     Config:
@@ -424,7 +424,7 @@ Content:
     tags=["content", "generation"],
     config_model=ReportGenerateConfig,
 )
-async def run_report_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_report_generate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate a structured report from content.
 
     Config:
@@ -500,7 +500,7 @@ Content:
     tags=["content", "generation"],
     config_model=NewsletterGenerateConfig,
 )
-async def run_newsletter_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_newsletter_generate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate newsletter from content/items.
 
     Config:
@@ -552,11 +552,12 @@ async def run_newsletter_generate_adapter(config: Dict[str, Any], context: Dict[
                 if item_url:
                     items_text += f" ({item_url})"
 
+        content_block = f"Content:\n{content[:5000]}"
         prompt = f"""Generate a newsletter titled "{title}".
 Format: {output_format}
 
 {f'Introduction: {intro}' if intro else ''}
-{f'Items:{items_text}' if items_text else f'Content:\n{content[:5000]}'}
+{f'Items:{items_text}' if items_text else content_block}
 
 Include a header, brief intro, main content sections, and a closing."""
 
@@ -586,7 +587,7 @@ Include a header, brief intro, main content sections, and a closing."""
     tags=["content", "visualization"],
     config_model=DiagramGenerateConfig,
 )
-async def run_diagram_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_diagram_generate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate diagram code (mermaid/graphviz).
 
     Config:

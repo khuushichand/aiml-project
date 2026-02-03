@@ -2,31 +2,35 @@
 # Description: Functions for managing embeddings in ChromaDB
 #
 # Imports:
-from pathlib import Path
-from typing import List, Dict, Any, Optional, Union, Sequence, Literal, Tuple, Set, Callable
-import threading
-import re
 import os
+import re
+import threading
+from collections.abc import Sequence
+from pathlib import Path
+
+# Redundant in some environments, but keep explicit Dict import for clarity
+from typing import Any, Callable, Literal, Optional, Union
+
 # 3rd-Party Imports:
 import chromadb
-import tempfile
-import uuid
-# Redundant in some environments, but keep explicit Dict import for clarity
-from typing import Dict
+
 try:
     # Prefer the modern Settings from chromadb.config (works in 0.4.x and 1.x)
     from chromadb.config import Settings as ChromaSettings  # type: ignore
 except Exception:  # pragma: no cover - fallback for older versions
     from chromadb import Settings as ChromaSettings  # type: ignore
-from chromadb.errors import ChromaError
 from itertools import islice
+
 import numpy as np
 from chromadb.api.models.Collection import Collection
 from chromadb.api.types import QueryResult
+from chromadb.errors import ChromaError
+
 #
 # Local Imports:
-from tldw_Server_API.app.core.Chunking import chunk_for_embedding, Chunker  # Using V2 through compatibility layer
+from tldw_Server_API.app.core.Chunking import Chunker, chunk_for_embedding  # Using V2 through compatibility layer
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
 # Import embeddings creation lazily/safely to avoid hard dependency at import time
 try:
     from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
@@ -44,8 +48,10 @@ from tldw_Server_API.app.core.Embeddings.audit_adapter import (
     log_security_violation,
 )
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze  # Assuming this is correct
-from tldw_Server_API.app.core.Utils.Utils import logger  # Assuming this is 'logging' aliased or a custom logger
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+from tldw_Server_API.app.core.Utils.Utils import logger  # Assuming this is 'logging' aliased or a custom logger
+
+
 #
 #######################################################################################################################
 #
@@ -128,7 +134,7 @@ def validate_model_id(model_id: str) -> str:
     return model_id
 
 
-def _coerce_config_dict(raw: Any) -> Dict[str, Any]:
+def _coerce_config_dict(raw: Any) -> dict[str, Any]:
     """Best-effort conversion of config-like objects into plain dicts."""
     if isinstance(raw, dict):
         return raw.copy()
@@ -148,7 +154,7 @@ def _coerce_config_dict(raw: Any) -> Dict[str, Any]:
     return {}
 
 
-def _normalize_user_embedding_config(raw_config: Any) -> Dict[str, Any]:
+def _normalize_user_embedding_config(raw_config: Any) -> dict[str, Any]:
     """Ensure user_embedding_config always includes an embedding_config mapping."""
     cfg = _coerce_config_dict(raw_config)
     embedding_config = cfg.get("embedding_config")
@@ -188,10 +194,10 @@ class ChromaDBManager:
     def __init__(
         self,
         user_id: str,
-        user_embedding_config: Dict[str, Any],
+        user_embedding_config: dict[str, Any],
         *,
         client: Optional[Any] = None,
-        client_factory: Optional[Callable[[Path, Dict[str, Any]], Any]] = None,
+        client_factory: Optional[Callable[[Path, dict[str, Any]], Any]] = None,
     ):
         """
         Initializes the ChromaDBManager for a specific user.
@@ -249,7 +255,7 @@ class ChromaDBManager:
             logger.info(f"User '{self.user_id}': Using injected Chroma client instance.")
         elif client_factory is not None:
             try:
-                factory_settings: Dict[str, Any] = {
+                factory_settings: dict[str, Any] = {
                     **chroma_client_settings_config,
                     "persist_directory": str(self.user_chroma_path),
                 }
@@ -380,7 +386,7 @@ class ChromaDBManager:
                 return
             yield batch
 
-    def _clean_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    def _clean_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
         """Cleans metadata to ensure compatibility with ChromaDB."""
         cleaned = {}
         if not isinstance(metadata, dict):
@@ -462,7 +468,7 @@ class ChromaDBManager:
     # The current code in store_in_chroma has improved dimension checking and will recreate the collection if a dimension mismatch occurs, logging the embedding_model_id_for_dim_check. It also attempts to store the dimension in the collection metadata upon recreation.
 
     def get_or_create_collection(self, collection_name: Optional[str] = None,
-                                  collection_metadata: Optional[Dict[str, Any]] = None) -> Collection:
+                                  collection_metadata: Optional[dict[str, Any]] = None) -> Collection:
         """
         Gets or creates a ChromaDB collection.
 
@@ -613,10 +619,10 @@ class ChromaDBManager:
                                   create_embeddings: bool = True,
                                   create_contextualized: Optional[bool] = None,  # None means use config default
                                   llm_model_for_context: Optional[str] = None,  # e.g., "gpt-3.5-turbo"
-                                  chunk_options: Optional[Dict] = None,
+                                  chunk_options: Optional[dict] = None,
                                   hierarchical_chunking: Optional[bool] = None,
-                                  hierarchical_template: Optional[Dict] = None,
-                                  base_metadata: Optional[Dict[str, Any]] = None):
+                                  hierarchical_template: Optional[dict] = None,
+                                  base_metadata: Optional[dict[str, Any]] = None):
         """
         Processes content by chunking, optionally contextualizing, generating embeddings,
         and storing them in ChromaDB and references in SQL DB.
@@ -670,7 +676,7 @@ class ChromaDBManager:
         )
         try:
             # Chunking (pass options as kwargs for compatibility). Support hierarchical mode.
-            effective_chunk_opts: Dict = dict(chunk_options or {})
+            effective_chunk_opts: dict = dict(chunk_options or {})
             # Enable adaptive chunking with overlap tuning by default for large docs
             effective_chunk_opts.setdefault('adaptive', True)
             effective_chunk_opts.setdefault('adaptive_overlap', True)
@@ -697,7 +703,7 @@ class ChromaDBManager:
             except Exception:
                 ingest_dedup_enabled = True
                 dedup_threshold = 0.9
-            duplicate_map: Dict[str, str] = {}
+            duplicate_map: dict[str, str] = {}
             if ingest_dedup_enabled and chunks and len(chunks) > 1:
                 chunks, duplicate_map = self._dedupe_text_chunks(chunks, threshold=dedup_threshold)
                 if duplicate_map:
@@ -723,10 +729,11 @@ class ChromaDBManager:
                     # Only proceed if we have a DB path attached to this manager
                     db_path = getattr(self, "db_path", None)
                     if db_path:
-                        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
                         from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import (
-                            extract_claims_for_chunks, store_claims,
+                            extract_claims_for_chunks,
+                            store_claims,
                         )
+                        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
                         # Build map: chunk_index -> chunk_text
                         chunk_text_map = {}
                         for ch in chunks:
@@ -1062,7 +1069,7 @@ class ChromaDBManager:
                         if not isinstance(citation_payload, dict):
                             citation_payload = {}
 
-                        def _citation_value(key: str, aliases: Tuple[str, ...] = ()) -> Any:
+                        def _citation_value(key: str, aliases: tuple[str, ...] = ()) -> Any:
                             if key in citation_payload:
                                 return citation_payload.get(key)
                             for alias in aliases:
@@ -1152,9 +1159,9 @@ class ChromaDBManager:
                 exc_info=True)
             raise  # Re-raise for unhandled issues
 
-    def store_in_chroma(self, collection_name: Optional[str], texts: List[str],
-                        embeddings: Union[np.ndarray, List[List[float]]],  # Type hint improved
-                        ids: List[str], metadatas: List[Dict[str, Any]],
+    def store_in_chroma(self, collection_name: Optional[str], texts: list[str],
+                        embeddings: Union[np.ndarray, list[list[float]]],  # Type hint improved
+                        ids: list[str], metadatas: list[dict[str, Any]],
                         embedding_model_id_for_dim_check: Optional[str] = None):
         """Stores embeddings and associated data into a ChromaDB collection."""
         if not texts or not ids or not metadatas or embeddings is None or len(
@@ -1256,10 +1263,10 @@ class ChromaDBManager:
 
     def vector_search(self, query: str, collection_name: Optional[str] = None, k: int = 10,
                       embedding_model_id_override: Optional[str] = None,
-                      where_filter: Optional[Dict[str, Any]] = None,
+                      where_filter: Optional[dict[str, Any]] = None,
                       # Use the Literal type for include_fields
-                      include_fields: Optional[List[ChromaIncludeLiteral]] = None
-                      ) -> List[Dict[str, Any]]:
+                      include_fields: Optional[list[ChromaIncludeLiteral]] = None
+                      ) -> list[dict[str, Any]]:
         """Performs a vector search in the specified collection."""
         target_collection = self.get_or_create_collection(collection_name)
 
@@ -1270,7 +1277,7 @@ class ChromaDBManager:
             raise ValueError("Embedding model ID not specified for vector search.")
 
         # The default value must also conform to List[ChromaIncludeLiteral]
-        effective_include_fields: List[ChromaIncludeLiteral]
+        effective_include_fields: list[ChromaIncludeLiteral]
         if include_fields is None:
             effective_include_fields = ["documents", "metadatas", "distances"]
         else:
@@ -1284,7 +1291,7 @@ class ChromaDBManager:
                 )
 
                 # Corrected call to create_embedding (from a previous iteration)
-                query_embedding_single: List[float] = create_embedding(
+                query_embedding_single: list[float] = create_embedding(
                     text=query,
                     user_app_config=self.user_embedding_config,  # Pass the main app_config
                     model_id_override=query_embedding_model_id,
@@ -1298,7 +1305,7 @@ class ChromaDBManager:
                         raise ValueError(f"Failed to generate query embedding for query: {query[:50]}...")
                     raise TypeError(f"Query embedding is malformed: {query_embedding_single}")
 
-                query_embedding_list_for_chroma: List[List[float]] = [query_embedding_single]
+                query_embedding_list_for_chroma: list[list[float]] = [query_embedding_single]
 
                 if not query_embedding_list_for_chroma or not query_embedding_list_for_chroma[0]:
                     logger.error(
@@ -1430,7 +1437,7 @@ class ChromaDBManager:
                              exc_info=True)
                 raise RuntimeError(f"Unexpected error during collection reset: {e}") from e
 
-    def delete_from_collection(self, ids: List[str], collection_name: Optional[str] = None):
+    def delete_from_collection(self, ids: list[str], collection_name: Optional[str] = None):
         """Deletes items from a collection by their IDs."""
         if not ids:
             logger.warning(f"User '{self.user_id}': No IDs provided for deletion. Skipping.")
@@ -1454,7 +1461,7 @@ class ChromaDBManager:
                 raise RuntimeError(f"Unexpected error during deletion: {e}") from e
 
     # --- Ingest-time utilities ---
-    def _dedupe_text_chunks(self, chunks: List[Dict[str, Any]], threshold: float = 0.9) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    def _dedupe_text_chunks(self, chunks: list[dict[str, Any]], threshold: float = 0.9) -> tuple[list[dict[str, Any]], dict[str, str]]:
         """Remove near-duplicate chunks using Jaccard + SimHash (short-text friendly).
 
         Args:
@@ -1479,7 +1486,7 @@ class ChromaDBManager:
                     if not words:
                         return 0
                     # small char-gram features per word to reduce collisions
-                    def grams(w: str) -> List[str]:
+                    def grams(w: str) -> list[str]:
                         g = set()
                         w2 = f"^{w}$"
                         for n in (2, 3):
@@ -1513,15 +1520,15 @@ class ChromaDBManager:
                     x &= x - 1
                     c += 1
                 return c
-            def shingles(s: str) -> Set[str]:
+            def shingles(s: str) -> set[str]:
                 s = s or ""
                 if len(s) < k:
                     return {s}
                 return {s[i:i+k] for i in range(0, len(s) - k + 1)}
 
-            canon: List[Tuple[str, Set[str], int]] = []  # (uid, shingle_set, simhash)
-            duplicate_map: Dict[str, str] = {}
-            filtered: List[Dict[str, Any]] = []
+            canon: list[tuple[str, set[str], int]] = []  # (uid, shingle_set, simhash)
+            duplicate_map: dict[str, str] = {}
+            filtered: list[dict[str, Any]] = []
             # SimHash gating config
             try:
                 from tldw_Server_API.app.core.config import settings as _settings
@@ -1567,27 +1574,13 @@ class ChromaDBManager:
             logger.warning(f"User '{self.user_id}': Dedupe failed ({e}); returning original chunks.")
             return chunks, {}
 
-        target_collection = self.get_or_create_collection(collection_name)  # Ensures collection exists
-        with self._lock:
-            try:
-                target_collection.delete(ids=ids)
-                logger.info(f"User '{self.user_id}': Deleted IDs {ids} from collection '{target_collection.name}'.")
-            except chromadb.errors.ChromaError as ce:
-                logger.error(f"User '{self.user_id}': ChromaDB error deleting from '{target_collection.name}': {ce}",
-                             exc_info=True)
-                raise RuntimeError(f"ChromaDB deletion failed: {ce}") from ce
-            except Exception as e:
-                logger.error(f"User '{self.user_id}': Unexpected error deleting from '{target_collection.name}': {e}",
-                             exc_info=True)
-                raise RuntimeError(f"Unexpected error during deletion: {e}") from e
-
     def query_collection_with_precomputed_embeddings(
-            self, query_embeddings: List[List[float]],
+            self, query_embeddings: list[list[float]],
             n_results: int = 5,
-            where_clause: Optional[Dict[str, Any]] = None,
+            where_clause: Optional[dict[str, Any]] = None,
             collection_name: Optional[str] = None,
             # Use the Literal type for include_fields
-            include_fields: Optional[List[ChromaIncludeLiteral]] = None
+            include_fields: Optional[list[ChromaIncludeLiteral]] = None
     ) -> QueryResult:
         """
         Queries a collection using pre-computed embeddings.
@@ -1598,7 +1591,7 @@ class ChromaDBManager:
         target_collection = self.get_or_create_collection(collection_name)
 
         # The default value must also conform to List[ChromaIncludeLiteral]
-        effective_include_fields: List[ChromaIncludeLiteral]
+        effective_include_fields: list[ChromaIncludeLiteral]
         if include_fields is None:
             effective_include_fields = ["documents", "metadatas", "distances"]
         else:
@@ -1698,8 +1691,8 @@ class ChromaDBManager:
 # This creates a default instance for single-user mode or tests
 _default_chroma_manager = None
 _manager_lock = threading.Lock()
-_TEST_FALLBACK_DIRS: Dict[str, Path] = {}
-_TEST_STUB_CLIENTS: Dict[str, Any] = {}
+_TEST_FALLBACK_DIRS: dict[str, Path] = {}
+_TEST_STUB_CLIENTS: dict[str, Any] = {}
 _TEST_STUB_CLIENTS_LOCK = threading.Lock()
 
 
@@ -1713,12 +1706,12 @@ class _InMemorySystem:
 
 
 class _InMemoryCollection:
-    def __init__(self, name: str, metadata: Optional[Dict[str, Any]] = None):
+    def __init__(self, name: str, metadata: Optional[dict[str, Any]] = None):
         self.name = name
-        self._metadata: Dict[str, Any] = dict(metadata or {})
-        self._docs: Dict[str, str] = {}
-        self._embs: Dict[str, List[float]] = {}
-        self._meta: Dict[str, Dict[str, Any]] = {}
+        self._metadata: dict[str, Any] = dict(metadata or {})
+        self._docs: dict[str, str] = {}
+        self._embs: dict[str, list[float]] = {}
+        self._meta: dict[str, dict[str, Any]] = {}
         self._deleted: bool = False
 
     def _ensure_active(self) -> None:
@@ -1726,11 +1719,11 @@ class _InMemoryCollection:
             raise RuntimeError(f"Collection '{self.name}' no longer exists")
 
     @property
-    def metadata(self) -> Dict[str, Any]:
+    def metadata(self) -> dict[str, Any]:
         self._ensure_active()
         return self._metadata
 
-    def modify(self, metadata: Optional[Dict[str, Any]] = None):
+    def modify(self, metadata: Optional[dict[str, Any]] = None):
         self._ensure_active()
         if metadata:
             self._metadata.update(metadata)
@@ -1739,10 +1732,10 @@ class _InMemoryCollection:
         self._ensure_active()
         return len(self._docs)
 
-    def add(self, documents: List[str], embeddings: List[List[float]], ids: List[str], metadatas: Optional[List[Dict[str, Any]]] = None):
+    def add(self, documents: list[str], embeddings: list[list[float]], ids: list[str], metadatas: Optional[list[dict[str, Any]]] = None):
         return self.upsert(documents=documents, embeddings=embeddings, ids=ids, metadatas=metadatas)
 
-    def upsert(self, documents: List[str], embeddings: List[List[float]], ids: List[str], metadatas: Optional[List[Dict[str, Any]]] = None):
+    def upsert(self, documents: list[str], embeddings: list[list[float]], ids: list[str], metadatas: Optional[list[dict[str, Any]]] = None):
         self._ensure_active()
         mds = metadatas or [{} for _ in ids]
         for i, id_ in enumerate(ids):
@@ -1751,7 +1744,7 @@ class _InMemoryCollection:
             self._meta[id_] = dict(mds[i] or {})
         return None
 
-    def delete(self, ids: Optional[List[str]] = None, where: Optional[Dict[str, Any]] = None):
+    def delete(self, ids: Optional[list[str]] = None, where: Optional[dict[str, Any]] = None):
         self._ensure_active()
         if ids:
             for id_ in list(ids):
@@ -1760,7 +1753,7 @@ class _InMemoryCollection:
                 self._meta.pop(id_, None)
         elif where:
             # Delete by metadata filter
-            def _match(md: Dict[str, Any]) -> bool:
+            def _match(md: dict[str, Any]) -> bool:
                 for k, v in (where or {}).items():
                     if md.get(k) != v:
                         return False
@@ -1772,7 +1765,7 @@ class _InMemoryCollection:
                 self._meta.pop(id_, None)
         return None
 
-    def get(self, ids: Optional[List[str]] = None, where: Optional[Dict[str, Any]] = None, limit: Optional[int] = None, offset: Optional[int] = None, include: Optional[List[str]] = None) -> Dict[str, Any]:
+    def get(self, ids: Optional[list[str]] = None, where: Optional[dict[str, Any]] = None, limit: Optional[int] = None, offset: Optional[int] = None, include: Optional[list[str]] = None) -> dict[str, Any]:
         self._ensure_active()
         # Mirror Chroma's default behavior: include documents and metadatas when include is not specified
         if include is None:
@@ -1783,7 +1776,7 @@ class _InMemoryCollection:
         else:
             keys = list(self._docs.keys())
         if where:
-            def match(m: Dict[str, Any]) -> bool:
+            def match(m: dict[str, Any]) -> bool:
                 for k, v in where.items():
                     if m.get(k) != v:
                         return False
@@ -1796,7 +1789,7 @@ class _InMemoryCollection:
                 keys = keys
         if limit is not None:
             keys = keys[:limit]
-        out: Dict[str, Any] = {"ids": keys}
+        out: dict[str, Any] = {"ids": keys}
         if "documents" in include:
             out["documents"] = [self._docs[k] for k in keys]
         if "metadatas" in include:
@@ -1807,13 +1800,13 @@ class _InMemoryCollection:
             out["distances"] = [0.0 for _ in keys]
         return out
 
-    def query(self, query_embeddings: List[List[float]], n_results: int = 10, where: Optional[Dict[str, Any]] = None, include: Optional[List[str]] = None) -> Dict[str, Any]:
+    def query(self, query_embeddings: list[list[float]], n_results: int = 10, where: Optional[dict[str, Any]] = None, include: Optional[list[str]] = None) -> dict[str, Any]:
         self._ensure_active()
         # Mirror common defaults: when include is omitted, return documents, metadatas, and distances
         if include is None:
             include = ["documents", "metadatas", "distances"]
         q = query_embeddings[0] if query_embeddings else []
-        def match(m: Dict[str, Any]) -> bool:
+        def match(m: dict[str, Any]) -> bool:
             if not where:
                 return True
             for k, v in where.items():
@@ -1859,16 +1852,16 @@ class _InMemoryCollection:
 
 class _InMemoryChromaClient:
     def __init__(self):
-        self._collections: Dict[str, _InMemoryCollection] = {}
+        self._collections: dict[str, _InMemoryCollection] = {}
         self._system = _InMemorySystem()
 
     def close(self):
         return None
 
-    def list_collections(self) -> List[_InMemoryCollection]:
+    def list_collections(self) -> list[_InMemoryCollection]:
         return list(self._collections.values())
 
-    def get_or_create_collection(self, name: str, metadata: Optional[Dict[str, Any]] = None) -> _InMemoryCollection:
+    def get_or_create_collection(self, name: str, metadata: Optional[dict[str, Any]] = None) -> _InMemoryCollection:
         if name not in self._collections:
             self._collections[name] = _InMemoryCollection(name, metadata=metadata)
         else:
@@ -1879,7 +1872,7 @@ class _InMemoryChromaClient:
                     pass
         return self._collections[name]
 
-    def create_collection(self, name: str, metadata: Optional[Dict[str, Any]] = None) -> _InMemoryCollection:
+    def create_collection(self, name: str, metadata: Optional[dict[str, Any]] = None) -> _InMemoryCollection:
         if name in self._collections:
             return self._collections[name]
         col = _InMemoryCollection(name, metadata=metadata)

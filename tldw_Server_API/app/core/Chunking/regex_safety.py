@@ -8,8 +8,7 @@ and normalize flags consistently across modules.
 from __future__ import annotations
 
 import re
-from typing import Optional, Tuple, Set
-import os
+
 try:  # pragma: no cover
     from loguru import logger as _logger
 except Exception:  # pragma: no cover
@@ -18,7 +17,6 @@ except Exception:  # pragma: no cover
             pass
     _logger = _N()
 import time
-
 
 # Pre-compiled heuristics to catch catastrophic backtracking risks
 _DANGEROUS_CHECKS = [
@@ -30,7 +28,7 @@ _DANGEROUS_CHECKS = [
 ]
 
 
-def check_pattern(pattern: str, *, max_len: int = 256) -> Optional[str]:
+def check_pattern(pattern: str, *, max_len: int = 256) -> str | None:
     """Return an error message if pattern appears dangerous/invalid, else None.
 
     - Enforces a maximum length.
@@ -59,7 +57,7 @@ def check_pattern(pattern: str, *, max_len: int = 256) -> Optional[str]:
     return None
 
 
-def compile_flags(flags_str: str, *, allowed: Set[str] | None = None, max_len: int = 10) -> Tuple[int, Optional[str]]:
+def compile_flags(flags_str: str, *, allowed: set[str] | None = None, max_len: int = 10) -> tuple[int, str | None]:
     """Map a flags string (e.g., "im") to re flags, enforcing an allowlist.
 
     Returns (flags_value, error_message). error_message is None if ok.
@@ -82,7 +80,7 @@ def compile_flags(flags_str: str, *, allowed: Set[str] | None = None, max_len: i
     return (flags, None)
 
 
-def warn_ambiguity(pattern: str) -> Optional[str]:
+def warn_ambiguity(pattern: str) -> str | None:
     """Return a warning string for patterns that are valid but ambiguous.
 
     Heuristics:

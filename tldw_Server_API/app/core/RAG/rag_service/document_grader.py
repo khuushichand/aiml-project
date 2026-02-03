@@ -10,7 +10,7 @@ Part of the Self-Correcting RAG feature set (Stage 1).
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Optional
 
 from loguru import logger
 
@@ -19,7 +19,7 @@ from loguru import logger
 class GradingConfig:
     """Configuration for document grading."""
 
-    provider: str = "openai"
+    provider: Optional[str] = None
     model: Optional[str] = None  # None uses provider default
     batch_size: int = 5
     timeout_seconds: float = 30.0
@@ -38,19 +38,19 @@ class GradingResult:
     reasoning: str
     latency_ms: int
     method: str  # "llm", "score_fallback", "error_fallback"
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class GradingBatchResult:
     """Result of grading a batch of documents."""
 
-    results: List[GradingResult]
+    results: list[GradingResult]
     relevant_count: int
     total_count: int
     avg_relevance: float
     total_latency_ms: int
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 # Default grading prompt template
@@ -74,7 +74,7 @@ Respond with a JSON object containing:
 JSON Response:"""
 
 
-def _resolve_grading_config() -> Tuple[str, Optional[str], float]:
+def _resolve_grading_config() -> tuple[str, Optional[str], float]:
     """
     Resolve LLM provider, model, and temperature from config with fallbacks.
 
@@ -206,16 +206,19 @@ class DocumentGrader:
 
         try:
             # Call LLM via asyncio.to_thread to avoid blocking
-            raw_response = await asyncio.to_thread(
-                self._analyze,
-                use_provider,
-                "",  # input_data (not used when custom_prompt_arg is provided)
-                prompt,
-                None,  # api_key
-                "You are a document relevance grader. Output valid JSON only.",
-                self.config.temperature,
-                model_override=use_model,
-                streaming=False,
+            raw_response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._analyze,
+                    use_provider,
+                    "",  # input_data (not used when custom_prompt_arg is provided)
+                    prompt,
+                    None,  # api_key
+                    "You are a document relevance grader. Output valid JSON only.",
+                    self.config.temperature,
+                    model_override=use_model,
+                    streaming=False,
+                ),
+                timeout=self.config.timeout_seconds,
             )
 
             latency_ms = int((time.time() - start_time) * 1000)
@@ -351,7 +354,7 @@ class DocumentGrader:
     async def grade_documents(
         self,
         query: str,
-        documents: List[Any],
+        documents: list[Any],
         provider: Optional[str] = None,
         model: Optional[str] = None,
     ) -> GradingBatchResult:
@@ -377,7 +380,7 @@ class DocumentGrader:
             )
 
         start_time = time.time()
-        results: List[GradingResult] = []
+        results: list[GradingResult] = []
 
         # Process in batches
         for i in range(0, len(documents), self.config.batch_size):
@@ -396,7 +399,7 @@ class DocumentGrader:
                 )
 
                 for j, result in enumerate(batch_results):
-                    if isinstance(result, Exception):
+                    if isinstance(result, BaseException):
                         # Handle exception for this document
                         doc = batch[j]
                         doc_id = getattr(doc, "id", str(id(doc)))
@@ -443,11 +446,11 @@ class DocumentGrader:
     async def filter_relevant(
         self,
         query: str,
-        documents: List[Any],
+        documents: list[Any],
         threshold: float = 0.5,
         provider: Optional[str] = None,
         model: Optional[str] = None,
-    ) -> Tuple[List[Any], Dict[str, Any]]:
+    ) -> tuple[list[Any], dict[str, Any]]:
         """
         Filter documents to keep only those above the relevance threshold.
 
@@ -503,7 +506,7 @@ class DocumentGrader:
 # Convenience function for pipeline integration
 async def grade_and_filter_documents(
     query: str,
-    documents: List[Any],
+    documents: list[Any],
     threshold: float = 0.5,
     provider: Optional[str] = None,
     model: Optional[str] = None,
@@ -511,7 +514,7 @@ async def grade_and_filter_documents(
     timeout_seconds: float = 30.0,
     fallback_to_score: bool = True,
     fallback_min_score: float = 0.3,
-) -> Tuple[List[Any], Dict[str, Any]]:
+) -> tuple[list[Any], dict[str, Any]]:
     """
     Convenience function to grade and filter documents in one call.
 
@@ -530,7 +533,7 @@ async def grade_and_filter_documents(
         Tuple of (filtered_documents, grading_metadata)
     """
     config = GradingConfig(
-        provider=provider or "openai",
+        provider=provider,
         model=model,
         batch_size=batch_size,
         timeout_seconds=timeout_seconds,

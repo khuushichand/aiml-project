@@ -5,12 +5,11 @@ This provides a comprehensive CLI interface for running evaluations
 with support for all configured LLM APIs (commercial and self-hosted).
 """
 
-import sys
 import json
-import os
-from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple
+import sys
 from collections import defaultdict
+from pathlib import Path
+from typing import Any, Optional
 
 import click
 from loguru import logger
@@ -19,12 +18,12 @@ from tabulate import tabulate
 # Add parent directories to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
-from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry
-from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset
-from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset
+from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry
+from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
     get_adapter_or_raise,
@@ -33,7 +32,6 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
     split_system_message,
 )
-
 
 # Mapping of config keys to friendly API names
 API_CONFIG_MAPPING = {
@@ -70,12 +68,12 @@ API_CATEGORIES = {
 def _call_adapter_text(
     *,
     api_endpoint: str,
-    messages_payload: List[Dict[str, Any]],
+    messages_payload: list[dict[str, Any]],
     temperature: Optional[float] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     max_tokens: Optional[int] = None,
-    app_config: Optional[Dict[str, Any]] = None,
+    app_config: Optional[dict[str, Any]] = None,
     timeout: Optional[float] = None,
     **extra_kwargs: Any,
 ) -> str:
@@ -87,7 +85,7 @@ def _call_adapter_text(
     if not resolved_model:
         raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
     system_message, cleaned_messages = split_system_message(messages_payload or [])
-    request: Dict[str, Any] = {
+    request: dict[str, Any] = {
         "messages": cleaned_messages,
         "system_message": system_message,
         "model": resolved_model,
@@ -101,7 +99,7 @@ def _call_adapter_text(
     return extract_response_content(response) or str(response)
 
 
-def get_available_apis() -> Dict[str, Dict[str, Any]]:
+def get_available_apis() -> dict[str, dict[str, Any]]:
     """
     Get all available APIs from configuration with their status.
 
@@ -160,7 +158,7 @@ def get_available_apis() -> Dict[str, Dict[str, Any]]:
     return available_apis
 
 
-def validate_api_config(api_name: str) -> Tuple[bool, str]:
+def validate_api_config(api_name: str) -> tuple[bool, str]:
     """
     Validate if an API is properly configured for use.
 
@@ -206,12 +204,12 @@ def get_api_model(api_name: str, model_override: Optional[str] = None) -> str:
 
 
 def run_evaluation_with_llm(
-    samples: List[Dict],
+    samples: list[dict],
     api_name: str,
     model: str,
-    eval_config: Dict[str, Any],
+    eval_config: dict[str, Any],
     progress_callback: Optional[callable] = None
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Run evaluation using actual LLM calls via chat API.
 

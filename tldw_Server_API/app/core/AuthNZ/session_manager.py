@@ -2,19 +2,18 @@
 # Description: Session management with Redis caching, encryption, and automatic cleanup
 #
 # Imports
-import json
-import hmac
-import hashlib
-import secrets
+import asyncio
 import base64
+import hashlib
+import hmac
+import json
 import os
 import stat
 import threading
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any, List, Tuple
-import asyncio
-from pathlib import Path
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Optional
 
 # File locking support (Unix/Windows)
 try:
@@ -25,33 +24,36 @@ except ImportError:
     fcntl = None  # type: ignore
 #
 # 3rd-party imports
-from redis import asyncio as redis_async
-from redis.exceptions import RedisError, ConnectionError as RedisConnectionError
+import time
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from loguru import logger
 from jose import jwt as jose_jwt
-import time
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
-#
-# Local imports
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from loguru import logger
+from redis import asyncio as redis_async
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import RedisError
+
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
     derive_hmac_key,
     derive_hmac_key_candidates,
 )
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool, reset_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
-    SessionError,
     InvalidSessionError,
+    SessionError,
     SessionRevokedException,
-    DatabaseError
 )
-from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
 from tldw_Server_API.app.core.AuthNZ.repos.sessions_repo import AuthnzSessionsRepo
+
+#
+# Local imports
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 
 try:
     from tldw_Server_API.app.core.config import settings as core_settings
@@ -79,9 +81,9 @@ class SessionManager:
         self.scheduler = AsyncIOScheduler()
         self._initialized = False
         self.cipher_suite: Optional[Fernet] = None
-        self._fernet_candidates: List[Fernet] = []
+        self._fernet_candidates: list[Fernet] = []
         self._persisted_key_path: Optional[Path] = None
-        self._ephemeral_cache: Dict[str, Tuple[str, float]] = {}
+        self._ephemeral_cache: dict[str, tuple[str, float]] = {}
         self._ephemeral_lock = threading.Lock()
         self._init_encryption()
 
@@ -197,9 +199,9 @@ class SessionManager:
         self.cipher_suite = self._fernet_candidates[0]
         logger.debug("Session token encryption initialized")
 
-    def _get_or_create_encryption_key(self) -> List[bytes]:
+    def _get_or_create_encryption_key(self) -> list[bytes]:
         """Resolve ordered list of candidate encryption keys (primary first)."""
-        key_bytes: List[bytes] = []
+        key_bytes: list[bytes] = []
         seen: set[bytes] = set()
 
         def _append(candidate: Optional[bytes]) -> None:
@@ -422,9 +424,9 @@ class SessionManager:
                 )
         return key_bytes
 
-    def _derive_secret_key_candidates(self) -> List[bytes]:
+    def _derive_secret_key_candidates(self) -> list[bytes]:
         """Derive deterministic Fernet keys from configured secret material."""
-        secrets_order: List[Optional[str | bytes]] = []
+        secrets_order: list[Optional[str | bytes]] = []
 
         def _add_secret(value: Optional[str | bytes]) -> None:
             if value:
@@ -442,7 +444,7 @@ class SessionManager:
         _add_secret(getattr(self.settings, "JWT_SECONDARY_PRIVATE_KEY", None))
         # NOTE: JWT_SECONDARY_PUBLIC_KEY is also excluded for the same reason
 
-        derived_keys: List[bytes] = []
+        derived_keys: list[bytes] = []
         seen: set[bytes] = set()
 
         for secret in secrets_order:
@@ -841,10 +843,10 @@ class SessionManager:
                 # Re-raise to allow callers to handle invalid-migration errors explicitly
                 raise
 
-    def _token_hash_candidates(self, token: str) -> List[str]:
+    def _token_hash_candidates(self, token: str) -> list[str]:
         """Return ordered hash candidates for a token across active/legacy secrets."""
-        hashes: List[str] = []
-        candidate_keys: List[bytes] = []
+        hashes: list[str] = []
+        candidate_keys: list[bytes] = []
 
         def _extend_from_settings(s: Optional[Settings]) -> None:
             if not s:
@@ -903,7 +905,7 @@ class SessionManager:
 
         last_error: Optional[Exception] = None
         num_candidates = len(self._fernet_candidates or [])
-        errors_by_candidate: List[str] = []
+        errors_by_candidate: list[str] = []
 
         for idx, cipher in enumerate(self._fernet_candidates or []):
             try:
@@ -928,7 +930,7 @@ class SessionManager:
         raise InvalidSessionError("Failed to decrypt session token") from last_error
 
     @staticmethod
-    def _extract_token_metadata(token: Optional[str]) -> Tuple[Optional[str], Optional[datetime]]:
+    def _extract_token_metadata(token: Optional[str]) -> tuple[Optional[str], Optional[datetime]]:
         """Return (jti, expires_at) tuple without verifying signature."""
         if not token:
             return None, None
@@ -947,7 +949,7 @@ class SessionManager:
             return None, None
 
     @staticmethod
-    def _get_unverified_claims(token: Optional[str]) -> Optional[Dict[str, Any]]:
+    def _get_unverified_claims(token: Optional[str]) -> Optional[dict[str, Any]]:
         """Return unverified JWT claims dict (best-effort)."""
         if not token:
             return None
@@ -959,8 +961,8 @@ class SessionManager:
 
     @staticmethod
     def _validate_token_binding(
-        claims: Optional[Dict[str, Any]],
-        session_data: Dict[str, Any],
+        claims: Optional[dict[str, Any]],
+        session_data: dict[str, Any],
         *,
         token_label: str,
     ) -> None:
@@ -1001,7 +1003,7 @@ class SessionManager:
         device_id: Optional[str] = None,
         expires_at_override: Optional[datetime] = None,
         refresh_expires_at_override: Optional[datetime] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new session for a user
 
@@ -1105,7 +1107,7 @@ class SessionManager:
             )
             raise SessionError(f"Failed to create session: {e}")
 
-    async def validate_session(self, access_token: str) -> Optional[Dict[str, Any]]:
+    async def validate_session(self, access_token: str) -> Optional[dict[str, Any]]:
         """
         Validate a session by access token
 
@@ -1125,7 +1127,7 @@ class SessionManager:
         token_hash_primary = token_hash_candidates[0]
         matched_hash: Optional[str] = None
         cache_normalize_required = False
-        cached: Optional[Dict[str, Any]] = None
+        cached: Optional[dict[str, Any]] = None
         if self.redis_client:
             for candidate_hash in token_hash_candidates:
                 cached = await self._get_cached_session(candidate_hash)
@@ -1135,7 +1137,7 @@ class SessionManager:
         try:
             db_pool = await self._ensure_db_pool()
             repo = AuthnzSessionsRepo(db_pool)
-            session_data: Optional[Dict[str, Any]] = None
+            session_data: Optional[dict[str, Any]] = None
 
             # Attempt to reuse cached session_id to minimize lookups,
             # but always verify current DB state.
@@ -1250,7 +1252,7 @@ class SessionManager:
         if not self._initialized:
             await self.initialize()
 
-        session_details: Optional[Dict[str, Any]] = None
+        session_details: Optional[dict[str, Any]] = None
         try:
             db_pool = await self._ensure_db_pool()
             repo = AuthnzSessionsRepo(db_pool)
@@ -1325,7 +1327,7 @@ class SessionManager:
         refresh_token: str,
         new_access_token: str,
         new_refresh_token: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Refresh a session with new tokens"""
         if not self._initialized:
             await self.initialize()
@@ -1550,11 +1552,11 @@ class SessionManager:
             logger.error(f"Error checking token blacklist; treating token as revoked: {e}")
             return True
 
-    async def get_user_sessions(self, user_id: int) -> List[Dict[str, Any]]:
+    async def get_user_sessions(self, user_id: int) -> list[dict[str, Any]]:
         """Get all sessions for a user (alias for get_active_sessions)"""
         return await self.get_active_sessions(user_id)
 
-    async def get_active_sessions(self, user_id: int) -> List[Dict[str, Any]]:
+    async def get_active_sessions(self, user_id: int) -> list[dict[str, Any]]:
         """Get all active sessions for a user"""
         if not self._initialized:
             await self.initialize()
@@ -1637,7 +1639,7 @@ class SessionManager:
         except RedisError as e:
             logger.warning(f"Failed to cache session: {e}")
 
-    async def _get_cached_session(self, token_hash: str) -> Optional[Dict[str, Any]]:
+    async def _get_cached_session(self, token_hash: str) -> Optional[dict[str, Any]]:
         """Get session metadata from Redis cache (if still valid)."""
         if not self.redis_client:
             return None
@@ -1811,7 +1813,7 @@ class SessionManager:
 
     async def _blacklist_session_tokens(
         self,
-        sessions: List[Dict[str, Any]],
+        sessions: list[dict[str, Any]],
         *,
         reason: Optional[str],
         revoked_by: Optional[int],

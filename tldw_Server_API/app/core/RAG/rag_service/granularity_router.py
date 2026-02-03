@@ -12,12 +12,11 @@ Design:
 
 import re
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Optional
 
 from loguru import logger
 
-from .types import QueryType, Granularity
-
+from .types import Granularity, QueryType
 
 # Patterns for query classification
 BROAD_PATTERNS = [
@@ -55,7 +54,7 @@ class GranularityDecision:
     granularity: Granularity
     confidence: float
     reasoning: str
-    retrieval_params: Dict[str, Any]
+    retrieval_params: dict[str, Any]
 
 
 class GranularityRouter:
@@ -68,9 +67,9 @@ class GranularityRouter:
 
     def __init__(
         self,
-        broad_patterns: Optional[List[str]] = None,
-        factoid_patterns: Optional[List[str]] = None,
-        specific_patterns: Optional[List[str]] = None,
+        broad_patterns: Optional[list[str]] = None,
+        factoid_patterns: Optional[list[str]] = None,
+        specific_patterns: Optional[list[str]] = None,
         enable_length_heuristic: bool = True,
         short_query_threshold: int = 8,  # words
         long_query_threshold: int = 25,  # words
@@ -102,7 +101,7 @@ class GranularityRouter:
         self.short_query_threshold = short_query_threshold
         self.long_query_threshold = long_query_threshold
 
-    def classify_query(self, query: str) -> Tuple[QueryType, float, str]:
+    def classify_query(self, query: str) -> tuple[QueryType, float, str]:
         """
         Classify a query into broad/specific/factoid categories.
 
@@ -183,7 +182,7 @@ class GranularityRouter:
 
         # Normalize confidence
         total_score = sum(scores.values())
-        winner = max(scores, key=scores.get)
+        winner = max(scores, key=lambda k: scores[k])
         confidence = scores[winner] / total_score if total_score > 0 else 0.5
 
         reasoning = "; ".join(reasons[:3]) if reasons else "Pattern match"
@@ -207,7 +206,7 @@ class GranularityRouter:
         }
         return mapping.get(query_type, Granularity.CHUNK)
 
-    def get_retrieval_params(self, granularity: Granularity) -> Dict[str, Any]:
+    def get_retrieval_params(self, granularity: Granularity) -> dict[str, Any]:
         """
         Get retrieval parameters for a given granularity level.
 

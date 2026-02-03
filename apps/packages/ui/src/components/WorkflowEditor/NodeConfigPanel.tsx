@@ -5,7 +5,7 @@
  * Dynamically renders form fields based on the step's config schema.
  */
 
-import { useMemo, useCallback } from "react"
+import { useMemo, useCallback, useEffect, useState } from "react"
 import {
   Input,
   InputNumber,
@@ -15,14 +15,14 @@ import {
   Button,
   Tooltip,
   Empty,
-  Divider
+  Divider,
+  Alert
 } from "antd"
 import {
   Settings,
   Trash2,
   Copy,
-  Info,
-  AlertCircle
+  Info
 } from "lucide-react"
 import type {
   WorkflowNodeData,
@@ -31,6 +31,8 @@ import type {
 import type { ConfigFieldSchema } from "./step-registry"
 import { useWorkflowEditorStore } from "@/store/workflow-editor"
 import { getStepMetadata } from "./step-registry"
+import { schemaHasProperties, schemaToConfigFields } from "./schema-utils"
+import { useWorkflowDynamicOptions } from "./dynamic-options"
 
 const { TextArea } = Input
 
@@ -44,6 +46,8 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
   const updateNode = useWorkflowEditorStore((s) => s.updateNode)
   const deleteNodes = useWorkflowEditorStore((s) => s.deleteNodes)
   const duplicateNodes = useWorkflowEditorStore((s) => s.duplicateNodes)
+  const stepRegistry = useWorkflowEditorStore((s) => s.stepRegistry)
+  const stepSchemas = useWorkflowEditorStore((s) => s.stepSchemas)
 
   const selectedNode = useMemo(
     () =>
@@ -54,9 +58,62 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
   )
 
   const metadata = useMemo(
-    () => (selectedNode ? getStepMetadata(selectedNode.data.stepType) : null),
-    [selectedNode]
+    () =>
+      selectedNode
+        ? getStepMetadata(selectedNode.data.stepType, stepRegistry)
+        : null,
+    [selectedNode, stepRegistry]
   )
+
+  const serverSchema = selectedNode
+    ? stepSchemas[selectedNode.data.stepType]
+    : undefined
+
+  const serverFields = useMemo(
+    () => schemaToConfigFields(serverSchema),
+    [serverSchema]
+  )
+
+  const configFields = useMemo(() => {
+    if (!metadata) return []
+    if (schemaHasProperties(serverSchema)) {
+      return serverFields
+    }
+    if (metadata.configSchema.length > 0) {
+      return metadata.configSchema
+    }
+    return serverFields
+  }, [metadata, serverSchema, serverFields])
+
+  const { optionsByKey, loadingByKey } = useWorkflowDynamicOptions({
+    fields: configFields,
+    stepType: selectedNode?.data.stepType,
+    config: selectedNode?.data.config
+  })
+
+  const resolvedFields = useMemo(
+    () =>
+      configFields.map((field) => {
+        if (field.options && field.options.length > 0) return field
+        const dynamicOptions = optionsByKey[field.key]
+        if (dynamicOptions && dynamicOptions.length > 0) {
+          return { ...field, options: dynamicOptions }
+        }
+        return field
+      }),
+    [configFields, optionsByKey]
+  )
+
+  const [rawConfigText, setRawConfigText] = useState<string>("")
+  const [rawConfigError, setRawConfigError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!selectedNode) return
+    setRawConfigText(
+      JSON.stringify(selectedNode.data.config ?? {}, null, 2)
+    )
+    setRawConfigError(null)
+  }, [selectedNode?.id, selectedNode?.data?.config])
 
   const handleConfigChange = useCallback(
     (key: string, value: unknown) => {
@@ -89,6 +146,33 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
     if (!selectedNode) return
     duplicateNodes([selectedNode.id])
   }, [selectedNode, duplicateNodes])
+
+  const handleRawConfigChange = useCallback(
+    (value: string) => {
+      if (!selectedNode) return
+      setRawConfigText(value)
+      if (!value.trim()) {
+        updateNode(selectedNode.id, { config: {} } as Partial<WorkflowNodeData>)
+        setRawConfigError(null)
+        return
+      }
+      try {
+        const parsed = JSON.parse(value)
+        if (parsed === null || typeof parsed !== "object") {
+          throw new Error("Config must be a JSON object")
+        }
+        updateNode(selectedNode.id, {
+          config: parsed as Record<string, unknown>
+        } as Partial<WorkflowNodeData>)
+        setRawConfigError(null)
+      } catch (error) {
+        setRawConfigError(
+          error instanceof Error ? error.message : "Invalid JSON"
+        )
+      }
+    },
+    [selectedNode, updateNode]
+  )
 
   // No node selected
   if (!selectedNode || !metadata) {
@@ -124,6 +208,7 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
     if (!shouldShowField(field)) return null
 
     const value = selectedNode.data.config[field.key] ?? field.default
+    const isLoading = loadingByKey[field.key] === true
 
     const label = (
       <span className="flex items-center gap-1">
@@ -192,8 +277,14 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
             <Select
               value={value as string}
               onChange={(val) => handleConfigChange(field.key, val)}
-              options={field.options}
+              options={field.options ?? []}
               className="w-full"
+              loading={isLoading}
+              showSearch
+              optionFilterProp="label"
+              allowClear
+              placeholder={field.description || "Select an option"}
+              notFoundContent={isLoading ? "Loading options..." : undefined}
             />
           </Form.Item>
         )
@@ -205,8 +296,14 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
               mode="multiple"
               value={value as string[]}
               onChange={(val) => handleConfigChange(field.key, val)}
-              options={field.options}
+              options={field.options ?? []}
               className="w-full"
+              loading={isLoading}
+              showSearch
+              optionFilterProp="label"
+              allowClear
+              placeholder={field.description || "Select options"}
+              notFoundContent={isLoading ? "Loading options..." : undefined}
             />
           </Form.Item>
         )
@@ -249,36 +346,37 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
         )
 
       case "model-picker":
-        // Placeholder for model picker - would integrate with model store
         return (
           <Form.Item key={field.key} label={label} className="mb-3">
             <Select
               value={value as string}
               onChange={(val) => handleConfigChange(field.key, val)}
-              placeholder="Select a model"
               className="w-full"
-              options={[
-                { value: "gpt-4", label: "GPT-4" },
-                { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo" },
-                { value: "claude-3-opus", label: "Claude 3 Opus" },
-                { value: "claude-3-sonnet", label: "Claude 3 Sonnet" }
-              ]}
+              options={field.options ?? []}
+              loading={isLoading}
+              showSearch
+              optionFilterProp="label"
+              allowClear
+              placeholder={field.description || "Select a model"}
+              notFoundContent={isLoading ? "Loading options..." : undefined}
             />
           </Form.Item>
         )
 
       case "collection-picker":
-        // Placeholder for collection picker
         return (
           <Form.Item key={field.key} label={label} className="mb-3">
             <Select
               value={value as string}
               onChange={(val) => handleConfigChange(field.key, val)}
-              placeholder="Select a collection"
               className="w-full"
-              options={[
-                { value: "default", label: "Default Collection" }
-              ]}
+              options={field.options ?? []}
+              loading={isLoading}
+              showSearch
+              optionFilterProp="label"
+              allowClear
+              placeholder={field.description || "Select a collection"}
+              notFoundContent={isLoading ? "Loading options..." : undefined}
             />
           </Form.Item>
         )
@@ -344,7 +442,27 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
           <Divider className="my-3" />
 
           {/* Dynamic Config Fields */}
-          {metadata.configSchema.map(renderField)}
+          {resolvedFields.map(renderField)}
+
+          {resolvedFields.length === 0 && (
+            <Form.Item label="Raw Config" className="mb-3">
+              <TextArea
+                value={rawConfigText}
+                onChange={(e) => handleRawConfigChange(e.target.value)}
+                rows={6}
+                className="font-mono text-xs"
+                placeholder='{"key": "value"}'
+              />
+              {rawConfigError && (
+                <Alert
+                  type="error"
+                  message={rawConfigError}
+                  showIcon
+                  className="mt-2"
+                />
+              )}
+            </Form.Item>
+          )}
         </Form>
       </div>
 

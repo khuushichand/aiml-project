@@ -4,7 +4,6 @@ import base64
 import hashlib
 import hmac
 import secrets
-from typing import Optional, Tuple
 
 API_KEY_PREFIX = "tldw_"
 API_KEY_SEPARATOR = "."
@@ -30,7 +29,7 @@ def format_api_key(key_id: str, secret: str) -> str:
     return f"{API_KEY_PREFIX}{key_id}{API_KEY_SEPARATOR}{secret}"
 
 
-def parse_api_key(api_key: str) -> Optional[Tuple[str, str]]:
+def parse_api_key(api_key: str) -> tuple[str, str] | None:
     """Extract (key_id, secret) from the new API key format."""
     if not api_key or not api_key.startswith(API_KEY_PREFIX):
         return None
@@ -55,7 +54,7 @@ def parse_api_key(api_key: str) -> Optional[Tuple[str, str]]:
 def kdf_hash_api_key(
     api_key: str,
     *,
-    salt: Optional[bytes] = None,
+    salt: bytes | None = None,
     iterations: int = API_KEY_KDF_ITERATIONS,
 ) -> str:
     """Return a PBKDF2-HMAC-SHA256 encoded hash string for an API key."""

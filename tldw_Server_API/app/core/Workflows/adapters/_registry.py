@@ -8,7 +8,7 @@ parallelizability.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set, Type
+from typing import Any, Callable
 
 from pydantic import BaseModel
 
@@ -22,8 +22,8 @@ class AdapterSpec:
     category: str
     description: str
     parallelizable: bool = True
-    config_model: Optional[Type[BaseModel]] = None
-    tags: List[str] = field(default_factory=list)
+    config_model: type[BaseModel] | None = None
+    tags: list[str] = field(default_factory=list)
 
 
 class AdapterRegistry:
@@ -46,10 +46,10 @@ class AdapterRegistry:
             ...
     """
 
-    _instance: Optional["AdapterRegistry"] = None
+    _instance: "AdapterRegistry" | None = None
 
     def __init__(self) -> None:
-        self._adapters: Dict[str, AdapterSpec] = {}
+        self._adapters: dict[str, AdapterSpec] = {}
 
     @classmethod
     def get(cls) -> "AdapterRegistry":
@@ -70,8 +70,8 @@ class AdapterRegistry:
         category: str = "misc",
         description: str = "",
         parallelizable: bool = True,
-        config_model: Optional[Type[BaseModel]] = None,
-        tags: Optional[List[str]] = None,
+        config_model: type[BaseModel] | None = None,
+        tags: list[str] | None = None,
     ) -> Callable[[Callable], Callable]:
         """Decorator to register an adapter with metadata.
 
@@ -101,7 +101,7 @@ class AdapterRegistry:
 
         return decorator
 
-    def get_adapter(self, name: str) -> Optional[Callable]:
+    def get_adapter(self, name: str) -> Callable | None:
         """Get an adapter function by name.
 
         Args:
@@ -113,7 +113,7 @@ class AdapterRegistry:
         spec = self._adapters.get(name)
         return spec.func if spec else None
 
-    def get_spec(self, name: str) -> Optional[AdapterSpec]:
+    def get_spec(self, name: str) -> AdapterSpec | None:
         """Get the full adapter spec by name.
 
         Args:
@@ -124,7 +124,7 @@ class AdapterRegistry:
         """
         return self._adapters.get(name)
 
-    def list_adapters(self) -> List[str]:
+    def list_adapters(self) -> list[str]:
         """List all registered adapter names.
 
         Returns:
@@ -132,7 +132,7 @@ class AdapterRegistry:
         """
         return list(self._adapters.keys())
 
-    def get_parallelizable(self) -> Set[str]:
+    def get_parallelizable(self) -> set[str]:
         """Get the set of parallelizable adapter names.
 
         This replaces the MAP_SUBSTEP_TYPES constant from constants.py.
@@ -142,7 +142,7 @@ class AdapterRegistry:
         """
         return {name for name, spec in self._adapters.items() if spec.parallelizable}
 
-    def get_by_category(self, category: str) -> List[str]:
+    def get_by_category(self, category: str) -> list[str]:
         """Get adapter names by category.
 
         Args:
@@ -153,7 +153,7 @@ class AdapterRegistry:
         """
         return [name for name, spec in self._adapters.items() if spec.category == category]
 
-    def get_categories(self) -> List[str]:
+    def get_categories(self) -> list[str]:
         """Get all unique categories.
 
         Returns:
@@ -161,7 +161,7 @@ class AdapterRegistry:
         """
         return list(set(spec.category for spec in self._adapters.values()))
 
-    def get_catalog(self) -> Dict[str, Dict[str, Any]]:
+    def get_catalog(self) -> dict[str, dict[str, Any]]:
         """Get full catalog for API documentation.
 
         Returns:
@@ -189,7 +189,7 @@ class AdapterRegistry:
 registry = AdapterRegistry.get()
 
 
-def get_adapter(name: str) -> Optional[Callable]:
+def get_adapter(name: str) -> Callable | None:
     """Convenience function to get an adapter by name.
 
     Args:
@@ -201,7 +201,7 @@ def get_adapter(name: str) -> Optional[Callable]:
     return registry.get_adapter(name)
 
 
-def get_parallelizable() -> Set[str]:
+def get_parallelizable() -> set[str]:
     """Convenience function to get parallelizable adapter names.
 
     Returns:

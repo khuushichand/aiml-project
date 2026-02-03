@@ -1,12 +1,13 @@
 # test_case_io.py
 # Import/Export functionality for test cases
 
+import base64
 import csv
 import json
-import base64
-from io import StringIO
-from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
+from io import StringIO
+from typing import Optional
+
 from loguru import logger
 
 from .test_case_manager import TestCaseManager
@@ -30,7 +31,7 @@ class TestCaseIO:
     # Export Functions
 
     def export_to_json(self, project_id: int, include_golden_only: bool = False,
-                      tag_filter: Optional[List[str]] = None) -> str:
+                      tag_filter: Optional[list[str]] = None) -> str:
         """
         Export test cases to JSON format.
 
@@ -76,7 +77,7 @@ class TestCaseIO:
         }, indent=2)
 
     def export_to_csv(self, project_id: int, include_golden_only: bool = False,
-                     tag_filter: Optional[List[str]] = None) -> str:
+                     tag_filter: Optional[list[str]] = None) -> str:
         """
         Export test cases to CSV format.
 
@@ -152,7 +153,7 @@ class TestCaseIO:
 
     def import_from_json(self, project_id: int, json_data: str,
                         signature_id: Optional[int] = None,
-                        auto_generate_names: bool = True) -> Tuple[int, List[str]]:
+                        auto_generate_names: bool = True) -> tuple[int, list[str]]:
         """
         Import test cases from JSON format.
 
@@ -229,7 +230,7 @@ class TestCaseIO:
 
     def import_from_csv(self, project_id: int, csv_data: str,
                        signature_id: Optional[int] = None,
-                       auto_generate_names: bool = True) -> Tuple[int, List[str]]:
+                       auto_generate_names: bool = True) -> tuple[int, list[str]]:
         """
         Import test cases from CSV format.
 

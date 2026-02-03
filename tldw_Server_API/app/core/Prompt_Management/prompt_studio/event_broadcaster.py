@@ -1,17 +1,18 @@
 # event_broadcaster.py
 # Event broadcasting system for Prompt Studio real-time updates
 
+import asyncio
 import json
 import uuid
-import asyncio
-from typing import Dict, Any, Optional, List, Set
 from datetime import datetime
 from enum import Enum
+from typing import Any, Optional
+
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
-    PromptStudioDatabase,
     DatabaseError,
+    PromptStudioDatabase,
 )
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import (
     prompt_studio_metrics,
@@ -76,7 +77,7 @@ class EventBroadcaster:
         self.client_id = db.client_id
 
         # Track subscriptions
-        self.subscriptions: Dict[str, Set[str]] = {}
+        self.subscriptions: dict[str, set[str]] = {}
 
         # Event queue for async processing
         self.event_queue: asyncio.Queue = asyncio.Queue()
@@ -86,8 +87,8 @@ class EventBroadcaster:
     ####################################################################################################################
     # Broadcasting Methods
 
-    async def broadcast_event(self, event_type: EventType, data: Dict[str, Any],
-                             client_ids: Optional[List[str]] = None,
+    async def broadcast_event(self, event_type: EventType, data: dict[str, Any],
+                             client_ids: Optional[list[str]] = None,
                              project_id: Optional[int] = None):
         """
         Broadcast an event to clients.
@@ -157,7 +158,7 @@ class EventBroadcaster:
             logger.debug(f"Compatibility broadcast ignored error: {e}")
 
     async def broadcast_job_event(self, job_id: int, event_type: EventType,
-                                 additional_data: Optional[Dict] = None):
+                                 additional_data: Optional[dict] = None):
         """
         Broadcast a job-related event.
 
@@ -317,7 +318,7 @@ class EventBroadcaster:
 
         logger.debug(f"Client {client_id} unsubscribed from {key}")
 
-    def get_subscribers(self, entity_type: str, entity_id: int) -> Set[str]:
+    def get_subscribers(self, entity_type: str, entity_id: int) -> set[str]:
         """
         Get subscribers for an entity.
 
@@ -375,7 +376,7 @@ class EventBroadcaster:
             except Exception as e:
                 logger.error(f"Error processing event: {e}")
 
-    async def _handle_queued_event(self, event: Dict[str, Any]):
+    async def _handle_queued_event(self, event: dict[str, Any]):
         """
         Handle a queued event.
 
@@ -394,8 +395,8 @@ class EventBroadcaster:
             project_id=project_id
         )
 
-    async def queue_event(self, event_type: EventType, data: Dict[str, Any],
-                         client_ids: Optional[List[str]] = None,
+    async def queue_event(self, event_type: EventType, data: dict[str, Any],
+                         client_ids: Optional[list[str]] = None,
                          project_id: Optional[int] = None):
         """
         Queue an event for async processing.
@@ -418,7 +419,7 @@ class EventBroadcaster:
     ####################################################################################################################
     # Helper Methods
 
-    async def _get_project_for_job(self, job: Dict[str, Any]) -> Optional[int]:
+    async def _get_project_for_job(self, job: dict[str, Any]) -> Optional[int]:
         """
         Get project ID for a job.
 
@@ -450,7 +451,7 @@ class EventBroadcaster:
             logger.error(f"Error getting project for job: {exc}")
             return None
 
-    async def _log_event(self, event_type: EventType, data: Dict[str, Any],
+    async def _log_event(self, event_type: EventType, data: dict[str, Any],
                         project_id: Optional[int] = None):
         """
         Log event to database for history/audit.
@@ -506,7 +507,7 @@ class EventHooks:
             event_type=EventType.JOB_STARTED
         )
 
-    async def on_job_completed(self, job_id: int, result: Dict[str, Any]):
+    async def on_job_completed(self, job_id: int, result: dict[str, Any]):
         """Hook for job completion."""
         await self.broadcaster.broadcast_job_event(
             job_id=job_id,

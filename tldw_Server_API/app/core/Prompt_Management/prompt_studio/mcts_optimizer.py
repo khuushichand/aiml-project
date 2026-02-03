@@ -4,16 +4,12 @@ Full MCTS optimizer for Prompt Studio (tree search, UCT, contextual generation,
 optional feedback refinement, and WS progress broadcasts).
 """
 
-from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime
 import math
+from datetime import datetime
+from typing import Any, Optional
+
 from loguru import logger
 
-from .prompt_executor import PromptExecutor
-from .test_runner import TestRunner
-from .types_common import MetricType
-from .prompt_quality import PromptQualityScorer
-from .prompt_decomposer import PromptDecomposer
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster import (
     EventBroadcaster,
     EventType,
@@ -21,6 +17,13 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster 
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import (
     prompt_studio_metrics,
 )
+
+from .prompt_decomposer import PromptDecomposer
+from .prompt_executor import PromptExecutor
+from .prompt_quality import PromptQualityScorer
+from .test_runner import TestRunner
+from .types_common import MetricType
+
 try:
     # Optional: shared WS connection manager if WS endpoints loaded
     from tldw_Server_API.app.api.v1.endpoints.prompt_studio_websocket import (
@@ -39,8 +42,8 @@ class MCTSOptimizer:
         self.scorer = PromptQualityScorer(executor=self.executor)
         self.decomposer = PromptDecomposer()
         # Simple in-memory caches (bounded by usage patterns)
-        self._rephrase_cache: Dict[Tuple[str, str], str] = {}
-        self._eval_cache: Dict[str, float] = {}
+        self._rephrase_cache: dict[tuple[str, str], str] = {}
+        self._eval_cache: dict[str, float] = {}
         try:
             from .optimization_strategies import IterativeRefinementOptimizer  # noqa: WPS433
             self._refiner_cls = IterativeRefinementOptimizer
@@ -61,8 +64,8 @@ class MCTSOptimizer:
 
         def __init__(self, *, parent: Optional["MCTSOptimizer._Node"], segment_index: int, system_text: str, score_bin: Optional[int] = None):
             self.parent = parent
-            self.children: List["MCTSOptimizer._Node"] = []
-            self.children_by_bin: Dict[int, "MCTSOptimizer._Node"] = {}
+            self.children: list["MCTSOptimizer._Node"] = []
+            self.children_by_bin: dict[int, "MCTSOptimizer._Node"] = {}
             self.segment_index = segment_index
             self.system_text = system_text
             self.q_sum = 0.0
@@ -82,12 +85,12 @@ class MCTSOptimizer:
         *,
         initial_prompt_id: int,
         optimization_id: Optional[int] = None,
-        test_case_ids: List[int],
-        model_config: Dict[str, Any],
+        test_case_ids: list[int],
+        model_config: dict[str, Any],
         max_iterations: int = 20,
         target_metric: MetricType = MetricType.ACCURACY,
-        strategy_params: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        strategy_params: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         params = strategy_params or {}
         n_sims = int(params.get("mcts_simulations") or max_iterations or 20)
         early_no_improve = int(params.get("early_stop_no_improve") or 5)
@@ -143,7 +146,7 @@ class MCTSOptimizer:
         best_score = await self._evaluate_prompt(initial_prompt_id, test_case_ids, model_config, target_metric)
         initial_score = best_score
 
-        iteration_history: List[Dict[str, Any]] = []
+        iteration_history: list[dict[str, Any]] = []
         no_improve_streak = 0
         nodes_created = 0
         edges_created = 0
@@ -158,7 +161,7 @@ class MCTSOptimizer:
             "evaluator_timeouts": 0,
         }
         # Collect top scored candidates per depth when debugging
-        self._debug_top_by_depth: Dict[int, List[Dict[str, Any]]] = {} if debug_decisions else None
+        self._debug_top_by_depth: dict[int, list[dict[str, Any]]] = {} if debug_decisions else None
 
         broadcaster = None
         if ws_connection_manager is not None and optimization_id is not None:
@@ -182,7 +185,7 @@ class MCTSOptimizer:
                 logger.info("MCTS token budget exhausted: %s >= %s", self._tokens_spent, token_budget)
                 break
             # Selection & Expansion
-            path: List[MCTSOptimizer._Node] = [root]
+            path: list[MCTSOptimizer._Node] = [root]
             node = root
             while True:
                 depth = node.segment_index
@@ -456,7 +459,7 @@ class MCTSOptimizer:
         best_existing: Optional[MCTSOptimizer._Node] = None
         best_existing_score = -1.0
         new_child: Optional[MCTSOptimizer._Node] = None
-        scored: List[Tuple[str, float, int]] = []
+        scored: list[tuple[str, float, int]] = []
         for cand_system in candidates:
             # DB-backed scorer cache (optional)
             try:
@@ -533,8 +536,8 @@ class MCTSOptimizer:
             pass
         return new_child or best_existing
 
-    async def _propose_candidates(self, system_so_far: str, segment_text: str, k: int) -> List[str]:
-        proposals: List[str] = []
+    async def _propose_candidates(self, system_so_far: str, segment_text: str, k: int) -> list[str]:
+        proposals: list[str] = []
         improved = await self._rephrase_segment(system_so_far, segment_text)
         if improved:
             proposals.append(improved)
@@ -543,7 +546,7 @@ class MCTSOptimizer:
         suffix2 = "\n\nBefore responding, validate that all required fields are present."
         proposals.append((system_so_far + suffix2).strip())
         seen = set()
-        uniq: List[str] = []
+        uniq: list[str] = []
         for p in proposals:
             if p not in seen:
                 uniq.append(p)
@@ -599,17 +602,17 @@ class MCTSOptimizer:
     async def _evaluate_with_feedback(
         self,
         *,
-        base_prompt: Dict[str, Any],
+        base_prompt: dict[str, Any],
         system_text: str,
         user_text: str,
-        test_case_ids: List[int],
-        model_config: Dict[str, Any],
+        test_case_ids: list[int],
+        model_config: dict[str, Any],
         target_metric: MetricType,
         feedback_enabled: bool,
         feedback_threshold: float,
         feedback_max_retries: int,
         optimization_id: Optional[int] = None,
-    ) -> Tuple[float, int]:
+    ) -> tuple[float, int]:
         # Caching by content to reduce repeated evaluations
         eval_cache_key = self._make_eval_cache_key(system_text, user_text, model_config, test_case_ids)
         cached = self._eval_cache.get(eval_cache_key)
@@ -662,7 +665,7 @@ class MCTSOptimizer:
                 break
         return best_score, best_prompt_id
 
-    def _create_ephemeral_prompt_version(self, *, base_prompt: Dict[str, Any], system_text: str, user_text: str) -> int:
+    def _create_ephemeral_prompt_version(self, *, base_prompt: dict[str, Any], system_text: str, user_text: str) -> int:
         # Compute next version number for the same prompt name within the project to avoid collisions
         new_name = f"{base_prompt['name']} (MCTS)"
         select_sql = """
@@ -714,11 +717,11 @@ class MCTSOptimizer:
     async def _evaluate_prompt(
         self,
         prompt_id: int,
-        test_case_ids: List[int],
-        model_config: Dict[str, Any],
+        test_case_ids: list[int],
+        model_config: dict[str, Any],
         target_metric: MetricType,
     ) -> float:
-        scores: List[float] = []
+        scores: list[float] = []
         metric_key = getattr(target_metric, "value", str(target_metric))
         for tc_id in test_case_ids:
             try:
@@ -764,15 +767,16 @@ class MCTSOptimizer:
             logger.debug(f"mcts: rephrase failed: {e}")
             return None
 
-    def _get_prompt(self, prompt_id: int) -> Dict[str, Any]:
+    def _get_prompt(self, prompt_id: int) -> dict[str, Any]:
         p = self.db.get_prompt(prompt_id)
         if not p:
             raise ValueError(f"Prompt {prompt_id} not found")
         return p
 
     @staticmethod
-    def _make_eval_cache_key(system_text: str, user_text: str, model_config: Dict[str, Any], test_case_ids: List[int]) -> str:
-        import hashlib, json
+    def _make_eval_cache_key(system_text: str, user_text: str, model_config: dict[str, Any], test_case_ids: list[int]) -> str:
+        import hashlib
+        import json
         h = hashlib.sha256()
         h.update(system_text.encode("utf-8", errors="ignore"))
         h.update(b"\0")
@@ -817,7 +821,8 @@ class MCTSOptimizer:
                 except Exception:
                     payload_raw = None
 
-            import json, datetime
+            import datetime
+            import json
             if isinstance(payload_raw, str):
                 payload = json.loads(payload_raw)
             elif isinstance(payload_raw, dict):
@@ -838,7 +843,7 @@ class MCTSOptimizer:
 
     def _db_cache_set(self, key: str, value: Any, *, ttl_sec: int = 3600) -> None:
         try:
-            import json, datetime, uuid
+            import datetime
             expires_at = (datetime.datetime.utcnow() + datetime.timedelta(seconds=int(ttl_sec))).isoformat()
             payload = {"value": value, "expires_at": expires_at}
             self.db._log_sync_event(

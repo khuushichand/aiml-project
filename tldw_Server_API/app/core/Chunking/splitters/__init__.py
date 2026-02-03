@@ -6,13 +6,13 @@ and an optional BlingFire-backed splitter when available.
 """
 from __future__ import annotations
 
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 
 
 class SentenceSplitter:
     """Interface for sentence splitting into character spans."""
 
-    def split_to_spans(self, text: str, language: Optional[str] = None) -> List[Tuple[int, int]]:
+    def split_to_spans(self, text: str, language: str | None = None) -> list[tuple[int, int]]:
         """Return list of (start_offset, end_offset) for sentences in text."""
         raise NotImplementedError
 

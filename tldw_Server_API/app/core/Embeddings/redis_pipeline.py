@@ -5,12 +5,11 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
-
 
 _STAGE_STREAM_DEFAULTS = {
     "chunking": "embeddings:chunking",
@@ -41,7 +40,7 @@ def _env_int(key: str, default: int) -> int:
         return int(default)
 
 
-def _sanitize_stream_value(value: Any) -> Optional[Any]:
+def _sanitize_stream_value(value: Any) -> Any | None:
     if value is None:
         return None
     if isinstance(value, bool):
@@ -56,8 +55,8 @@ def _sanitize_stream_value(value: Any) -> Optional[Any]:
     return str(value)
 
 
-def _sanitize_stream_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    sanitized: Dict[str, Any] = {}
+def _sanitize_stream_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
     for key, value in (payload or {}).items():
         clean_value = _sanitize_stream_value(value)
         if clean_value is None:
@@ -99,8 +98,8 @@ def idempotency_ttl_seconds() -> int:
 
 @dataclass(frozen=True)
 class RedisEmbeddingsQueues:
-    streams: Dict[str, str]
-    groups: Dict[str, str]
+    streams: dict[str, str]
+    groups: dict[str, str]
     dlq_prefix: str
 
 
@@ -115,10 +114,10 @@ def load_queues() -> RedisEmbeddingsQueues:
 def enqueue_stage(
     *,
     stage: str,
-    payload: Dict[str, Any],
-    redis_client: Optional[Any] = None,
+    payload: dict[str, Any],
+    redis_client: Any | None = None,
     require_redis: bool = True,
-) -> Optional[str]:
+) -> str | None:
     """Enqueue a stage payload into Redis Streams."""
     stage_norm = _stage_key(stage)
     client = redis_client
@@ -143,12 +142,12 @@ def enqueue_stage(
 
 def enqueue_chunking_job(
     *,
-    payload: Dict[str, Any],
-    root_job_uuid: Optional[str],
+    payload: dict[str, Any],
+    root_job_uuid: str | None,
     force_regenerate: bool,
-    redis_client: Optional[Any] = None,
+    redis_client: Any | None = None,
     require_redis: bool = True,
-) -> Optional[str]:
+) -> str | None:
     """Enqueue the chunking stage with idempotency guard."""
     if not root_job_uuid:
         raise ValueError("root_job_uuid is required for embeddings chunking enqueue")
@@ -192,12 +191,12 @@ def enqueue_chunking_job(
 
 def enqueue_content_job(
     *,
-    payload: Dict[str, Any],
-    root_job_uuid: Optional[str],
+    payload: dict[str, Any],
+    root_job_uuid: str | None,
     force_regenerate: bool,
-    redis_client: Optional[Any] = None,
+    redis_client: Any | None = None,
     require_redis: bool = True,
-) -> Optional[str]:
+) -> str | None:
     """Enqueue the content stage with idempotency guard."""
     if not root_job_uuid:
         raise ValueError("root_job_uuid is required for embeddings content enqueue")

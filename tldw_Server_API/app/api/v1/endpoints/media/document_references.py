@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.document_references import (
     DocumentReferencesResponse,
     ReferenceEntry,
@@ -19,7 +19,6 @@ from tldw_Server_API.app.api.v1.schemas.document_references import (
 from tldw_Server_API.app.api.v1.utils.cache import cache_response, get_cached_response
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
-
 
 router = APIRouter(tags=["Document Workspace"])
 
@@ -66,7 +65,7 @@ def _build_references_cache_key(
     return f"cache:/api/v1/media/{media_id}/references:{scope_str}:{enrich_flag}"
 
 
-def _parse_year_from_date(date_str: Optional[str]) -> Optional[int]:
+def _parse_year_from_date(date_str: str | None) -> int | None:
     if not date_str:
         return None
     match = re.search(r"\b(19\d{2}|20[0-3]\d)\b", date_str)
@@ -78,7 +77,7 @@ def _parse_year_from_date(date_str: Optional[str]) -> Optional[int]:
     return None
 
 
-def _find_reference_section(content: str) -> Optional[str]:
+def _find_reference_section(content: str) -> str | None:
     """Find and extract the references section from document content."""
     for pattern in REFERENCE_SECTION_PATTERNS:
         match = re.search(pattern, content)
@@ -94,9 +93,9 @@ def _find_reference_section(content: str) -> Optional[str]:
     return None
 
 
-def _split_references(refs_text: str) -> List[str]:
+def _split_references(refs_text: str) -> list[str]:
     """Split references section into individual references."""
-    references: List[str] = []
+    references: list[str] = []
 
     # Try numbered list format: [1], 1., 1), etc.
     numbered_pattern = r"(?m)^\s*(?:\[\d+\]|\d+[\.\)])\s+"
@@ -139,7 +138,7 @@ def _split_references(refs_text: str) -> List[str]:
     return references[:100]  # Limit to 100 references
 
 
-def _extract_doi(text: str) -> Optional[str]:
+def _extract_doi(text: str) -> str | None:
     """Extract DOI from reference text."""
     match = re.search(DOI_PATTERN, text, re.IGNORECASE)
     if match:
@@ -152,7 +151,7 @@ def _extract_doi(text: str) -> Optional[str]:
     return None
 
 
-def _extract_arxiv_id(text: str) -> Optional[str]:
+def _extract_arxiv_id(text: str) -> str | None:
     """Extract arXiv ID from reference text."""
     # New format: YYMM.NNNNN
     match = re.search(ARXIV_PATTERN, text, re.IGNORECASE)
@@ -165,7 +164,7 @@ def _extract_arxiv_id(text: str) -> Optional[str]:
     return None
 
 
-def _extract_url(text: str) -> Optional[str]:
+def _extract_url(text: str) -> str | None:
     """Extract URL from reference text."""
     # First try to find DOI URL
     doi = _extract_doi(text)
@@ -182,7 +181,7 @@ def _extract_url(text: str) -> Optional[str]:
     return None
 
 
-def _extract_year(text: str) -> Optional[int]:
+def _extract_year(text: str) -> int | None:
     """Extract publication year from reference text."""
     years = re.findall(YEAR_PATTERN, text)
     if years:
@@ -246,7 +245,7 @@ def _parse_reference_basic(raw_text: str) -> ReferenceEntry:
     )
 
 
-async def _enrich_with_semantic_scholar(references: List[ReferenceEntry]) -> Tuple[List[ReferenceEntry], bool]:
+async def _enrich_with_semantic_scholar(references: list[ReferenceEntry]) -> tuple[list[ReferenceEntry], bool]:
     """Enrich references with Semantic Scholar data.
 
     Limits enrichment to MAX_ENRICHMENT_REFS to avoid long response times.
@@ -254,8 +253,8 @@ async def _enrich_with_semantic_scholar(references: List[ReferenceEntry]) -> Tup
     """
     try:
         from tldw_Server_API.app.core.Third_Party.Semantic_Scholar import (
-            search_papers_semantic_scholar,
             get_paper_details_semantic_scholar,
+            search_papers_semantic_scholar,
         )
     except ImportError:
         logger.warning("Semantic Scholar module not available for enrichment")
@@ -343,7 +342,7 @@ async def _enrich_with_semantic_scholar(references: List[ReferenceEntry]) -> Tup
     return enriched, enrichment_performed
 
 
-def _apply_semantic_scholar_data(ref: ReferenceEntry, paper: Dict[str, Any]) -> ReferenceEntry:
+def _apply_semantic_scholar_data(ref: ReferenceEntry, paper: dict[str, Any]) -> ReferenceEntry:
     """Apply Semantic Scholar data to a reference entry."""
     # Update basic fields if not already set
     if not ref.title and paper.get("title"):
@@ -398,7 +397,7 @@ def _needs_external_enrichment(ref: ReferenceEntry) -> bool:
     )
 
 
-def _apply_crossref_data(ref: ReferenceEntry, item: Dict[str, Any]) -> ReferenceEntry:
+def _apply_crossref_data(ref: ReferenceEntry, item: dict[str, Any]) -> ReferenceEntry:
     """Apply Crossref data to a reference entry."""
     if not ref.title and item.get("title"):
         ref.title = item["title"]
@@ -417,7 +416,7 @@ def _apply_crossref_data(ref: ReferenceEntry, item: Dict[str, Any]) -> Reference
     return ref
 
 
-def _apply_arxiv_data(ref: ReferenceEntry, item: Dict[str, Any]) -> ReferenceEntry:
+def _apply_arxiv_data(ref: ReferenceEntry, item: dict[str, Any]) -> ReferenceEntry:
     """Apply arXiv data to a reference entry."""
     if not ref.title and item.get("title"):
         ref.title = item["title"]
@@ -434,7 +433,7 @@ def _apply_arxiv_data(ref: ReferenceEntry, item: Dict[str, Any]) -> ReferenceEnt
     return ref
 
 
-async def _enrich_with_crossref(references: List[ReferenceEntry]) -> Tuple[List[ReferenceEntry], bool]:
+async def _enrich_with_crossref(references: list[ReferenceEntry]) -> tuple[list[ReferenceEntry], bool]:
     """Enrich references with Crossref metadata (DOI lookups)."""
     try:
         from tldw_Server_API.app.core.Third_Party.Crossref import get_crossref_by_doi
@@ -445,7 +444,7 @@ async def _enrich_with_crossref(references: List[ReferenceEntry]) -> Tuple[List[
     refs_to_enrich = references[:MAX_ENRICHMENT_REFS]
     unenriched_remainder = references[MAX_ENRICHMENT_REFS:]
 
-    enriched: List[ReferenceEntry] = []
+    enriched: list[ReferenceEntry] = []
     enrichment_performed = False
 
     for ref in refs_to_enrich:
@@ -464,7 +463,7 @@ async def _enrich_with_crossref(references: List[ReferenceEntry]) -> Tuple[List[
     return enriched, enrichment_performed
 
 
-async def _enrich_with_arxiv(references: List[ReferenceEntry]) -> Tuple[List[ReferenceEntry], bool]:
+async def _enrich_with_arxiv(references: list[ReferenceEntry]) -> tuple[list[ReferenceEntry], bool]:
     """Enrich references with arXiv metadata (ID lookups)."""
     try:
         from tldw_Server_API.app.core.Third_Party.Arxiv import get_arxiv_by_id
@@ -475,7 +474,7 @@ async def _enrich_with_arxiv(references: List[ReferenceEntry]) -> Tuple[List[Ref
     refs_to_enrich = references[:MAX_ENRICHMENT_REFS]
     unenriched_remainder = references[MAX_ENRICHMENT_REFS:]
 
-    enriched: List[ReferenceEntry] = []
+    enriched: list[ReferenceEntry] = []
     enrichment_performed = False
 
     for ref in refs_to_enrich:
@@ -647,7 +646,7 @@ async def get_document_references(
     logger.debug("Parsed {} references from media_id={}", len(references), media_id)
 
     # 6. Enrich with external APIs if requested
-    enrichment_sources: Set[str] = set()
+    enrichment_sources: set[str] = set()
     if enrich and references:
         try:
             references, enriched = await _enrich_with_semantic_scholar(references)

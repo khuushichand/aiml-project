@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+from typing import Any
 
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
@@ -182,6 +182,7 @@ async def api_health():
             # Fallback: read from configured policy file if available
             import os as _os
             from pathlib import Path as _Path
+
             import yaml as _yaml
 
             p = _os.getenv("RG_POLICY_PATH")
@@ -267,7 +268,7 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
-def _calculate_security_status(summary: Dict[str, Any]) -> Dict[str, Any]:
+def _calculate_security_status(summary: dict[str, Any]) -> dict[str, Any]:
     """Derive human-readable security posture from the audit summary."""
     thresholds = {
         "critical_high_risk_min": _int_env("AUDIT_SEC_CRITICAL_HIGH_RISK_MIN", 1),
@@ -297,7 +298,7 @@ def _calculate_security_status(summary: Dict[str, Any]) -> Dict[str, Any]:
 @router.get("/health/security", tags=["health"], summary="Security posture overview")
 async def api_security_health():
     """Summarize recent security audit activity and map to a risk posture."""
-    response: Dict[str, Any] = {
+    response: dict[str, Any] = {
         "timestamp": _utcnow_iso(),
         "risk_level": "unknown",
         "status": "unknown",

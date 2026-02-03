@@ -1,0 +1,176 @@
+# audio_health.py
+# Description: Audio health endpoints.
+import os
+from typing import Any, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from loguru import logger
+from starlette import status
+
+from tldw_Server_API.app.api.v1.endpoints.audio_tts import get_tts_service
+from tldw_Server_API.app.core.Audio.error_payloads import _http_error_detail
+from tldw_Server_API.app.core.Audio.transcription_service import _map_openai_audio_model_to_whisper
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id
+from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
+
+router = APIRouter(
+    tags=["Audio"],
+    responses={
+        404: {"description": "Not found"},
+        401: {"description": "Unauthorized"},
+        429: {"description": "Rate limit exceeded"},
+    },
+)
+
+
+@router.get("/health")
+async def get_tts_health(request: Request, tts_service: TTSServiceV2 = Depends(get_tts_service)):
+    """
+    Get health status of TTS providers.
+    """
+    from datetime import datetime
+
+    try:
+        status_data = tts_service.get_status()
+        if not isinstance(status_data, dict):
+            logger.warning("TTS service returned non-mapping status; falling back to defaults")
+            status_map = {}
+        else:
+            status_map = status_data
+
+        capabilities = await tts_service.get_capabilities()
+
+        available_providers = status_map.get("available", 0)
+        total_providers = status_map.get("total_providers", 0)
+
+        health_status = "healthy" if available_providers > 0 else "unhealthy"
+
+        health = {
+            "status": health_status,
+            "providers": {
+                "total": total_providers,
+                "available": available_providers,
+                "details": status_map.get("providers", {}),
+            },
+            "circuit_breakers": status_map.get("circuit_breakers", {}),
+            "capabilities": capabilities,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+        try:
+            from tldw_Server_API.app.core.TTS.adapter_registry import TTSProvider, get_tts_factory
+
+            factory = await get_tts_factory()
+            adapter = await factory.registry.get_adapter(TTSProvider.KOKORO)
+            if adapter:
+                backend = "onnx" if getattr(adapter, "use_onnx", True) else "pytorch"
+                kokoro_info = {
+                    "backend": backend,
+                    "device": str(getattr(adapter, "device", "unknown")),
+                    "model_path": getattr(adapter, "model_path", None),
+                    "voices_json": getattr(adapter, "voices_json", None),
+                }
+                try:
+                    es_env = os.getenv("PHONEMIZER_ESPEAK_LIBRARY")
+                    kokoro_info["espeak_lib_env"] = es_env
+                    if es_env:
+                        kokoro_info["espeak_lib_exists"] = bool(os.path.exists(es_env))
+                    else:
+                        kokoro_info["espeak_lib_exists"] = False
+                except Exception as exc:
+                    logger.debug(f"Kokoro health: espeak library introspection failed: {exc}")
+                health["providers"]["kokoro"] = kokoro_info
+        except Exception as e:
+            logger.debug(f"Kokoro health enrichment failed: {e}")
+
+        return health
+    except Exception as e:
+        logger.error(f"Error getting TTS health: {e}", exc_info=True)
+        request_id = ensure_request_id(request)
+        payload = _http_error_detail("TTS health check failed", request_id, exc=e)
+        return {"status": "error", **payload, "timestamp": datetime.utcnow().isoformat()}
+
+
+@router.get("/transcriptions/health", summary="Check STT transcription model health")
+async def get_stt_health(
+    request: Request,
+    model: Optional[str] = Query(
+        default=None,
+        description=(
+            "Transcription model to check (OpenAI-style id or internal STT model name). "
+            "Defaults to the configured STT provider when omitted."
+        ),
+    ),
+    warm: bool = Query(
+        default=False,
+        description="If true and the provider is Whisper, eagerly load the model to verify it can be initialized.",
+    ),
+):
+    """
+    Lightweight health/readiness endpoint for STT models.
+    """
+    from datetime import datetime
+
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as stt_lib
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Files as audio_files
+
+    request_id = ensure_request_id(request)
+    raw_model = (model or "").strip()
+    if not raw_model:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+            resolve_default_transcription_model,
+        )
+
+        raw_model = resolve_default_transcription_model("whisper-1")
+    provider_raw, _, _ = stt_lib.parse_transcription_model(raw_model)
+
+    if provider_raw == "whisper":
+        resolved_model = _map_openai_audio_model_to_whisper(raw_model)
+        try:
+            resolved_model = stt_lib.validate_whisper_model_identifier(resolved_model)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=_http_error_detail("Invalid transcription model identifier", request_id, exc=exc),
+            ) from exc
+    else:
+        resolved_model = raw_model
+
+    try:
+        status_info = audio_files.check_transcription_model_status(resolved_model)
+    except Exception:
+        logger.exception("STT health: check_transcription_model_status failed")
+        status_info = {
+            "available": False,
+            "message": "Failed to check model status.",
+            "model": resolved_model,
+        }
+
+    health: dict[str, Any] = {
+        "provider": provider_raw,
+        "alias": raw_model,
+        "model": status_info.get("model", resolved_model),
+        "available": bool(status_info.get("available", False)),
+        "message": status_info.get("message"),
+        "estimated_size": status_info.get("estimated_size"),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    warm_info: dict[str, Any] = {}
+    if warm and provider_raw == "whisper":
+        device = getattr(stt_lib, "processing_choice", "cpu")
+        try:
+            stt_lib.get_whisper_model(resolved_model, device, check_download_status=False)
+            warm_info = {"ok": True, "device": device}
+        except Exception:
+            logger.exception(f"STT health warm-up failed for model={resolved_model}, device={device}")
+            warm_info = {
+                "ok": False,
+                "device": device,
+                "error": "Model initialization failed.",
+            }
+
+    if warm_info:
+        health["warm"] = warm_info
+
+    return health

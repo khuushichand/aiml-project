@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
-
 
 RuntimeType = Literal["docker", "firecracker", "lima"]
 TrustLevelType = Literal["trusted", "standard", "untrusted"]
@@ -13,37 +12,37 @@ TrustLevelType = Literal["trusted", "standard", "untrusted"]
 class SandboxRuntimeInfo(BaseModel):
     name: RuntimeType
     available: bool = Field(description="Whether this runtime is detected/usable on host")
-    default_images: List[str] = Field(default_factory=list)
-    max_cpu: Optional[float] = Field(default=None, description="Max CPU (cores) per run")
-    max_mem_mb: Optional[int] = Field(default=None, description="Max memory (MB) per run")
-    max_upload_mb: Optional[int] = Field(default=None, description="Max inline/session upload size (MB)")
-    max_log_bytes: Optional[int] = Field(default=None, description="Max bytes streamed to logs per run")
-    queue_max_length: Optional[int] = Field(default=None, description="Max queued runs before 429 is returned")
-    queue_ttl_sec: Optional[int] = Field(default=None, description="Maximum time a run may remain queued before being dropped")
-    workspace_cap_mb: Optional[int] = Field(default=None, description="Default workspace size cap (MB)")
-    artifact_ttl_hours: Optional[int] = Field(default=None, description="Default artifact retention (hours)")
-    supported_spec_versions: List[str] = Field(default_factory=lambda: ["1.0"], description="Supported spec versions (e.g., ['1.0','1.1'] when 1.1 features are enabled)")
-    interactive_supported: Optional[bool] = Field(default=None, description="Whether stdin-over-WS interactive runs are supported")
-    egress_allowlist_supported: Optional[bool] = Field(default=None, description="Whether egress allowlisting is supported by the runtime")
-    store_mode: Optional[str] = Field(default=None, description="Current store backend mode (memory|sqlite|cluster)")
-    notes: Optional[str] = None
+    default_images: list[str] = Field(default_factory=list)
+    max_cpu: float | None = Field(default=None, description="Max CPU (cores) per run")
+    max_mem_mb: int | None = Field(default=None, description="Max memory (MB) per run")
+    max_upload_mb: int | None = Field(default=None, description="Max inline/session upload size (MB)")
+    max_log_bytes: int | None = Field(default=None, description="Max bytes streamed to logs per run")
+    queue_max_length: int | None = Field(default=None, description="Max queued runs before 429 is returned")
+    queue_ttl_sec: int | None = Field(default=None, description="Maximum time a run may remain queued before being dropped")
+    workspace_cap_mb: int | None = Field(default=None, description="Default workspace size cap (MB)")
+    artifact_ttl_hours: int | None = Field(default=None, description="Default artifact retention (hours)")
+    supported_spec_versions: list[str] = Field(default_factory=lambda: ["1.0"], description="Supported spec versions (e.g., ['1.0','1.1'] when 1.1 features are enabled)")
+    interactive_supported: bool | None = Field(default=None, description="Whether stdin-over-WS interactive runs are supported")
+    egress_allowlist_supported: bool | None = Field(default=None, description="Whether egress allowlisting is supported by the runtime")
+    store_mode: str | None = Field(default=None, description="Current store backend mode (memory|sqlite|cluster)")
+    notes: str | None = None
 
 
 class SandboxRuntimesResponse(BaseModel):
-    runtimes: List[SandboxRuntimeInfo]
+    runtimes: list[SandboxRuntimeInfo]
 
 
 class SandboxSessionCreateRequest(BaseModel):
     spec_version: str = Field(default="1.0")
-    runtime: Optional[RuntimeType] = Field(default=None, description="Preferred runtime; if omitted, policy decides")
-    base_image: Optional[str] = Field(default=None, description="Default base image for runs in this session")
-    cpu_limit: Optional[float] = Field(default=None, ge=0, description="vCPUs or CPU shares as supported by runtime")
-    memory_mb: Optional[int] = Field(default=None, ge=64, description="Memory limit in MB")
-    timeout_sec: Optional[int] = Field(default=300, ge=1, le=3600)
-    network_policy: Optional[Literal["deny_all", "allowlist"]] = Field(default="deny_all")
-    env: Optional[Dict[str, str]] = Field(default=None, description="Non-secret environment variables")
-    labels: Optional[Dict[str, str]] = Field(default=None)
-    trust_level: Optional[TrustLevelType] = Field(
+    runtime: RuntimeType | None = Field(default=None, description="Preferred runtime; if omitted, policy decides")
+    base_image: str | None = Field(default=None, description="Default base image for runs in this session")
+    cpu_limit: float | None = Field(default=None, ge=0, description="vCPUs or CPU shares as supported by runtime")
+    memory_mb: int | None = Field(default=None, ge=64, description="Memory limit in MB")
+    timeout_sec: int | None = Field(default=300, ge=1, le=3600)
+    network_policy: Literal["deny_all", "allowlist"] | None = Field(default="deny_all")
+    env: dict[str, str] | None = Field(default=None, description="Non-secret environment variables")
+    labels: dict[str, str] | None = Field(default=None)
+    trust_level: TrustLevelType | None = Field(
         default="standard",
         description="Trust level for risk-based isolation: trusted (relaxed), standard (default), untrusted (strict)"
     )
@@ -52,9 +51,9 @@ class SandboxSessionCreateRequest(BaseModel):
 class SandboxSession(BaseModel):
     id: str
     runtime: RuntimeType
-    base_image: Optional[str] = None
-    expires_at: Optional[datetime] = None
-    policy_hash: Optional[str] = None
+    base_image: str | None = None
+    expires_at: datetime | None = None
+    policy_hash: str | None = None
 
 
 class SandboxFileUploadResponse(BaseModel):
@@ -64,8 +63,8 @@ class SandboxFileUploadResponse(BaseModel):
 
 
 class RunResources(BaseModel):
-    cpu: Optional[float] = Field(default=None, ge=0)
-    memory_mb: Optional[int] = Field(default=None, ge=64)
+    cpu: float | None = Field(default=None, ge=0)
+    memory_mb: int | None = Field(default=None, ge=64)
 
 
 class RunFile(BaseModel):
@@ -75,27 +74,27 @@ class RunFile(BaseModel):
 
 class SandboxRunCreateRequest(BaseModel):
     spec_version: str = Field(default="1.0")
-    session_id: Optional[str] = None
-    runtime: Optional[RuntimeType] = None
-    base_image: Optional[str] = None
-    command: List[str]
-    env: Optional[Dict[str, str]] = None
-    startup_timeout_sec: Optional[int] = Field(default=None, ge=1, le=600, description="Provisioning timeout (image pull/start). Separate from execution timeout.")
-    timeout_sec: Optional[int] = Field(default=300, ge=1, le=3600)
-    resources: Optional[RunResources] = None
-    network_policy: Optional[Literal["deny_all", "allowlist"]] = Field(default=None)
-    files: Optional[List[RunFile]] = Field(default=None, description="Inline small files to write before run")
-    capture_patterns: Optional[List[str]] = Field(default=None, description="Glob patterns for artifact capture")
+    session_id: str | None = None
+    runtime: RuntimeType | None = None
+    base_image: str | None = None
+    command: list[str]
+    env: dict[str, str] | None = None
+    startup_timeout_sec: int | None = Field(default=None, ge=1, le=600, description="Provisioning timeout (image pull/start). Separate from execution timeout.")
+    timeout_sec: int | None = Field(default=300, ge=1, le=3600)
+    resources: RunResources | None = None
+    network_policy: Literal["deny_all", "allowlist"] | None = Field(default=None)
+    files: list[RunFile] | None = Field(default=None, description="Inline small files to write before run")
+    capture_patterns: list[str] | None = Field(default=None, description="Glob patterns for artifact capture")
     # Spec 1.1: interactive stdin over WS (backward compatible; ignored when runtime does not support it)
-    interactive: Optional[bool] = Field(default=None, description="Enable interactive mode with stdin over WS (spec 1.1)")
-    stdin_max_bytes: Optional[int] = Field(default=None, ge=0, description="Max total stdin bytes across connection(s)")
-    stdin_max_frame_bytes: Optional[int] = Field(default=None, ge=0, description="Max bytes per stdin frame")
-    stdin_bps: Optional[int] = Field(default=None, ge=0, description="Approximate stdin bytes-per-second rate limit")
-    stdin_idle_timeout_sec: Optional[int] = Field(default=None, ge=0, description="Close WS after this many seconds of stdin inactivity")
+    interactive: bool | None = Field(default=None, description="Enable interactive mode with stdin over WS (spec 1.1)")
+    stdin_max_bytes: int | None = Field(default=None, ge=0, description="Max total stdin bytes across connection(s)")
+    stdin_max_frame_bytes: int | None = Field(default=None, ge=0, description="Max bytes per stdin frame")
+    stdin_bps: int | None = Field(default=None, ge=0, description="Approximate stdin bytes-per-second rate limit")
+    stdin_idle_timeout_sec: int | None = Field(default=None, ge=0, description="Close WS after this many seconds of stdin inactivity")
     # Spec 1.1: Optional resume hint for clients; WS also supports a 'from_seq' query parameter on /runs/{id}/stream
-    resume_from_seq: Optional[int] = Field(default=None, ge=0, description="Suggest resuming WS from this sequence number (spec 1.1)")
+    resume_from_seq: int | None = Field(default=None, ge=0, description="Suggest resuming WS from this sequence number (spec 1.1)")
     # Trust level for risk-based isolation profiles
-    trust_level: Optional[TrustLevelType] = Field(
+    trust_level: TrustLevelType | None = Field(
         default="standard",
         description="Trust level for risk-based isolation: trusted (relaxed), standard (default), untrusted (strict)"
     )
@@ -103,21 +102,21 @@ class SandboxRunCreateRequest(BaseModel):
 
 class SandboxRun(BaseModel):
     id: str
-    session_id: Optional[str] = None
+    session_id: str | None = None
     runtime: RuntimeType
-    base_image: Optional[str] = None
-    command: List[str]
+    base_image: str | None = None
+    command: list[str]
     created_at: datetime
 
 
 class SandboxRunStatus(BaseModel):
     id: str
-    spec_version: Optional[str] = None
-    runtime: Optional[RuntimeType] = None
-    runtime_version: Optional[str] = None
-    base_image: Optional[str] = None
-    image_digest: Optional[str] = None
-    policy_hash: Optional[str] = None
+    spec_version: str | None = None
+    runtime: RuntimeType | None = None
+    runtime_version: str | None = None
+    base_image: str | None = None
+    image_digest: str | None = None
+    policy_hash: str | None = None
     phase: Literal[
         "queued",
         "starting",
@@ -127,41 +126,41 @@ class SandboxRunStatus(BaseModel):
         "killed",
         "timed_out",
     ]
-    exit_code: Optional[int] = None
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    message: Optional[str] = None
-    resource_usage: Optional[Dict[str, int]] = Field(default=None, description="Resource usage summary when available")
-    estimated_start_time: Optional[datetime] = None
-    log_stream_url: Optional[str] = Field(default=None, description="Optional WS URL (signed or unsigned) to stream logs; may include from_seq query (spec 1.1)")
+    exit_code: int | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    message: str | None = None
+    resource_usage: dict[str, int] | None = Field(default=None, description="Resource usage summary when available")
+    estimated_start_time: datetime | None = None
+    log_stream_url: str | None = Field(default=None, description="Optional WS URL (signed or unsigned) to stream logs; may include from_seq query (spec 1.1)")
 
 
 class ArtifactInfo(BaseModel):
     path: str
     size: int
-    download_url: Optional[str] = None
+    download_url: str | None = None
 
 
 class ArtifactListResponse(BaseModel):
-    items: List[ArtifactInfo]
+    items: list[ArtifactInfo]
 
 
 class CancelResponse(BaseModel):
     id: str
     cancelled: bool
-    message: Optional[str] = None
+    message: str | None = None
 
 
 # Admin API Schemas
 class SandboxAdminRunSummary(BaseModel):
     id: str
-    user_id: Optional[str] = None
-    spec_version: Optional[str] = None
-    runtime: Optional[RuntimeType] = None
-    runtime_version: Optional[str] = None
-    base_image: Optional[str] = None
-    image_digest: Optional[str] = None
-    policy_hash: Optional[str] = None
+    user_id: str | None = None
+    spec_version: str | None = None
+    runtime: RuntimeType | None = None
+    runtime_version: str | None = None
+    base_image: str | None = None
+    image_digest: str | None = None
+    policy_hash: str | None = None
     phase: Literal[
         "queued",
         "starting",
@@ -171,10 +170,10 @@ class SandboxAdminRunSummary(BaseModel):
         "killed",
         "timed_out",
     ]
-    exit_code: Optional[int] = None
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    message: Optional[str] = None
+    exit_code: int | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    message: str | None = None
 
 
 class SandboxAdminRunListResponse(BaseModel):
@@ -182,21 +181,21 @@ class SandboxAdminRunListResponse(BaseModel):
     limit: int
     offset: int
     has_more: bool
-    items: List[SandboxAdminRunSummary]
+    items: list[SandboxAdminRunSummary]
 
 
 class SandboxAdminRunDetails(SandboxAdminRunSummary):
-    resource_usage: Optional[Dict[str, int]] = None
+    resource_usage: dict[str, int] | None = None
 
 
 # Admin: Idempotency listing
 class SandboxAdminIdempotencyItem(BaseModel):
     endpoint: str
-    user_id: Optional[str] = None
+    user_id: str | None = None
     key: str
-    fingerprint: Optional[str] = None
+    fingerprint: str | None = None
     object_id: str
-    created_at: Optional[str] = None
+    created_at: str | None = None
 
 
 class SandboxAdminIdempotencyListResponse(BaseModel):
@@ -204,7 +203,7 @@ class SandboxAdminIdempotencyListResponse(BaseModel):
     limit: int
     offset: int
     has_more: bool
-    items: List[SandboxAdminIdempotencyItem]
+    items: list[SandboxAdminIdempotencyItem]
 
 
 # Admin: Usage aggregates
@@ -220,7 +219,7 @@ class SandboxAdminUsageResponse(BaseModel):
     limit: int
     offset: int
     has_more: bool
-    items: List[SandboxAdminUsageItem]
+    items: list[SandboxAdminUsageItem]
 
 
 # Snapshot/Clone Schemas
@@ -241,7 +240,7 @@ class SnapshotInfo(BaseModel):
 
 class SnapshotListResponse(BaseModel):
     """Response listing available snapshots for a session."""
-    items: List[SnapshotInfo] = Field(default_factory=list)
+    items: list[SnapshotInfo] = Field(default_factory=list)
 
 
 class SnapshotRestoreRequest(BaseModel):
@@ -257,7 +256,7 @@ class SnapshotRestoreResponse(BaseModel):
 
 class SessionCloneRequest(BaseModel):
     """Request to clone a session."""
-    new_session_name: Optional[str] = Field(
+    new_session_name: str | None = Field(
         default=None,
         description="Optional name for the new session"
     )

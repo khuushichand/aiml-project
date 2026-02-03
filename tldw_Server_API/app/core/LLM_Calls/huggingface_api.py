@@ -3,14 +3,15 @@
 HuggingFace API client for browsing and downloading GGUF models.
 """
 
-import os
 import asyncio
-from typing import Dict, List, Optional, Any, Callable
+import os
 from pathlib import Path
+from typing import Any, Callable, Optional
+
 from loguru import logger
+
 from tldw_Server_API.app.core.config import load_and_log_configs
-import json
-from tldw_Server_API.app.core.http_client import create_async_client, RetryPolicy
+from tldw_Server_API.app.core.http_client import create_async_client
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
@@ -61,11 +62,11 @@ class HuggingFaceAPI:
     async def search_models(
         self,
         query: str = "",
-        filter_tags: Optional[List[str]] = None,
+        filter_tags: Optional[list[str]] = None,
         sort: str = "downloads",
         limit: int = 50,
         full_search: bool = False
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Search for models on HuggingFace.
 
@@ -125,7 +126,7 @@ class HuggingFaceAPI:
             logger.error(f"Error searching models: {last_exc}")
             return []
 
-    async def get_model_info(self, repo_id: str) -> Optional[Dict[str, Any]]:
+    async def get_model_info(self, repo_id: str) -> Optional[dict[str, Any]]:
         """
         Get detailed information about a specific model.
 
@@ -155,7 +156,7 @@ class HuggingFaceAPI:
             logger.error(f"Error getting model info for {repo_id}: {last_exc}")
             return None
 
-    async def list_model_files(self, repo_id: str, path: str = "") -> List[Dict[str, Any]]:
+    async def list_model_files(self, repo_id: str, path: str = "") -> list[dict[str, Any]]:
         """
         List files in a model repository.
 
@@ -341,7 +342,7 @@ class HuggingFaceAPI:
             logger.debug(f"No README found for {repo_id}: {last_exc}")
             return None
 
-    async def get_model_config(self, repo_id: str) -> Optional[Dict[str, Any]]:
+    async def get_model_config(self, repo_id: str) -> Optional[dict[str, Any]]:
         """
         Get the config.json for a model.
 
@@ -376,7 +377,7 @@ class HuggingFaceAPI:
         size_range: Optional[tuple[int, int]] = None,
         quantization: Optional[str] = None,
         limit: int = 20
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Search specifically for GGUF models with additional filters.
 
@@ -438,7 +439,7 @@ async def find_best_gguf_model(
     model_name: str,
     max_size_gb: float = 10.0,
     preferred_quant: Optional[str] = "Q4_K_M"
-) -> Optional[Dict[str, Any]]:
+) -> Optional[dict[str, Any]]:
     """
     Find the best GGUF version of a model based on criteria.
 

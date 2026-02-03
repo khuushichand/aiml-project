@@ -14,7 +14,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -41,7 +41,7 @@ from tldw_Server_API.app.core.Workflows.adapters.media._config import (
     tags=["media", "document"],
     config_model=PDFExtractConfig,
 )
-async def run_pdf_extract_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_pdf_extract_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Extract text and metadata from a PDF file.
 
     Config:
@@ -258,7 +258,7 @@ async def run_pdf_extract_adapter(config: Dict[str, Any], context: Dict[str, Any
     tags=["media", "ocr"],
     config_model=OCRConfig,
 )
-async def run_ocr_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_ocr_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Run OCR on an image to extract text.
 
     Config:
@@ -332,7 +332,6 @@ async def run_ocr_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     # Get OCR backend
     try:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import get_backend
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import OCRResult
 
         backend = get_backend(backend_name)
         if backend is None:
@@ -391,7 +390,7 @@ async def run_ocr_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     tags=["media", "document"],
     config_model=DocumentTableExtractConfig,
 )
-async def run_document_table_extract_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_document_table_extract_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Extract tables from documents as structured JSON/CSV.
 
     Config:
@@ -438,8 +437,8 @@ async def run_document_table_extract_adapter(config: Dict[str, Any], context: Di
         if provider == "docling":
             # Use docling for table extraction
             try:
-                from docling.document_converter import DocumentConverter
                 from docling.datamodel.base_models import InputFormat
+                from docling.document_converter import DocumentConverter
 
                 converter = DocumentConverter()
                 result = converter.convert(str(file_path))

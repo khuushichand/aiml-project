@@ -8,15 +8,14 @@ This module includes adapters for media operations:
 - document_table_extract: Extract tables from documents
 """
 
+from tldw_Server_API.app.core.Workflows.adapters.media.documents import (
+    run_document_table_extract_adapter,
+    run_ocr_adapter,
+    run_pdf_extract_adapter,
+)
 from tldw_Server_API.app.core.Workflows.adapters.media.ingest import (
     run_media_ingest_adapter,
     run_process_media_adapter,
-)
-
-from tldw_Server_API.app.core.Workflows.adapters.media.documents import (
-    run_pdf_extract_adapter,
-    run_ocr_adapter,
-    run_document_table_extract_adapter,
 )
 
 __all__ = [

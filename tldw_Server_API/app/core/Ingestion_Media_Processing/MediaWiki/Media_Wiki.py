@@ -3,31 +3,36 @@
 #######################################################################################################################
 #
 # Imports
+import bz2
+import gzip
 import json
 import os
 import re
 import sys
 import tempfile
 import traceback
-from pathlib import Path
-import gzip
-import bz2
-from typing import List, Dict, Any, Iterator, Optional, Union
+from collections.abc import Iterator
 from datetime import datetime, timezone  # Added for default ingestion_date
+from pathlib import Path
+from typing import Any, Optional, Union
 from urllib.parse import quote
-#
-# 3rd-Party Imports
-from loguru import logger as _base_logger
+
 import mwparserfromhell
 import mwxml
 import yaml
+
+#
+# 3rd-Party Imports
+from loguru import logger as _base_logger
+
+from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+
 #
 # Local Imports
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
-from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
 from tldw_Server_API.app.core.Utils.Utils import logging
+
 try:  # Optional embeddings dependencies
     from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
     from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
@@ -157,10 +162,10 @@ def setup_media_wiki_logger(name: str, level: Union[int, str] = "INFO", log_file
 
 setup_media_wiki_logger('mediawiki_import', log_file='mediawiki_import.log')
 
-_mediawiki_import_config_cache: Optional[Dict[str, Any]] = None
+_mediawiki_import_config_cache: Optional[dict[str, Any]] = None
 
 
-def get_mediawiki_import_config() -> Dict[str, Any]:
+def get_mediawiki_import_config() -> dict[str, Any]:
     """Lazy-load and cache MediaWiki import config."""
     global _mediawiki_import_config_cache
     if _mediawiki_import_config_cache is None:
@@ -349,12 +354,12 @@ def _open_dump_file_text(safe_path: Path):
 
 def parse_mediawiki_dump(
     file_path: Union[str, Path],
-    namespaces: Optional[List[int]] = None,
+    namespaces: Optional[list[int]] = None,
     skip_redirects: bool = False,
     allowed_dir: Optional[Path] = None,
     *,
     prevalidated_path: Optional[Path] = None,
-) -> Iterator[Dict[str, Any]]:
+) -> Iterator[dict[str, Any]]:
     # Validate file path
     safe_path = prevalidated_path if prevalidated_path is not None else validate_file_path(
         str(file_path),
@@ -404,7 +409,7 @@ def parse_mediawiki_dump(
             logging.debug(f"Yielded page: {page.title}")
 
 
-def optimized_chunking(text: str, chunk_options: Dict[str, Any]) -> List[Dict[str, Any]]:
+def optimized_chunking(text: str, chunk_options: dict[str, Any]) -> list[dict[str, Any]]:
     # Using simple newline splitting for sections as an example.
     # Your original implementation used re.split(r'\n==\s*(.*?)\s*==\n', text)
     # which is good for MediaWiki section syntax.
@@ -486,7 +491,7 @@ def _build_mediawiki_embedding_config(
     *,
     api_name_vector_db: Optional[str],
     api_key_vector_db: Optional[str],
-) -> Optional[Dict[str, Any]]:
+) -> Optional[dict[str, Any]]:
     cfg = get_mediawiki_import_config()
     embeddings_cfg = cfg.get("embeddings", {}) or {}
     provider = str(embeddings_cfg.get("provider") or "openai").strip()
@@ -517,7 +522,7 @@ def _build_mediawiki_embedding_config(
     model_id = f"{provider_norm}:{model}"
 
     if provider_norm == "openai":
-        model_cfg: Dict[str, Any] = {
+        model_cfg: dict[str, Any] = {
             "provider": "openai",
             "model_name_or_path": model,
         }
@@ -569,7 +574,7 @@ def _mediawiki_collection_name(wiki_name: str) -> str:
 
 def _store_mediawiki_chunks_in_vector_db(
     *,
-    chunks: List[Dict[str, Any]],
+    chunks: list[dict[str, Any]],
     media_id: int,
     title: str,
     wiki_name: str,
@@ -592,7 +597,7 @@ def _store_mediawiki_chunks_in_vector_db(
     if not user_db_base_dir:
         return False, "USER_DB_BASE_DIR is not configured."
 
-    user_embedding_config: Dict[str, Any] = {
+    user_embedding_config: dict[str, Any] = {
         "USER_DB_BASE_DIR": user_db_base_dir,
         "embedding_config": embedding_config,
     }
@@ -630,8 +635,8 @@ def _store_mediawiki_chunks_in_vector_db(
     if len(embeddings) != len(texts):
         return False, "Embedding generation returned a mismatched vector count."
 
-    metadatas: List[Dict[str, Any]] = []
-    ids: List[str] = []
+    metadatas: list[dict[str, Any]] = []
+    ids: list[str] = []
     for idx, ch in indexed_chunks:
         section = None
         metadata = ch.get("metadata") if isinstance(ch.get("metadata"), dict) else {}
@@ -670,13 +675,13 @@ def process_single_item(
         content: str,
         title: str,
         wiki_name: str,
-        chunk_options: Dict[str, Any],
-        item: Dict[str, Any],  # Contains timestamp, page_id etc. from parse_mediawiki_dump
+        chunk_options: dict[str, Any],
+        item: dict[str, Any],  # Contains timestamp, page_id etc. from parse_mediawiki_dump
         store_to_db: bool = True,
         store_to_vector_db: bool = True,
         api_name_vector_db: Optional[str] = None,
         api_key_vector_db: Optional[str] = None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     try:
         logging.debug(
             f"process_single_item: Processing item: {title} (StoreDB: {store_to_db}, StoreVector: {store_to_vector_db})")
@@ -894,16 +899,16 @@ def save_checkpoint(file_path: str, last_processed_id: int):
 def import_mediawiki_dump(
         file_path: str,
         wiki_name: str,
-        namespaces: List[int] = None,
+        namespaces: list[int] = None,
         skip_redirects: bool = False,
-        chunk_options_override: Dict[str, Any] = None,
+        chunk_options_override: dict[str, Any] = None,
         progress_callback: Any = None,
         store_to_db: bool = True,
         store_to_vector_db: bool = True,
         api_name_vector_db: Optional[str] = None,
         api_key_vector_db: Optional[str] = None,
         allowed_dir: Optional[Path] = None,
-) -> Iterator[Dict[str, Any]]:
+) -> Iterator[dict[str, Any]]:
     try:
         # Sanitize wiki_name and validate file_path
         safe_wiki_name = sanitize_wiki_name(wiki_name)
@@ -1014,7 +1019,7 @@ def import_mediawiki_dump(
 
 def count_pages(
     file_path: Union[str, Path],
-    namespaces: Optional[List[int]] = None,
+    namespaces: Optional[list[int]] = None,
     skip_redirects: bool = False,
     allowed_dir: Optional[Path] = None,
     *,

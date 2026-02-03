@@ -9,24 +9,21 @@ of concerns between analytics and user data.
 """
 
 import asyncio
-import json
-import time
 import hashlib
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Set
-from collections import defaultdict, deque
-from pathlib import Path
-from contextlib import asynccontextmanager
+import json
 import statistics
+import time
+from collections import deque
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any, Optional
 
 from loguru import logger
-import numpy as np
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
-from .analytics_db import DEFAULT_ANALYTICS_DB_PATH, get_analytics_db, AnalyticsDatabase
+from .analytics_db import DEFAULT_ANALYTICS_DB_PATH, get_analytics_db
 
 
 class FeedbackType(Enum):
@@ -58,9 +55,9 @@ class AnalyticsEvent:
     event_type: AnalyticsEventType
     timestamp: datetime = field(default_factory=datetime.now)
     query_hash: Optional[str] = None  # Hashed for privacy
-    metrics: Dict[str, Any] = field(default_factory=dict)
+    metrics: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
             "event_type": self.event_type.value,
@@ -76,15 +73,15 @@ class UserFeedback:
     conversation_id: str
     message_id: Optional[str]
     query: str
-    document_ids: List[str]
-    chunk_ids: List[str]
+    document_ids: list[str]
+    chunk_ids: list[str]
     relevance_score: Optional[int]  # 1-5
     helpful: Optional[bool]
-    issues: List[str]
+    issues: list[str]
     user_notes: Optional[str]
     created_at: datetime = field(default_factory=datetime.now)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
             "conversation_id": self.conversation_id,
@@ -116,7 +113,7 @@ class AnalyticsStore:
         """
         self.db = get_analytics_db(db_path)
 
-    async def record_search(self, search_data: Dict[str, Any]) -> bool:
+    async def record_search(self, search_data: dict[str, Any]) -> bool:
         """
         Record search analytics.
 
@@ -136,7 +133,7 @@ class AnalyticsStore:
             logger.error(f"Failed to record search analytics: {e}")
             return False
 
-    async def record_feedback(self, feedback_data: Dict[str, Any]) -> bool:
+    async def record_feedback(self, feedback_data: dict[str, Any]) -> bool:
         """
         Record anonymized feedback analytics.
 
@@ -155,7 +152,7 @@ class AnalyticsStore:
             logger.error(f"Failed to record feedback: {e}")
             return False
 
-    async def record_event(self, event: "AnalyticsEvent | Dict[str, Any]") -> bool:
+    async def record_event(self, event: "AnalyticsEvent | dict[str, Any]") -> bool:
         """
         Record a generic analytics event.
 
@@ -174,6 +171,33 @@ class AnalyticsStore:
         except Exception as e:
             logger.error(f"Failed to record analytics event: {e}")
             return False
+
+    async def record_performance_metric(
+        self,
+        *,
+        metric_type: str,
+        value: float,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> bool:
+        """
+        Record a performance metric as an analytics event.
+
+        Args:
+            metric_type: Metric name (e.g., "search_latency")
+            value: Metric value
+            metadata: Optional additional fields
+
+        Returns:
+            Success status
+        """
+        metrics: dict[str, Any] = {"metric_type": metric_type, "value": value}
+        if metadata:
+            metrics.update(metadata)
+        event = AnalyticsEvent(
+            event_type=AnalyticsEventType.PERFORMANCE,
+            metrics=metrics,
+        )
+        return await self.record_event(event)
 
     async def record_search_quality(self, *, query_hash: str, relevance_score: float, clicked: bool) -> bool:
         """
@@ -199,7 +223,7 @@ class AnalyticsStore:
 
     async def record_document_performance(
         self,
-        doc_data: Optional[Dict[str, Any]] = None,
+        doc_data: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> bool:
         """
@@ -224,7 +248,7 @@ class AnalyticsStore:
             logger.error(f"Failed to record document performance: {e}")
             return False
 
-    async def record_error(self, error_data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> bool:
+    async def record_error(self, error_data: Optional[dict[str, Any]] = None, **kwargs: Any) -> bool:
         """
         Record error tracking information.
 
@@ -247,7 +271,7 @@ class AnalyticsStore:
             logger.error(f"Failed to record error: {e}")
             return False
 
-    async def record_feature_usage(self, feature_data: Dict[str, Any]) -> bool:
+    async def record_feature_usage(self, feature_data: dict[str, Any]) -> bool:
         """
         Record feature usage statistics.
 
@@ -266,7 +290,7 @@ class AnalyticsStore:
             logger.error(f"Failed to record feature usage: {e}")
             return False
 
-    async def get_analytics_summary(self, days: int = 7) -> Dict[str, Any]:
+    async def get_analytics_summary(self, days: int = 7) -> dict[str, Any]:
         """
         Get analytics summary for the specified period.
 
@@ -392,11 +416,11 @@ class UserFeedbackStore:
         self,
         conversation_id: str,
         query: str,
-        document_ids: List[str],
-        chunk_ids: List[str],
+        document_ids: list[str],
+        chunk_ids: list[str],
         relevance_score: Optional[int] = None,
         helpful: Optional[bool] = None,
-        issues: Optional[List[str]] = None,
+        issues: Optional[list[str]] = None,
         user_notes: Optional[str] = None,
         message_id: Optional[str] = None
     ) -> str:
@@ -452,9 +476,9 @@ class UserFeedbackStore:
     async def merge_feedback_update(
         self,
         feedback_id: str,
-        issues: Optional[List[str]] = None,
+        issues: Optional[list[str]] = None,
         user_notes: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         """Merge issues (union) and overwrite user_notes for an existing feedback row."""
         if issues is None and user_notes is None:
             return None
@@ -482,7 +506,7 @@ class UserFeedbackStore:
                     record = {}
 
             raw_issues = record.get("issues")
-            existing_issues: List[str] = []
+            existing_issues: list[str] = []
             if raw_issues:
                 try:
                     decoded = json.loads(raw_issues)
@@ -491,10 +515,10 @@ class UserFeedbackStore:
                 except Exception:
                     existing_issues = []
 
-            def _merge_issues(existing: List[str], incoming: Optional[List[str]]) -> List[str]:
+            def _merge_issues(existing: list[str], incoming: Optional[list[str]]) -> list[str]:
                 if not incoming:
                     return list(existing)
-                merged: List[str] = []
+                merged: list[str] = []
                 seen = set()
                 for item in existing + [str(item) for item in incoming if str(item).strip()]:
                     if item in seen:
@@ -525,7 +549,7 @@ class UserFeedbackStore:
     async def get_conversation_feedback(
         self,
         conversation_id: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get all feedback for a conversation."""
         select_sql = """
             SELECT *
@@ -538,7 +562,7 @@ class UserFeedbackStore:
 
         try:
             cursor = self.db.execute_query(select_sql, (conversation_id,))
-            feedback: List[Dict[str, Any]] = []
+            feedback: list[dict[str, Any]] = []
             for row in cursor.fetchall():
                 fb = dict(row)
                 fb["document_ids"] = json.loads(fb["document_ids"]) if fb.get("document_ids") else []
@@ -577,41 +601,41 @@ class UnifiedFeedbackSystem:
         self.enable_analytics = enable_analytics
 
         if enable_analytics:
-            self.analytics = AnalyticsStore(analytics_db_path)
+            self.analytics: Optional[AnalyticsStore] = AnalyticsStore(analytics_db_path)
         else:
             self.analytics = None
 
         if chacha_db:
-            self.user_feedback = UserFeedbackStore(chacha_db)
+            self.user_feedback: Optional[UserFeedbackStore] = UserFeedbackStore(chacha_db)
         else:
             self.user_feedback = None
 
         # Performance tracking
-        self._performance_buffer = deque(maxlen=100)
-        self._error_buffer = deque(maxlen=50)
+        self._performance_buffer: deque[dict[str, Any]] = deque(maxlen=100)
+        self._error_buffer: deque[dict[str, Any]] = deque(maxlen=50)
 
     async def submit_feedback(
         self,
         conversation_id: str,
         query: str,
-        document_ids: List[str],
-        chunk_ids: List[str],
+        document_ids: list[str],
+        chunk_ids: list[str],
         feedback_type: Optional[str] = None,
         relevance_score: Optional[int] = None,
         helpful: Optional[bool] = None,
-        issues: Optional[List[str]] = None,
+        issues: Optional[list[str]] = None,
         user_notes: Optional[str] = None,
         session_id: Optional[str] = None,
         _user_id: Optional[str] = None,  # Reserved for future use
         message_id: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Submit feedback to both stores.
 
         Returns:
             Result with feedback ID and status
         """
-        result = {"success": False, "feedback_id": None, "errors": []}
+        result: dict[str, Any] = {"success": False, "feedback_id": None, "errors": []}
 
         # Store in user's conversation DB
         if self.user_feedback and conversation_id:
@@ -716,9 +740,9 @@ class UnifiedFeedbackSystem:
         query: Optional[str],
         doc_id: Optional[str],
         event_type: str,
-        impression: Optional[List[str]] = None,
+        impression: Optional[list[str]] = None,
         corpus: Optional[str] = None,
-        chunk_ids: Optional[List[str]] = None,
+        chunk_ids: Optional[list[str]] = None,
         rank: Optional[int] = None,
         session_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
@@ -823,8 +847,8 @@ class UnifiedFeedbackSystem:
 
     async def record_citation_usage(
         self,
-        document_ids: List[str],
-        chunk_ids: List[str],
+        document_ids: list[str],
+        chunk_ids: list[str],
         citation_style: str
     ):
         """Record citation usage."""
@@ -851,7 +875,7 @@ class UnifiedFeedbackSystem:
         self,
         error_type: str,
         error_message: str,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[dict[str, Any]] = None
     ):
         """Record an error occurrence."""
         if self.enable_analytics and self.analytics:
@@ -861,7 +885,7 @@ class UnifiedFeedbackSystem:
                 metadata=context
             )
 
-    async def get_analytics_dashboard(self) -> Dict[str, Any]:
+    async def get_analytics_dashboard(self) -> dict[str, Any]:
         """Get analytics dashboard data."""
         if not self.enable_analytics or not self.analytics:
             return {"error": "Analytics not enabled"}
@@ -871,7 +895,7 @@ class UnifiedFeedbackSystem:
     async def get_conversation_insights(
         self,
         conversation_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get insights for a specific conversation."""
         insights = {
             "feedback_count": 0,

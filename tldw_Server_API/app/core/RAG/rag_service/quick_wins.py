@@ -6,27 +6,26 @@ This module provides immediately useful features like spell checking,
 result highlighting, cost tracking, and query templates.
 """
 
+import json
 import os
 import re
-import json
-from typing import Dict, List, Any, Optional, Tuple
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-import hashlib
-from collections import defaultdict
+from typing import Any, Optional
 
+import tiktoken
 from loguru import logger
 from spellchecker import SpellChecker
-import tiktoken
 
-from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 
 
 # 1. QUERY SPELL CHECKING
 class QuerySpellChecker:
     """Spell checker for queries."""
 
-    def __init__(self, custom_dictionary: Optional[List[str]] = None):
+    def __init__(self, custom_dictionary: Optional[list[str]] = None):
         """
         Initialize spell checker.
 
@@ -53,7 +52,7 @@ class QuerySpellChecker:
         ]
         self.spell_checker.word_frequency.load_words(terms)
 
-    def check_query(self, query: str) -> Dict[str, Any]:
+    def check_query(self, query: str) -> dict[str, Any]:
         """
         Check query for spelling errors.
 
@@ -66,13 +65,13 @@ class QuerySpellChecker:
         words = query.split()
         misspelled = self.spell_checker.unknown(words)
 
-        corrections = {}
+        corrections: dict[str, dict[str, Any]] = {}
         for word in misspelled:
             # Get correction suggestions
             suggestions = self.spell_checker.candidates(word)
             if suggestions:
                 # Get most likely correction
-                correction = self.spell_checker.correction(word)
+                correction = self.spell_checker.correction(word) or word
                 corrections[word] = {
                     "correction": correction,
                     "suggestions": list(suggestions)[:5]
@@ -106,7 +105,8 @@ class QuerySpellChecker:
         if result["has_errors"]:
             # For now, return corrected query
             # In production, would calculate confidence
-            return result["corrected"]
+            corrected = result.get("corrected")
+            return corrected if isinstance(corrected, str) else query
 
         return query
 
@@ -129,9 +129,9 @@ class ResultHighlighter:
     def highlight_document(
         self,
         document: str,
-        query_terms: List[str],
+        query_terms: list[str],
         context_window: int = 50
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Highlight query terms in document.
 
@@ -144,28 +144,28 @@ class ResultHighlighter:
             Highlighted document with metadata
         """
         highlighted = document
-        matches = []
+        matches: list[dict[str, Any]] = []
 
         for term in query_terms:
             # Find all occurrences
             pattern = re.escape(term)
             flags = 0 if self.case_sensitive else re.IGNORECASE
 
-            for match in re.finditer(pattern, document, flags):
+            for re_match in re.finditer(pattern, document, flags):
                 matches.append({
                     "term": term,
-                    "start": match.start(),
-                    "end": match.end(),
-                    "context": self._extract_context(document, match.start(), match.end(), context_window)
+                    "start": re_match.start(),
+                    "end": re_match.end(),
+                    "context": self._extract_context(document, re_match.start(), re_match.end(), context_window)
                 })
 
         # Sort matches by position (reverse for replacement)
-        matches.sort(key=lambda x: x["start"], reverse=True)
+        matches.sort(key=lambda x: int(x["start"]), reverse=True)
 
         # Apply highlights
-        for match in matches:
-            start = match["start"]
-            end = match["end"]
+        for match_info in matches:
+            start = int(match_info["start"])
+            end = int(match_info["end"])
             highlighted = (
                 highlighted[:start] +
                 f"{self.highlight_tag}{highlighted[start:end]}{self.highlight_tag}" +
@@ -202,12 +202,12 @@ class ResultHighlighter:
     def _extract_snippets(
         self,
         document: str,
-        matches: List[Dict],
+        matches: list[dict],
         window: int
-    ) -> List[str]:
+    ) -> list[str]:
         """Extract relevant snippets from document."""
-        snippets = []
-        seen_ranges = []
+        snippets: list[str] = []
+        seen_ranges: list[tuple[int, int]] = []
 
         for match in matches[:5]:  # Limit to 5 snippets
             start = match["start"]
@@ -240,7 +240,7 @@ class LLMCost:
     output_cost_per_1k: float
     total_cost: float
     timestamp: datetime = field(default_factory=datetime.now)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class CostTracker:
@@ -271,7 +271,7 @@ class CostTracker:
 
     def __init__(self):
         """Initialize cost tracker."""
-        self.costs: List[LLMCost] = []
+        self.costs: list[LLMCost] = []
         self.total_by_provider = defaultdict(float)
         self.total_by_model = defaultdict(float)
 
@@ -292,7 +292,7 @@ class CostTracker:
         model: str,
         input_text: str,
         output_text: str,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> LLMCost:
         """
         Track cost for an LLM call.
@@ -347,7 +347,7 @@ class CostTracker:
 
         return cost
 
-    def get_summary(self, last_n: Optional[int] = None) -> Dict[str, Any]:
+    def get_summary(self, last_n: Optional[int] = None) -> dict[str, Any]:
         """Get cost summary."""
         costs_to_analyze = self.costs[-last_n:] if last_n else self.costs
 
@@ -407,7 +407,7 @@ class DebugMode:
 class QueryTemplate:
     """Predefined query template."""
 
-    def __init__(self, name: str, pattern: str, variables: List[str], description: str = ""):
+    def __init__(self, name: str, pattern: str, variables: list[str], description: str = ""):
         """
         Initialize query template.
 
@@ -430,7 +430,7 @@ class QueryTemplate:
 
         return self.pattern.format(**kwargs)
 
-    def validate(self, query: str) -> Tuple[bool, Dict[str, str]]:
+    def validate(self, query: str) -> tuple[bool, dict[str, str]]:
         """Check if query matches template and extract variables."""
         # Simple pattern matching (would be more sophisticated in production)
         # Convert template pattern to regex
@@ -513,7 +513,7 @@ class QueryTemplateLibrary:
         """Add a custom template."""
         self.templates[template.name] = template
 
-    def match_query(self, query: str) -> Optional[Tuple[QueryTemplate, Dict[str, str]]]:
+    def match_query(self, query: str) -> Optional[tuple[QueryTemplate, dict[str, str]]]:
         """Find matching template for query."""
         for template in self.templates.values():
             matches, variables = template.validate(query)
@@ -522,7 +522,7 @@ class QueryTemplateLibrary:
 
         return None
 
-    def suggest_templates(self, partial_query: str) -> List[QueryTemplate]:
+    def suggest_templates(self, partial_query: str) -> list[QueryTemplate]:
         """Suggest templates based on partial query."""
         suggestions = []
 
@@ -546,7 +546,7 @@ class WebhookNotifier:
             default_timeout: Default timeout for webhook calls
         """
         self.default_timeout = default_timeout
-        self.webhook_history = []
+        self.webhook_history: list[dict[str, Any]] = []
 
     async def _close_response(self, resp: Any) -> None:
         if resp is None:
@@ -563,8 +563,8 @@ class WebhookNotifier:
         self,
         webhook_url: str,
         event_type: str,
-        data: Dict[str, Any],
-        headers: Optional[Dict[str, str]] = None
+        data: dict[str, Any],
+        headers: Optional[dict[str, str]] = None
     ) -> bool:
         """
         Send webhook notification.
@@ -634,7 +634,7 @@ class WebhookNotifier:
         success_rate: float,
         total_queries: int,
         processing_time: float,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ):
         """Send batch completion notification."""
         await self.send_notification(
@@ -654,7 +654,7 @@ class WebhookNotifier:
         webhook_url: str,
         job_id: str,
         error: str,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ):
         """Send batch failure notification."""
         await self.send_notification(

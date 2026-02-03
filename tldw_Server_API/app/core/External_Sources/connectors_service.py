@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timedelta, timezone
+from typing import Any
+
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
@@ -189,7 +190,7 @@ async def _ensure_tables(db) -> None:
         raise
 
 
-async def upsert_policy(db, org_id: int, policy: Dict[str, Any]) -> Dict[str, Any]:
+async def upsert_policy(db, org_id: int, policy: dict[str, Any]) -> dict[str, Any]:
     await _ensure_tables(db)
     is_pg = await is_postgres_backend()
     fields = [
@@ -270,7 +271,7 @@ async def upsert_policy(db, org_id: int, policy: Dict[str, Any]) -> Dict[str, An
     return await get_policy(db, org_id)
 
 
-async def get_policy(db, org_id: int) -> Dict[str, Any]:
+async def get_policy(db, org_id: int) -> dict[str, Any]:
     await _ensure_tables(db)
     is_pg = await is_postgres_backend()
     if is_pg:
@@ -313,7 +314,7 @@ async def get_policy(db, org_id: int) -> Dict[str, Any]:
     return row
 
 
-def _oauth_state_cutoff(max_age_minutes: int) -> Tuple[datetime, str]:
+def _oauth_state_cutoff(max_age_minutes: int) -> tuple[datetime, str]:
     cutoff_dt = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
     cutoff_str = cutoff_dt.strftime("%Y-%m-%d %H:%M:%S")
     return cutoff_dt, cutoff_str
@@ -388,7 +389,7 @@ async def consume_oauth_state(
     return True
 
 
-async def create_account(db, user_id: int, provider: str, display_name: str, email: Optional[str], tokens: Dict[str, Any]) -> Dict[str, Any]:
+async def create_account(db, user_id: int, provider: str, display_name: str, email: str | None, tokens: dict[str, Any]) -> dict[str, Any]:
     await _ensure_tables(db)
     is_pg = await is_postgres_backend()
     # Securely envelope tokens if crypto is configured; fallback to storing access token raw
@@ -438,7 +439,7 @@ async def create_account(db, user_id: int, provider: str, display_name: str, ema
         return dict(r)
 
 
-async def _get_account_with_tokens(db, user_id: int, account_id: int) -> Optional[Dict[str, Any]]:
+async def _get_account_with_tokens(db, user_id: int, account_id: int) -> dict[str, Any] | None:
     await _ensure_tables(db)
     is_pg = await is_postgres_backend()
     if is_pg:
@@ -456,7 +457,7 @@ async def _get_account_with_tokens(db, user_id: int, account_id: int) -> Optiona
         except Exception:
             d = dict(r)
     # Decrypt envelope if present
-    tokens: Dict[str, Any] = {}
+    tokens: dict[str, Any] = {}
     import json as _json
     at_raw = d.get("access_token")
     if at_raw and isinstance(at_raw, str) and at_raw.strip().startswith("{"):
@@ -475,19 +476,19 @@ async def _get_account_with_tokens(db, user_id: int, account_id: int) -> Optiona
     return d
 
 
-async def get_account_tokens(db, user_id: int, account_id: int) -> Optional[Dict[str, Any]]:
+async def get_account_tokens(db, user_id: int, account_id: int) -> dict[str, Any] | None:
     row = await _get_account_with_tokens(db, user_id, account_id)
     if not row:
         return None
     return row.get("tokens") or {}
 
 
-async def get_account_email(db, user_id: int, account_id: int) -> Optional[str]:
+async def get_account_email(db, user_id: int, account_id: int) -> str | None:
     row = await _get_account_with_tokens(db, user_id, account_id)
     return None if not row else (row.get("email") or None)
 
 
-async def get_account_for_user(db, user_id: int, account_id: int) -> Optional[Dict[str, Any]]:
+async def get_account_for_user(db, user_id: int, account_id: int) -> dict[str, Any] | None:
     await _ensure_tables(db)
     is_pg = await is_postgres_backend()
     if is_pg:
@@ -524,7 +525,7 @@ async def get_account_for_user(db, user_id: int, account_id: int) -> Optional[Di
         return dict(r)
 
 
-async def update_account_tokens(db, user_id: int, account_id: int, new_tokens: Dict[str, Any]) -> bool:
+async def update_account_tokens(db, user_id: int, account_id: int, new_tokens: dict[str, Any]) -> bool:
     """Persist refreshed tokens for an account. Uses envelope encryption when configured.
 
     new_tokens may include: access_token, refresh_token, expires_in/at, scope.
@@ -532,7 +533,7 @@ async def update_account_tokens(db, user_id: int, account_id: int, new_tokens: D
     await _ensure_tables(db)
     is_pg = await is_postgres_backend()
     import json as _json
-    existing_refresh: Optional[str] = None
+    existing_refresh: str | None = None
     if not new_tokens.get("refresh_token"):
         existing = await _get_account_with_tokens(db, user_id, account_id)
         if not existing:
@@ -587,7 +588,7 @@ async def update_account_tokens(db, user_id: int, account_id: int, new_tokens: D
     return True
 
 
-async def get_source_by_id(db, user_id: int, source_id: int) -> Optional[Dict[str, Any]]:
+async def get_source_by_id(db, user_id: int, source_id: int) -> dict[str, Any] | None:
     await _ensure_tables(db)
     is_pg = await is_postgres_backend()
     if is_pg:
@@ -622,7 +623,7 @@ async def get_source_by_id(db, user_id: int, source_id: int) -> Optional[Dict[st
 
 
 async def should_ingest_item(
-    db, *, source_id: int, provider: str, external_id: str, version: Optional[str], modified_at: Optional[str], content_hash: Optional[str]
+    db, *, source_id: int, provider: str, external_id: str, version: str | None, modified_at: str | None, content_hash: str | None
 ) -> bool:
     await _ensure_tables(db)
     is_pg = await is_postgres_backend()
@@ -651,7 +652,7 @@ async def should_ingest_item(
 
 
 async def record_ingested_item(
-    db, *, source_id: int, provider: str, external_id: str, name: Optional[str], mime: Optional[str], size: Optional[int], version: Optional[str], modified_at: Optional[str], content_hash: Optional[str]
+    db, *, source_id: int, provider: str, external_id: str, name: str | None, mime: str | None, size: int | None, version: str | None, modified_at: str | None, content_hash: str | None
 ) -> None:
     await _ensure_tables(db)
     is_pg = await is_postgres_backend()
@@ -712,7 +713,7 @@ def count_connectors_jobs_today(user_id: int) -> int:
             pass
 
 
-async def list_accounts(db, user_id: int) -> List[Dict[str, Any]]:
+async def list_accounts(db, user_id: int) -> list[dict[str, Any]]:
     await _ensure_tables(db)
     is_pg = await is_postgres_backend()
     if is_pg:
@@ -741,10 +742,10 @@ async def create_source(
     provider: str,
     remote_id: str,
     type_: str,
-    path: Optional[str],
-    options: Dict[str, Any],
+    path: str | None,
+    options: dict[str, Any],
     enabled: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     await _ensure_tables(db)
     is_pg = await is_postgres_backend()
     if is_pg:
@@ -791,7 +792,7 @@ async def create_source(
         return row
 
 
-async def list_sources(db, user_id: int) -> List[Dict[str, Any]]:
+async def list_sources(db, user_id: int) -> list[dict[str, Any]]:
     await _ensure_tables(db)
     # Join through accounts to enforce per-user scoping
     is_pg = await is_postgres_backend()
@@ -843,7 +844,7 @@ async def list_sources(db, user_id: int) -> List[Dict[str, Any]]:
     return out
 
 
-async def update_source(db, user_id: int, source_id: int, *, enabled: Optional[bool] = None, options: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+async def update_source(db, user_id: int, source_id: int, *, enabled: bool | None = None, options: dict[str, Any] | None = None) -> dict[str, Any] | None:
     await _ensure_tables(db)
     is_pg = await is_postgres_backend()
     # Ensure source belongs to user via join
@@ -855,7 +856,7 @@ async def update_source(db, user_id: int, source_id: int, *, enabled: Optional[b
         if not row:
             return None
         sets = []
-        params: List[Any] = []
+        params: list[Any] = []
         if enabled is not None:
             sets.append("enabled = $%d" % (len(params) + 1))
             params.append(enabled)
@@ -882,7 +883,7 @@ async def update_source(db, user_id: int, source_id: int, *, enabled: Optional[b
     if not r:
         return None
     sets = []
-    params: List[Any] = []
+    params: list[Any] = []
     if enabled is not None:
         sets.append("enabled = ?")
         params.append(1 if enabled else 0)
@@ -916,7 +917,7 @@ async def update_source(db, user_id: int, source_id: int, *, enabled: Optional[b
         return row
 
 
-async def create_import_job(user_id: int, source_id: int, *, request_id: Optional[str] = None) -> Dict[str, Any]:
+async def create_import_job(user_id: int, source_id: int, *, request_id: str | None = None) -> dict[str, Any]:
     """Create a generic job in the core Jobs manager for connector import.
 
     Scaffold behavior: creates a job with payload but does not perform ingestion.

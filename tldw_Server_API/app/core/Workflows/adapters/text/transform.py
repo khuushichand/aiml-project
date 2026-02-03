@@ -14,7 +14,7 @@ from __future__ import annotations
 import html
 import re
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -38,7 +38,7 @@ from tldw_Server_API.app.core.Workflows.adapters.text._config import (
     tags=["text", "json"],
     config_model=JSONTransformConfig,
 )
-async def run_json_transform_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_json_transform_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Transform JSON data using jq-like expressions or mappings.
 
     Config:
@@ -91,7 +91,7 @@ async def run_json_transform_adapter(config: Dict[str, Any], context: Dict[str, 
     tags=["text", "json"],
     config_model=JSONValidateConfig,
 )
-async def run_json_validate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_json_validate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Validate JSON data against a schema.
 
     Config:
@@ -133,7 +133,7 @@ async def run_json_validate_adapter(config: Dict[str, Any], context: Dict[str, A
     tags=["text", "xml"],
     config_model=XMLTransformConfig,
 )
-async def run_xml_transform_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_xml_transform_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Transform XML data using XPath or XSLT.
 
     Config:
@@ -187,7 +187,7 @@ async def run_xml_transform_adapter(config: Dict[str, Any], context: Dict[str, A
     tags=["text", "template"],
     config_model=TemplateRenderConfig,
 )
-async def run_template_render_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_template_render_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Render Jinja2 templates with context data.
 
     Config:
@@ -236,7 +236,7 @@ async def run_template_render_adapter(config: Dict[str, Any], context: Dict[str,
     tags=["text", "extraction"],
     config_model=RegexExtractConfig,
 )
-async def run_regex_extract_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_regex_extract_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Extract data using regular expressions.
 
     Config:
@@ -301,7 +301,7 @@ async def run_regex_extract_adapter(config: Dict[str, Any], context: Dict[str, A
     tags=["text", "cleaning"],
     config_model=TextCleanConfig,
 )
-async def run_text_clean_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_text_clean_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Clean and normalize text content.
 
     Config:

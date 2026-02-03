@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, HttpUrl, validator
 
@@ -9,12 +9,12 @@ from tldw_Server_API.app.api.v1.schemas._compat import Field
 
 class CollectionsFeedCreateRequest(BaseModel):
     url: HttpUrl = Field(example="https://example.com/feed.xml")
-    name: Optional[str] = Field(default=None, example="Example Feed")
-    tags: List[str] = Field(default_factory=list, example=["news", "tech"])
-    schedule_expr: Optional[str] = Field(default=None, description="Cron expression for polling")
-    timezone: Optional[str] = Field(default=None, description="Timezone for schedule (IANA or UTC+/-)")
+    name: str | None = Field(default=None, example="Example Feed")
+    tags: list[str] = Field(default_factory=list, example=["news", "tech"])
+    schedule_expr: str | None = Field(default=None, description="Cron expression for polling")
+    timezone: str | None = Field(default=None, description="Timezone for schedule (IANA or UTC+/-)")
     active: bool = Field(default=True, description="Whether the feed job is active")
-    settings: Optional[Dict[str, Any]] = Field(
+    settings: dict[str, Any] | None = Field(
         default=None,
         description="Optional watchlists source settings (rss/history prefs, limits)",
     )
@@ -25,13 +25,13 @@ class CollectionsFeedCreateRequest(BaseModel):
 
 
 class CollectionsFeedUpdateRequest(BaseModel):
-    name: Optional[str] = Field(default=None, example="Example Feed")
-    url: Optional[HttpUrl] = Field(default=None, example="https://example.com/feed.xml")
-    tags: Optional[List[str]] = Field(default=None, example=["news", "tech"])
-    schedule_expr: Optional[str] = Field(default=None, description="Cron expression for polling")
-    timezone: Optional[str] = Field(default=None, description="Timezone for schedule (IANA or UTC+/-)")
-    active: Optional[bool] = Field(default=None, description="Whether the feed job is active")
-    settings: Optional[Dict[str, Any]] = Field(
+    name: str | None = Field(default=None, example="Example Feed")
+    url: HttpUrl | None = Field(default=None, example="https://example.com/feed.xml")
+    tags: list[str] | None = Field(default=None, example=["news", "tech"])
+    schedule_expr: str | None = Field(default=None, description="Cron expression for polling")
+    timezone: str | None = Field(default=None, description="Timezone for schedule (IANA or UTC+/-)")
+    active: bool | None = Field(default=None, description="Whether the feed job is active")
+    settings: dict[str, Any] | None = Field(
         default=None,
         description="Optional watchlists source settings (rss/history prefs, limits)",
     )
@@ -47,25 +47,25 @@ class CollectionsFeed(BaseModel):
     url: str
     source_type: str = Field(example="rss")
     origin: str = Field(example="feed")
-    tags: List[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     active: bool
-    settings: Optional[Dict[str, Any]] = None
-    last_scraped_at: Optional[str] = None
-    etag: Optional[str] = None
-    last_modified: Optional[str] = None
-    defer_until: Optional[str] = None
-    status: Optional[str] = None
-    consec_not_modified: Optional[int] = None
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
-    job_id: Optional[int] = None
-    schedule_expr: Optional[str] = None
-    timezone: Optional[str] = None
-    job_active: Optional[bool] = None
-    next_run_at: Optional[str] = None
-    wf_schedule_id: Optional[str] = None
+    settings: dict[str, Any] | None = None
+    last_scraped_at: str | None = None
+    etag: str | None = None
+    last_modified: str | None = None
+    defer_until: str | None = None
+    status: str | None = None
+    consec_not_modified: int | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    job_id: int | None = None
+    schedule_expr: str | None = None
+    timezone: str | None = None
+    job_active: bool | None = None
+    next_run_at: str | None = None
+    wf_schedule_id: str | None = None
 
 
 class CollectionsFeedsListResponse(BaseModel):
-    items: List[CollectionsFeed]
+    items: list[CollectionsFeed]
     total: int

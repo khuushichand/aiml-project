@@ -12,19 +12,17 @@ import hmac
 import json
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 from urllib.parse import urlparse
 
-from loguru import logger
-
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
-from tldw_Server_API.app.core.Workflows.adapters._common import (
-    resolve_context_user_id,
-    resolve_artifacts_dir,
-)
-from tldw_Server_API.app.core.Workflows.adapters.integration._config import NotifyConfig, WebhookConfig
 from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
+from tldw_Server_API.app.core.Workflows.adapters._common import (
+    resolve_artifacts_dir,
+    resolve_context_user_id,
+)
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
+from tldw_Server_API.app.core.Workflows.adapters.integration._config import NotifyConfig, WebhookConfig
 
 
 @registry.register(
@@ -35,7 +33,7 @@ from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allo
     tags=["integration", "notification"],
     config_model=NotifyConfig,
 )
-async def run_notify_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_notify_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Send a notification via webhook (Slack/email-compatible JSON).
 
     Config:
@@ -102,7 +100,7 @@ async def run_notify_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     tags=["integration", "webhook"],
     config_model=WebhookConfig,
 )
-async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_webhook_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Send an HTTP request (with safe egress) or dispatch a local webhook event.
 
     Config (HTTP mode when 'url' provided):
@@ -143,7 +141,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
     def _resolve_json_ref(expr: str) -> Any:
         """Resolve a limited JSON reference like 'inputs.qa_samples' or 'prev.response_json.items|pluck:id'."""
         path = expr
-        pluck_field: Optional[str] = None
+        pluck_field: str | None = None
         # Support '|pluck:field'
         if "|pluck:" in path:
             path, tail = path.split("|pluck:", 1)
@@ -218,7 +216,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                 out.append(host)
         return out
 
-    def _resolve_signing_secret(ref: str) -> Optional[str]:
+    def _resolve_signing_secret(ref: str) -> str | None:
         if not ref:
             return None
         try:
@@ -233,7 +231,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
         except Exception:
             return None
 
-    def _policy_allows(url_val: str) -> tuple[bool, Optional[str]]:
+    def _policy_allows(url_val: str) -> tuple[bool, str | None]:
         policy_cfg = config.get("egress_policy") or config.get("egress") or {}
         if not isinstance(policy_cfg, dict) or not policy_cfg:
             return True, None
@@ -260,7 +258,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
         except Exception:
             pass
 
-    from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
+    from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent, webhook_manager
 
     user_id = resolve_context_user_id(context)
     if not user_id:
@@ -293,7 +291,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             url_t = str(url_t).strip()
             if not url_t:
                 return {"dispatched": False, "error": "missing_url"}
-            headers_r: Dict[str, str] = {}
+            headers_r: dict[str, str] = {}
             if isinstance(headers_cfg, dict):
                 for hk, hv in headers_cfg.items():
                     try:
@@ -371,7 +369,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             secret = os.getenv("WORKFLOWS_WEBHOOK_SECRET", "")
             body_json_str = None
             # Prepare request kwargs
-            req_kwargs: Dict[str, Any] = {}
+            req_kwargs: dict[str, Any] = {}
             if method == "GET":
                 if isinstance(body_r, dict):
                     req_kwargs["params"] = body_r
@@ -562,7 +560,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                 except Exception:
                     pass
                 # Build outputs
-                out: Dict[str, Any] = {"dispatched": ok, "status_code": resp.status_code}
+                out: dict[str, Any] = {"dispatched": ok, "status_code": resp.status_code}
                 try:
                     body_bytes = _read_response_bytes(resp)
                 except ValueError:

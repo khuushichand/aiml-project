@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from loguru import logger
 
@@ -8,8 +8,8 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 
 
 def _collect_cache_namespaces(
-    current_user: Optional[User],
-    namespaces: Optional[Iterable[str]] = None,
+    current_user: User | None,
+    namespaces: Iterable[str] | None = None,
 ) -> set[str]:
     collected: set[str] = {str(ns) for ns in (namespaces or []) if ns}
     if current_user:
@@ -23,10 +23,10 @@ def _collect_cache_namespaces(
 
 
 async def delete_media_vectors(
-    current_user: Optional[User],
+    current_user: User | None,
     *,
     media_id: int,
-    namespaces: Optional[Iterable[str]] = None,
+    namespaces: Iterable[str] | None = None,
 ) -> None:
     """Best-effort vector-store cleanup for a media item."""
     cache_namespaces = _collect_cache_namespaces(current_user, namespaces)
@@ -72,10 +72,10 @@ async def delete_media_vectors(
 
 
 def invalidate_rag_caches(
-    current_user: Optional[User],
+    current_user: User | None,
     *,
-    namespaces: Optional[Iterable[str]] = None,
-    media_id: Optional[int] = None,
+    namespaces: Iterable[str] | None = None,
+    media_id: int | None = None,
 ) -> None:
     """Best-effort RAG cache invalidation for content updates."""
     cache_namespaces = _collect_cache_namespaces(current_user, namespaces)

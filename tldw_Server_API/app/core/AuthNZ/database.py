@@ -2,38 +2,41 @@
 # Description: Database connection pooling and transaction management for user registration system
 #
 # Imports
+import asyncio
 import os
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional, Any, Dict
-import asyncio
-from urllib.parse import urlparse, unquote
+from typing import Any, Optional
+from urllib.parse import unquote, urlparse
+
+import aiosqlite
+
 #
 # 3rd-party imports
 import asyncpg
-import aiosqlite
-from loguru import logger
 from fastapi import HTTPException
+from loguru import logger
+
+from tldw_Server_API.app.core.AuthNZ.exceptions import (
+    ConnectionPoolExhaustedError,
+    DatabaseError,
+    DatabaseLockError,
+    DuplicateOrganizationError,
+    DuplicatePermissionError,
+    DuplicateRoleError,
+    DuplicateTeamError,
+    DuplicateUserError,
+    InvalidRegistrationCodeError,
+    RegistrationError,
+    TransactionError,
+    WeakPasswordError,
+)
+from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
-from tldw_Server_API.app.core.AuthNZ.exceptions import (
-    DatabaseError,
-    ConnectionPoolExhaustedError,
-    TransactionError,
-    DatabaseLockError,
-    DuplicateUserError,
-    WeakPasswordError,
-    InvalidRegistrationCodeError,
-    RegistrationError,
-    DuplicateOrganizationError,
-    DuplicateTeamError,
-    DuplicateRoleError,
-    DuplicatePermissionError,
-)
-
 
 #######################################################################################################################
 #
@@ -539,7 +542,7 @@ class DatabasePool:
                 await conn.commit()
                 return cursor
 
-    async def fetchone(self, query: str, *args) -> Optional[Dict[str, Any]]:
+    async def fetchone(self, query: str, *args) -> Optional[dict[str, Any]]:
         """Fetch a single row"""
         async with self.acquire() as conn:
             if self.pool:
@@ -560,7 +563,7 @@ class DatabasePool:
                 return None
 
     # Compatibility aliases for callers expecting asyncpg-like API
-    async def fetchrow(self, query: str, *args) -> Optional[Dict[str, Any]]:
+    async def fetchrow(self, query: str, *args) -> Optional[dict[str, Any]]:
         """Alias for fetchone to match asyncpg-style interfaces."""
         return await self.fetchone(query, *args)
 
@@ -622,7 +625,7 @@ class DatabasePool:
         self._initialized = False
         logger.info("Database pool closed")
 
-    async def health_check(self) -> Dict[str, Any]:
+    async def health_check(self) -> dict[str, Any]:
         """Perform database health check"""
         try:
             if self.pool:
@@ -769,7 +772,9 @@ async def reset_db_pool():
     except Exception as e:
         logger.debug(f"reset_db_pool: ignoring MCP config cache reset error: {e}")
     try:
-        from tldw_Server_API.app.core.MCP_unified.security.ip_filter import get_ip_access_controller as _get_ip_controller
+        from tldw_Server_API.app.core.MCP_unified.security.ip_filter import (
+            get_ip_access_controller as _get_ip_controller,
+        )
         if hasattr(_get_ip_controller, "cache_clear"):
             _get_ip_controller.cache_clear()
     except Exception as e:

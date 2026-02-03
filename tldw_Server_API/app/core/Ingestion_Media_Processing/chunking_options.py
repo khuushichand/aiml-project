@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, List, Tuple
+from typing import Any
 
+from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Utils.Utils import logging
-from tldw_Server_API.app.core.config import load_and_log_configs, settings
 
 
-def prepare_chunking_options_dict(form_data: Any) -> Optional[Dict[str, Any]]:
+def prepare_chunking_options_dict(form_data: Any) -> dict[str, Any] | None:
     """
     Prepare the dictionary of chunking options based on form data.
 
@@ -52,7 +52,7 @@ def prepare_chunking_options_dict(form_data: Any) -> Optional[Dict[str, Any]]:
         or getattr(form_data, "context_window_size", None)
     )
 
-    language: Optional[str]
+    language: str | None
     if media_type in ["audio", "video"]:
         language = getattr(form_data, "chunk_language", None) or getattr(
             form_data, "transcription_language", None
@@ -60,7 +60,7 @@ def prepare_chunking_options_dict(form_data: Any) -> Optional[Dict[str, Any]]:
     else:
         language = getattr(form_data, "chunk_language", None)
 
-    chunk_options: Dict[str, Any] = {
+    chunk_options: dict[str, Any] = {
         "method": final_chunk_method,
         "max_size": chunk_size_used,
         "overlap": chunk_overlap_used,
@@ -124,12 +124,12 @@ def prepare_chunking_options_dict(form_data: Any) -> Optional[Dict[str, Any]]:
 def apply_chunking_template_if_any(
     form_data: Any,
     db: Any,
-    chunking_options_dict: Optional[Dict[str, Any]],
+    chunking_options_dict: dict[str, Any] | None,
     *,
-    TemplateClassifier: Optional[Any] = None,
-    first_url: Optional[str] = None,
-    first_filename: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
+    TemplateClassifier: Any | None = None,
+    first_url: str | None = None,
+    first_filename: str | None = None,
+) -> dict[str, Any] | None:
     """
     Apply an explicit or auto-selected chunking template to the provided
     chunking options dictionary.
@@ -207,8 +207,8 @@ def apply_chunking_template_if_any(
                 logging.warning("Failed to list chunking templates for auto-apply: {}", list_err)
                 return opts
 
-            best_cfg: Optional[Dict[str, Any]] = None
-            best_key: Optional[Tuple[float, int]] = None
+            best_cfg: dict[str, Any] | None = None
+            best_key: tuple[float, int] | None = None
 
             for t in candidates:
                 try:
@@ -267,8 +267,8 @@ def apply_chunking_template_if_any(
 
 def prepare_common_options(
     form_data: Any,
-    chunk_options: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+    chunk_options: dict[str, Any] | None,
+) -> dict[str, Any]:
     """
     Prepare the dictionary of common processing options for ingestion.
 

@@ -9,24 +9,23 @@ Stage 1 scope:
 """
 from __future__ import annotations
 
-from typing import Dict, Any, List, Optional, Tuple
-
+import io
+import mailbox
 import os
 import re
-import io
-import zipfile
 import tempfile
-import mailbox
+import zipfile
 from email import policy
-from email.message import Message, EmailMessage
-from email.parser import BytesParser
 from email.header import decode_header, make_header
+from email.message import EmailMessage, Message
+from email.parser import BytesParser
 from email.utils import getaddresses
+from typing import Any
 
-from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
-from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import DEFAULT_MEDIA_TYPE_CONFIG
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.Utils.Utils import logging
 
 try:
     import html2text as _html2text
@@ -56,8 +55,8 @@ try:  # pragma: no cover - defensive guard
     # Additionally patch the active policy content manager mapping so any
     # pre-bound handler for Message objects also ignores 'maintype'.
     try:
-        from email.message import Message as _EMessage  # local alias
         from email import policy as _epolicy
+        from email.message import Message as _EMessage  # local alias
         _cm_inst = getattr(_epolicy.default, 'content_manager', None)
         if _cm_inst and hasattr(_cm_inst, 'set_handlers'):
             _orig_handler = _cm_inst.set_handlers.get(_EMessage)
@@ -90,7 +89,7 @@ except Exception:
     pass
 
 
-def _decode_mime_header(value: Optional[str]) -> str:
+def _decode_mime_header(value: str | None) -> str:
     if not value:
         return ""
     try:
@@ -104,7 +103,7 @@ def _addresses_from_header(msg: Message, header_name: str) -> str:
         raw_values = msg.get_all(header_name, [])
         pairs = getaddresses(raw_values)
         # Keep only email part for storage/search; join with comma+space
-        emails: List[str] = []
+        emails: list[str] = []
         for name, email_addr in pairs:
             if email_addr and "@" in email_addr:
                 emails.append(email_addr)
@@ -159,7 +158,7 @@ def parse_eml_bytes(
     filename: str = "email.eml",
     *,
     return_children: bool = False,
-) -> Tuple[str, Dict[str, Any], List[Tuple[bytes, str]]]:
+) -> tuple[str, dict[str, Any], list[tuple[bytes, str]]]:
     """
     Parse EML bytes and return (content_text, metadata_dict).
     metadata_dict contains email-specific fields in metadata['email'].
@@ -177,7 +176,7 @@ def parse_eml_bytes(
     fmt = (msg.get_content_type() or "message/rfc822").strip()
 
     # Flatten headers map with unfolded values
-    headers_map: Dict[str, Any] = {}
+    headers_map: dict[str, Any] = {}
     try:
         for k, v in msg.items():
             headers_map[k] = _decode_mime_header(v)
@@ -185,10 +184,10 @@ def parse_eml_bytes(
         pass
 
     # Bodies and attachments
-    text_parts: List[str] = []
-    html_first: Optional[str] = None
-    attachments_meta: List[Dict[str, Any]] = []
-    child_emls: List[Tuple[bytes, str]] = []  # (bytes, filename)
+    text_parts: list[str] = []
+    html_first: str | None = None
+    attachments_meta: list[dict[str, Any]] = []
+    child_emls: list[tuple[bytes, str]] = []  # (bytes, filename)
 
     if msg.is_multipart():
         for part in msg.walk():
@@ -250,7 +249,7 @@ def parse_eml_bytes(
     if not text_content and html_first:
         text_content = _html_to_text(html_first)
 
-    metadata: Dict[str, Any] = {
+    metadata: dict[str, Any] = {
         "title": subject or (filename.rsplit(".", 1)[0] if filename else "Untitled Email"),
         "author": from_addr or "Unknown",
         "parser_used": "builtin-email",
@@ -276,24 +275,24 @@ def process_email_task(
     *,
     file_bytes: bytes,
     filename: str,
-    title_override: Optional[str] = None,
-    author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    title_override: str | None = None,
+    author_override: str | None = None,
+    keywords: list[str] | None = None,
     perform_chunking: bool = True,
-    chunk_options: Optional[Dict[str, Any]] = None,
+    chunk_options: dict[str, Any] | None = None,
     perform_analysis: bool = False,
-    api_name: Optional[str] = None,
-    api_key: Optional[str] = None,
-    custom_prompt: Optional[str] = None,
-    system_prompt: Optional[str] = None,
+    api_name: str | None = None,
+    api_key: str | None = None,
+    custom_prompt: str | None = None,
+    system_prompt: str | None = None,
     summarize_recursively: bool = False,
     ingest_attachments: bool = False,
     max_depth: int = 1,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Process EML bytes and produce a normalized dict (no DB interaction).
     """
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "status": "Pending",
         "input_ref": filename,
         "media_type": "email",
@@ -376,7 +375,7 @@ def process_email_task(
 
         # Optionally parse nested email attachments recursively (children are returned in 'children' key)
         if ingest_attachments and max_depth > 1 and child_emls:
-            children_results: List[Dict[str, Any]] = []
+            children_results: list[dict[str, Any]] = []
             for child_bytes, child_name in child_emls:
                 try:
                     child_res = process_email_task(
@@ -422,25 +421,25 @@ def process_eml_archive_bytes(
     *,
     file_bytes: bytes,
     archive_name: str,
-    title_override: Optional[str] = None,
-    author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    title_override: str | None = None,
+    author_override: str | None = None,
+    keywords: list[str] | None = None,
     perform_chunking: bool = True,
-    chunk_options: Optional[Dict[str, Any]] = None,
+    chunk_options: dict[str, Any] | None = None,
     perform_analysis: bool = False,
-    api_name: Optional[str] = None,
-    api_key: Optional[str] = None,
-    custom_prompt: Optional[str] = None,
-    system_prompt: Optional[str] = None,
+    api_name: str | None = None,
+    api_key: str | None = None,
+    custom_prompt: str | None = None,
+    system_prompt: str | None = None,
     summarize_recursively: bool = False,
     ingest_attachments: bool = False,
     max_depth: int = 1,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Process a ZIP archive of EML files and return a list of per-email result dicts.
     Applies basic guardrails on member count and uncompressed size using archive config limits.
     """
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     try:
         zf = zipfile.ZipFile(io.BytesIO(file_bytes), 'r')
     except Exception as e:
@@ -545,26 +544,26 @@ def process_mbox_bytes(
     *,
     file_bytes: bytes,
     mbox_name: str,
-    title_override: Optional[str] = None,
-    author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    title_override: str | None = None,
+    author_override: str | None = None,
+    keywords: list[str] | None = None,
     perform_chunking: bool = True,
-    chunk_options: Optional[Dict[str, Any]] = None,
+    chunk_options: dict[str, Any] | None = None,
     perform_analysis: bool = False,
-    api_name: Optional[str] = None,
-    api_key: Optional[str] = None,
-    custom_prompt: Optional[str] = None,
-    system_prompt: Optional[str] = None,
+    api_name: str | None = None,
+    api_key: str | None = None,
+    custom_prompt: str | None = None,
+    system_prompt: str | None = None,
     summarize_recursively: bool = False,
     ingest_attachments: bool = False,
     max_depth: int = 1,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Process an MBOX file (bytes) and return a list of per-email result dicts.
     Uses Python's mailbox.mbox by writing bytes to a temporary file. Applies guardrails
     using the same DEFAULT_MEDIA_TYPE_CONFIG['archive'] limits used for ZIP archives.
     """
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
 
     # Guardrails based on archive limits
     cfg = DEFAULT_MEDIA_TYPE_CONFIG.get('archive', {}) if isinstance(DEFAULT_MEDIA_TYPE_CONFIG, dict) else {}
@@ -605,7 +604,7 @@ def process_mbox_bytes(
         # Iterate messages with cap; stage successes, and if cap exceeded, emit a single guardrail error only
         count = 0
         limit_exceeded = False
-        staged: List[Dict[str, Any]] = []
+        staged: list[dict[str, Any]] = []
         for msg in mbox:
             count += 1
             if count > max_internal_files:
@@ -720,20 +719,20 @@ def process_pst_bytes(
     *,
     file_bytes: bytes,
     pst_name: str,
-    title_override: Optional[str] = None,
-    author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    title_override: str | None = None,
+    author_override: str | None = None,
+    keywords: list[str] | None = None,
     perform_chunking: bool = True,
-    chunk_options: Optional[Dict[str, Any]] = None,
+    chunk_options: dict[str, Any] | None = None,
     perform_analysis: bool = False,
-    api_name: Optional[str] = None,
-    api_key: Optional[str] = None,
-    custom_prompt: Optional[str] = None,
-    system_prompt: Optional[str] = None,
+    api_name: str | None = None,
+    api_key: str | None = None,
+    custom_prompt: str | None = None,
+    system_prompt: str | None = None,
     summarize_recursively: bool = False,
     ingest_attachments: bool = False,
     max_depth: int = 1,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     PST/OST container handler with optional pypff integration.
     - If pypff is unavailable, returns a clear informative error (feature-flag behavior).
@@ -782,7 +781,7 @@ def process_pst_bytes(
             "error": "PST/OST support not enabled. Install and configure 'pypff' (libpff) or integrate 'readpst' for parsing.",
         }]
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
 
     # Write bytes to a temp file for pypff
     tmp_path = None
@@ -802,7 +801,7 @@ def process_pst_bytes(
             root = getattr(pst, 'root_folder', None)
 
         # Traverse folders and messages up to max_internal_files
-        stack: List[Any] = []
+        stack: list[Any] = []
         if root is not None:
             stack.append(root)
 
@@ -875,7 +874,7 @@ def process_pst_bytes(
                             continue
 
                         # Extract basic fields with broad compatibility
-                        def _get(obj, names: List[str]) -> Optional[str]:
+                        def _get(obj, names: list[str]) -> str | None:
                             for n in names:
                                 v = getattr(obj, n, None)
                                 if callable(v):
@@ -893,9 +892,9 @@ def process_pst_bytes(
                         plain_body = _get(msg, ["get_plain_text_body", "plain_text_body", "body"])
                         html_body = _get(msg, ["get_html_body", "html_body"]) if not plain_body else None
                         # Recipients
-                        recipients_to: List[str] = []
-                        recipients_cc: List[str] = []
-                        recipients_bcc: List[str] = []
+                        recipients_to: list[str] = []
+                        recipients_cc: list[str] = []
+                        recipients_bcc: list[str] = []
                         try:
                             # Common pypff APIs
                             num_rcpts = 0
@@ -951,7 +950,7 @@ def process_pst_bytes(
                         if subject:
                             em["Subject"] = subject
                         # Normalize and set recipients once
-                        def _norm_list(vals: List[str]) -> List[str]:
+                        def _norm_list(vals: list[str]) -> list[str]:
                             uniq = []
                             seen = set()
                             for v in vals or []:
@@ -975,7 +974,7 @@ def process_pst_bytes(
                             try:
                                 # Normalize to RFC2822
                                 from datetime import timezone
-                                from email.utils import parsedate_to_datetime, format_datetime
+                                from email.utils import format_datetime, parsedate_to_datetime
                                 dt = None
                                 if hasattr(msg_date, 'isoformat'):
                                     dt = msg_date  # datetime-like
@@ -1008,7 +1007,7 @@ def process_pst_bytes(
                         else:
                             em.set_content("")
                         # Collect attachment metadata (no bytes loaded)
-                        attachments_meta: List[Dict[str, Any]] = []
+                        attachments_meta: list[dict[str, Any]] = []
                         try:
                             num_att = 0
                             for an in ("get_number_of_attachments", "number_of_attachments"):

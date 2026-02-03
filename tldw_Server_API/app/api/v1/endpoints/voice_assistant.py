@@ -12,14 +12,20 @@ import json
 import os
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
+    get_chacha_db_for_user,
+    get_chacha_db_for_user_id,
+)
 from tldw_Server_API.app.api.v1.schemas.voice_assistant_schemas import (
     VoiceActionType,
+    VoiceAnalytics,
+    VoiceAnalyticsSummary,
     VoiceAssistantState,
     VoiceCommandDefinition,
     VoiceCommandInfo,
@@ -28,8 +34,6 @@ from tldw_Server_API.app.api.v1.schemas.voice_assistant_schemas import (
     VoiceCommandResponse,
     VoiceCommandToggleRequest,
     VoiceCommandUsage,
-    VoiceAnalytics,
-    VoiceAnalyticsSummary,
     VoiceSessionInfo,
     VoiceSessionListResponse,
     VoiceWorkflowTemplateInfo,
@@ -45,44 +49,45 @@ from tldw_Server_API.app.api.v1.schemas.voice_assistant_schemas import (
     WSIntentMessage,
     WSMessageType,
     WSStateChangeMessage,
+    WSTranscriptionMessage,
     WSTTSChunkMessage,
     WSTTSEndMessage,
-    WSTranscriptionMessage,
     WSWorkflowCompleteMessage,
     WSWorkflowProgressMessage,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
-    get_chacha_db_for_user,
-    get_chacha_db_for_user_id,
-)
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.VoiceAssistant import (
     ActionType,
     VoiceCommand,
-    VoiceCommandRegistry,
     VoiceCommandRouter,
     VoiceSessionManager,
-    VoiceWorkflowHandler,
+    get_active_voice_session_count,
+    get_user_voice_sessions,
+    get_voice_analytics_summary_stats,
+    get_voice_command_counts,
     get_voice_command_registry,
     get_voice_command_router,
+    get_voice_command_usage_stats,
     get_voice_session_manager,
+    get_voice_top_commands,
+    get_voice_usage_by_day,
     get_voice_workflow_handler,
     save_voice_command,
     save_voice_session,
-    get_voice_command as get_voice_command_db,
-    delete_voice_command as delete_voice_command_db,
-    get_voice_session as get_voice_session_db,
-    get_user_voice_sessions,
-    delete_voice_session as delete_voice_session_db,
-    get_voice_command_usage_stats,
-    get_voice_top_commands,
-    get_voice_usage_by_day,
-    get_voice_analytics_summary_stats,
-    get_active_voice_session_count,
-    get_voice_command_counts,
 )
-
+from tldw_Server_API.app.core.VoiceAssistant import (
+    delete_voice_command as delete_voice_command_db,
+)
+from tldw_Server_API.app.core.VoiceAssistant import (
+    delete_voice_session as delete_voice_session_db,
+)
+from tldw_Server_API.app.core.VoiceAssistant import (
+    get_voice_command as get_voice_command_db,
+)
+from tldw_Server_API.app.core.VoiceAssistant import (
+    get_voice_session as get_voice_session_db,
+)
 
 # REST router
 router = APIRouter(
@@ -133,9 +138,9 @@ async def _authenticate_websocket(
 
     if _looks_like_jwt(token):
         try:
+            from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
             from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
             from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
-            from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 
             jwt_service = get_jwt_service()
             payload = await jwt_service.verify_token_async(token, token_type="access")
@@ -954,7 +959,7 @@ async def websocket_voice_assistant(
     user_id: Optional[int] = None
     session_id: Optional[str] = None
     db: Optional[CharactersRAGDB] = None
-    config: Dict[str, Any] = {}
+    config: dict[str, Any] = {}
     transcriber = None
 
     try:
@@ -1020,7 +1025,7 @@ async def websocket_voice_assistant(
 
         # Main message loop
         router_instance = get_voice_command_router()
-        audio_buffer: List[bytes] = []
+        audio_buffer: list[bytes] = []
 
         while True:
             try:
@@ -1189,10 +1194,10 @@ async def websocket_voice_assistant(
 
 async def _process_audio_command(
     websocket: WebSocket,
-    audio_buffer: List[bytes],
+    audio_buffer: list[bytes],
     user_id: int,
     session_id: str,
-    config: Dict[str, Any],
+    config: dict[str, Any],
     router_instance: VoiceCommandRouter,
     db: Optional[CharactersRAGDB] = None,
 ) -> None:
@@ -1261,7 +1266,7 @@ async def _process_audio_command(
 
 async def _transcribe_audio(
     audio_bytes: bytes,
-    config: Dict[str, Any],
+    config: dict[str, Any],
 ) -> str:
     """Transcribe audio bytes to text."""
     try:
@@ -1294,7 +1299,7 @@ async def _process_text_command(
     text: str,
     user_id: int,
     session_id: str,
-    config: Dict[str, Any],
+    config: dict[str, Any],
     router_instance: VoiceCommandRouter,
     db: Optional[CharactersRAGDB] = None,
 ) -> None:
@@ -1356,7 +1361,7 @@ async def _process_text_command(
 async def _stream_tts_response(
     websocket: WebSocket,
     text: str,
-    config: Dict[str, Any],
+    config: dict[str, Any],
 ) -> None:
     """Stream TTS audio to WebSocket."""
     try:

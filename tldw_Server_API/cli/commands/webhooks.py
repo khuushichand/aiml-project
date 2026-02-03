@@ -3,14 +3,11 @@ Webhook management commands for tldw Evaluations CLI.
 """
 
 import sys
-from typing import List
 
 import click
 from loguru import logger
 
-from tldw_Server_API.cli.utils.output import (
-    print_error, print_success, print_info, print_table, print_json
-)
+from tldw_Server_API.cli.utils.output import print_error, print_info, print_json, print_success, print_table
 
 
 @click.group()
@@ -31,7 +28,7 @@ def register_webhook(ctx, url, events, user):
     try:
         cli_context.load_config()
 
-        from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
+        from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent, webhook_manager
 
         # Parse events
         if events:

@@ -12,13 +12,11 @@ Provides a comprehensive command-line interface for:
 """
 
 import sys
-import os
 from pathlib import Path
 from typing import Optional
 
 import click
 from loguru import logger
-from rich.console import Console
 from rich.traceback import install as install_rich_traceback
 
 # Install rich traceback for better error display
@@ -29,18 +27,18 @@ project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from tldw_Server_API.cli.utils.output import console, print_error, print_success, print_info
-from tldw_Server_API.cli.utils.config import load_cli_config, ConfigError
+from tldw_Server_API.cli.commands.config import config_group
+from tldw_Server_API.cli.commands.database import db_group
+from tldw_Server_API.cli.commands.evaluation import eval_group
+from tldw_Server_API.cli.commands.export import export_group
 
 # Import command groups
 from tldw_Server_API.cli.commands.health import health_group
-from tldw_Server_API.cli.commands.evaluation import eval_group
-from tldw_Server_API.cli.commands.database import db_group
-from tldw_Server_API.cli.commands.config import config_group
+from tldw_Server_API.cli.commands.testing import test_group
 from tldw_Server_API.cli.commands.users import users_group
 from tldw_Server_API.cli.commands.webhooks import webhook_group
-from tldw_Server_API.cli.commands.testing import test_group
-from tldw_Server_API.cli.commands.export import export_group
+from tldw_Server_API.cli.utils.config import ConfigError, load_cli_config
+from tldw_Server_API.cli.utils.output import print_error, print_info
 
 
 # Global CLI context

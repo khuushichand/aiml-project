@@ -8,14 +8,12 @@ at startup on Postgres backends. They complement the SQLite migrations in
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-
 import json
+from typing import Any
 
 from loguru import logger
 
-from .database import get_db_pool, DatabasePool
-
+from .database import DatabasePool, get_db_pool
 
 _BUDGET_FIELD_KEYS = {
     "budget_day_usd",
@@ -950,7 +948,7 @@ _CREATE_VK_COUNTERS = [
 ]
 
 
-async def ensure_tool_catalogs_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
+async def ensure_tool_catalogs_tables_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure tool catalogs tables exist on PostgreSQL backends.
 
     Returns True if ensured (or not needed), False if skipped due to non-PG backend.
@@ -976,7 +974,7 @@ async def ensure_tool_catalogs_tables_pg(pool: Optional[DatabasePool] = None) ->
         return False
 
 
-async def ensure_privilege_snapshots_table_pg(pool: Optional[DatabasePool] = None) -> bool:
+async def ensure_privilege_snapshots_table_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure privilege_snapshots table exists for PostgreSQL backends."""
     try:
         db_pool = pool or await get_db_pool()
@@ -994,7 +992,7 @@ async def ensure_privilege_snapshots_table_pg(pool: Optional[DatabasePool] = Non
         return False
 
 
-async def ensure_authnz_core_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
+async def ensure_authnz_core_tables_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure core AuthNZ tables exist for PostgreSQL backends.
 
     This covers audit_logs, sessions, registration_codes, RBAC tables,
@@ -1021,7 +1019,7 @@ async def ensure_authnz_core_tables_pg(pool: Optional[DatabasePool] = None) -> b
         return False
 
 
-def _parse_json_payload_pg(raw: Any) -> Dict[str, Any]:
+def _parse_json_payload_pg(raw: Any) -> dict[str, Any]:
     if raw is None:
         return {}
     if isinstance(raw, dict):
@@ -1036,12 +1034,12 @@ def _parse_json_payload_pg(raw: Any) -> Dict[str, Any]:
     return {}
 
 
-def _normalize_threshold_list_pg(values: Any) -> Optional[List[int]]:
+def _normalize_threshold_list_pg(values: Any) -> list[int] | None:
     if not isinstance(values, list):
         return None
     if not values:
         return None
-    cleaned: List[int] = []
+    cleaned: list[int] = []
     for val in values:
         try:
             num = int(val)
@@ -1055,13 +1053,13 @@ def _normalize_threshold_list_pg(values: Any) -> Optional[List[int]]:
     return sorted(set(cleaned))
 
 
-def _coerce_alert_thresholds_pg(value: Any) -> Optional[Dict[str, Any]]:
+def _coerce_alert_thresholds_pg(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
     if isinstance(value, list):
         return {"global": value}
     if isinstance(value, dict):
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         if "global" in value:
             out["global"] = value.get("global")
         if "per_metric" in value:
@@ -1070,13 +1068,13 @@ def _coerce_alert_thresholds_pg(value: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _coerce_enforcement_mode_pg(value: Any) -> Optional[Dict[str, Any]]:
+def _coerce_enforcement_mode_pg(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
     if isinstance(value, str):
         return {"global": value}
     if isinstance(value, dict):
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         if "global" in value:
             out["global"] = value.get("global")
         if "per_metric" in value:
@@ -1085,11 +1083,11 @@ def _coerce_enforcement_mode_pg(value: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _normalize_alert_thresholds_pg(value: Any) -> Optional[Dict[str, Any]]:
+def _normalize_alert_thresholds_pg(value: Any) -> dict[str, Any] | None:
     payload = _coerce_alert_thresholds_pg(value)
     if payload is None:
         return None
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     global_values = payload.get("global")
     if global_values is not None:
         normalized = _normalize_threshold_list_pg(global_values)
@@ -1097,7 +1095,7 @@ def _normalize_alert_thresholds_pg(value: Any) -> Optional[Dict[str, Any]]:
             out["global"] = normalized
     per_metric = payload.get("per_metric")
     if isinstance(per_metric, dict):
-        cleaned: Dict[str, Any] = {}
+        cleaned: dict[str, Any] = {}
         for key, values in per_metric.items():
             if key not in _BUDGET_FIELD_KEYS:
                 continue
@@ -1109,17 +1107,17 @@ def _normalize_alert_thresholds_pg(value: Any) -> Optional[Dict[str, Any]]:
     return out or None
 
 
-def _normalize_enforcement_mode_pg(value: Any) -> Optional[Dict[str, Any]]:
+def _normalize_enforcement_mode_pg(value: Any) -> dict[str, Any] | None:
     payload = _coerce_enforcement_mode_pg(value)
     if payload is None:
         return None
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     global_value = payload.get("global")
     if isinstance(global_value, str) and global_value in {"none", "soft", "hard"}:
         out["global"] = global_value
     per_metric = payload.get("per_metric")
     if isinstance(per_metric, dict):
-        cleaned: Dict[str, Any] = {}
+        cleaned: dict[str, Any] = {}
         for key, val in per_metric.items():
             if key not in _BUDGET_FIELD_KEYS:
                 continue
@@ -1130,17 +1128,17 @@ def _normalize_enforcement_mode_pg(value: Any) -> Optional[Dict[str, Any]]:
     return out or None
 
 
-def _normalize_budget_payload_pg(raw: Any) -> Dict[str, Any]:
+def _normalize_budget_payload_pg(raw: Any) -> dict[str, Any]:
     data = _parse_json_payload_pg(raw)
     if not data:
         return {}
-    budgets: Dict[str, Any] = {}
+    budgets: dict[str, Any] = {}
     if isinstance(data.get("budgets"), dict):
         budgets.update(data.get("budgets") or {})
     for key in _BUDGET_FIELD_KEYS:
         if key in data and key not in budgets:
             budgets[key] = data[key]
-    payload: Dict[str, Any] = {}
+    payload: dict[str, Any] = {}
     for key in _BUDGET_FIELD_KEYS:
         if key in budgets:
             payload[key] = budgets[key]
@@ -1251,7 +1249,7 @@ async def _normalize_org_budgets_pg(db_pool: DatabasePool) -> None:
 
 
 async def ensure_billing_tables_pg(
-    pool: Optional[DatabasePool] = None,
+    pool: DatabasePool | None = None,
     *,
     run_backfill: bool = True,
 ) -> bool:
@@ -1431,7 +1429,7 @@ async def ensure_billing_tables_pg(
         return False
 
 
-async def ensure_api_keys_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
+async def ensure_api_keys_tables_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure api_keys + api_key_audit_log tables exist for PostgreSQL backends.
 
     Returns True when ensured (or already present), False when skipped due to a non-PG backend.
@@ -1498,7 +1496,7 @@ async def ensure_api_keys_tables_pg(pool: Optional[DatabasePool] = None) -> bool
         return False
 
 
-async def ensure_user_provider_secrets_pg(pool: Optional[DatabasePool] = None) -> bool:
+async def ensure_user_provider_secrets_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure user_provider_secrets table exists for PostgreSQL backends."""
     try:
         db_pool = pool or await get_db_pool()
@@ -1524,7 +1522,7 @@ async def ensure_user_provider_secrets_pg(pool: Optional[DatabasePool] = None) -
         return False
 
 
-async def ensure_org_provider_secrets_pg(pool: Optional[DatabasePool] = None) -> bool:
+async def ensure_org_provider_secrets_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure org_provider_secrets table exists for PostgreSQL backends."""
     try:
         db_pool = pool or await get_db_pool()
@@ -1550,7 +1548,7 @@ async def ensure_org_provider_secrets_pg(pool: Optional[DatabasePool] = None) ->
         return False
 
 
-async def ensure_llm_provider_overrides_pg(pool: Optional[DatabasePool] = None) -> bool:
+async def ensure_llm_provider_overrides_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure llm_provider_overrides table exists for PostgreSQL backends."""
     try:
         db_pool = pool or await get_db_pool()
@@ -1569,7 +1567,7 @@ async def ensure_llm_provider_overrides_pg(pool: Optional[DatabasePool] = None) 
         logger.warning(f"Failed to ensure PostgreSQL llm_provider_overrides table: {exc}")
         return False
 
-async def ensure_usage_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
+async def ensure_usage_tables_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure usage and LLM usage tables exist for PostgreSQL backends.
 
     Mirrors the SQLite migrations (usage_log/usage_daily, llm_usage_log/llm_usage_daily)
@@ -1592,7 +1590,7 @@ async def ensure_usage_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
         return False
 
 
-async def ensure_virtual_key_counters_pg(pool: Optional[DatabasePool] = None) -> bool:
+async def ensure_virtual_key_counters_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure virtual-key counter tables exist for PostgreSQL backends.
 
     These tables back cross-instance quota counters for JWTs and API keys.

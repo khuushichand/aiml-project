@@ -1,17 +1,15 @@
 # monitoring.py
 # Monitoring and metrics integration for Prompt Studio
 
-from typing import Dict, Any, Optional, List
-from contextlib import contextmanager
 import os
 import time
+from contextlib import contextmanager
 from datetime import datetime
+from typing import Any
+
 from loguru import logger
 
-from tldw_Server_API.app.core.Metrics.metrics_manager import (
-    MetricsRegistry, MetricDefinition, MetricType
-)
-from tldw_Server_API.app.core.Metrics.decorators import track_metrics, monitor_resource
+from tldw_Server_API.app.core.Metrics.metrics_manager import MetricDefinition, MetricsRegistry, MetricType
 from tldw_Server_API.app.core.Metrics.traces import trace_operation
 
 ########################################################################################################################
@@ -774,7 +772,7 @@ class PromptStudioHealthCheck:
         self.websocket_manager = websocket_manager
         self.metrics = PromptStudioMetrics()
 
-    def check_health(self) -> Dict[str, Any]:
+    def check_health(self) -> dict[str, Any]:
         """
         Check health of Prompt Studio components.
 
@@ -865,7 +863,7 @@ class PromptStudioHealthCheck:
 
         return health
 
-    def get_metrics_summary(self) -> Dict[str, Any]:
+    def get_metrics_summary(self) -> dict[str, Any]:
         """
         Get summary of current metrics.
 

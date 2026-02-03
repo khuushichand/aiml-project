@@ -13,9 +13,7 @@ from __future__ import annotations
 import os
 import socket
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
-
-from loguru import logger as default_logger
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from loguru import Logger
@@ -23,7 +21,7 @@ if TYPE_CHECKING:
 
 # Unified denylist of CLI arguments that should not be passed directly
 # (secrets should be passed via environment variables instead)
-DEFAULT_SECRET_DENYLIST: Set[str] = {
+DEFAULT_SECRET_DENYLIST: set[str] = {
     "api_key",
     "hf_token",
     "token",
@@ -31,7 +29,7 @@ DEFAULT_SECRET_DENYLIST: Set[str] = {
     "anthropic_api_key",
 }
 
-WILDCARD_HOSTS: Set[str] = {
+WILDCARD_HOSTS: set[str] = {
     "0.0.0.0",
     "::",
     "0:0:0:0:0:0:0:0",
@@ -46,7 +44,7 @@ def strip_host_brackets(host: str) -> str:
     return h
 
 
-def resolve_client_host(host: Optional[str]) -> str:
+def resolve_client_host(host: str | None) -> str:
     """Resolve a bind host to a usable client connect host.
 
     Wildcard bind hosts map to loopback for readiness/inference calls.
@@ -71,7 +69,7 @@ def build_base_url(host: str, port: int) -> str:
     return f"http://{format_host_for_url(host)}:{int(port)}"
 
 
-def env_bool(name: str) -> Optional[bool]:
+def env_bool(name: str) -> bool | None:
     """Parse a boolean value from an environment variable.
 
     Returns True for "1", "true", "yes", "on" (case-insensitive).
@@ -89,7 +87,7 @@ def env_bool(name: str) -> Optional[bool]:
     return None
 
 
-def env_int(name: str) -> Optional[int]:
+def env_int(name: str) -> int | None:
     """Parse an integer value from an environment variable.
 
     Returns None if the variable is not set or cannot be parsed.
@@ -103,7 +101,7 @@ def env_int(name: str) -> Optional[int]:
         return None
 
 
-def env_paths(name: str) -> Optional[List[Path]]:
+def env_paths(name: str) -> list[Path] | None:
     """Parse a comma-separated list of paths from an environment variable.
 
     Returns None if the variable is not set or empty.
@@ -164,7 +162,7 @@ def pick_port(
 
 def is_path_allowed(
     path: Path,
-    base_dirs: List[Path],
+    base_dirs: list[Path],
 ) -> bool:
     """Check if a path is under one of the allowed base directories.
 
@@ -197,8 +195,8 @@ def is_path_allowed(
 
 def build_allowed_paths(
     models_dir: Path,
-    extra_paths: Optional[List[Path]] = None,
-) -> List[Path]:
+    extra_paths: list[Path] | None = None,
+) -> list[Path]:
     """Build a list of allowed base paths for security checks.
 
     Args:
@@ -215,9 +213,9 @@ def build_allowed_paths(
 
 
 def check_denylist(
-    args: Dict[str, Any],
+    args: dict[str, Any],
     allow_secrets: bool = False,
-    denylist: Optional[Set[str]] = None,
+    denylist: set[str] | None = None,
 ) -> None:
     """Check if any arguments are in the denylist.
 

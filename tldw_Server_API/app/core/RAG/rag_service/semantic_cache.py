@@ -5,22 +5,21 @@ This module provides semantic similarity-based caching that can find
 cached results for semantically similar queries, not just exact matches.
 """
 
-import time
 import asyncio
 import hashlib
-import pickle
 import json
 import os
 import re
-from typing import Dict, Optional, Any, List, Tuple, Type
-from dataclasses import dataclass, field
 import threading
-import numpy as np
+import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Optional, cast
 
+import numpy as np
 from loguru import logger
 
-from .advanced_cache import CacheEntry, MemoryCache
+from .advanced_cache import CacheEntry
 
 
 @dataclass
@@ -79,8 +78,8 @@ class SemanticCache:
         self.embedding_model = embedding_model
 
         # Main cache storage
-        self._cache: Dict[str, SemanticCacheEntry] = {}
-        self._embeddings: Dict[str, np.ndarray] = {}
+        self._cache: dict[str, SemanticCacheEntry] = {}
+        self._embeddings: dict[str, np.ndarray] = {}
         self._lock = threading.RLock()
 
         # Statistics
@@ -133,12 +132,13 @@ class SemanticCache:
                 logger.warning(f"Embedding model does not have expected interface: {type(self.embedding_model)}")
                 return None
 
+            embedding_array = np.asarray(embedding)
             # Normalize the embedding
-            norm = np.linalg.norm(embedding)
+            norm = np.linalg.norm(embedding_array)
             if norm > 0:
-                embedding = embedding / norm
+                embedding_array = embedding_array / norm
 
-            return embedding
+            return embedding_array
         except Exception as e:
             logger.error(f"Failed to generate embedding: {e}")
             return None
@@ -162,9 +162,9 @@ class SemanticCache:
         if norm1 == 0 or norm2 == 0:
             return 0.0
 
-        return dot_product / (norm1 * norm2)
+        return float(dot_product / (norm1 * norm2))
 
-    async def find_similar(self, query: str, embedding: Optional[np.ndarray] = None) -> Optional[Tuple[str, float]]:
+    async def find_similar(self, query: str, embedding: Optional[np.ndarray] = None) -> Optional[tuple[str, float]]:
         """
         Find most similar cached query.
 
@@ -271,7 +271,7 @@ class SemanticCache:
         query: str,
         value: Any,
         ttl: Optional[int] = None,
-        metadata: Optional[Dict] = None
+        metadata: Optional[dict] = None
     ) -> None:
         """
         Cache a query result.
@@ -345,14 +345,14 @@ class SemanticCache:
             self._exact_hits = 0
             logger.info("Semantic cache cleared")
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
         with self._lock:
             total_requests = self._hits + self._misses
             hit_rate = self._hits / total_requests if total_requests > 0 else 0
             semantic_hit_rate = self._semantic_hits / self._hits if self._hits > 0 else 0
 
-            stats = {
+            stats: dict[str, Any] = {
                 "size": len(self._cache),
                 "max_size": self.max_size,
                 "total_hits": self._hits,
@@ -395,7 +395,7 @@ class SemanticCache:
         try:
             with self._lock:
                 # Prepare serializable state
-                state = {
+                state: dict[str, Any] = {
                     "cache": {},
                     "stats": {
                         "hits": self._hits,
@@ -424,7 +424,8 @@ class SemanticCache:
                 # Save embeddings separately as binary
                 embeddings_path = Path(self.persist_path).with_suffix('.embeddings.npz')
                 if self._embeddings:
-                    np.savez_compressed(embeddings_path, **self._embeddings)
+                    savez = cast(Any, np.savez_compressed)
+                    savez(embeddings_path, **self._embeddings)
 
                 # Save main state as JSON
                 with open(self.persist_path, 'w') as f:
@@ -503,9 +504,9 @@ class AdaptiveCache(SemanticCache):
         super().__init__(*args, **kwargs)
 
         # Pattern tracking
-        self._query_patterns: Dict[str, int] = {}
-        self._similarity_scores: List[float] = []
-        self._ttl_effectiveness: Dict[str, float] = {}
+        self._query_patterns: dict[str, int] = {}
+        self._similarity_scores: list[float] = []
+        self._ttl_effectiveness: dict[str, float] = {}
 
         # Adaptive parameters
         self._adaptive_threshold = self.similarity_threshold
@@ -550,7 +551,7 @@ class AdaptiveCache(SemanticCache):
                 self.similarity_threshold = self._adaptive_threshold
                 logger.info(f"Raised similarity threshold to {self._adaptive_threshold:.2f}")
 
-    def get_patterns(self) -> List[Tuple[str, int]]:
+    def get_patterns(self) -> list[tuple[str, int]]:
         """Get most common query patterns."""
         with self._lock:
             return sorted(
@@ -559,7 +560,7 @@ class AdaptiveCache(SemanticCache):
                 reverse=True
             )[:10]
 
-    def suggest_prefetch(self) -> List[str]:
+    def suggest_prefetch(self) -> list[str]:
         """Suggest queries to prefetch based on patterns."""
         patterns = self.get_patterns()
         suggestions = []
@@ -572,7 +573,7 @@ class AdaptiveCache(SemanticCache):
 
 
 _SHARED_CACHE_LOCK = threading.Lock()
-_SHARED_CACHES: Dict[Tuple[Type[SemanticCache], str, float, Optional[int], Optional[int], Optional[str]], SemanticCache] = {}
+_SHARED_CACHES: dict[tuple[type[SemanticCache], str, float, Optional[int], Optional[int], Optional[str]], SemanticCache] = {}
 _DEFAULT_CACHE_DIR: Optional[Path] = None
 
 
@@ -610,7 +611,7 @@ def _resolve_default_cache_dir() -> Optional[Path]:
         return _DEFAULT_CACHE_DIR
     project_root = None
     try:
-        from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+        from tldw_Server_API.app.core.config import load_and_log_configs
         cfg = load_and_log_configs() or {}
         project_root = cfg.get("PROJECT_ROOT")
     except (ImportError, AttributeError, KeyError, TypeError) as exc:
@@ -762,7 +763,7 @@ def _sanitize_persist_path(persist_path: Optional[str], namespace_key: str) -> O
 
 
 def get_shared_cache(
-    cache_cls: Type[SemanticCache],
+    cache_cls: type[SemanticCache],
     *,
     similarity_threshold: float,
     ttl: Optional[int],
@@ -795,7 +796,7 @@ def get_shared_cache(
                     namespace=namespace,
                 )
             except TypeError:
-                cache = cache_cls(similarity_threshold=similarity_threshold)  # type: ignore[call-arg]
+                cache = cache_cls(similarity_threshold=similarity_threshold)
             _SHARED_CACHES[cache_key] = cache
     return cache
 

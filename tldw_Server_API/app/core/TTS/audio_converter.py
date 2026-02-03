@@ -7,14 +7,16 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Any, Optional
+
 #
 # Third-party Imports
-import numpy as np
 from loguru import logger
+
 #
 # Local Imports
 from .tts_exceptions import TTSError
+
 #
 #######################################################################################################################
 #
@@ -99,7 +101,7 @@ class AudioConverter:
         output_path: Path,
         chapter_titles: list[str],
         *,
-        metadata: Optional[Dict[str, str]] = None,
+        metadata: Optional[dict[str, str]] = None,
     ) -> bool:
         if not input_paths:
             logger.error("No input files provided for M4B packaging")
@@ -110,7 +112,7 @@ class AudioConverter:
         list_path = AudioConverter._write_concat_list(input_paths)
         meta_file = tempfile.NamedTemporaryFile(delete=False, suffix=".ffmeta")
         try:
-            durations_ms: List[int] = []
+            durations_ms: list[int] = []
             for path in input_paths:
                 duration = await AudioConverter.get_duration(path)
                 durations_ms.append(max(1, int(round(duration * 1000))))
@@ -153,7 +155,7 @@ class AudioConverter:
     def _build_ffmetadata(
         chapter_titles: list[str],
         chapter_durations_ms: list[int],
-        metadata: Optional[Dict[str, str]] = None,
+        metadata: Optional[dict[str, str]] = None,
     ) -> str:
         lines = [";FFMETADATA1"]
         if metadata:
@@ -321,7 +323,7 @@ class AudioConverter:
         file_path: Path,
         min_seconds: float = 0,
         max_seconds: float = float('inf')
-    ) -> Tuple[bool, float]:
+    ) -> tuple[bool, float]:
         """
         Check if audio duration is within specified range.
 
@@ -388,7 +390,7 @@ class AudioConverter:
             return 0.0
 
     @staticmethod
-    async def get_audio_info(file_path: Path) -> Dict[str, Any]:
+    async def get_audio_info(file_path: Path) -> dict[str, Any]:
         """
         Get detailed audio file information.
 
@@ -521,7 +523,7 @@ class AudioConverter:
     def _build_atempo_filter(speed_ratio: float) -> str:
         if speed_ratio <= 0:
             raise ValueError("speed_ratio must be positive")
-        factors: List[float] = []
+        factors: list[float] = []
         remaining = speed_ratio
         while remaining > 2.0:
             factors.append(2.0)
@@ -758,7 +760,7 @@ class AudioConverter:
 
 
 # Utility function for quick checks
-async def validate_audio_tools() -> Tuple[bool, str]:
+async def validate_audio_tools() -> tuple[bool, str]:
     """
     Validate that required audio processing tools are installed.
 

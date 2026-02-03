@@ -1,8 +1,9 @@
 # paper_search_schemas.py
 # Pydantic models and FastAPI request forms for provider-specific paper search.
 
-from typing import Optional, Dict, Any, List
+from typing import Any, Optional
 from uuid import UUID
+
 from fastapi import Query
 from pydantic import BaseModel
 
@@ -21,8 +22,8 @@ class BioRxivPaper(BaseModel):
 
 
 class BioRxivSearchResponse(BaseModel):
-    query_echo: Dict[str, Any]
-    items: List[BioRxivPaper]
+    query_echo: dict[str, Any]
+    items: list[BioRxivPaper]
     total_results: int
     page: int
     results_per_page: int
@@ -73,8 +74,8 @@ class BioRxivPublishedRecord(BaseModel):
 
 
 class BioRxivPubsSearchResponse(BaseModel):
-    query_echo: Dict[str, Any]
-    items: List[BioRxivPublishedRecord]
+    query_echo: dict[str, Any]
+    items: list[BioRxivPublishedRecord]
     total_results: int
     page: int
     results_per_page: int
@@ -122,8 +123,8 @@ class PubMedPaper(BaseModel):
 
 
 class PubMedSearchResponse(BaseModel):
-    query_echo: Dict[str, Any]
-    items: List[PubMedPaper]
+    query_echo: dict[str, Any]
+    items: list[PubMedPaper]
     total_results: int
     page: int
     results_per_page: int
@@ -153,15 +154,15 @@ class PubMedSearchRequestForm:
 class PMCOAIHeader(BaseModel):
     identifier: Optional[str] = None
     datestamp: Optional[str] = None
-    setSpecs: Optional[List[str]] = None
+    setSpecs: Optional[list[str]] = None
 
 
 class PMCOAIMetadata(BaseModel):
     title: Optional[str] = None
-    creators: Optional[List[str]] = None
-    identifiers: Optional[List[str]] = None
-    rights: Optional[List[str]] = None
-    license_urls: Optional[List[str]] = None
+    creators: Optional[list[str]] = None
+    identifiers: Optional[list[str]] = None
+    rights: Optional[list[str]] = None
+    license_urls: Optional[list[str]] = None
     date: Optional[str] = None
     pmcid: Optional[str] = None
     pmid: Optional[str] = None
@@ -175,14 +176,14 @@ class PMCOAIRecord(BaseModel):
 
 
 class PMCOAIListResponse(BaseModel):
-    query_echo: Dict[str, Any]
-    items: List[PMCOAIRecord]
+    query_echo: dict[str, Any]
+    items: list[PMCOAIRecord]
     resumption_token: Optional[str] = None
 
 
 class PMCOAIIdentifiersResponse(BaseModel):
-    query_echo: Dict[str, Any]
-    items: List[PMCOAIHeader]
+    query_echo: dict[str, Any]
+    items: list[PMCOAIHeader]
     resumption_token: Optional[str] = None
 
 
@@ -192,13 +193,13 @@ class PMCOAISet(BaseModel):
 
 
 class PMCOAIListSetsResponse(BaseModel):
-    query_echo: Dict[str, Any]
-    items: List[PMCOAISet]
+    query_echo: dict[str, Any]
+    items: list[PMCOAISet]
     resumption_token: Optional[str] = None
 
 
 class PMCOAIIdentifyResponse(BaseModel):
-    info: Dict[str, Any]
+    info: dict[str, Any]
 
 
 # ---------------- PMC OA Web Service Schemas ----------------
@@ -214,17 +215,17 @@ class PMCOARecord(BaseModel):
     citation: Optional[str] = None
     license: Optional[str] = None
     retracted: Optional[bool] = None
-    links: List[PMCOALink] = []
+    links: list[PMCOALink] = []
 
 
 class PMCOAQueryResponse(BaseModel):
-    query_echo: Dict[str, Any]
-    items: List[PMCOARecord]
+    query_echo: dict[str, Any]
+    items: list[PMCOARecord]
     resumption_token: Optional[str] = None
 
 
 class PMCOAIdentifyResponse(BaseModel):
-    info: Dict[str, Any]
+    info: dict[str, Any]
 
 
 # ---------------- Additional Provider Schemas (Scaffold) ----------------
@@ -243,8 +244,8 @@ class GenericPaper(BaseModel):
 
 
 class GenericSearchResponse(BaseModel):
-    query_echo: Dict[str, Any]
-    items: List[GenericPaper]
+    query_echo: dict[str, Any]
+    items: list[GenericPaper]
     total_results: int
     page: int
     results_per_page: int
@@ -320,8 +321,8 @@ class BioRxivFunderPaper(BaseModel):
 
 
 class BioRxivFunderSearchResponse(BaseModel):
-    query_echo: Dict[str, Any]
-    items: List[BioRxivFunderPaper]
+    query_echo: dict[str, Any]
+    items: list[BioRxivFunderPaper]
     total_results: int
     page: int
     results_per_page: int
@@ -400,8 +401,8 @@ class BioRxivSummaryItem(BaseModel):
 
 
 class BioRxivSummaryResponse(BaseModel):
-    query_echo: Dict[str, Any]
-    items: List[BioRxivSummaryItem]
+    query_echo: dict[str, Any]
+    items: list[BioRxivSummaryItem]
 
 
 class BioRxivSummaryRequestForm:
@@ -420,8 +421,8 @@ class BioRxivUsageItem(BaseModel):
 
 
 class BioRxivUsageResponse(BaseModel):
-    query_echo: Dict[str, Any]
-    items: List[BioRxivUsageItem]
+    query_echo: dict[str, Any]
+    items: list[BioRxivUsageItem]
 
 
 class BioRxivUsageRequestForm:
@@ -460,8 +461,8 @@ class ChemRxivSearchRequestForm:
 # ---------------- IACR Schemas ----------------
 
 class IacrConferenceResponse(BaseModel):
-    query_echo: Dict[str, Any]
-    data: Dict[str, Any]
+    query_echo: dict[str, Any]
+    data: dict[str, Any]
 
 
 # ---------------- Ingest Batch Schemas ----------------
@@ -473,11 +474,11 @@ class IngestBatchItem(BaseModel):
     arxiv_id: Optional[str] = None
     title: Optional[str] = None
     author: Optional[str] = None
-    keywords: Optional[List[str]] = None
+    keywords: Optional[list[str]] = None
 
 
 class IngestBatchRequest(BaseModel):
-    items: List[IngestBatchItem]
+    items: list[IngestBatchItem]
     perform_chunking: bool = True
     parser: Optional[str] = "pymupdf4llm"
     chunk_method: Optional[str] = None
@@ -509,7 +510,7 @@ class IngestBatchResultItem(BaseModel):
 
 
 class IngestBatchResponse(BaseModel):
-    results: List[IngestBatchResultItem]
+    results: list[IngestBatchResultItem]
     succeeded: int
     failed: int
 

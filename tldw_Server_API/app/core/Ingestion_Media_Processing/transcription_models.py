@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 
-def get_transcription_models_payload() -> Dict[str, Any]:
+def get_transcription_models_payload() -> dict[str, Any]:
     """
     Return the static transcription models payload used by /media endpoints.
 
     Centralizing this here allows both the legacy and modular endpoints
     to share the same definitions without duplicating data.
     """
-    models_by_category: Dict[str, List[Dict[str, str]]] = {
+    models_by_category: dict[str, list[dict[str, str]]] = {
         "Whisper Models": [
             {
                 "value": "whisper-tiny",
@@ -207,7 +207,7 @@ def get_transcription_models_payload() -> Dict[str, Any]:
         ],
     }
 
-    flat_values: List[str] = []
+    flat_values: list[str] = []
     for category_models in models_by_category.values():
         flat_values.extend(model["value"] for model in category_models)
 

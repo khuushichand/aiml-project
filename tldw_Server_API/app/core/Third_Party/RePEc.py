@@ -20,13 +20,10 @@ Notes
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional, Tuple
-from tldw_Server_API.app.core.http_client import fetch
 import xml.etree.ElementTree as ET
+from typing import Any
 
-
-
-
+from tldw_Server_API.app.core.http_client import fetch
 
 # ---------------- IDEAS (RePEc) API: handle -> reference metadata ----------------
 
@@ -36,7 +33,7 @@ def _repec_not_configured() -> str:
     )
 
 
-def _normalize_getref_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_getref_payload(obj: dict[str, Any]) -> dict[str, Any]:
     """Normalize a single getref JSON object to GenericPaper shape.
 
     Based on API examples documented on IDEAS (title, author string, abstract,
@@ -55,7 +52,7 @@ def _normalize_getref_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
     pub_date = creationdate or revisiondate
 
     # Attempt to find a PDF link from link array
-    pdf_url: Optional[str] = None
+    pdf_url: str | None = None
     for lk in (obj.get("link") or []):
         try:
             if (lk.get("function") or "").lower() == "full text":
@@ -80,7 +77,7 @@ def _normalize_getref_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_ref_by_handle(handle: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_ref_by_handle(handle: str) -> tuple[dict[str, Any] | None, str | None]:
     """Lookup a single RePEc item by handle using IDEAS API (`getref`).
 
     Requires env var `REPEC_API_CODE`.
@@ -96,7 +93,7 @@ def get_ref_by_handle(handle: str) -> Tuple[Optional[Dict[str, Any]], Optional[s
         # Example function: getref; parameters: code, handle
         # If this endpoint shape changes, adapt the URL/params accordingly.
         url = "https://ideas.repec.org/cgi-bin/getref.cgi"
-        params: Dict[str, Any] = {"code": code, "handle": handle}
+        params: dict[str, Any] = {"code": code, "handle": handle}
         r = fetch(method="GET", url=url, params=params, timeout=20, headers={"Accept-Encoding": "gzip, deflate"})
         if r.status_code == 404:
             return None, None
@@ -121,7 +118,7 @@ def get_ref_by_handle(handle: str) -> Tuple[Optional[Dict[str, Any]], Optional[s
 _CITEC_BASE = "http://citec.repec.org/api"
 
 
-def get_citations_plain(handle: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_citations_plain(handle: str) -> tuple[dict[str, Any] | None, str | None]:
     """Fetch citation summary for a RePEc handle using CitEc `plain` endpoint.
 
     Returns a dict like: {"handle", "cited_by", "cites", "uri", "date"}
@@ -142,7 +139,7 @@ def get_citations_plain(handle: str) -> Tuple[Optional[Dict[str, Any]], Optional
             # Some responses may be HTML-wrapped or XSL transformed; treat as error
             return None, "CitEc response not XML in 'plain' mode."
         # Expected structure: <citationData id="..."><date>...</date><uri>...</uri><citedBy>n</citedBy><cites>m</cites></citationData>
-        out: Dict[str, Any] = {"handle": None, "cited_by": 0, "cites": 0, "uri": None, "date": None}
+        out: dict[str, Any] = {"handle": None, "cited_by": 0, "cites": 0, "uri": None, "date": None}
         if root.tag == "errorString":
             return None, root.text or "CitEc error"
         if root.tag != "citationData":
@@ -173,7 +170,7 @@ def get_citations_plain(handle: str) -> Tuple[Optional[Dict[str, Any]], Optional
         return None, f"CitEc error: {str(e)}"
 
 
-def get_citations_amf_raw(handle: str) -> Tuple[Optional[str], Optional[str]]:
+def get_citations_amf_raw(handle: str) -> tuple[str | None, str | None]:
     """Fetch the AMF record for citations/references for a handle.
 
     Returns (xml_text, error_message). On success, xml_text is a string.

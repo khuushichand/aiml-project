@@ -9,7 +9,11 @@ from tldw_Server_API.app.core.Chat.chat_service import build_context_and_message
 
 
 @pytest.mark.asyncio
-async def test_history_dedup_when_request_includes_history(populated_chacha_db):
+@pytest.mark.unit
+async def test_history_dedup_when_request_includes_history(
+    populated_chacha_db: object,
+) -> None:
+    """Ensure request history does not duplicate stored messages."""
     loop = asyncio.get_running_loop()
     metrics = get_chat_metrics()
 
@@ -68,7 +72,12 @@ async def test_history_dedup_when_request_includes_history(populated_chacha_db):
 
 
 @pytest.mark.asyncio
-async def test_history_dedup_user_only_enabled(populated_chacha_db, monkeypatch):
+@pytest.mark.unit
+async def test_history_dedup_user_only_enabled(
+    populated_chacha_db: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure trailing user overlap is trimmed when the flag is enabled."""
     monkeypatch.setenv("CHAT_TRIM_USER_ONLY_OVERLAP", "1")
     loop = asyncio.get_running_loop()
     metrics = get_chat_metrics()
@@ -128,7 +137,12 @@ async def test_history_dedup_user_only_enabled(populated_chacha_db, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_history_dedup_user_only_disabled(populated_chacha_db, monkeypatch):
+@pytest.mark.unit
+async def test_history_dedup_user_only_disabled(
+    populated_chacha_db: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure trailing user overlap is persisted when the flag is disabled."""
     monkeypatch.setenv("CHAT_TRIM_USER_ONLY_OVERLAP", "0")
     loop = asyncio.get_running_loop()
     metrics = get_chat_metrics()

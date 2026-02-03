@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters._common import resolve_context_user_id
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.llm._config import (
     ModerationConfig,
     PolicyCheckConfig,
@@ -28,7 +28,7 @@ from tldw_Server_API.app.core.Workflows.adapters.llm._config import (
     tags=["moderation", "safety"],
     config_model=ModerationConfig,
 )
-async def run_moderation_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_moderation_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Check or redact text content using the moderation service.
 
     Config:
@@ -175,7 +175,7 @@ async def run_moderation_adapter(config: Dict[str, Any], context: Dict[str, Any]
     tags=["moderation", "pii", "policy"],
     config_model=PolicyCheckConfig,
 )
-async def run_policy_check_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_policy_check_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Policy/PII gate step.
 
     Config:
@@ -220,7 +220,7 @@ async def run_policy_check_adapter(config: Dict[str, Any], context: Dict[str, An
     except Exception:
         text = str(text or "")
 
-    flags: Dict[str, Any] = {"pii": {}, "block_words": [], "too_long": False}
+    flags: dict[str, Any] = {"pii": {}, "block_words": [], "too_long": False}
     reasons: list[str] = []
     blocked = False
 
@@ -260,7 +260,7 @@ async def run_policy_check_adapter(config: Dict[str, Any], context: Dict[str, An
     except Exception:
         pass
 
-    out: Dict[str, Any] = {"flags": flags, "blocked": blocked, "reasons": reasons}
+    out: dict[str, Any] = {"flags": flags, "blocked": blocked, "reasons": reasons}
     if redact_preview and text:
         try:
             from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector

@@ -2,13 +2,15 @@
 # Description: Database migrations for AuthNZ module tables
 #
 # Imports
-from typing import Any, Dict, List, Optional
-import sqlite3
 import json
+import sqlite3
 from pathlib import Path
+from typing import Any, Optional
+
 #
 # 3rd-party imports
 from loguru import logger
+
 #
 # Local imports
 from tldw_Server_API.app.core.DB_Management.migrations import Migration, MigrationManager
@@ -2363,13 +2365,13 @@ def migration_042_create_org_budgets(conn: sqlite3.Connection) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_org_budgets_org ON org_budgets(org_id)")
 
-    def _normalize_alert_thresholds(value: Any) -> Optional[Dict[str, Any]]:
+    def _normalize_alert_thresholds(value: Any) -> Optional[dict[str, Any]]:
         if value is None:
             return None
         if isinstance(value, list):
             return {"global": value}
         if isinstance(value, dict):
-            out: Dict[str, Any] = {}
+            out: dict[str, Any] = {}
             if "global" in value:
                 out["global"] = value.get("global")
             if "per_metric" in value:
@@ -2377,13 +2379,13 @@ def migration_042_create_org_budgets(conn: sqlite3.Connection) -> None:
             return out or None
         return None
 
-    def _normalize_enforcement_mode(value: Any) -> Optional[Dict[str, Any]]:
+    def _normalize_enforcement_mode(value: Any) -> Optional[dict[str, Any]]:
         if value is None:
             return None
         if isinstance(value, str):
             return {"global": value}
         if isinstance(value, dict):
-            out: Dict[str, Any] = {}
+            out: dict[str, Any] = {}
             if "global" in value:
                 out["global"] = value.get("global")
             if "per_metric" in value:
@@ -2391,8 +2393,8 @@ def migration_042_create_org_budgets(conn: sqlite3.Connection) -> None:
             return out or None
         return None
 
-    def _inflate_legacy_budgets(legacy: Dict[str, Any]) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {}
+    def _inflate_legacy_budgets(legacy: dict[str, Any]) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
         for key in ("budget_day_usd", "budget_month_usd", "budget_day_tokens", "budget_month_tokens"):
             if key in legacy:
                 payload[key] = legacy[key]
@@ -2508,7 +2510,7 @@ def migration_045_add_users_created_by(conn: sqlite3.Connection) -> None:
 # Migration Registry
 #
 
-def get_authnz_migrations() -> List[Migration]:
+def get_authnz_migrations() -> list[Migration]:
     """Get all AuthNZ migrations in order"""
     return [
         Migration(1, "Create users table", migration_001_create_users_table, rollback_001_drop_users_table),

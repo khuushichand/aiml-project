@@ -2,10 +2,11 @@
 # FastAPI dependencies for Collections database access (per-user)
 
 from typing import Optional
+
 from fastapi import Depends, HTTPException, status
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 
 

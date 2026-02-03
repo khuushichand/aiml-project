@@ -2,28 +2,21 @@
 # Description: API key management with rotation, expiration, and revocation capabilities
 #
 # Imports
+import asyncio
 import hashlib
 import hmac
-import json
-import asyncio
 import ipaddress
+import json
 import threading
-from weakref import WeakKeyDictionary
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any, List, Set, Union, TYPE_CHECKING
 from enum import Enum
+from typing import TYPE_CHECKING, Any, Optional, Union
+from weakref import WeakKeyDictionary
+
 #
 # 3rd-party imports
 from loguru import logger
-#
-# Local imports
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
-from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
-    derive_hmac_key,
-    derive_hmac_key_candidates,
-)
+
 from tldw_Server_API.app.core.AuthNZ.api_key_crypto import (
     format_api_key,
     generate_api_key_id,
@@ -33,6 +26,16 @@ from tldw_Server_API.app.core.AuthNZ.api_key_crypto import (
     parse_api_key,
     verify_kdf_hash,
 )
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
+    derive_hmac_key,
+    derive_hmac_key_candidates,
+)
+
+#
+# Local imports
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
+from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
@@ -84,7 +87,7 @@ class APIKeyScope(Enum):
 VALID_SCOPE_VALUES = frozenset({"read", "write", "admin", "service"})
 
 
-def normalize_scope(scope: Optional[Union[str, List[str]]]) -> Set[str]:
+def normalize_scope(scope: Optional[Union[str, list[str]]]) -> set[str]:
     """
     Normalize stored scope value to an explicit set of scope strings.
 
@@ -128,7 +131,7 @@ def normalize_scope(scope: Optional[Union[str, List[str]]]) -> Set[str]:
     return {"read"}
 
 
-def has_scope(key_scopes: Set[str], required_scope: str) -> bool:
+def has_scope(key_scopes: set[str], required_scope: str) -> bool:
     """
     Check if key scopes satisfy the required scope using explicit matching.
 
@@ -163,7 +166,7 @@ _WRITE_ENDPOINT_HINTS = (
 )
 
 
-def _serialize_scope_value(scope: Optional[Union[str, List[str]]]) -> Optional[str]:
+def _serialize_scope_value(scope: Optional[Union[str, list[str]]]) -> Optional[str]:
     """Serialize an optional scope value for storage."""
     if scope is None:
         return None
@@ -180,9 +183,9 @@ def _serialize_scope_value(scope: Optional[Union[str, List[str]]]) -> Optional[s
 
 def _infer_virtual_key_scope(
     *,
-    scope: Optional[Union[str, List[str]]],
-    allowed_methods: Optional[List[str]],
-    allowed_endpoints: Optional[List[str]],
+    scope: Optional[Union[str, list[str]]],
+    allowed_methods: Optional[list[str]],
+    allowed_endpoints: Optional[list[str]],
 ) -> str:
     """
     Infer a safe default scope for virtual keys.
@@ -425,9 +428,9 @@ class APIKeyManager:
             raise ValueError("Unable to derive API key hash candidates")
         return candidates[0]
 
-    def hash_candidates(self, api_key: str) -> List[str]:
+    def hash_candidates(self, api_key: str) -> list[str]:
         """Return ordered HMAC hashes for API keys across active/legacy secrets."""
-        hashes: List[str] = []
+        hashes: list[str] = []
         try:
             key_candidates = derive_hmac_key_candidates(self.settings)
         except Exception:
@@ -443,7 +446,7 @@ class APIKeyManager:
         api_key: str,
         key_identifier: str,
         repo: "AuthnzApiKeysRepo",
-    ) -> Optional[tuple[Dict[str, Any], Optional[str]]]:
+    ) -> Optional[tuple[dict[str, Any], Optional[str]]]:
         """Verify new-format key with embedded key_id."""
         result = await repo.fetch_active_by_key_id(key_identifier)
         if not result:
@@ -470,7 +473,7 @@ class APIKeyManager:
         self,
         api_key: str,
         repo: "AuthnzApiKeysRepo",
-    ) -> Optional[tuple[Dict[str, Any], Optional[str]]]:
+    ) -> Optional[tuple[dict[str, Any], Optional[str]]]:
         """Verify legacy key without embedded key_id."""
         hash_candidates = self.hash_candidates(api_key)
         if not hash_candidates:
@@ -487,12 +490,12 @@ class APIKeyManager:
         user_id: int,
         name: Optional[str] = None,
         description: Optional[str] = None,
-        scope: Union[str, List[str]] = "read",
+        scope: Union[str, list[str]] = "read",
         expires_in_days: Optional[int] = 90,
         rate_limit: Optional[int] = None,
-        allowed_ips: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        allowed_ips: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None
+    ) -> dict[str, Any]:
         """
         Create a new API key for a user
 
@@ -575,21 +578,21 @@ class APIKeyManager:
         expires_in_days: Optional[int] = 30,
         org_id: Optional[int] = None,
         team_id: Optional[int] = None,
-        scope: Optional[Union[str, List[str]]] = None,
-        allowed_endpoints: Optional[List[str]] = None,
-        allowed_providers: Optional[List[str]] = None,
-        allowed_models: Optional[List[str]] = None,
+        scope: Optional[Union[str, list[str]]] = None,
+        allowed_endpoints: Optional[list[str]] = None,
+        allowed_providers: Optional[list[str]] = None,
+        allowed_models: Optional[list[str]] = None,
         budget_day_tokens: Optional[int] = None,
         budget_month_tokens: Optional[int] = None,
         budget_day_usd: Optional[float] = None,
         budget_month_usd: Optional[float] = None,
         parent_key_id: Optional[int] = None,
         # Extra generic constraints (stored in metadata)
-        allowed_methods: Optional[List[str]] = None,
-        allowed_paths: Optional[List[str]] = None,
+        allowed_methods: Optional[list[str]] = None,
+        allowed_paths: Optional[list[str]] = None,
         max_calls: Optional[int] = None,
         max_runs: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create a Virtual API Key with LLM endpoint scope and budgets."""
         if not self._initialized:
             await self.initialize()
@@ -667,7 +670,7 @@ class APIKeyManager:
         required_scope: Optional[str] = None,
         ip_address: Optional[str] = None,
         record_usage: bool = True,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         """
         Validate an API key and return its information
 
@@ -838,7 +841,7 @@ class APIKeyManager:
         key_id: int,
         user_id: int,
         expires_in_days: Optional[int] = 90
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Rotate an API key - atomically create new one and revoke old one.
 
@@ -868,7 +871,7 @@ class APIKeyManager:
             # Decode stored JSON fields in a fail-closed way for security-
             # sensitive allowlists like allowed_ips.
             raw_allowed_ips = old_key.get("allowed_ips")
-            allowed_ips: Optional[List[str]] = None
+            allowed_ips: Optional[list[str]] = None
             if raw_allowed_ips:
                 decoded_allowed_ips = self._coerce_json_field(raw_allowed_ips)
                 if decoded_allowed_ips is None or not isinstance(decoded_allowed_ips, list):
@@ -984,7 +987,7 @@ class APIKeyManager:
         self,
         user_id: int,
         include_revoked: bool = False
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         List all API keys for a user
 
@@ -1033,7 +1036,7 @@ class APIKeyManager:
         except Exception:  # noqa: BLE001 - best-effort cleanup must not break requests
             logger.opt(exception=True).error("Failed to cleanup expired keys")
 
-    def _has_scope(self, key_scope: Optional[Union[str, List[str]]], required_scope: str) -> bool:
+    def _has_scope(self, key_scope: Optional[Union[str, list[str]]], required_scope: str) -> bool:
         """
         Check if key scope satisfies required scope using explicit matching.
 
@@ -1077,7 +1080,7 @@ class APIKeyManager:
         key_id: int,
         action: str,
         user_id: Optional[int] = None,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[dict[str, Any]] = None
     ) -> None:
         """Log an action in the audit log"""
         try:

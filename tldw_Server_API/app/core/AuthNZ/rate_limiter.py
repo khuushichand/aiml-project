@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import RateLimitError
 from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import AuthnzRateLimitsRepo
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 
 
 class RateLimiter:
@@ -23,14 +23,14 @@ class RateLimiter:
 
     def __init__(
         self,
-        db_pool: Optional[DatabasePool] = None,
-        settings: Optional[Settings] = None,
+        db_pool: DatabasePool | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.db_pool = db_pool
         self.enabled = True
         self._initialized = False
-        self._rate_limits_repo: Optional[AuthnzRateLimitsRepo] = None
+        self._rate_limits_repo: AuthnzRateLimitsRepo | None = None
 
     async def initialize(self) -> None:
         if self._initialized:
@@ -56,9 +56,9 @@ class RateLimiter:
         self,
         identifier: str,
         endpoint: str,
-        limit: Optional[int] = None,
-        window_minutes: Optional[int] = None,
-    ) -> Tuple[bool, Dict[str, Any]]:
+        limit: int | None = None,
+        window_minutes: int | None = None,
+    ) -> tuple[bool, dict[str, Any]]:
         """No-op rate limit check (RG handles ingress limits)."""
         return True, {"rate_limit_source": "resource_governor"}
 
@@ -66,9 +66,9 @@ class RateLimiter:
         self,
         user_id: int,
         endpoint: str,
-        limit: Optional[int] = None,
-        window_minutes: Optional[int] = None,
-    ) -> Tuple[bool, Dict[str, Any]]:
+        limit: int | None = None,
+        window_minutes: int | None = None,
+    ) -> tuple[bool, dict[str, Any]]:
         """No-op per-user rate limit check (RG handles ingress limits)."""
         return True, {"rate_limit_source": "resource_governor"}
 
@@ -76,9 +76,9 @@ class RateLimiter:
         self,
         identifier: str,
         attempt_type: str = "login",
-        lockout_threshold: Optional[int] = None,
-        lockout_duration_minutes: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        lockout_threshold: int | None = None,
+        lockout_duration_minutes: int | None = None,
+    ) -> dict[str, Any]:
         if not self._initialized:
             await self.initialize()
 
@@ -119,7 +119,7 @@ class RateLimiter:
             "remaining_attempts": max(0, int(lockout_threshold) - attempt_count),
         }
 
-    async def check_lockout(self, identifier: str, attempt_type: str = "login") -> Tuple[bool, Optional[datetime]]:
+    async def check_lockout(self, identifier: str, attempt_type: str = "login") -> tuple[bool, datetime | None]:
         if not self._initialized:
             await self.initialize()
         repo = self._get_rate_limits_repo()
@@ -137,15 +137,15 @@ class RateLimiter:
             attempt_type=attempt_type,
         )
 
-    async def reset_rate_limit(self, identifier: str, endpoint: Optional[str] = None) -> None:
+    async def reset_rate_limit(self, identifier: str, endpoint: str | None = None) -> None:
         """No-op reset for legacy rate limit counters (deprecated)."""
         return None
 
-    async def get_usage_stats(self, *_args: Any, **_kwargs: Any) -> Dict[str, Any]:
+    async def get_usage_stats(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {"rate_limit_source": "resource_governor"}
 
 
-_rate_limiter: Optional[RateLimiter] = None
+_rate_limiter: RateLimiter | None = None
 
 
 def get_rate_limiter() -> RateLimiter:
@@ -158,8 +158,8 @@ def get_rate_limiter() -> RateLimiter:
 async def check_rate_limit(
     identifier: str,
     endpoint: str,
-    limit: Optional[int] = None,
-    window_minutes: Optional[int] = None,
-) -> Tuple[bool, Dict[str, Any]]:
+    limit: int | None = None,
+    window_minutes: int | None = None,
+) -> tuple[bool, dict[str, Any]]:
     limiter = get_rate_limiter()
     return await limiter.check_rate_limit(identifier, endpoint, limit=limit, window_minutes=window_minutes)

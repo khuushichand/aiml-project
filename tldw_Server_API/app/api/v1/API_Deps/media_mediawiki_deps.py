@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import Form, HTTPException, status
 
@@ -19,7 +19,7 @@ def get_mediawiki_form_data(
         ...,
         description="A unique name for this MediaWiki instance.",
     ),
-    namespaces_str: Optional[str] = Form(
+    namespaces_str: str | None = Form(
         None,
         description="Comma-separated namespace IDs (e.g., '0,1'). All if None.",
     ),
@@ -34,15 +34,15 @@ def get_mediawiki_form_data(
         ).get("default_size", 1000),
         description="Max chunk size.",
     ),
-    api_name_vector_db: Optional[str] = Form(
+    api_name_vector_db: str | None = Form(
         None,
         description="API name for vector DB/embedding service.",
     ),
-    api_key_vector_db: Optional[str] = Form(
+    api_key_vector_db: str | None = Form(
         None,
         description="API key for vector DB/embedding service.",
     ),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Shared dependency for MediaWiki dump processing/ingest endpoints.
 

@@ -17,28 +17,31 @@ Security
 - Prompt length and content validated against SecurityConfig
 """
 
-from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Header
+from typing import Any, Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
+    PromptStudioDatabase,
+    SecurityConfig,
+    get_prompt_studio_db,
+    get_prompt_studio_user,
+    get_security_config,
+    require_project_access,
+    require_project_write_access,
+)
+
 # Local imports
-from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import (
-    StandardResponse, ListResponse
+from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import ListResponse, StandardResponse
+from tldw_Server_API.app.api.v1.schemas.prompt_studio_project import (
+    PromptCreate,
+    PromptResponse,
+    PromptUpdate,
+    PromptVersion,
 )
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_schemas import ExecutePromptSimpleRequest
-from tldw_Server_API.app.api.v1.schemas.prompt_studio_project import (
-    PromptCreate, PromptUpdate, PromptResponse, PromptVersion,
-    SignatureCreate, SignatureUpdate, SignatureResponse,
-    PromptGenerateRequest, PromptImproveRequest, ExampleGenerateRequest
-)
-from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
-    get_prompt_studio_db, get_prompt_studio_user, require_project_access,
-    require_project_write_access, check_rate_limit, get_security_config,
-    PromptStudioDatabase, SecurityConfig
-)
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
-    DatabaseError, InputError, ConflictError
-)
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import ConflictError, DatabaseError, InputError
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 ########################################################################################################################
@@ -64,8 +67,8 @@ async def create_prompt_simple(
     prompt_data: PromptCreate,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
-    user_context: Dict = Depends(get_prompt_studio_user)
-) -> Dict[str, Any]:
+    user_context: dict = Depends(get_prompt_studio_user)
+) -> dict[str, Any]:
     resp = await create_prompt(prompt_data, db, security_config, user_context)  # type: ignore[arg-type]
     # Unwrap StandardResponse regardless of Pydantic/dict
     if hasattr(resp, "model_dump"):
@@ -131,7 +134,7 @@ async def create_prompt(
     prompt_data: PromptCreate,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")
 ) -> StandardResponse:
     """
@@ -330,7 +333,7 @@ async def list_prompts_simple(
 async def execute_prompt_simple(
     payload: ExecutePromptSimpleRequest,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     from tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_executor import PromptExecutor
     executor = PromptExecutor(db)
     prompt_id = int(payload.prompt_id)
@@ -360,7 +363,7 @@ async def execute_prompt_simple(
 async def get_prompt(
     prompt_id: int = Path(..., description="Prompt ID"),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Get a specific prompt by ID.
@@ -457,7 +460,7 @@ async def update_prompt(
     updates: PromptUpdate = ...,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     security_config: SecurityConfig = Depends(get_security_config),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Update a prompt (creates a new version).
@@ -549,7 +552,7 @@ async def update_prompt(
 async def get_prompt_history(
     prompt_id: int = Path(..., description="Prompt ID"),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Get version history for a prompt.
@@ -601,7 +604,7 @@ async def revert_prompt(
     prompt_id: int = Path(..., description="Current prompt ID"),
     version: int = Path(..., description="Version number to revert to"),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Revert a prompt to a previous version (creates a new version).

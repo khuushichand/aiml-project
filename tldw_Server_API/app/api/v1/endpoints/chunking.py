@@ -3,28 +3,30 @@
 #
 # Imports
 import asyncio
-from typing import List, Optional, Dict, Any
-#
-# Third-party Libraries
-from loguru import logger
+from typing import Any, Optional
+
 from fastapi import (
     APIRouter,
     Body,
-    HTTPException,
-    Request,
-    status,
-    UploadFile,
+    Depends,  # Added for dependency injection
     File,
     Form,
-    Depends  # Added for dependency injection
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
 )
+
+#
+# Third-party Libraries
+from loguru import logger
 
 # Local Imports
 from tldw_Server_API.app.core.Chunking import (
-    improved_chunking_process,
     ChunkingError,
+    InvalidChunkingMethodError,
     InvalidInputError,
-    InvalidChunkingMethodError
+    improved_chunking_process,
 )
 
 # Default chunking options
@@ -41,21 +43,29 @@ default_chunk_options_from_lib = {
     'summarization_detail': 0.5,
     'tokenizer_name_or_path': 'gpt2'
 }
-from tldw_Server_API.app.api.v1.schemas.chunking_schema import ChunkingResponse, ChunkingTextRequest, \
-    ChunkingOptionsRequest, ChunkedContentResponse, ChunkingCapabilitiesResponse, MethodSpecificOptions, CodeMethodOptions
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as general_llm_analyzer
-from tldw_Server_API.app.core.config import load_and_log_configs as load_server_configs
+# Dependencies for user-specific database access
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import try_get_media_db_for_user
+from tldw_Server_API.app.api.v1.schemas.chunking_schema import (
+    ChunkedContentResponse,
+    ChunkingCapabilitiesResponse,
+    ChunkingOptionsRequest,
+    ChunkingResponse,
+    ChunkingTextRequest,
+    CodeMethodOptions,
+    MethodSpecificOptions,
+)
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
-from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
-# Dependencies for user-specific database access
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import try_get_media_db_for_user
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.Chunking.base import ChunkingMethod
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Chunking import Chunker
+from tldw_Server_API.app.core.Chunking.base import ChunkingMethod
+from tldw_Server_API.app.core.config import load_and_log_configs as load_server_configs
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as general_llm_analyzer
+
 #
 #######################################################################################################################
 #
@@ -140,7 +150,8 @@ async def process_text_for_chunking_json(
     if request_data.options and request_data.options.template_name:
         # Import necessary modules for template support
         import json
-        from tldw_Server_API.app.core.Chunking.templates import TemplateProcessor, ChunkingTemplate, TemplateStage
+
+        from tldw_Server_API.app.core.Chunking.templates import ChunkingTemplate, TemplateProcessor, TemplateStage
 
         try:
             # Use the injected user-specific database instance
@@ -426,7 +437,7 @@ async def process_text_for_chunking_json(
     # --- Perform Chunking ---
     loop = asyncio.get_running_loop()
     try:
-        chunk_results: List[Dict[str, Any]] = await loop.run_in_executor(
+        chunk_results: list[dict[str, Any]] = await loop.run_in_executor(
             None,
             improved_chunking_process,
             request_data.text_content,
@@ -616,7 +627,7 @@ async def process_file_for_chunking(
 
     loop = asyncio.get_running_loop()
     try:
-        chunk_results: List[Dict[str, Any]] = await loop.run_in_executor(
+        chunk_results: list[dict[str, Any]] = await loop.run_in_executor(
             None, improved_chunking_process, text_content,
             effective_processing_options, tokenizer_for_chunker_file,
             llm_call_func_to_use_file, llm_api_config_to_use_file

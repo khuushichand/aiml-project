@@ -3,21 +3,22 @@ Main Scheduler class that orchestrates all components.
 """
 
 import asyncio
-from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Optional
+
 from loguru import logger
 
-from .base import Task, TaskStatus, TaskPriority
-from .base.registry import TaskRegistry, get_registry
+from .authorization import AuthContext, get_authorizer
+from .backends import BackendManager
+from .base import Task, TaskPriority, TaskStatus
 from .base.exceptions import SchedulerError
-from .backends import create_backend, BackendManager
+from .base.registry import get_registry
 from .config import SchedulerConfig, get_config
-from .core.write_buffer import SafeWriteBuffer
-from .core.worker_pool import WorkerPool
 from .core.leader_election import LeaderElection
-from .services import LeaseService, DependencyService, PayloadService
-from .authorization import TaskAuthorizer, get_authorizer, AuthContext
+from .core.worker_pool import WorkerPool
+from .core.write_buffer import SafeWriteBuffer
+from .services import DependencyService, LeaseService, PayloadService
 
 
 class Scheduler:
@@ -166,9 +167,9 @@ class Scheduler:
                      payload: Optional[Any] = None,
                      priority: int = TaskPriority.NORMAL.value,
                      queue_name: Optional[str] = None,
-                     depends_on: Optional[List[str]] = None,
+                     depends_on: Optional[list[str]] = None,
                      idempotency_key: Optional[str] = None,
-                     metadata: Optional[Dict[str, Any]] = None,
+                     metadata: Optional[dict[str, Any]] = None,
                      auth_context: Optional[AuthContext] = None) -> str:
         """
         Submit a task to the scheduler.
@@ -239,7 +240,7 @@ class Scheduler:
         logger.debug(f"Task {task_id} submitted to queue {task.queue_name}")
         return task_id
 
-    async def submit_batch(self, tasks: List[Dict[str, Any]], auth_context: Optional[AuthContext] = None) -> List[str]:
+    async def submit_batch(self, tasks: list[dict[str, Any]], auth_context: Optional[AuthContext] = None) -> list[str]:
         """
         Submit multiple tasks atomically.
 
@@ -263,9 +264,9 @@ class Scheduler:
         if not tasks:
             return []
 
-        pending_idempotency: Dict[str, str] = {}
-        prepared_tasks: List[tuple[int, Task]] = []
-        result_ids: List[str] = []
+        pending_idempotency: dict[str, str] = {}
+        prepared_tasks: list[tuple[int, Task]] = []
+        result_ids: list[str] = []
 
         for idx, task_spec in enumerate(tasks):
             handler = task_spec.get('handler')
@@ -451,7 +452,7 @@ class Scheduler:
             # Wait before checking again
             await asyncio.sleep(1)
 
-    async def get_queue_status(self, queue_name: Optional[str] = None) -> Dict[str, Any]:
+    async def get_queue_status(self, queue_name: Optional[str] = None) -> dict[str, Any]:
         """
         Get queue status.
 
@@ -493,7 +494,7 @@ class Scheduler:
 
         return await self.worker_pool.scale_to(target, queue_name)
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """
         Get scheduler status.
 
@@ -520,11 +521,11 @@ class Scheduler:
         payload: Optional[Any],
         priority: int,
         queue_name: Optional[str],
-        depends_on: Optional[List[str]],
+        depends_on: Optional[list[str]],
         idempotency_key: Optional[str],
-        metadata: Optional[Dict[str, Any]],
+        metadata: Optional[dict[str, Any]],
         auth_context: Optional[AuthContext],
-        pending_idempotency: Optional[Dict[str, str]] = None
+        pending_idempotency: Optional[dict[str, str]] = None
     ) -> tuple[Optional[Task], Optional[str]]:
         """Validate inputs and build a Task instance matching single-submit semantics."""
 
@@ -629,7 +630,7 @@ class Scheduler:
 
         return task, None
 
-    def _validate_metadata(self, metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def _validate_metadata(self, metadata: Optional[dict[str, Any]]) -> dict[str, Any]:
         """
         Validate required task metadata and return a defensive copy.
 

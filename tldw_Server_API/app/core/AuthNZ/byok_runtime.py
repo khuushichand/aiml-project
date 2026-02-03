@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import os
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, Optional
-
-import os
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -15,12 +15,11 @@ from tldw_Server_API.app.core.AuthNZ.byok_config import (
 from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
     is_byok_enabled,
     is_provider_allowlisted,
-    resolve_server_default_key,
-    resolve_byok_base_url_allowlist,
     is_trusted_base_url_request,
+    resolve_byok_base_url_allowlist,
+    resolve_server_default_key,
     validate_credential_fields,
 )
-from tldw_Server_API.app.core.Metrics import increment_counter
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.AuthNZ.repos.org_provider_secrets_repo import (
@@ -35,7 +34,7 @@ from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     normalize_provider_name,
 )
 from tldw_Server_API.app.core.config import loaded_config_data
-
+from tldw_Server_API.app.core.Metrics import increment_counter
 
 DEFAULT_LAST_USED_THROTTLE_SECONDS = 300
 
@@ -50,7 +49,7 @@ def _last_used_throttle_seconds() -> int:
         return DEFAULT_LAST_USED_THROTTLE_SECONDS
 
 
-def _parse_last_used(value: Any) -> Optional[datetime]:
+def _parse_last_used(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value
     if isinstance(value, str):
@@ -61,7 +60,7 @@ def _parse_last_used(value: Any) -> Optional[datetime]:
     return None
 
 
-def _should_touch(last_used_at: Optional[datetime]) -> bool:
+def _should_touch(last_used_at: datetime | None) -> bool:
     if last_used_at is None:
         return True
     throttle = _last_used_throttle_seconds()
@@ -75,7 +74,7 @@ def _bool_label(value: bool) -> str:
     return "true" if value else "false"
 
 
-def _can_use_base_url_override(provider: str, request: Optional[Any]) -> bool:
+def _can_use_base_url_override(provider: str, request: Any | None) -> bool:
     if not is_trusted_base_url_request(request):
         return False
     provider_norm = normalize_provider_name(provider)
@@ -87,7 +86,7 @@ def _sanitize_credential_fields(
     credential_fields_raw: Any,
     *,
     allow_base_url: bool,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if credential_fields_raw is None:
         return {}
     if not isinstance(credential_fields_raw, dict):
@@ -116,12 +115,12 @@ def _apply_active_scope(ids: list[int], active_id: Any) -> list[int]:
 @dataclass
 class ResolvedByokCredentials:
     provider: str
-    api_key: Optional[str]
-    app_config: Optional[Dict[str, Any]]
-    credential_fields: Dict[str, Any]
+    api_key: str | None
+    app_config: dict[str, Any] | None
+    credential_fields: dict[str, Any]
     source: str
     allowlisted: bool
-    _touch_cb: Optional[Callable[[], Awaitable[None]]] = None
+    _touch_cb: Callable[[], Awaitable[None]] | None = None
 
     @property
     def uses_byok(self) -> bool:
@@ -200,7 +199,7 @@ def _fallback_result(
     provider: str,
     *,
     allowlisted: bool,
-    fallback_resolver: Optional[Callable[[str], Optional[str]]],
+    fallback_resolver: Callable[[str], str | None] | None,
 ) -> ResolvedByokCredentials:
     api_key = None
     if fallback_resolver is not None:
@@ -235,7 +234,7 @@ def _invalid_byok_result(provider: str, *, source: str) -> ResolvedByokCredentia
     )
 
 
-def _build_app_config(provider: str, credential_fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _build_app_config(provider: str, credential_fields: dict[str, Any]) -> dict[str, Any] | None:
     if not credential_fields:
         return None
     try:
@@ -243,7 +242,7 @@ def _build_app_config(provider: str, credential_fields: Dict[str, Any]) -> Optio
     except Exception:
         base_cfg = None
     provider_norm = normalize_provider_name(provider)
-    scrubbed_cfg: Optional[Dict[str, Any]] = None
+    scrubbed_cfg: dict[str, Any] | None = None
     if base_cfg:
         try:
             section = PROVIDER_APP_CONFIG_KEYS.get(provider_norm)
@@ -263,7 +262,7 @@ def _build_app_config(provider: str, credential_fields: Dict[str, Any]) -> Optio
     return merged or None
 
 
-def _extract_payload(row: Dict[str, Any], provider: str) -> Optional[Dict[str, Any]]:
+def _extract_payload(row: dict[str, Any], provider: str) -> dict[str, Any] | None:
     encrypted_blob = row.get("encrypted_blob")
     if not encrypted_blob:
         return None
@@ -277,11 +276,11 @@ def _extract_payload(row: Dict[str, Any], provider: str) -> Optional[Dict[str, A
 def _build_touch_cb(
     *,
     provider: str,
-    last_used_at: Optional[datetime],
+    last_used_at: datetime | None,
     repo: AuthnzUserProviderSecretsRepo | AuthnzOrgProviderSecretsRepo,
-    user_id: Optional[int] = None,
-    scope_type: Optional[str] = None,
-    scope_id: Optional[int] = None,
+    user_id: int | None = None,
+    scope_type: str | None = None,
+    scope_id: int | None = None,
 ) -> Callable[[], Awaitable[None]]:
     async def _touch() -> None:
         if not _should_touch(last_used_at):
@@ -302,11 +301,11 @@ def _build_touch_cb(
 async def resolve_byok_credentials(
     provider: str,
     *,
-    user_id: Optional[int],
-    request: Optional[Any] = None,
-    team_ids: Optional[list[int]] = None,
-    org_ids: Optional[list[int]] = None,
-    fallback_resolver: Optional[Callable[[str], Optional[str]]] = None,
+    user_id: int | None,
+    request: Any | None = None,
+    team_ids: list[int] | None = None,
+    org_ids: list[int] | None = None,
+    fallback_resolver: Callable[[str], str | None] | None = None,
 ) -> ResolvedByokCredentials:
     provider_norm = normalize_provider_name(provider)
     byok_enabled = is_byok_enabled()

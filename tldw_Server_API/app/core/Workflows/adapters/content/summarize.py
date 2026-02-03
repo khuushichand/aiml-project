@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -24,7 +24,7 @@ from tldw_Server_API.app.core.Workflows.adapters.content._config import Summariz
     tags=["content", "summarization"],
     config_model=SummarizeConfig,
 )
-async def run_summarize_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_summarize_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Summarize text using LLM with optional chunking strategies.
 
     Config:

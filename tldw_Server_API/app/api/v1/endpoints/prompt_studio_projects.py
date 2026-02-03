@@ -23,28 +23,34 @@ See also
 """
 
 import os
-from typing import Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Request, Header
+from typing import Any, Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, status
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
 
-# Local imports
-from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import (
-    StandardResponse, ListResponse
-)
-from tldw_Server_API.app.api.v1.schemas.prompt_studio_project import (
-    ProjectCreate, ProjectUpdate, ProjectResponse, ProjectListItem
-)
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
-    get_prompt_studio_db, get_prompt_studio_user, require_project_access,
-    require_project_write_access, check_rate_limit, get_security_config,
-    PromptStudioDatabase, SecurityConfig
+    PromptStudioDatabase,
+    SecurityConfig,
+    check_rate_limit,
+    get_prompt_studio_db,
+    get_prompt_studio_user,
+    get_security_config,
+    require_project_access,
+    require_project_write_access,
 )
-from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
-    DatabaseError, InputError, ConflictError
+
+# Local imports
+from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import ListResponse, StandardResponse
+from tldw_Server_API.app.api.v1.schemas.prompt_studio_project import (
+    ProjectCreate,
+    ProjectListItem,
+    ProjectResponse,
+    ProjectUpdate,
 )
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import ConflictError, DatabaseError, InputError
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 ########################################################################################################################
 # Router Setup
@@ -68,9 +74,9 @@ router = APIRouter(
 async def create_project_simple(
     project_data: ProjectCreate,
     request: Request,
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Compatibility helper to support POST without trailing slash returning a plain project object.
     Mirrors the pattern used by test-cases simple create.
@@ -93,7 +99,7 @@ async def create_project_simple(
     return data
 
 async def _rl_create_project(
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
     security_config: SecurityConfig = Depends(get_security_config),
 ) -> bool:
     return await check_rate_limit("create_project", user_context=user_context, security_config=security_config)
@@ -150,7 +156,7 @@ async def _rl_create_project(
 async def create_project(
     project_data: ProjectCreate,
     request: Request,
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     _: bool = Depends(_rl_create_project),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
@@ -261,7 +267,7 @@ async def list_projects(
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by status"),
     include_deleted: bool = Query(False, description="Include deleted projects"),
     search: Optional[str] = Query(None, description="Search in name and description"),
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
 ) -> ListResponse:
     """
@@ -330,7 +336,7 @@ async def list_projects_simple(
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by status"),
     include_deleted: bool = Query(False, description="Include deleted projects"),
     search: Optional[str] = Query(None, description="Search in name and description"),
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
 ) -> ListResponse:
     # Explicit unauthorized check for no-slash path to satisfy tests
@@ -391,7 +397,7 @@ async def get_project_simple(
     project_id: int = Path(..., description="Project ID"),
     _: bool = Depends(require_project_access),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     resp = await get_project(project_id, _, db)  # type: ignore[arg-type]
     if isinstance(resp, dict) and resp.get("data"):
         data = resp["data"]
@@ -410,7 +416,7 @@ async def update_project(
     updates: ProjectUpdate = ...,
     _: bool = Depends(require_project_write_access),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Update a project.
@@ -479,7 +485,7 @@ async def delete_project(
     permanent: bool = Query(False, description="Permanently delete (cannot be undone)"),
     _: bool = Depends(require_project_write_access),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> StandardResponse:
     """
     Delete a project (soft delete by default).
@@ -539,7 +545,7 @@ async def archive_project(
     project_id: int = Path(..., description="Project ID"),
     _: bool = Depends(require_project_write_access),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
 ) -> StandardResponse:
     """
     Archive a project (set status to archived).
@@ -590,7 +596,7 @@ async def unarchive_project(
     project_id: int = Path(..., description="Project ID"),
     _: bool = Depends(require_project_write_access),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
 ) -> StandardResponse:
     """
     Unarchive a project (set status to active).

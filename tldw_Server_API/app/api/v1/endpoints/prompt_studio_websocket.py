@@ -13,11 +13,12 @@ Key responsibilities
 - Offer SSE fallback for environments without WebSocket support
 """
 
-import json
 import asyncio
-from typing import Dict, Set, Optional
+import json
 from datetime import datetime
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from loguru import logger
 
 # Create router
@@ -27,14 +28,12 @@ router = APIRouter(
 )
 
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
-    get_prompt_studio_db, get_prompt_studio_user,
-    PromptStudioDatabase
+    PromptStudioDatabase,
+    get_prompt_studio_db,
+    get_prompt_studio_user,
 )
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.jobs_adapter import (
     PromptStudioJobsAdapter,
-)
-from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster import (
-    EventBroadcaster, EventType
 )
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 
@@ -88,12 +87,12 @@ class ConnectionManager:
     def __init__(self):
         """Initialize connection manager."""
         # Store active connections by client ID
-        self.active_connections: Dict[str, Set[WebSocket]] = {}
+        self.active_connections: dict[str, set[WebSocket]] = {}
         # Store connection metadata
-        self.connection_metadata: Dict[WebSocket, Dict] = {}
+        self.connection_metadata: dict[WebSocket, dict] = {}
 
     async def connect(self, websocket: WebSocket, client_id: str,
-                     user_context: Optional[Dict] = None):
+                     user_context: Optional[dict] = None):
         """
         Accept and register a new WebSocket connection.
 
@@ -210,15 +209,16 @@ class ConnectionManager:
 ########################################################################################################################
 # SSE (Server-Sent Events) Fallback
 
-from fastapi import Response
-from fastapi.responses import StreamingResponse
 import asyncio
+
+from fastapi.responses import StreamingResponse
+
 
 async def sse_endpoint(
     client_id: str = Query(..., description="Client ID"),
     project_id: Optional[int] = Query(None, description="Project ID to subscribe to"),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Optional[Dict] = Depends(get_prompt_studio_user),
+    user_context: Optional[dict] = Depends(get_prompt_studio_user),
 ):
     """
     Server-Sent Events endpoint as fallback for WebSocket.
@@ -355,7 +355,7 @@ async def sse_endpoint_route(
     client_id: str = Query(..., description="Client ID"),
     project_id: Optional[int] = Query(None, description="Project ID to subscribe to"),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Optional[Dict] = Depends(get_prompt_studio_user),
+    user_context: Optional[dict] = Depends(get_prompt_studio_user),
 ):
     return await sse_endpoint(
         client_id=client_id,

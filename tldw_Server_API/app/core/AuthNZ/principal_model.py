@@ -11,10 +11,9 @@ referenced from multiple AuthNZ components without creating import cycles.
 from __future__ import annotations
 
 import hashlib
-from typing import Any, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
-
 
 PrincipalKind = Literal["user", "api_key", "service", "anonymous"]
 
@@ -46,44 +45,44 @@ class AuthPrincipal(BaseModel):
         description="High-level principal kind (user, api_key, service, anonymous).",
     )
     # Identity fields (only some will be populated depending on kind)
-    user_id: Optional[int] = Field(
+    user_id: int | None = Field(
         default=None,
         description="Numeric user identifier when the principal is a user or API-key-backed user.",
     )
-    api_key_id: Optional[int] = Field(
+    api_key_id: int | None = Field(
         default=None,
         description="Numeric API key identifier when the principal is authenticated via API key.",
     )
-    username: Optional[str] = Field(
+    username: str | None = Field(
         default=None,
         description="Username for user principals when available.",
     )
-    email: Optional[str] = Field(
+    email: str | None = Field(
         default=None,
         description="Email for user principals when available.",
     )
-    subject: Optional[str] = Field(
+    subject: str | None = Field(
         default=None,
         description=(
             "Optional subject descriptor (e.g. 'user:123', 'service:workflow-engine'). "
             "When present, this is used as the primary key input for principal_id computation."
         ),
     )
-    token_type: Optional[str] = Field(
+    token_type: str | None = Field(
         default=None,
         description="Logical token type when authenticated via JWT or similar (access, refresh, service, virtual, etc.).",
     )
-    jti: Optional[str] = Field(
+    jti: str | None = Field(
         default=None,
         description="JWT ID or similar opaque token identifier, when available.",
     )
 
     # Claims
-    roles: List[str] = Field(
+    roles: list[str] = Field(
         default_factory=list,
         description="Role names associated with this principal.",
     )
-    permissions: List[str] = Field(
+    permissions: list[str] = Field(
         default_factory=list,
         description="Effective permission strings associated with this principal.",
     )
@@ -91,19 +90,19 @@ class AuthPrincipal(BaseModel):
         default=False,
         description="Convenience flag for admin-like principals.",
     )
-    org_ids: List[int] = Field(
+    org_ids: list[int] = Field(
         default_factory=list,
         description="Organization identifiers this principal is a member of.",
     )
-    team_ids: List[int] = Field(
+    team_ids: list[int] = Field(
         default_factory=list,
         description="Team identifiers this principal is a member of.",
     )
-    active_org_id: Optional[int] = Field(
+    active_org_id: int | None = Field(
         default=None,
         description="Active organization identifier for the current token scope.",
     )
-    active_team_id: Optional[int] = Field(
+    active_team_id: int | None = Field(
         default=None,
         description="Active team identifier for the current token scope.",
     )
@@ -159,15 +158,15 @@ class AuthContext(BaseModel):
         ...,
         description="Canonical principal for the current request.",
     )
-    ip: Optional[str] = Field(
+    ip: str | None = Field(
         default=None,
         description="Best-effort client IP address for the request.",
     )
-    user_agent: Optional[str] = Field(
+    user_agent: str | None = Field(
         default=None,
         description="User-Agent string from the request, when available.",
     )
-    request_id: Optional[str] = Field(
+    request_id: str | None = Field(
         default=None,
         description="Correlated request identifier used for tracing.",
     )

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 from loguru import logger
@@ -21,7 +20,6 @@ from tldw_Server_API.app.api.v1.schemas.document_annotations import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
 
 router = APIRouter(tags=["Document Workspace"])
 
@@ -463,7 +461,7 @@ async def sync_annotations(
     # Ensure table exists
     _ensure_annotations_table(db)
 
-    synced_annotations: List[AnnotationResponse] = []
+    synced_annotations: list[AnnotationResponse] = []
     id_mapping: dict = {}
 
     insert_sql = f"""

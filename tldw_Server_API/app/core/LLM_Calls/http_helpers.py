@@ -4,13 +4,18 @@ This module avoids importing chat_calls to prevent recursion. It uses the
 centralized http_client underneath while preserving a minimal Session-like API.
 """
 
-from typing import Iterable, Optional, Any
 import time
+from collections.abc import Iterable
+from typing import Any, Optional
 
 from tldw_Server_API.app.core.http_client import (
-    create_client as _hc_create_client,
-    fetch as _hc_fetch,
     RetryPolicy as _HC_RetryPolicy,
+)
+from tldw_Server_API.app.core.http_client import (
+    create_client as _hc_create_client,
+)
+from tldw_Server_API.app.core.http_client import (
+    fetch as _hc_fetch,
 )
 from tldw_Server_API.app.core.LLM_Calls.error_utils import is_network_error
 

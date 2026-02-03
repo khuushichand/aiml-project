@@ -4,20 +4,24 @@
 # Imports
 import asyncio
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Optional
+
 #
 # Third-party imports
 from loguru import logger
 
-from tldw_Server_API.app.core.Local_LLM.LLM_Base_Handler import BaseLLMHandler
-from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ModelNotFoundError, ModelDownloadError, \
-    InferenceError
-from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import HuggingFaceConfig
 from tldw_Server_API.app.core.Local_LLM import handler_utils
+from tldw_Server_API.app.core.Local_LLM.LLM_Base_Handler import BaseLLMHandler
+from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import (
+    InferenceError,
+    ModelDownloadError,
+    ModelNotFoundError,
+)
+from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import HuggingFaceConfig
 
 try:
     import torch
-    from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, pipeline
 except ImportError:
     logger.error("transformers or torch not installed. Please install them: pip install transformers torch torchvision torchaudio accelerate bitsandbytes")
     # Raise or handle appropriately
@@ -29,13 +33,13 @@ except ImportError:
 
 
 class HuggingFaceHandler(BaseLLMHandler):
-    def __init__(self, config: HuggingFaceConfig, global_app_config: Dict[str, Any]):
+    def __init__(self, config: HuggingFaceConfig, global_app_config: dict[str, Any]):
         super().__init__(config, global_app_config)
         self.config: HuggingFaceConfig # For type hinting
         self.models_dir = Path(self.config.models_dir)
         if not self.models_dir.exists():
             self.models_dir.mkdir(parents=True, exist_ok=True)
-        self.loaded_models: Dict[tuple, Any] = {} # Cache for loaded models and tokenizers
+        self.loaded_models: dict[tuple, Any] = {} # Cache for loaded models and tokenizers
 
     def _is_path_allowed(self, p: Path) -> bool:
         base_dirs = handler_utils.build_allowed_paths(
@@ -51,10 +55,10 @@ class HuggingFaceHandler(BaseLLMHandler):
             return tuple(self._freeze_config(v) for v in value)
         return value
 
-    def _cache_key(self, model_name_or_path: str, quantization_config: Optional[Dict]) -> tuple:
+    def _cache_key(self, model_name_or_path: str, quantization_config: Optional[dict]) -> tuple:
         return (model_name_or_path, self._freeze_config(quantization_config))
 
-    async def list_models(self) -> List[str]:
+    async def list_models(self) -> list[str]:
         """Lists locally available Hugging Face models (directories in models_dir)."""
         if not self.models_dir.exists():
             return []
@@ -131,7 +135,7 @@ class HuggingFaceHandler(BaseLLMHandler):
         return None
 
 
-    async def _load_model_and_tokenizer(self, model_name_or_path: str, quantization_config: Optional[Dict] = None):
+    async def _load_model_and_tokenizer(self, model_name_or_path: str, quantization_config: Optional[dict] = None):
         """Loads model and tokenizer, applying quantization if specified."""
         cache_key = self._cache_key(model_name_or_path, quantization_config)
         if cache_key in self.loaded_models:
@@ -199,11 +203,11 @@ class HuggingFaceHandler(BaseLLMHandler):
 
     async def chat_completion(self,
                               model_name_or_path: str,
-                              messages: List[Dict[str, str]], # e.g., [{"role": "user", "content": "Hello"}]
+                              messages: list[dict[str, str]], # e.g., [{"role": "user", "content": "Hello"}]
                               max_new_tokens: int = 100,
                               temperature: float = 0.7,
                               top_p: float = 0.9,
-                              quantization_config: Optional[Dict] = None, # e.g. {"load_in_4bit": True}
+                              quantization_config: Optional[dict] = None, # e.g. {"load_in_4bit": True}
                               **generation_kwargs) -> str:
         """
         Generates a chat completion using a Hugging Face model.
@@ -262,7 +266,7 @@ class HuggingFaceHandler(BaseLLMHandler):
                                   model_name_or_path: str,
                                   prompt: str,
                                   max_length: int = 100,
-                                  quantization_config: Optional[Dict] = None,
+                                  quantization_config: Optional[dict] = None,
                                   **pipeline_kwargs) -> str:
         """
         Uses the Hugging Face text-generation pipeline. Simpler for basic text generation.

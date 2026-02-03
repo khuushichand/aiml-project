@@ -11,11 +11,11 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal, Optional
 
 from loguru import logger
 
-from .types import Document, DataSource
+from .types import DataSource, Document
 
 
 @dataclass
@@ -37,12 +37,12 @@ class WebFallbackConfig:
 class WebFallbackResult:
     """Result of web search fallback."""
 
-    documents: List[Document]
+    documents: list[Document]
     search_time_ms: int
     result_count: int
     engine_used: str
     query_used: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 async def web_search_fallback(
@@ -149,10 +149,10 @@ async def web_search_fallback(
 
 
 def _convert_web_results_to_documents(
-    raw_results: List[Dict[str, Any]],
+    raw_results: list[dict[str, Any]],
     query: str,
     max_content_chars: int,
-) -> List[Document]:
+) -> list[Document]:
     """
     Convert raw web search results to Document objects.
 
@@ -198,7 +198,7 @@ def _convert_web_results_to_documents(
                 id=doc_id,
                 content=content,
                 source=DataSource.WEB_CONTENT,
-                score=1.0 - (idx * 0.05),  # Decrease score by position
+                score=max(0.0, 1.0 - (idx * 0.05)),  # Decrease score by position
                 metadata={
                     "title": title,
                     "url": url,
@@ -218,11 +218,11 @@ def _convert_web_results_to_documents(
 
 
 def merge_web_results(
-    local_docs: List[Document],
-    web_docs: List[Document],
+    local_docs: list[Document],
+    web_docs: list[Document],
     strategy: Literal["prepend", "append", "interleave"] = "prepend",
     max_total: Optional[int] = None,
-) -> List[Document]:
+) -> list[Document]:
     """
     Merge local and web documents according to a strategy.
 
@@ -263,14 +263,14 @@ def merge_web_results(
 # Convenience function for pipeline integration
 async def fallback_to_web_search(
     query: str,
-    local_docs: List[Document],
+    local_docs: list[Document],
     relevance_signal: float,
     threshold: float = 0.25,
     engine: str = "duckduckgo",
     result_count: int = 5,
     merge_strategy: Literal["prepend", "append", "interleave"] = "prepend",
     max_total: Optional[int] = None,
-) -> tuple[List[Document], Dict[str, Any]]:
+) -> tuple[list[Document], dict[str, Any]]:
     """
     Convenience function to conditionally fall back to web search.
 
@@ -287,7 +287,7 @@ async def fallback_to_web_search(
     Returns:
         Tuple of (merged_documents, metadata)
     """
-    metadata = {
+    metadata: dict[str, Any] = {
         "web_fallback_enabled": True,
         "relevance_signal": relevance_signal,
         "threshold": threshold,

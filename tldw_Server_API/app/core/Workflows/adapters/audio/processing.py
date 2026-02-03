@@ -15,22 +15,22 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     resolve_artifacts_dir,
     resolve_workflow_file_path,
 )
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.audio._config import (
-    AudioNormalizeConfig,
     AudioConcatConfig,
-    AudioTrimConfig,
     AudioConvertConfig,
     AudioExtractConfig,
     AudioMixConfig,
+    AudioNormalizeConfig,
+    AudioTrimConfig,
 )
 
 
@@ -42,7 +42,7 @@ from tldw_Server_API.app.core.Workflows.adapters.audio._config import (
     config_model=AudioNormalizeConfig,
     tags=["audio"],
 )
-async def run_audio_normalize_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_audio_normalize_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Normalize audio volume levels using ffmpeg.
 
     Config:
@@ -128,7 +128,7 @@ async def run_audio_normalize_adapter(config: Dict[str, Any], context: Dict[str,
     config_model=AudioConcatConfig,
     tags=["audio"],
 )
-async def run_audio_concat_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_audio_concat_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Concatenate multiple audio files into one.
 
     Config:
@@ -236,7 +236,7 @@ async def run_audio_concat_adapter(config: Dict[str, Any], context: Dict[str, An
     config_model=AudioTrimConfig,
     tags=["audio"],
 )
-async def run_audio_trim_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_audio_trim_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Trim an audio file to a specific time range.
 
     Config:
@@ -298,7 +298,7 @@ async def run_audio_trim_adapter(config: Dict[str, Any], context: Dict[str, Any]
     config_model=AudioConvertConfig,
     tags=["audio"],
 )
-async def run_audio_convert_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_audio_convert_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Convert audio file to a different format.
 
     Config:
@@ -365,7 +365,7 @@ async def run_audio_convert_adapter(config: Dict[str, Any], context: Dict[str, A
     config_model=AudioExtractConfig,
     tags=["audio"],
 )
-async def run_audio_extract_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_audio_extract_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Extract audio track from a video file.
 
     Config:
@@ -431,7 +431,7 @@ async def run_audio_extract_adapter(config: Dict[str, Any], context: Dict[str, A
     config_model=AudioMixConfig,
     tags=["audio"],
 )
-async def run_audio_mix_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_audio_mix_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Mix multiple audio tracks together.
 
     Config:

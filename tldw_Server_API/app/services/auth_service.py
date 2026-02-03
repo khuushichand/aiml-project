@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
-from loguru import logger
 from datetime import datetime
+from typing import Any
+
+from loguru import logger
+
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 
 
-async def fetch_user_by_login_identifier(db, identifier: str) -> Optional[Dict[str, Any]]:
+async def fetch_user_by_login_identifier(db, identifier: str) -> dict[str, Any] | None:
     """Fetch a user row by username or email (case-insensitive), normalized to dict."""
     ident_l = identifier.strip().lower()
     is_pg = await is_postgres_backend()
@@ -53,7 +55,7 @@ async def update_user_password_hash(db, user_id: int, new_hash: str) -> None:
         raise
 
 
-async def update_user_last_login(db, user_id: int, now: Optional[datetime] = None) -> None:
+async def update_user_last_login(db, user_id: int, now: datetime | None = None) -> None:
     """Update last_login timestamp for the user."""
     now = now or datetime.utcnow()
     is_pg = await is_postgres_backend()
@@ -70,7 +72,7 @@ async def update_user_last_login(db, user_id: int, now: Optional[datetime] = Non
         raise
 
 
-async def fetch_active_user_by_id(db, user_id: int) -> Optional[Dict[str, Any]]:
+async def fetch_active_user_by_id(db, user_id: int) -> dict[str, Any] | None:
     """Fetch an active user by id, normalized to dict, or None if not found."""
     is_pg = await is_postgres_backend()
     try:

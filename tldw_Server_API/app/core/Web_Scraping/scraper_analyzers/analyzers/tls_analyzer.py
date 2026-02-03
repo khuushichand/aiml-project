@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import random
 import warnings
-from typing import Any, Dict
+from typing import Any
 
 warnings.filterwarnings("ignore", message="Event loop is closed", category=RuntimeWarning)
 logging.getLogger("asyncio").setLevel(logging.CRITICAL)
@@ -14,17 +13,18 @@ try:
 except ImportError:  # pragma: no cover - optional dependency guard
     AsyncSession = None
 
-from ..utils.browser_identities import MODERN_BROWSER_IDENTITIES
-from ..utils.impersonate_target import get_impersonate_target
 from tldw_Server_API.app.core.http_client import afetch
 
+from ..utils.browser_identities import MODERN_BROWSER_IDENTITIES
+from ..utils.impersonate_target import get_impersonate_target
 
-async def _run_tls_test(url: str) -> Dict[str, Any]:
+
+async def _run_tls_test(url: str) -> dict[str, Any]:
     """
     Conduct a controlled experiment to detect TLS fingerprinting using a single,
     randomly chosen browser identity for both requests.
     """
-    results: Dict[str, Any] = {"python_request_blocked": None, "browser_request_blocked": None}
+    results: dict[str, Any] = {"python_request_blocked": None, "browser_request_blocked": None}
     chosen_identity = random.choice(MODERN_BROWSER_IDENTITIES)
     user_agent = chosen_identity.get("User-Agent", "")
 
@@ -69,7 +69,7 @@ async def _run_tls_test(url: str) -> Dict[str, Any]:
     return results
 
 
-async def analyze_tls_fingerprint(url: str) -> Dict[str, Any]:
+async def analyze_tls_fingerprint(url: str) -> dict[str, Any]:
     """
     Main entry point. Run the TLS test and interpret the results.
     """

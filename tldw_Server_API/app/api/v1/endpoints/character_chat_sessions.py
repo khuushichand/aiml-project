@@ -4,70 +4,57 @@ API endpoints for character chat session management.
 Provides CRUD operations for chat sessions and character-specific completions.
 """
 
+import asyncio
 import json
+import os
+import random
+import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any, Literal
+from typing import Any, Literal, Optional
+
 from fastapi import (
     APIRouter,
+    Body,
     Depends,
     HTTPException,
-    Query,
     Path,
-    status,
-    Body,
+    Query,
     Response,
-
+    status,
 )
 from fastapi.responses import StreamingResponse
 from loguru import logger
-from collections import defaultdict, deque
-import time
-import os
-import asyncio
-import random
 
 # Database and authentication dependencies
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
-    CharactersRAGDB,
-    CharactersRAGDBError,
-    ConflictError,
-    InputError
-)
 
 # Schemas
 from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
-    ChatSessionCreate,
-    ChatSessionResponse,
-    ChatSessionUpdate,
-    ChatSessionListResponse,
-    MessageResponse,
-
     CharacterChatCompletionPrepRequest,
     CharacterChatCompletionPrepResponse,
     CharacterChatCompletionV2Request,
     CharacterChatCompletionV2Response,
     CharacterChatStreamPersistRequest,
     CharacterChatStreamPersistResponse,
+    ChatSessionCreate,
+    ChatSessionListResponse,
+    ChatSessionResponse,
+    ChatSessionUpdate,
+    MessageResponse,
 )
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
+    record_byok_missing_credentials,
+    resolve_byok_credentials,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 
 # Character chat helpers
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
-    start_new_chat_session,
-    post_message_to_conversation,
-    retrieve_conversation_messages_for_ui,
-    load_chat_and_character,
     map_sender_to_role,
+    post_message_to_conversation,
     replace_placeholders,
-)
-
-
-# Chat helpers and utilities
-from tldw_Server_API.app.core.Chat.chat_helpers import (
-    get_or_create_conversation,
-    load_conversation_history
 )
 
 # Rate limiting
@@ -75,28 +62,31 @@ from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import (
     get_character_rate_limiter,
 )
 
-# For chat completions
-from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
-from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
-    record_byok_missing_credentials,
-    resolve_byok_credentials,
-)
-from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
-
-# Completion schemas centralized in schemas/chat_session_schemas.py
-from tldw_Server_API.app.core.Streaming.streams import SSEStream
-from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_provider_line, sse_done
-from tldw_Server_API.app.core.Utils.common import parse_boolean
-
 # Import shared constants
 from tldw_Server_API.app.core.Character_Chat.constants import (
-    MAX_STREAMING_CHUNKS,
     MAX_STREAMING_BYTES,
-    MAX_TOOL_CALLS_SIZE,
+    MAX_STREAMING_CHUNKS,
     MAX_TOOL_CALLS_COUNT,
+    MAX_TOOL_CALLS_SIZE,
     THROTTLE_CACHE_MAX_KEYS,
     THROTTLE_STALE_SECONDS,
 )
+
+# Chat helpers and utilities
+# For chat completions
+from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_provider_line, sse_done
+
+# Completion schemas centralized in schemas/chat_session_schemas.py
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
+from tldw_Server_API.app.core.Utils.common import parse_boolean
 
 THROTTLE_WINDOW_SIZE = 100
 
@@ -155,7 +145,7 @@ def _validate_and_truncate_tool_calls(tool_calls: Any) -> Optional[list]:
 
 
 def _verify_chat_ownership(
-    conversation: Optional[Dict[str, Any]],
+    conversation: Optional[dict[str, Any]],
     user_id: Any,
     chat_id: str
 ) -> None:
@@ -198,8 +188,8 @@ class _BoundedThrottleCache:
     """
 
     def __init__(self):
-        self._data: Dict[str, deque] = {}
-        self._last_access: Dict[str, float] = {}
+        self._data: dict[str, deque] = {}
+        self._last_access: dict[str, float] = {}
         self._lock: Optional[asyncio.Lock] = None
         self._lock_loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -272,7 +262,7 @@ def reset_complete_windows() -> None:
 # Helper Functions
 # ========================================================================
 
-def _convert_db_conversation_to_response(conv_data: Dict[str, Any]) -> ChatSessionResponse:
+def _convert_db_conversation_to_response(conv_data: dict[str, Any]) -> ChatSessionResponse:
     """Convert database conversation to response model."""
     return ChatSessionResponse(
         id=conv_data.get('id', ''),
@@ -290,7 +280,7 @@ def _convert_db_conversation_to_response(conv_data: Dict[str, Any]) -> ChatSessi
         version=conv_data.get('version', 1)
     )
 
-def _convert_db_message_to_response(msg_data: Dict[str, Any]) -> MessageResponse:
+def _convert_db_message_to_response(msg_data: dict[str, Any]) -> MessageResponse:
     """Convert database message to response model."""
     return MessageResponse(
         id=msg_data.get('id', ''),
@@ -314,12 +304,12 @@ def _convert_db_message_to_response(msg_data: Dict[str, Any]) -> MessageResponse
              summary="Create a new chat session", tags=["Chat Sessions"])
 async def create_chat_session(
     session_data: ChatSessionCreate,
+    response: Response,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
     seed_first_message: bool = Query(False, description="If true, seed the chat with an initial assistant greeting"),
     greeting_strategy: Literal["default", "alternate_random", "alternate_index"] = Query("default", description="How to choose the initial assistant greeting when seeding"),
     alternate_index: Optional[int] = Query(None, ge=0, description="Index for alternate greeting when greeting_strategy=alternate_index"),
-    response: Response = None,
 ):
     """
     Create a new chat session with a character.
@@ -460,8 +450,8 @@ async def create_chat_session(
         if response is not None and seed_status is not None:
             try:
                 response.headers["X-Chat-Seed-Status"] = seed_status
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to set X-Chat-Seed-Status header: {}", exc)
 
         # Log creation
         logger.info(f"Created chat session {created_id} for character {session_data.character_id} by user {current_user.id}")
@@ -580,7 +570,7 @@ async def get_chat_context(
 )
 async def complete_chat_legacy(
     chat_id: str = Path(..., description="Chat session ID"),
-    body: Optional[Dict[str, Any]] = Body(
+    body: Optional[dict[str, Any]] = Body(
         default=None,
         description=(
             "DEPRECATED: Request body is ignored. This parameter will be removed and non-empty bodies will be rejected (422) in a future release."
@@ -607,7 +597,8 @@ async def complete_chat_legacy(
         # Deprecation headers for clients; also used if we reject a non-empty body
         # Sunset date is configurable via DEPRECATION_SUNSET_DAYS env var (default 90 days)
         try:
-            from datetime import datetime, timedelta, timezone as _tz
+            from datetime import datetime, timedelta
+            from datetime import timezone as _tz
             sunset_days = int(os.getenv("DEPRECATION_SUNSET_DAYS", "90"))
             sunset = (datetime.now(_tz.utc) + timedelta(days=sunset_days)).strftime("%a, %d %b %Y %H:%M:%S GMT")
         except Exception:
@@ -696,7 +687,7 @@ async def prepare_chat_completion(
         messages = [m for m in messages if not m.get('deleted')]
         paginated = messages
 
-        formatted: List[Dict[str, Any]] = []
+        formatted: list[dict[str, Any]] = []
         if include_ctx and character and offset == 0:
             parts = [
                 f"You are {char_label}.",
@@ -800,7 +791,7 @@ async def character_chat_completion(
         messages = [m for m in messages if not m.get('deleted')]
         paginated = messages
 
-        formatted: List[Dict[str, Any]] = []
+        formatted: list[dict[str, Any]] = []
         if include_ctx and character and offset == 0:
             parts = [
                 f"You are {char_label}.",
@@ -968,7 +959,7 @@ async def character_chat_completion(
             except Exception:
                 return ""
 
-        def _chunk_text(text: str, size: int = 2000) -> List[str]:
+        def _chunk_text(text: str, size: int = 2000) -> list[str]:
             if not text:
                 return []
             return [text[i : i + size] for i in range(0, len(text), size)]
@@ -1714,7 +1705,7 @@ async def export_chat_history(
                 "created_at": str(conversation.get('created_at', '')),
                 "messages": []
             }
-            message_metadata_extra: Dict[str, Any] = {}
+            message_metadata_extra: dict[str, Any] = {}
             # Build messages with optional tool_calls per message
             for msg in messages:
                 if msg.get('deleted'):
@@ -1739,7 +1730,8 @@ async def export_chat_history(
                 elif role_for_tool_calls == 'assistant':
                     # Fallback: parse inline suffix [tool_calls]: <json>
                     try:
-                        import re as _re, json as _json
+                        import json as _json
+                        import re as _re
                         m = _re.search(r"\[tool_calls\]\s*:\s*(\{.*|\[.*)$", (msg.get('content') or ''), _re.DOTALL)
                         if m:
                             parsed = _json.loads(m.group(1).strip())

@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-
 
 FileType = Literal["ical", "markdown_table", "html_table", "xlsx", "data_table", "image"]
 ExportFormat = Literal["ics", "md", "html", "xlsx", "csv", "json", "png", "jpg", "webp"]
@@ -24,15 +23,15 @@ class FileExportRequest(BaseModel):
 class FileCreateOptions(BaseModel):
     """Options controlling artifact persistence and export limits."""
     persist: Literal[True] = Field(description="Persist artifact and export metadata (must be true)")
-    max_bytes: Optional[int] = Field(default=None, ge=1, description="Hard cap for export bytes")
-    max_rows: Optional[int] = Field(default=None, ge=1, description="Row cap for table-like payloads")
-    max_cells: Optional[int] = Field(default=None, ge=1, description="Cell cap for table-like payloads")
-    export_ttl_seconds: Optional[int] = Field(
+    max_bytes: int | None = Field(default=None, ge=1, description="Hard cap for export bytes")
+    max_rows: int | None = Field(default=None, ge=1, description="Row cap for table-like payloads")
+    max_cells: int | None = Field(default=None, ge=1, description="Cell cap for table-like payloads")
+    export_ttl_seconds: int | None = Field(
         default=None,
         ge=1,
         description="TTL in seconds for transient exports (URL mode only)",
     )
-    retention_until: Optional[datetime] = Field(
+    retention_until: datetime | None = Field(
         default=None,
         description="UTC timestamp after which the artifact may be purged",
     )
@@ -41,9 +40,9 @@ class FileCreateOptions(BaseModel):
 class FileCreateRequest(BaseModel):
     """Request payload for creating a file artifact."""
     file_type: FileType
-    payload: Dict[str, Any] = Field(description="File-type specific payload")
-    title: Optional[str] = Field(default=None, description="Display name for artifact")
-    export: Optional[FileExportRequest] = None
+    payload: dict[str, Any] = Field(description="File-type specific payload")
+    title: str | None = Field(default=None, description="Display name for artifact")
+    export: FileExportRequest | None = None
     options: FileCreateOptions
 
 
@@ -51,25 +50,25 @@ class FileValidationIssue(BaseModel):
     """Validation issue detail for artifact payloads."""
     code: str
     message: str
-    path: Optional[str] = None
+    path: str | None = None
 
 
 class FileValidationResult(BaseModel):
     """Validation result containing warnings."""
     ok: bool
-    warnings: List[FileValidationIssue] = Field(default_factory=list)
+    warnings: list[FileValidationIssue] = Field(default_factory=list)
 
 
 class FileExportInfo(BaseModel):
     """Export status and delivery details."""
     status: Literal["none", "ready", "pending"]
-    format: Optional[ExportFormat] = None
-    url: Optional[str] = None
-    content_type: Optional[str] = None
-    bytes: Optional[int] = None
-    job_id: Optional[str] = None
-    content_b64: Optional[str] = Field(default=None, description="Inline export payload (small files only)")
-    expires_at: Optional[datetime] = None
+    format: ExportFormat | None = None
+    url: str | None = None
+    content_type: str | None = None
+    bytes: int | None = None
+    job_id: str | None = None
+    content_b64: str | None = Field(default=None, description="Inline export payload (small files only)")
+    expires_at: datetime | None = None
 
 
 class FileArtifact(BaseModel):
@@ -77,10 +76,10 @@ class FileArtifact(BaseModel):
     file_id: int
     file_type: FileType
     title: str
-    structured: Dict[str, Any]
+    structured: dict[str, Any]
     validation: FileValidationResult
     export: FileExportInfo
-    retention_until: Optional[datetime] = None
+    retention_until: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

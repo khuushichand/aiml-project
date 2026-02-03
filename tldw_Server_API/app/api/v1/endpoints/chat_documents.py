@@ -5,43 +5,46 @@ import datetime
 import os
 import sqlite3
 import time
-from typing import Any, AsyncIterator, Dict, List, Optional, Type, Union
+from collections.abc import AsyncIterator
+from typing import Any, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from loguru import logger
 from starlette.responses import StreamingResponse
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.chat_documents_deps import get_document_generator_service
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, InputError
-from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
+from tldw_Server_API.app.api.v1.schemas.document_generator_schemas import (
+    AsyncGenerationResponse,
+    BulkGenerateRequest,
+    BulkGenerateResponse,
+    DocumentListResponse,
+    GeneratedDocument,
+    GenerateDocumentRequest,
+    GenerateDocumentResponse,
+    GenerationStatistics,
+    JobStatusResponse,
+    PromptConfigResponse,
+    SavePromptConfigRequest,
+)
+from tldw_Server_API.app.api.v1.schemas.document_generator_schemas import (
+    DocumentType as DocType,
+)
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
-from tldw_Server_API.app.api.v1.schemas.document_generator_schemas import (
-    DocumentType as DocType,
-    GenerationStatus,
-    GenerateDocumentRequest,
-    GenerateDocumentResponse,
-    AsyncGenerationResponse,
-    JobStatusResponse,
-    GeneratedDocument,
-    DocumentListResponse,
-    SavePromptConfigRequest,
-    PromptConfigResponse,
-    BulkGenerateRequest,
-    BulkGenerateResponse,
-    GenerationStatistics,
-    DocumentGeneratorError,
-)
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
+from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.core.Chat.document_generator import (
     DocumentGeneratorService,
     DocumentType,
+)
+from tldw_Server_API.app.core.Chat.document_generator import (
     GenerationStatus as GenStatus,
 )
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, InputError
 
 router = APIRouter()
 
@@ -57,8 +60,8 @@ async def generate_document(
     request: GenerateDocumentRequest,
     http_request: Request,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    service_cls: Type[DocumentGeneratorService] = Depends(get_document_generator_service),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    service_cls: type[DocumentGeneratorService] = Depends(get_document_generator_service),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ) -> Union[GenerateDocumentResponse, AsyncGenerationResponse]:
     """Generate a document from a conversation."""
     try:
@@ -93,7 +96,7 @@ async def generate_document(
 
         # When no explicit key is provided, resolve BYOK first and fall back to server defaults.
         if not provider_api_key:
-            def _fallback_resolver(name: str) -> Optional[str]:
+            def _fallback_resolver(name: str) -> str | None:
                 key_val, _ = resolve_provider_api_key(
                     name,
                     prefer_module_keys_in_tests=True,
@@ -225,7 +228,7 @@ async def generate_document(
                 yield streaming_source
 
             stream_started_at = time.perf_counter()
-            collected_chunks: List[str] = []
+            collected_chunks: list[str] = []
 
             if str(os.getenv("STREAMS_UNIFIED", "0")).strip().lower() in {"1", "true", "yes", "on"}:
                 from tldw_Server_API.app.core.Streaming.streams import SSEStream
@@ -404,7 +407,7 @@ async def generate_document(
 async def get_job_status(
     job_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    service_cls: Type[DocumentGeneratorService] = Depends(get_document_generator_service),
+    service_cls: type[DocumentGeneratorService] = Depends(get_document_generator_service),
 ) -> JobStatusResponse:
     """Get the status of a document generation job."""
     try:
@@ -459,8 +462,8 @@ async def get_job_status(
 async def cancel_job(
     job_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    service_cls: Type[DocumentGeneratorService] = Depends(get_document_generator_service),
-) -> Dict[str, str]:
+    service_cls: type[DocumentGeneratorService] = Depends(get_document_generator_service),
+) -> dict[str, str]:
     """Cancel a document generation job."""
     try:
         service = service_cls(db)
@@ -506,11 +509,11 @@ async def cancel_job(
     tags=["chat-documents"],
 )
 async def list_generated_documents(
-    conversation_id: Optional[str] = Query(None, min_length=1, description="Filter by conversation ID"),
-    document_type: Optional[DocType] = Query(None, description="Filter by document type"),
+    conversation_id: str | None = Query(None, min_length=1, description="Filter by conversation ID"),
+    document_type: DocType | None = Query(None, description="Filter by document type"),
     limit: int = Query(50, ge=1, le=200, description="Maximum number of documents"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    service_cls: Type[DocumentGeneratorService] = Depends(get_document_generator_service),
+    service_cls: type[DocumentGeneratorService] = Depends(get_document_generator_service),
 ) -> DocumentListResponse:
     """List previously generated documents."""
     try:
@@ -547,7 +550,7 @@ async def list_generated_documents(
 async def get_generated_document(
     document_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    service_cls: Type[DocumentGeneratorService] = Depends(get_document_generator_service),
+    service_cls: type[DocumentGeneratorService] = Depends(get_document_generator_service),
 ) -> GeneratedDocument:
     """Get a specific generated document."""
     try:
@@ -578,8 +581,8 @@ async def get_generated_document(
 async def delete_generated_document(
     document_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    service_cls: Type[DocumentGeneratorService] = Depends(get_document_generator_service),
-) -> Dict[str, str]:
+    service_cls: type[DocumentGeneratorService] = Depends(get_document_generator_service),
+) -> dict[str, str]:
     """Delete a generated document."""
     try:
         service = service_cls(db)
@@ -610,7 +613,7 @@ async def delete_generated_document(
 async def save_prompt_config(
     config: SavePromptConfigRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    service_cls: Type[DocumentGeneratorService] = Depends(get_document_generator_service),
+    service_cls: type[DocumentGeneratorService] = Depends(get_document_generator_service),
 ) -> PromptConfigResponse:
     """Save a custom prompt configuration for a document type."""
     try:
@@ -659,7 +662,7 @@ async def save_prompt_config(
 async def get_prompt_config(
     document_type: DocType,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    service_cls: Type[DocumentGeneratorService] = Depends(get_document_generator_service),
+    service_cls: type[DocumentGeneratorService] = Depends(get_document_generator_service),
 ) -> PromptConfigResponse:
     """Get the prompt configuration for a document type."""
     try:
@@ -712,13 +715,13 @@ async def get_prompt_config(
 async def bulk_generate_documents(
     request: BulkGenerateRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    service_cls: Type[DocumentGeneratorService] = Depends(get_document_generator_service),
+    service_cls: type[DocumentGeneratorService] = Depends(get_document_generator_service),
 ) -> BulkGenerateResponse:
     """Generate multiple documents in bulk (async)."""
     try:
         service = service_cls(db)
 
-        job_ids: List[str] = []
+        job_ids: list[str] = []
         total_jobs = len(request.conversation_ids) * len(request.document_types)
 
         for conv_id in request.conversation_ids:
@@ -756,7 +759,7 @@ async def bulk_generate_documents(
 )
 async def get_generation_statistics(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    service_cls: Type[DocumentGeneratorService] = Depends(get_document_generator_service),
+    service_cls: type[DocumentGeneratorService] = Depends(get_document_generator_service),
 ) -> GenerationStatistics:
     """Get statistics about document generation."""
     try:
@@ -775,11 +778,11 @@ async def get_generation_statistics(
                 most_used_model=None,
             )
 
-        by_type: Dict[str, int] = {}
-        by_provider: Dict[str, int] = {}
+        by_type: dict[str, int] = {}
+        by_provider: dict[str, int] = {}
         total_time = 0
         total_tokens = 0
-        models: Dict[str, int] = {}
+        models: dict[str, int] = {}
 
         for doc in all_docs:
             doc_type = doc["document_type"]

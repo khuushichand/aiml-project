@@ -5,11 +5,11 @@ This module includes the STT adapter for audio transcription.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from tldw_Server_API.app.core.exceptions import AdapterError
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters._common import resolve_workflow_file_uri
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.audio._config import STTConfig
 
 
@@ -21,7 +21,7 @@ from tldw_Server_API.app.core.Workflows.adapters.audio._config import STTConfig
     config_model=STTConfig,
     tags=["audio", "speech"],
 )
-async def run_stt_transcribe_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_stt_transcribe_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Transcribe audio file locally with optional diarization.
 
     Config:

@@ -6,33 +6,32 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.api.v1.schemas.document_insights import (
     DocumentInsightsResponse,
     GenerateInsightsRequest,
     InsightCategory,
     InsightItem,
 )
-from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.api.v1.utils.cache import (
     cache_response,
     get_cached_response,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
-
 
 router = APIRouter(tags=["Document Workspace"])
 
@@ -98,7 +97,7 @@ def _get_adapter(provider: str):
     return adapter
 
 
-def _resolve_model(provider: str, model: Optional[str], app_config: Dict[str, Any]) -> Optional[str]:
+def _resolve_model(provider: str, model: str | None, app_config: dict[str, Any]) -> str | None:
     """Resolve the model to use for the provider."""
     if model:
         return model
@@ -136,9 +135,9 @@ def _extract_json_payload(raw: Any) -> Any:
     return raw
 
 
-def _normalize_insights(raw_insights: List[Any]) -> List[InsightItem]:
+def _normalize_insights(raw_insights: list[Any]) -> list[InsightItem]:
     """Normalize raw LLM insights into InsightItem list."""
-    normalized: List[InsightItem] = []
+    normalized: list[InsightItem] = []
     valid_categories = {c.value for c in InsightCategory}
 
     for item in raw_insights:
@@ -191,7 +190,7 @@ def _normalize_insights(raw_insights: List[Any]) -> List[InsightItem]:
 )
 async def generate_document_insights(
     media_id: int = Path(..., description="The ID of the media item"),
-    request: Optional[GenerateInsightsRequest] = None,
+    request: GenerateInsightsRequest | None = None,
     db: MediaDatabase = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> DocumentInsightsResponse:

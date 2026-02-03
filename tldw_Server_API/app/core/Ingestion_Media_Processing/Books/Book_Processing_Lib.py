@@ -41,28 +41,31 @@ import stat
 import tempfile
 import zipfile
 from datetime import datetime
-import defusedxml.ElementTree as ET
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple, Union
+from typing import Any, Optional, Union
+
+import defusedxml.ElementTree as ET
+import ebooklib
+import html2text
+
 #
 # External Imports
 from bs4 import BeautifulSoup
-import ebooklib
 from ebooklib import epub
-import html2text
+
+from tldw_Server_API.app.core.Chunking import ChunkingError, InvalidChunkingMethodError, improved_chunking_process
 
 #
 # Import Local
 from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords, create_media_database
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
-from tldw_Server_API.app.core.Chunking import improved_chunking_process, ChunkingError, \
-    InvalidChunkingMethodError
-from tldw_Server_API.app.core.Metrics.metrics_logger import (log_counter, log_histogram)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
     open_safe_local_path,
     resolve_safe_local_path,
 )
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Utils.Utils import logging
+
 #
 #######################################################################################################################
 # Function Definitions
@@ -71,7 +74,7 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 MAX_ZIP_MEMBERS = 500
 MAX_ZIP_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 
-def extract_epub_metadata_from_text(content: str) -> Tuple[Optional[str], Optional[str]]:
+def extract_epub_metadata_from_text(content: str) -> tuple[Optional[str], Optional[str]]:
     """
     Extracts Title and Author from a string if specific headers are present.
 
@@ -152,7 +155,7 @@ def slugify(text: str) -> str:
 #
 # File Conversion Functions
 
-def epub_to_markdown(epub_path: str) -> Tuple[str, Optional[epub.EpubBook]]:
+def epub_to_markdown(epub_path: str) -> tuple[str, Optional[epub.EpubBook]]:
     """
     Converts an EPUB file to Markdown format.
 
@@ -229,7 +232,7 @@ def epub_to_markdown(epub_path: str) -> Tuple[str, Optional[epub.EpubBook]]:
         # Still return None for the book object on error
         return f"# Error converting EPUB\n\n{e}", book # Return error message and potentially None book
 
-def extract_epub_metadata_from_epub_obj(book: epub.EpubBook) -> Tuple[Optional[str], Optional[str]]:
+def extract_epub_metadata_from_epub_obj(book: epub.EpubBook) -> tuple[Optional[str], Optional[str]]:
     """
     Extracts title and author directly from an `ebooklib.epub.EpubBook` object's metadata.
 
@@ -274,7 +277,7 @@ def extract_epub_metadata_from_epub_obj(book: epub.EpubBook) -> Tuple[Optional[s
 #
 # epub parsing Functions
 
-def read_epub_filtered(epub_path) -> Tuple[str, Optional[epub.EpubBook]]:
+def read_epub_filtered(epub_path) -> tuple[str, Optional[epub.EpubBook]]:
     """
     Reads an EPUB file by following its spine, attempting to skip known front matter.
 
@@ -387,7 +390,7 @@ def read_epub_filtered(epub_path) -> Tuple[str, Optional[epub.EpubBook]]:
         logging.exception(f"Failed to parse EPUB: {str(e)}")
         return "", book # Return empty string and potentially None book
 
-def read_epub(file_path) -> Tuple[str, Optional[epub.EpubBook]]:
+def read_epub(file_path) -> tuple[str, Optional[epub.EpubBook]]:
     """
     Reads and extracts text from an EPUB file, cleaning up messy spacing.
 
@@ -562,11 +565,11 @@ def process_epub(
     file_path: str,
     title_override: Optional[str] = None,
     author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    keywords: Optional[list[str]] = None,
     custom_prompt: Optional[str] = None,
     system_prompt: Optional[str] = None,
     perform_chunking: bool = True,
-    chunk_options: Optional[Dict[str, Any]] = None,
+    chunk_options: Optional[dict[str, Any]] = None,
     # Removed custom_chapter_pattern - should be inside chunk_options if needed
     perform_analysis: bool = False,
     api_name: Optional[str] = None,
@@ -574,7 +577,7 @@ def process_epub(
     summarize_recursively: bool = False,
     extraction_method: str = 'filtered', # 'markdown', 'filtered', 'basic'
     base_dir: Optional[Path] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Processes an EPUB file: extracts content & metadata, chunks, and optionally summarizes.
     Returns a dictionary with processed data, status, and errors. *No DB interaction.*
@@ -653,7 +656,7 @@ def process_epub(
               especially if a fallback occurred (e.g., "read_epub (fallback)").
     """
     start_time = datetime.now()
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "status": "Pending",
         "input_ref": file_path,
         "processing_source": file_path,
@@ -966,11 +969,11 @@ def process_epub(
 
 def process_zip_of_epubs(
     zip_file_path: str,
-    keywords: Optional[List[str]] = None,
+    keywords: Optional[list[str]] = None,
     base_dir: Optional[Path] = None,
     # Pass all other relevant options down to process_epub
     **epub_options # Collects title_override, author_override, perform_chunking, chunk_options etc.
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
     """
     Processes a ZIP file containing multiple EPUB files.
 
@@ -1159,9 +1162,9 @@ def _process_markup_or_plain_text(
     file_type: str, # 'html', 'xml', 'opml', 'text'
     title_override: Optional[str] = None,
     author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    keywords: Optional[list[str]] = None,
     perform_chunking: bool = True,
-    chunk_options: Optional[Dict[str, Any]] = None,
+    chunk_options: Optional[dict[str, Any]] = None,
     perform_analysis: bool = False,
     api_name: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -1169,7 +1172,7 @@ def _process_markup_or_plain_text(
     system_prompt: Optional[str] = None,
     summarize_recursively: bool = False,
     base_dir: Optional[Path] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Internal helper to process HTML, XML, OPML, or plain text files.
 
@@ -1218,7 +1221,7 @@ def _process_markup_or_plain_text(
     final_title_for_logging = Path(file_path).name
 
     media_type = file_type if file_type in ['html', 'xml', 'opml', 'text'] else "document"
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "status": "Pending", "input_ref": file_path, "processing_source": file_path,
         "media_type": media_type, "source_format": file_type, "content": None,
         "metadata": {"title": None, "author": None, "raw": None}, "chunks": None,
@@ -1235,7 +1238,7 @@ def _process_markup_or_plain_text(
     markdown_content: Optional[str] = None
     extracted_title: Optional[str] = None
     extracted_author: str = "Unknown"
-    raw_metadata: Dict[str, Any] = {}
+    raw_metadata: dict[str, Any] = {}
 
     try:
         logging.info(f"Processing {file_type} file from {file_path}")
@@ -1473,7 +1476,7 @@ def _process_markup_or_plain_text(
     return result
 
 
-def extract_epub_metadata(content: str) -> Tuple[Optional[str], Optional[str]]:
+def extract_epub_metadata(content: str) -> tuple[Optional[str], Optional[str]]:
     """
     Extracts Title and Author from a string based on "Title:" and "Author:" prefixes.
 

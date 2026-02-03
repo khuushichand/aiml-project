@@ -11,15 +11,14 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from loguru import logger
 
-from ..models import RunSpec, RunStatus, RunPhase
+from ..models import RunPhase, RunSpec, RunStatus
 from ..streams import get_hub
 
 
-def _truthy(v: Optional[str]) -> bool:
+def _truthy(v: str | None) -> bool:
     return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
@@ -31,7 +30,7 @@ def lima_available() -> bool:
     return shutil.which("limactl") is not None
 
 
-def lima_version() -> Optional[str]:
+def lima_version() -> str | None:
     """Get Lima version string."""
     env = os.getenv("TLDW_SANDBOX_LIMA_VERSION")
     if env:
@@ -67,7 +66,7 @@ def _generate_lima_config(
     workspace_host_path: str,
     cpu: int,
     memory_mb: int,
-    env: Dict[str, str],
+    env: dict[str, str],
     network_policy: str,
 ) -> dict:
     """Generate Lima YAML configuration as a dictionary."""
@@ -128,14 +127,14 @@ class LimaRunner:
 
     # Track active VMs per run_id for cancellation
     _active_lock = threading.RLock()
-    _active_vm: Dict[str, str] = {}  # run_id -> vm_name
-    _active_run_dir: Dict[str, str] = {}  # run_id -> temp directory
+    _active_vm: dict[str, str] = {}  # run_id -> vm_name
+    _active_run_dir: dict[str, str] = {}  # run_id -> temp directory
 
     def __init__(self) -> None:
         pass
 
     @staticmethod
-    def _lima_version() -> Optional[str]:
+    def _lima_version() -> str | None:
         return lima_version()
 
     @classmethod
@@ -185,7 +184,7 @@ class LimaRunner:
                 cls._active_run_dir.pop(run_id, None)
 
     def start_run(
-        self, run_id: str, spec: RunSpec, session_workspace: Optional[str] = None
+        self, run_id: str, spec: RunSpec, session_workspace: str | None = None
     ) -> RunStatus:
         """Execute a run in a Lima VM."""
         logger.debug(f"LimaRunner.start_run called with spec: {spec}")
@@ -214,7 +213,7 @@ class LimaRunner:
             pass
 
         # Compute pseudo image digest
-        image_digest: Optional[str] = None
+        image_digest: str | None = None
         base = spec.base_image or "ubuntu:24.04"
         try:
             image_digest = f"sha256:{hashlib.sha256(base.encode('utf-8')).hexdigest()}"
@@ -225,9 +224,9 @@ class LimaRunner:
         time.sleep(0.01)
 
         # Placeholder artifacts
-        artifacts_map: Dict[str, bytes] = {}
+        artifacts_map: dict[str, bytes] = {}
         try:
-            patterns: List[str] = list(spec.capture_patterns or [])
+            patterns: list[str] = list(spec.capture_patterns or [])
             for pat in patterns:
                 key = pat.strip().lstrip("./") or "artifact.bin"
                 if any(ch in key for ch in ["*", "?", "["]):
@@ -253,7 +252,7 @@ class LimaRunner:
 
         art_bytes = sum(len(v) for v in artifacts_map.values()) if artifacts_map else 0
 
-        usage: Dict[str, int] = {
+        usage: dict[str, int] = {
             "cpu_time_sec": 0,
             "wall_time_sec": int(max(0.0, (finished - started).total_seconds())),
             "peak_rss_mb": 0,
@@ -275,7 +274,7 @@ class LimaRunner:
         )
 
     def _run_real(
-        self, run_id: str, spec: RunSpec, session_workspace: Optional[str] = None
+        self, run_id: str, spec: RunSpec, session_workspace: str | None = None
     ) -> RunStatus:
         """Execute a real run in a Lima VM."""
         started = datetime.utcnow()
@@ -345,9 +344,9 @@ class LimaRunner:
             LimaRunner._active_vm[run_id] = vm_name
             LimaRunner._active_run_dir[run_id] = run_dir
 
-        exit_code: Optional[int] = None
-        image_digest: Optional[str] = None
-        artifacts_map: Dict[str, bytes] = {}
+        exit_code: int | None = None
+        image_digest: str | None = None
+        artifacts_map: dict[str, bytes] = {}
         message = "Lima execution"
 
         try:
@@ -497,7 +496,7 @@ class LimaRunner:
 
         art_bytes = sum(len(v) for v in artifacts_map.values()) if artifacts_map else 0
 
-        usage: Dict[str, int] = {
+        usage: dict[str, int] = {
             "cpu_time_sec": 0,  # VM-level CPU accounting not available
             "wall_time_sec": int(max(0.0, (finished - started).total_seconds())),
             "peak_rss_mb": 0,  # VM-level memory accounting not available
@@ -536,7 +535,7 @@ class LimaRunner:
                     pass
 
     @staticmethod
-    def _write_entry_script(workspace: str, command: List[str]) -> None:
+    def _write_entry_script(workspace: str, command: list[str]) -> None:
         """Write the entry script that will run inside the VM."""
         import shlex
 
@@ -568,7 +567,7 @@ exit $exit_code
         os.chmod(entry, 0o755)
 
     @staticmethod
-    def _write_env_file(workspace: str, env: Dict[str, str]) -> None:
+    def _write_env_file(workspace: str, env: dict[str, str]) -> None:
         """Write environment variables to a file for sourcing in the VM."""
         if not env:
             return
@@ -583,7 +582,7 @@ exit $exit_code
             Path(workspace, ".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     @staticmethod
-    def _tail_log(run_id: str, log_path: str, stop_flag: Dict[str, bool]) -> None:
+    def _tail_log(run_id: str, log_path: str, stop_flag: dict[str, bool]) -> None:
         """Tail the log file and stream to hub."""
         hub = get_hub()
         max_log = None
@@ -615,13 +614,13 @@ exit $exit_code
 
     @staticmethod
     def _collect_artifacts(
-        workspace: str, capture_patterns: Optional[List[str]]
-    ) -> Dict[str, bytes]:
+        workspace: str, capture_patterns: list[str] | None
+    ) -> dict[str, bytes]:
         """Collect artifacts matching the capture patterns."""
         if not capture_patterns:
             return {}
 
-        artifacts_map: Dict[str, bytes] = {}
+        artifacts_map: dict[str, bytes] = {}
 
         try:
             for root, _dirs, files in os.walk(workspace):

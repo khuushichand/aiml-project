@@ -3,15 +3,13 @@ Configuration management commands for tldw Evaluations CLI.
 """
 
 import sys
-from typing import Dict, Any
+from typing import Any
 
 import click
 from loguru import logger
 
-from tldw_Server_API.cli.utils.output import (
-    print_error, print_success, print_info, print_config_section, print_json
-)
-from tldw_Server_API.cli.utils.config import save_config, get_config_value
+from tldw_Server_API.cli.utils.config import save_config
+from tldw_Server_API.cli.utils.output import print_config_section, print_error, print_json, print_success
 
 
 @click.group()
@@ -127,7 +125,7 @@ def reload_config(ctx):
         sys.exit(1)
 
 
-def _set_nested_value(config: Dict[str, Any], path: str, value: Any):
+def _set_nested_value(config: dict[str, Any], path: str, value: Any):
     """Set nested configuration value by dot-separated path."""
     keys = path.split('.')
     current = config

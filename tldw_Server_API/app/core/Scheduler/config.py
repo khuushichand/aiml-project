@@ -2,10 +2,11 @@
 Configuration management for the scheduler system.
 """
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Dict, Any
-import os
+from typing import Any, Optional
+
 from loguru import logger
 
 # Prefer using the central project config when available so we place
@@ -33,7 +34,8 @@ def _default_scheduler_db_url() -> str:
     # Preserve test behavior
     if (os.getenv('PYTEST_CURRENT_TEST') is not None or
             os.getenv('TEST_MODE', '').strip().lower() in {'1', 'true', 'yes', 'on'}):
-        import tempfile, os as _os
+        import os as _os
+        import tempfile
         return f"sqlite:///{tempfile.gettempdir()}/scheduler_{_os.getpid()}.db"
 
     # Try to use the repo's Databases directory
@@ -357,7 +359,7 @@ class SchedulerConfig:
                     return f"{scheme_user}:****@{parts[1]}"
         return url
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary"""
         return {
             'database_url': self._safe_database_url(),

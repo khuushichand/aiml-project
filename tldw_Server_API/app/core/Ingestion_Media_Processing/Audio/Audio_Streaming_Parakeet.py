@@ -16,24 +16,23 @@
 import asyncio
 import base64
 import json
-from loguru import logger
 import time
-from typing import Optional, AsyncGenerator, Dict, Any, Callable
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
+
 import numpy as np
-import soundfile as sf
-import tempfile
-from pathlib import Path
+from loguru import logger
+
+from .Audio_Transcription_Lib import is_transcription_error_message
 
 # Import transcription functions
 from .Audio_Transcription_Nemo import (
     transcribe_with_parakeet,
-    load_parakeet_model,
 )
 from .Audio_Transcription_Parakeet_MLX import (
     transcribe_with_parakeet_mlx,
 )
-from .Audio_Transcription_Lib import is_transcription_error_message
 
 logger = logger
 
@@ -153,7 +152,7 @@ class ParakeetStreamingTranscriber:
 
         return _noop()
 
-    async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
+    async def process_audio_chunk(self, audio_data: bytes) -> Optional[dict[str, Any]]:
         """
         Process a chunk of audio data.
 
@@ -280,7 +279,7 @@ class ParakeetStreamingTranscriber:
             logger.error(f"Transcription error: {e}")
             return None
 
-    async def flush(self) -> Optional[Dict[str, Any]]:
+    async def flush(self) -> Optional[dict[str, Any]]:
         """Process any remaining audio in the buffer."""
         if self.buffer.get_duration() > 0:
             audio = self.buffer.get_audio()

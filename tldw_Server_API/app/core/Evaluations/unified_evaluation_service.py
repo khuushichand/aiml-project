@@ -13,13 +13,13 @@ This service provides:
 """
 
 import asyncio
-import json
 import time
 import uuid
 from contextlib import suppress
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Tuple
 from enum import Enum
+from typing import Any, Optional
+
 from loguru import logger
 
 # Import database components
@@ -27,33 +27,32 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_evaluations_database as _create_evals_db,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-
-# Import evaluation engines
-from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
-from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import ResponseQualityEvaluator
-
-# Import support services
-from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
-from tldw_Server_API.app.core.Evaluations.user_rate_limiter import user_rate_limiter, UserTier
-from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitBreaker
 from tldw_Server_API.app.core.Evaluations.audit_adapter import (
-    log_evaluation_created,
-    log_evaluation_created_async,
-    log_evaluation_updated,
-    log_evaluation_updated_async,
-    log_evaluation_deleted,
-    log_evaluation_deleted_async,
-    log_run_started,
-    log_run_started_async,
-    log_run_cancelled,
-    log_run_cancelled_async,
     log_dataset_created,
     log_dataset_created_async,
     log_dataset_deleted,
     log_dataset_deleted_async,
+    log_evaluation_created,
+    log_evaluation_created_async,
+    log_evaluation_deleted,
+    log_evaluation_deleted_async,
+    log_evaluation_updated,
+    log_evaluation_updated_async,
+    log_run_cancelled,
+    log_run_cancelled_async,
+    log_run_started,
+    log_run_started_async,
 )
-from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent
+from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitBreaker
+
+# Import support services
+from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
+
+# Import evaluation engines
+from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
+from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import ResponseQualityEvaluator
 from tldw_Server_API.app.core.Evaluations.webhook_identity import webhook_user_id_from_value
+from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent
 
 
 class EvaluationType(str, Enum):
@@ -134,7 +133,7 @@ class UnifiedEvaluationService:
             def evaluation_created(self, *, user_id: str, eval_id: str, name: str, eval_type: str) -> None:
                 log_evaluation_created(user_id=user_id, eval_id=eval_id, name=name, eval_type=eval_type)
 
-            def evaluation_updated(self, *, user_id: str, eval_id: str, updates: Dict[str, Any]) -> None:
+            def evaluation_updated(self, *, user_id: str, eval_id: str, updates: dict[str, Any]) -> None:
                 log_evaluation_updated(user_id=user_id, eval_id=eval_id, updates=updates)
 
             def evaluation_deleted(self, *, user_id: str, eval_id: str) -> None:
@@ -229,13 +228,13 @@ class UnifiedEvaluationService:
         self,
         name: str,
         eval_type: str,
-        eval_spec: Dict[str, Any],
+        eval_spec: dict[str, Any],
         description: Optional[str] = None,
         dataset_id: Optional[str] = None,
-        dataset: Optional[List[Dict]] = None,
-        metadata: Optional[Dict] = None,
+        dataset: Optional[list[dict]] = None,
+        metadata: Optional[dict] = None,
         created_by: str = "system"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new evaluation definition.
 
@@ -308,7 +307,7 @@ class UnifiedEvaluationService:
         after: Optional[str] = None,
         eval_type: Optional[str] = None,
         created_by: Optional[str] = None
-    ) -> Tuple[List[Dict], bool]:
+    ) -> tuple[list[dict], bool]:
         """
         List evaluations with pagination and filtering.
 
@@ -332,7 +331,7 @@ class UnifiedEvaluationService:
             logger.error(f"Failed to list evaluations: {e}")
             raise
 
-    async def get_evaluation(self, eval_id: str, *, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    async def get_evaluation(self, eval_id: str, *, created_by: Optional[str] = None) -> Optional[dict[str, Any]]:
         """Get evaluation by ID"""
         try:
             return self.db.get_evaluation(eval_id, created_by=created_by)
@@ -343,10 +342,10 @@ class UnifiedEvaluationService:
     async def update_evaluation(
         self,
         eval_id: str,
-        updates: Dict[str, Any],
+        updates: dict[str, Any],
         updated_by: str = "system",
         created_by: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         """Update evaluation definition and return the updated record.
 
         The underlying DB method returns a boolean. For API correctness and
@@ -395,12 +394,12 @@ class UnifiedEvaluationService:
         self,
         eval_id: str,
         target_model: str,
-        config: Optional[Dict] = None,
-        dataset_override: Optional[Dict] = None,
+        config: Optional[dict] = None,
+        dataset_override: Optional[dict] = None,
         webhook_url: Optional[str] = None,
         created_by: str = "system",
         webhook_user_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create and start an evaluation run.
 
@@ -479,7 +478,7 @@ class UnifiedEvaluationService:
         self,
         run_id: str,
         eval_id: str,
-        eval_config: Dict,
+        eval_config: dict,
         created_by: str,
         webhook_user_id: Optional[str] = None,
     ):
@@ -545,7 +544,7 @@ class UnifiedEvaluationService:
             # Ensure the task registry is cleaned up
             self.runner.running_tasks.pop(run_id, None)
 
-    async def get_run(self, run_id: str, *, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    async def get_run(self, run_id: str, *, created_by: Optional[str] = None) -> Optional[dict[str, Any]]:
         """Get run by ID"""
         try:
             return self.db.get_run(run_id, created_by=created_by)
@@ -560,7 +559,7 @@ class UnifiedEvaluationService:
         limit: int = 20,
         after: Optional[str] = None,
         created_by: Optional[str] = None,
-    ) -> Tuple[List[Dict], bool]:
+    ) -> tuple[list[dict], bool]:
         """List runs with filtering"""
         try:
             runs, has_more = self.db.list_runs(
@@ -604,12 +603,12 @@ class UnifiedEvaluationService:
         self,
         source_text: str,
         summary: str,
-        metrics: Optional[List[str]] = None,
+        metrics: Optional[list[str]] = None,
         api_name: str = "openai",
         api_key: Optional[str] = None,
         user_id: str = "system",
         webhook_user_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Run G-Eval summarization evaluation.
 
@@ -672,7 +671,8 @@ class UnifiedEvaluationService:
             # Emit webhook for completion (await in TEST_MODE for deterministic tests)
             if self.enable_webhooks:
                 try:
-                    import os as _os, asyncio as _asyncio
+                    import asyncio as _asyncio
+                    import os as _os
                     effective_user_id = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(user_id) or user_id
                     if effective_user_id == "single_user":
                         try:
@@ -719,15 +719,15 @@ class UnifiedEvaluationService:
     async def evaluate_rag(
         self,
         query: str,
-        contexts: List[str],
+        contexts: list[str],
         response: str,
         ground_truth: Optional[str] = None,
-        metrics: Optional[List[str]] = None,
+        metrics: Optional[list[str]] = None,
         api_name: str = "openai",
         api_key: Optional[str] = None,
         user_id: str = "system",
         webhook_user_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Run RAG system evaluation.
 
@@ -778,7 +778,8 @@ class UnifiedEvaluationService:
             # Emit webhook for completion (await in TEST_MODE for deterministic tests)
             if self.enable_webhooks:
                 try:
-                    import os as _os, asyncio as _asyncio
+                    import asyncio as _asyncio
+                    import os as _os
                     effective_user_id = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(user_id) or user_id
                     if effective_user_id == "single_user":
                         try:
@@ -826,12 +827,12 @@ class UnifiedEvaluationService:
         prompt: str,
         response: str,
         expected_format: Optional[str] = None,
-        custom_criteria: Optional[Dict] = None,
+        custom_criteria: Optional[dict] = None,
         api_name: str = "openai",
         api_key: Optional[str] = None,
         user_id: str = "system",
         webhook_user_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Evaluate response quality.
 
@@ -880,7 +881,8 @@ class UnifiedEvaluationService:
             # Emit webhook for completion (await in TEST_MODE for deterministic tests)
             if self.enable_webhooks:
                 try:
-                    import os as _os, asyncio as _asyncio
+                    import asyncio as _asyncio
+                    import os as _os
                     effective_user_id = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(user_id) or user_id
                     if effective_user_id == "single_user":
                         try:
@@ -925,12 +927,12 @@ class UnifiedEvaluationService:
 
     async def evaluate_ocr(
         self,
-        items: List[Dict[str, Any]],
-        ocr_options: Optional[Dict[str, Any]] = None,
-        metrics: Optional[List[str]] = None,
-        thresholds: Optional[Dict[str, float]] = None,
+        items: list[dict[str, Any]],
+        ocr_options: Optional[dict[str, Any]] = None,
+        metrics: Optional[list[str]] = None,
+        thresholds: Optional[dict[str, float]] = None,
         user_id: str = "system",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate OCR effectiveness for provided documents.
 
         Each item supports keys: id, pdf_path|pdf_bytes|extracted_text, ground_truth_text
@@ -972,16 +974,16 @@ class UnifiedEvaluationService:
 
     async def evaluate_qa3(
         self,
-        items: List[Dict[str, Any]],
-        allowed_labels: Optional[List[str]] = None,
-        label_mapping: Optional[Dict[str, str]] = None,
+        items: list[dict[str, Any]],
+        allowed_labels: Optional[list[str]] = None,
+        label_mapping: Optional[dict[str, str]] = None,
         generate_predictions: bool = False,
         api_name: str = "openai",
         api_key: Optional[str] = None,
         temperature: float = 0.0,
         max_tokens: int = 3,
         user_id: str = "system"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate tri-label QA accuracy and PRF per label.
 
         If generate_predictions is True, uses LLM to produce predictions.
@@ -1068,7 +1070,7 @@ class UnifiedEvaluationService:
                 results.append({"id": it.get("id"), "question": q, "gold": gold, "pred": pred})
 
         # Metrics
-        cm: Dict[str, Dict[str, int]] = {g: {p: 0 for p in allowed} for g in allowed}
+        cm: dict[str, dict[str, int]] = {g: {p: 0 for p in allowed} for g in allowed}
         total = 0
         correct = 0
         for r in results:
@@ -1119,12 +1121,12 @@ class UnifiedEvaluationService:
 
     async def evaluate_propositions(
         self,
-        extracted: List[str],
-        reference: List[str],
+        extracted: list[str],
+        reference: list[str],
         method: str = "semantic",
         threshold: float = 0.7,
         user_id: str = "system"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate proposition extraction against a reference set."""
         try:
             from tldw_Server_API.app.core.Chunking.utils.proposition_eval import evaluate_propositions as eval_props
@@ -1181,9 +1183,9 @@ class UnifiedEvaluationService:
     async def create_dataset(
         self,
         name: str,
-        samples: List[Dict],
+        samples: list[dict],
         description: Optional[str] = None,
-        metadata: Optional[Dict] = None,
+        metadata: Optional[dict] = None,
         created_by: str = "system"
     ) -> str:
         """Create a new dataset"""
@@ -1210,7 +1212,7 @@ class UnifiedEvaluationService:
         after: Optional[str] = None,
         offset: int = 0,
         created_by: Optional[str] = None,
-    ) -> Tuple[List[Dict], bool]:
+    ) -> tuple[list[dict], bool]:
         """List datasets with pagination"""
         try:
             return self.db.list_datasets(limit=limit, after=after, offset=offset, created_by=created_by)
@@ -1218,7 +1220,7 @@ class UnifiedEvaluationService:
             logger.error(f"Failed to list datasets: {e}")
             raise
 
-    async def get_dataset(self, dataset_id: str, *, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    async def get_dataset(self, dataset_id: str, *, created_by: Optional[str] = None) -> Optional[dict[str, Any]]:
         """Get dataset by ID"""
         try:
             return self.db.get_dataset(dataset_id, created_by=created_by)
@@ -1253,7 +1255,7 @@ class UnifiedEvaluationService:
         end_date: Optional[datetime] = None,
         limit: int = 100,
         offset: int = 0
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get evaluation history for a user.
 
@@ -1334,7 +1336,7 @@ class UnifiedEvaluationService:
         return variants
 
     @staticmethod
-    def _extract_created_ts(record: Dict[str, Any]) -> Optional[int]:
+    def _extract_created_ts(record: dict[str, Any]) -> Optional[int]:
         value = record.get("created_at")
         if value is None:
             value = record.get("created")
@@ -1351,9 +1353,9 @@ class UnifiedEvaluationService:
     async def _store_evaluation_result(
         self,
         evaluation_type: str,
-        input_data: Dict,
+        input_data: dict,
         results: Any,
-        metadata: Dict
+        metadata: dict
     ) -> str:
         """Store evaluation result in database using unified approach"""
         try:
@@ -1425,7 +1427,7 @@ class UnifiedEvaluationService:
             logger.error(f"Failed to store evaluation result: {e}")
             return f"temp_{int(time.time())}"
 
-    async def get_metrics_summary(self) -> Dict[str, Any]:
+    async def get_metrics_summary(self) -> dict[str, Any]:
         """Get evaluation metrics summary"""
         try:
             if advanced_metrics.enabled:
@@ -1436,7 +1438,7 @@ class UnifiedEvaluationService:
             # Do not expose internal error details to external clients
             return {"error": "Failed to collect metrics"}
 
-    async def health_check(self) -> Dict[str, Any]:
+    async def health_check(self) -> dict[str, Any]:
         """Check service health"""
         try:
             # Check database connectivity with a lightweight probe

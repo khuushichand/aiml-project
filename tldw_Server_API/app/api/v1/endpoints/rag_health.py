@@ -5,8 +5,8 @@ Health and monitoring endpoints for the RAG service.
 Provides health checks, cache statistics, and system monitoring.
 """
 
-from typing import Dict, Any, Optional
 from datetime import datetime
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
@@ -16,12 +16,12 @@ from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 
 # Import RAG components
 from ....core.RAG.rag_service.advanced_cache import RAGCache
-from ....core.RAG.rag_service.metrics_collector import get_metrics_collector
-from ....core.RAG.rag_service.resilience import get_coordinator, HealthStatus
+
 # Avoid importing optional quick_wins at module import time to prevent test collection failures
 # get_cost_tracker will be imported lazily inside the cost summary endpoint
 from ....core.RAG.rag_service.batch_processing import BatchProcessor
-
+from ....core.RAG.rag_service.metrics_collector import get_metrics_collector
+from ....core.RAG.rag_service.resilience import get_coordinator
 
 router = APIRouter(prefix="/api/v1/rag", tags=["rag-health"])
 
@@ -48,7 +48,7 @@ def get_batch_processor() -> BatchProcessor:
 
 
 @router.get("/health", summary="RAG service health check")
-async def health_check() -> Dict[str, Any]:
+async def health_check() -> dict[str, Any]:
     """
     Comprehensive health check for RAG service.
 
@@ -159,7 +159,7 @@ async def health_check() -> Dict[str, Any]:
 
 
 @router.get("/health/live", summary="Simple liveness check")
-async def liveness_check() -> Dict[str, str]:
+async def liveness_check() -> dict[str, str]:
     """
     Simple liveness check for container orchestration.
 
@@ -169,7 +169,7 @@ async def liveness_check() -> Dict[str, str]:
 
 
 @router.get("/health/ready", summary="Readiness check")
-async def readiness_check() -> Dict[str, Any]:
+async def readiness_check() -> dict[str, Any]:
     """
     Readiness check for container orchestration.
 
@@ -196,7 +196,7 @@ async def readiness_check() -> Dict[str, Any]:
     summary="Get cache statistics",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def get_cache_statistics() -> Dict[str, Any]:
+async def get_cache_statistics() -> dict[str, Any]:
     """
     Get detailed cache statistics.
 
@@ -244,7 +244,7 @@ async def get_cache_statistics() -> Dict[str, Any]:
     summary="Clear cache",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def clear_cache() -> Dict[str, str]:
+async def clear_cache() -> dict[str, str]:
     """
     Clear all cache entries.
 
@@ -274,7 +274,7 @@ async def clear_cache() -> Dict[str, str]:
     summary="Get cache warming status",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def get_cache_warming_status() -> Dict[str, Any]:
+async def get_cache_warming_status() -> dict[str, Any]:
     """Get status of cache warming operations."""
     try:
         cache = get_rag_cache()
@@ -306,7 +306,7 @@ async def get_cache_warming_status() -> Dict[str, Any]:
     summary="Get metrics summary",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def get_metrics_summary() -> Dict[str, Any]:
+async def get_metrics_summary() -> dict[str, Any]:
     """Get summary of RAG pipeline metrics."""
     try:
         metrics = get_metrics_collector()
@@ -345,7 +345,7 @@ async def get_metrics_summary() -> Dict[str, Any]:
     summary="Get cost tracking summary",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def get_cost_summary() -> Dict[str, Any]:
+async def get_cost_summary() -> dict[str, Any]:
     """Get summary of LLM API costs."""
     try:
         # Lazy import to avoid hard dependency during module import
@@ -391,7 +391,7 @@ async def get_cost_summary() -> Dict[str, Any]:
     summary="Get batch job statuses",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def get_batch_jobs() -> Dict[str, Any]:
+async def get_batch_jobs() -> dict[str, Any]:
     """Get status of all batch processing jobs."""
     try:
         processor = get_batch_processor()
@@ -425,7 +425,7 @@ async def get_batch_jobs() -> Dict[str, Any]:
         )
 
 
-def _get_cache_recommendations(stats: Dict[str, Any]) -> list:
+def _get_cache_recommendations(stats: dict[str, Any]) -> list:
     """Generate cache recommendations based on statistics."""
     recommendations = []
 

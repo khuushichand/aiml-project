@@ -19,9 +19,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
-
-from loguru import logger
+from typing import Any
 
 
 def _utcnow_iso() -> str:
@@ -32,17 +30,17 @@ def _utcnow_iso() -> str:
 class UsageEvent:
     user_id: str
     type: str
-    resource_id: Optional[str] = None
-    tags: Optional[List[str]] = None
-    metadata: Optional[Dict[str, Any]] = None
-    timestamp: Optional[str] = None
+    resource_id: str | None = None
+    tags: list[str] | None = None
+    metadata: dict[str, Any] | None = None
+    timestamp: str | None = None
 
 
 @dataclass
 class SemanticMemory:
     user_id: str
     content: str
-    tags: Optional[List[str]] = None
+    tags: list[str] | None = None
     pinned: bool = False
 
 
@@ -125,7 +123,7 @@ class PersonalizationDB:
                 conn.close()
 
     # Profiles
-    def get_or_create_profile(self, user_id: str) -> Dict[str, Any]:
+    def get_or_create_profile(self, user_id: str) -> dict[str, Any]:
         with self._lock:
             conn = self._connect()
             try:
@@ -154,7 +152,7 @@ class PersonalizationDB:
             finally:
                 conn.close()
 
-    def update_profile(self, user_id: str, **fields) -> Dict[str, Any]:
+    def update_profile(self, user_id: str, **fields) -> dict[str, Any]:
         # Ensure row exists
         self.get_or_create_profile(user_id)
         if not fields:
@@ -235,9 +233,9 @@ class PersonalizationDB:
             finally:
                 conn.close()
 
-    def list_semantic_memories(self, user_id: str, q: Optional[str] = None, limit: int = 50, offset: int = 0) -> Tuple[List[Dict[str, Any]], int]:
+    def list_semantic_memories(self, user_id: str, q: str | None = None, limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
         clauses = ["user_id = ?"]
-        params: List[Any] = [str(user_id)]
+        params: list[Any] = [str(user_id)]
         if q:
             clauses.append("content LIKE ?")
             params.append(f"%{q}%")
@@ -250,7 +248,7 @@ class PersonalizationDB:
             try:
                 cur = conn.execute(sql, params_page)
                 rows = cur.fetchall()
-                items: List[Dict[str, Any]] = []
+                items: list[dict[str, Any]] = []
                 for r in rows:
                     items.append({
                         "id": r["id"],
@@ -266,7 +264,7 @@ class PersonalizationDB:
                 conn.close()
 
     # Topics
-    def upsert_topic(self, user_id: str, label: str, score: float, last_seen: Optional[str] = None) -> None:
+    def upsert_topic(self, user_id: str, label: str, score: float, last_seen: str | None = None) -> None:
         import uuid
         last = last_seen or _utcnow_iso()
         with self._lock:
@@ -304,7 +302,7 @@ class PersonalizationDB:
             finally:
                 conn.close()
 
-    def purge_user(self, user_id: str) -> Dict[str, int]:
+    def purge_user(self, user_id: str) -> dict[str, int]:
         with self._lock:
             conn = self._connect()
             try:

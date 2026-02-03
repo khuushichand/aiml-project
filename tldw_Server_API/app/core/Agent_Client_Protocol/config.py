@@ -4,7 +4,6 @@ import json
 import os
 import shlex
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 from tldw_Server_API.app.core.config import get_config_section
 
@@ -12,13 +11,13 @@ from tldw_Server_API.app.core.config import get_config_section
 @dataclass
 class ACPRunnerConfig:
     command: str
-    args: List[str] = field(default_factory=list)
-    env: Dict[str, str] = field(default_factory=dict)
-    cwd: Optional[str] = None
+    args: list[str] = field(default_factory=list)
+    env: dict[str, str] = field(default_factory=dict)
+    cwd: str | None = None
     startup_timeout_sec: float = 10.0
 
 
-def _parse_args(raw: Optional[str]) -> List[str]:
+def _parse_args(raw: str | None) -> list[str]:
     if not raw:
         return []
     text = raw.strip()
@@ -35,7 +34,7 @@ def _parse_args(raw: Optional[str]) -> List[str]:
     return shlex.split(text)
 
 
-def _parse_env(raw: Optional[str]) -> Dict[str, str]:
+def _parse_env(raw: str | None) -> dict[str, str]:
     if not raw:
         return {}
     text = raw.strip()
@@ -50,7 +49,7 @@ def _parse_env(raw: Optional[str]) -> Dict[str, str]:
             return {str(k): str(v) for k, v in data.items()}
         return {}
     pairs = [seg.strip() for seg in text.split(",") if seg.strip()]
-    env: Dict[str, str] = {}
+    env: dict[str, str] = {}
     for pair in pairs:
         if "=" not in pair:
             continue
