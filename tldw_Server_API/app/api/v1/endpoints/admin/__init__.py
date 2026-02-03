@@ -1,4 +1,4 @@
-# admin.py
+# admin/__init__.py
 # Description: Admin endpoints for user management, registration codes, and system administration
 #
 # Imports
@@ -381,7 +381,7 @@ async def _get_admin_org_ids(principal: AuthPrincipal) -> list[int] | None:
     return await admin_scope_service.get_admin_org_ids(principal)
 
 
-# Compat shim: tests import this helper from admin.py.
+# Compat shim: tests import this helper from the admin module.
 async def _load_bulk_user_candidates(
     *,
     principal: AuthPrincipal,

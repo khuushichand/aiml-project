@@ -98,7 +98,7 @@ def _resolve_quality_config(config_prefix: str = "RAG_QUALITY") -> tuple[str, Op
     try:
         from tldw_Server_API.app.core.config import load_and_log_configs
         cfg = load_and_log_configs() or {}
-    except Exception:
+    except (ImportError, AttributeError, OSError, TypeError, ValueError):
         cfg = {}
 
     provider = None
@@ -249,7 +249,7 @@ class FastGroundednessGrader:
                 metadata={"error": "timeout"},
             )
 
-        except Exception as e:
+        except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.warning(f"Fast groundedness check failed: {e}")
             return self._heuristic_groundedness(query, answer, documents, start_time)
 
@@ -297,7 +297,7 @@ class FastGroundednessGrader:
                     method="llm",
                 )
 
-        except Exception as e:
+        except (json.JSONDecodeError, AttributeError, TypeError, ValueError) as e:
             logger.debug(f"Failed to parse groundedness response: {e}")
 
         # Default on parse failure
@@ -475,7 +475,7 @@ class UtilityGrader:
                 metadata={"error": "timeout"},
             )
 
-        except Exception as e:
+        except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.warning(f"Utility grading failed: {e}")
             return self._heuristic_utility(query, answer, start_time)
 
@@ -500,7 +500,7 @@ class UtilityGrader:
                     method="llm",
                 )
 
-        except Exception as e:
+        except (json.JSONDecodeError, AttributeError, TypeError, ValueError) as e:
             logger.debug(f"Failed to parse utility response: {e}")
 
         # Default on parse failure

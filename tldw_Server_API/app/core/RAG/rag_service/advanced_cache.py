@@ -22,7 +22,7 @@ class CacheEntry:
         self.last_accessed = time.time()
         try:
             self.access_count += 1
-        except Exception:
+        except TypeError:
             self.access_count = 1
 
     def is_expired(self) -> bool:
@@ -44,7 +44,7 @@ class MemoryCache:
         if entry.is_expired():
             try:
                 self._store.pop(key, None)
-            except Exception:
+            except (KeyError, TypeError):
                 pass
             return None
         entry.update_access()
@@ -79,7 +79,7 @@ class AdvancedAgenticCache:
         if expires_at and expires_at < time.time():
             try:
                 self._store.pop(k, None)
-            except Exception:
+            except (KeyError, TypeError):
                 pass
             return None
         return value
@@ -88,7 +88,7 @@ class AdvancedAgenticCache:
         try:
             expires_at = time.time() + max(1, int(ttl_sec))
             self._store[(namespace, key)] = (expires_at, value)
-        except Exception:
+        except (TypeError, ValueError):
             pass
 
     def invalidate_prefix(self, namespace: str, prefix: str) -> int:
@@ -96,7 +96,7 @@ class AdvancedAgenticCache:
         for k in to_delete:
             try:
                 self._store.pop(k, None)
-            except Exception:
+            except (KeyError, TypeError):
                 pass
         return len(to_delete)
 

@@ -24,7 +24,7 @@ from loguru import logger
 
 try:
     from .types import DataSource, Document
-except Exception:  # pragma: no cover - import guard for isolated tests
+except ImportError:  # pragma: no cover - import guard for isolated tests
     # Minimal fallback for type hints
     class Document:  # type: ignore
         def __init__(self, id: str, content: str, source=None, metadata: dict[str, Any] | None = None, score: float = 0.0):
@@ -38,7 +38,7 @@ except Exception:  # pragma: no cover - import guard for isolated tests
 
 try:
     from tldw_Server_API.app.core.Embeddings.async_embeddings import get_async_embedding_service
-except Exception:  # pragma: no cover - import guard for environments without embeddings
+except ImportError:  # pragma: no cover - import guard for environments without embeddings
     get_async_embedding_service = None  # type: ignore
 
 
@@ -85,7 +85,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
         if na == 0.0 or nb == 0.0:
             return 0.0
         return float(va.dot(vb) / (na * nb))
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError, ZeroDivisionError):
         # Fallback: Jaccard over rounded floats as tokens (very rough)
         sa = {round(x, 3) for x in a}
         sb = {round(x, 3) for x in b}
@@ -122,7 +122,7 @@ async def apply_multi_vector_passages(
     # Embed query
     try:
         q_vec = await svc.create_embedding(text=query, user_id=user_id)
-    except Exception as exc:
+    except (AttributeError, ConnectionError, OSError, RuntimeError, TimeoutError, TypeError, ValueError) as exc:
         logger.warning(f"Query embedding failed; skipping multi-vector passages: {exc}")
         return documents
 
@@ -145,7 +145,7 @@ async def apply_multi_vector_passages(
             batch = all_spans[i : i + cfg.batch_size]
             vecs = await svc.create_embeddings_batch(batch, user_id=user_id)
             span_vectors.extend(vecs)
-    except Exception as exc:
+    except (AttributeError, ConnectionError, OSError, RuntimeError, TimeoutError, TypeError, ValueError) as exc:
         logger.warning(f"Span embeddings failed; skipping multi-vector passages: {exc}")
         return documents
 
@@ -182,7 +182,7 @@ async def apply_multi_vector_passages(
         # Keep original score but expose mv_score for downstream consumers
         try:
             d.metadata["mv_score"] = float(sim)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
         ranked.append((sim, doc_idx))
 

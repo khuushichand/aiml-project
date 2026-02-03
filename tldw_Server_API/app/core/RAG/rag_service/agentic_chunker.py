@@ -40,7 +40,7 @@ AnswerGenerator: Any
 try:
     from .generation import AnswerGenerator as _AnswerGenerator
     AnswerGenerator = _AnswerGenerator
-except Exception:
+except ImportError:
     AnswerGenerator = None
 
 
@@ -122,9 +122,9 @@ def _get_media_db_for_structure() -> Any:
             return None
         # Use in-memory path; backend drives the actual connection
         _STRUCT_DB = _MDB(db_path=":memory:", client_id="agentic_toolbox", backend=backend)
-        return _STRUCT_DB
-    except Exception:
+    except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return None
+    return _STRUCT_DB
 
 
 def _now() -> float:
@@ -159,7 +159,7 @@ def invalidate_intra_doc_vectors(media_id: str) -> int:
         try:
             _INTRA_DOC_VEC_CACHE.pop(k, None)
             removed += 1
-        except Exception:
+        except (KeyError, TypeError):
             pass
     return removed
 
@@ -168,15 +168,15 @@ def clear_agentic_caches() -> None:
     """Clear ephemeral chunk cache and intra-doc vector cache."""
     try:
         AGENTIC_CACHE.invalidate_prefix("ephemeral_chunk", "")
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError, ValueError):
         pass
     try:
         _INTRA_DOC_VEC_CACHE.clear()
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         pass
     try:
         _EPHEMERAL_CACHE.clear()
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         pass
 
 

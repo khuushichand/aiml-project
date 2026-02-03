@@ -17,6 +17,7 @@ import asyncio
 import calendar
 import hashlib
 import re
+import sqlite3
 import time
 import uuid
 from dataclasses import dataclass, field, replace
@@ -603,7 +604,7 @@ try:
     from tldw_Server_API.app.core.config import (
         rag_require_hard_citations as _rag_req_hc,
     )
-except Exception:  # noqa: BLE001
+except ImportError:
     _rag_low_conf = None
     _rag_req_hc = None
 
@@ -666,13 +667,13 @@ def _normalize_chunk_type_value(value: Any) -> Optional[str]:
             normalized = Chunker.normalize_chunk_type(value)
             if isinstance(normalized, str) and normalized:
                 return normalized
-    except Exception:  # noqa: BLE001
+    except (AttributeError, TypeError, ValueError):
         pass
     if value is None:
         return None
     try:
         raw = str(value).strip().lower()
-    except Exception:  # noqa: BLE001
+    except (AttributeError, TypeError, ValueError):
         return None
     if not raw:
         return None
@@ -721,7 +722,7 @@ try:
     from .resilience import (
         get_coordinator as _get_coordinator,
     )
-except Exception:  # noqa: BLE001
+except ImportError:
     _get_coordinator = None
     _CircuitBreakerConfig = None
     _RetryConfig = None
@@ -1100,7 +1101,7 @@ async def unified_rag_pipeline(
             inbound_meta = kwargs.get("metadata")
             if isinstance(inbound_meta, dict):
                 metadata.update(inbound_meta)
-        except Exception:  # noqa: BLE001
+        except TypeError:
             pass
         timings = {"total": 0.0}
         # Consistent contract: return UnifiedRAGResponse for all outcomes
@@ -1123,7 +1124,7 @@ async def unified_rag_pipeline(
                 claims=None,
                 factuality=None,
             )
-        except Exception:  # noqa: BLE001
+        except (ImportError, TypeError, ValueError):
             # Fallback to dataclass if schema import fails (non-API contexts)
             return UnifiedSearchResult(
                 documents=[],
@@ -1157,7 +1158,7 @@ async def unified_rag_pipeline(
         inbound_meta = kwargs.get("metadata")
         if isinstance(inbound_meta, dict):
             result.metadata.update(inbound_meta)
-    except Exception:  # noqa: BLE001
+    except TypeError:
         pass
 
     cache_instance = None
@@ -1166,7 +1167,7 @@ async def unified_rag_pipeline(
         from tldw_Server_API.app.core.config import RAG_SERVICE_CONFIG
         cfg = cast(dict[str, Any], RAG_SERVICE_CONFIG) if isinstance(RAG_SERVICE_CONFIG, dict) else {}
         cache_max_size = int((cfg.get("cache") or {}).get("max_cache_size", cache_max_size))
-    except Exception:  # noqa: BLE001
+    except (ImportError, TypeError, ValueError):
         pass
     cache_namespace = index_namespace or (user_id or None)
     if cache_namespace is None:
@@ -1175,7 +1176,7 @@ async def unified_rag_pipeline(
             if any(parts):
                 joined = "|".join([str(p or "") for p in parts])
                 cache_namespace = f"db:{hashlib.sha256(joined.encode('utf-8')).hexdigest()[:12]}"
-        except Exception:  # noqa: BLE001
+        except (TypeError, ValueError):
             cache_namespace = None
 
     def _get_cache_instance():
@@ -1223,7 +1224,7 @@ async def unified_rag_pipeline(
                 if component not in coord.circuit_breakers:
                     coord.register_circuit_breaker(component, CircuitBreakerConfig())
                 breaker = coord.circuit_breakers[component]
-            except Exception:  # noqa: BLE001
+            except (AttributeError, KeyError, TypeError):
                 breaker = None
 
         async def _attempt():
@@ -1283,7 +1284,7 @@ async def unified_rag_pipeline(
             if "fused_score" not in cal and "top_doc_prob" in cal:
                 try:
                     cal["fused_score"] = float(cal.get("top_doc_prob") or 0.0)
-                except Exception:  # noqa: BLE001
+                except (TypeError, ValueError):
                     pass
             # Mark whether learned fusion was explicitly requested
             if enable_learned_fusion:
@@ -1322,7 +1323,7 @@ async def unified_rag_pipeline(
                     _beh = _os.getenv("RAG_NUMERIC_FIDELITY_BEHAVIOR", "ask").strip().lower()
                     if _beh in {"continue", "ask", "decline", "retry"}:
                         numeric_fidelity_behavior = _beh  # type: ignore
-        except Exception:  # noqa: BLE001
+        except (TypeError, ValueError):
             pass
 
         # Apply config-driven defaults for confidence/citation gates when not explicitly set
@@ -1334,20 +1335,20 @@ async def unified_rag_pipeline(
             if _rag_req_hc and not bool(require_hard_citations):
                 if bool(_rag_req_hc(default=False)):
                     require_hard_citations = True
-        except Exception:  # noqa: BLE001
+        except (TypeError, ValueError):
             pass
 
         # Apply config-driven default for strict extractive generation
         _rag_strict: Any = None
         try:
             from tldw_Server_API.app.core.config import rag_strict_extractive as _rag_strict
-        except Exception:  # noqa: BLE001
+        except ImportError:
             pass
         try:
             if _rag_strict is not None and not bool(strict_extractive):
                 if bool(_rag_strict(default=False)):
                     strict_extractive = True
-        except Exception:  # noqa: BLE001
+        except (TypeError, ValueError):
             pass
 
         # Precompute query analysis once for reuse across phases
@@ -1364,7 +1365,7 @@ async def unified_rag_pipeline(
                 analysis_intent_val = getattr(analysis_intent, "value", str(analysis_intent)) if analysis_intent is not None else None
                 analysis_complexity_val = getattr(analysis_complexity, "value", str(analysis_complexity)) if analysis_complexity is not None else None
                 analysis_domain = getattr(analysis, "domain", None)
-            except Exception:  # noqa: BLE001
+            except (AttributeError, TypeError, ValueError, RuntimeError):
                 analysis = None
                 analysis_intent_val = None
                 analysis_complexity_val = None
@@ -1386,7 +1387,7 @@ async def unified_rag_pipeline(
                             cached_rewrites = [c for c in cached if isinstance(c, str) and c.strip()]
                     except ValueError as exc:
                         logger.debug(f"Rewrite cache disabled for user_id={user_id}: {exc}")
-                    except Exception:  # noqa: BLE001
+                    except (AttributeError, OSError, RuntimeError, TypeError, sqlite3.Error):
                         pass
                 strategies = (expansion_strategies or ["acronym", "synonym"]).copy()
                 expanded_variants: list[str] = []
@@ -1412,7 +1413,7 @@ async def unified_rag_pipeline(
                             r.rewritten_query for r in rw
                             if getattr(r, "rewritten_query", None)
                         ]
-                    except Exception:  # noqa: BLE001
+                    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                         rewriter_variants = []
 
                 # Merge and dedupe all candidates while preserving order
@@ -1434,7 +1435,7 @@ async def unified_rag_pipeline(
                 # Bound the number of variations to avoid excessive retrieval fan-out
                 try:
                     max_variations = max(0, int(max_query_variations))
-                except Exception:  # noqa: BLE001
+                except (TypeError, ValueError):
                     max_variations = 3
                 limit = 1 + max_variations
                 if len(expanded_queries) > limit:
@@ -1448,7 +1449,7 @@ async def unified_rag_pipeline(
                             rc.put(query, rewrites=rew, intent=intent_label, corpus=index_namespace)
                 except ValueError as exc:
                     logger.debug(f"Rewrite cache write disabled for user_id={user_id}: {exc}")
-                except Exception:  # noqa: BLE001
+                except (AttributeError, TypeError, ValueError):
                     pass
                 result.expanded_queries = [q for q in expanded_queries if q != query]
                 if result.expanded_queries:
@@ -1457,7 +1458,15 @@ async def unified_rag_pipeline(
                 result.timings["query_expansion"] = time.time() - expansion_start
                 if metrics:
                     metrics.expansion_time = result.timings["query_expansion"]
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Query expansion failed: {str(e)}")
                 logger.warning(f"Query expansion error: {e}")
 
@@ -1473,14 +1482,14 @@ async def unified_rag_pipeline(
                     # Favor lexical; shift hybrid_alpha toward FTS
                     try:
                         hybrid_alpha = min(max(0.0, float(hybrid_alpha)), 1.0)
-                    except Exception:  # noqa: BLE001
+                    except (TypeError, ValueError):
                         pass
                     hybrid_alpha = min(hybrid_alpha, 0.5)
                 elif strat == "broad":
                     # Favor semantic
                     try:
                         hybrid_alpha = min(max(0.0, float(hybrid_alpha)), 1.0)
-                    except Exception:  # noqa: BLE001
+                    except (TypeError, ValueError):
                         pass
                     hybrid_alpha = max(hybrid_alpha, 0.7)
                 # Respect suggested top_k when present
@@ -1488,14 +1497,14 @@ async def unified_rag_pipeline(
                     tk = int(routing.get("top_k", top_k))
                     if 1 <= tk <= 100:
                         top_k = tk
-                except Exception:  # noqa: BLE001
+                except (TypeError, ValueError):
                     pass
                 result.metadata["intent_routing"] = {
                     "strategy": strat,
                     "hybrid_alpha": hybrid_alpha,
                     "top_k": top_k,
                 }
-            except Exception as e:  # noqa: BLE001
+            except (AttributeError, RuntimeError, TypeError, ValueError) as e:
                 result.errors.append(f"Intent routing failed: {e}")
 
         # ========== DYNAMIC GRANULARITY ROUTING ==========
@@ -1541,7 +1550,7 @@ async def unified_rag_pipeline(
                     }
 
                 result.timings["granularity_routing"] = time.time() - granularity_start
-            except Exception as e:  # noqa: BLE001
+            except (AttributeError, RuntimeError, TypeError, ValueError) as e:
                 result.errors.append(f"Granularity routing failed: {e}")
                 logger.warning(f"Granularity routing error: {e}")
 
@@ -1559,7 +1568,7 @@ async def unified_rag_pipeline(
                         direct = await get_fn(query)
                     else:
                         direct = get_fn(query)
-                except Exception:  # noqa: BLE001
+                except (AttributeError, OSError, RuntimeError, TypeError):
                     direct = None
                 if direct:
                     cached_documents = direct
@@ -1575,7 +1584,7 @@ async def unified_rag_pipeline(
                                 cached_result = await find_fn(q)
                             else:
                                 cached_result = find_fn(q)
-                        except Exception:  # noqa: BLE001
+                        except (AttributeError, OSError, RuntimeError, TypeError):
                             cached_result = None
                         if cached_result:
                             cached_query, similarity = cached_result
@@ -1584,7 +1593,7 @@ async def unified_rag_pipeline(
                                     cached_documents = await get_fn(cached_query)
                                 else:
                                     cached_documents = get_fn(cached_query)
-                            except Exception:  # noqa: BLE001
+                            except (AttributeError, OSError, RuntimeError, TypeError):
                                 cached_documents = None
                             if cached_documents:
                                 result.cache_hit = True
@@ -1632,7 +1641,7 @@ async def unified_rag_pipeline(
                     try:
                         qa = QueryAnalyzer()
                         local_analysis = qa.analyze_query(query)
-                    except Exception:  # noqa: BLE001
+                    except (AttributeError, TypeError, ValueError, RuntimeError):
                         local_analysis = None
                 # Conceptual queries favor semantic; specific factual favor keyword
                 if local_analysis and getattr(local_analysis, "intent", None) is not None:
@@ -1651,7 +1660,7 @@ async def unified_rag_pipeline(
                         hybrid_alpha = 0.4
                     result.metadata["query_intent"] = getattr(local_analysis.intent, "value", str(local_analysis.intent))
                 result.metadata["adaptive_hybrid_alpha"] = hybrid_alpha
-            except Exception:  # noqa: BLE001
+            except (AttributeError, TypeError, ValueError):
                 pass
 
         # ========== HyDE PREP (optional) ==========
@@ -1669,7 +1678,7 @@ async def unified_rag_pipeline(
                     raw_model = cfg.get("RAG_HYDE_MODEL")
                     hyde_provider = hyde_provider or (str(raw_provider).strip() if raw_provider else None)
                     hyde_model = hyde_model or (str(raw_model).strip() if raw_model else None)
-                except Exception:  # noqa: BLE001
+                except (ImportError, AttributeError, OSError, TypeError, ValueError):
                     pass
                 hypo = generate_hypothetical_answer(query, hyde_provider, hyde_model)
                 vec = await hyde_embed_text(hypo)
@@ -1677,7 +1686,15 @@ async def unified_rag_pipeline(
                     hyde_vector = vec
                     result.metadata["hyde_applied"] = True
                 result.timings["hyde_prep"] = time.time() - hyde_start
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"HyDE prep failed: {e}")
 
         # ========== AUTO TEMPORAL FILTERS (optional) ==========
@@ -1752,7 +1769,7 @@ async def unified_rag_pipeline(
                         "end": date_range["end"],
                         "source": "auto",
                     }
-            except Exception:  # noqa: BLE001
+            except (AttributeError, TypeError, ValueError, RuntimeError):
                 pass
 
         # ========== DOCUMENT RETRIEVAL ==========
@@ -1777,9 +1794,9 @@ async def unified_rag_pipeline(
                         for _k, _v in _attrs.items():
                             try:
                                 _otel_span.set_attribute(_k, _v)
-                            except Exception:  # noqa: BLE001
+                            except (AttributeError, RuntimeError, TypeError, ValueError):
                                 pass
-                    except Exception:  # noqa: BLE001
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         _otel_cm = None
                         _otel_span = None
                 if MultiDatabaseRetriever and RetrievalConfig:
@@ -1827,7 +1844,7 @@ async def unified_rag_pipeline(
                             end = datetime.fromisoformat(date_range.get("end", "")) if date_range.get("end") else None
                             if start and end:
                                 config.date_filter = (start, end)
-                        except Exception:  # noqa: BLE001
+                        except (TypeError, ValueError):
                             pass
                     # Fallback: use metadata-written temporal filter (auto)
                     if getattr(config, 'date_filter', None) is None:
@@ -1839,7 +1856,7 @@ async def unified_rag_pipeline(
                                 end_val = tf.get("end")
                                 if start_val and end_val:
                                     config.date_filter = (datetime.fromisoformat(start_val), datetime.fromisoformat(end_val))
-                            except Exception:  # noqa: BLE001
+                            except (TypeError, ValueError):
                                 pass
 
                     # Determine sources
@@ -1913,7 +1930,16 @@ async def unified_rag_pipeline(
                                 if isinstance(result.metadata, dict):
                                     result.metadata.setdefault("fallbacks", {})
                                     result.metadata["fallbacks"]["media_db_fts"] = True
-                        except Exception as _fb_err:  # noqa: BLE001
+                        except (
+                            AttributeError,
+                            ConnectionError,
+                            OSError,
+                            RuntimeError,
+                            TypeError,
+                            ValueError,
+                            asyncio.TimeoutError,
+                            sqlite3.Error,
+                        ) as _fb_err:
                             result.errors.append(f"Media DB fallback retrieval failed: {str(_fb_err)}")
 
                     # Optionally run HyDE-enhanced media retrieval and merge
@@ -1934,7 +1960,15 @@ async def unified_rag_pipeline(
                                         by_id[d.id] = d
                                 documents = sorted(by_id.values(), key=lambda x: getattr(x, "score", 0.0), reverse=True)
                                 result.metadata["hyde_merged_count"] = len(hyde_docs)
-                        except Exception as e:  # noqa: BLE001
+                        except (
+                            AttributeError,
+                            ConnectionError,
+                            OSError,
+                            RuntimeError,
+                            TypeError,
+                            ValueError,
+                            asyncio.TimeoutError,
+                        ) as e:
                             result.errors.append(f"HyDE retrieval merge failed: {e}")
 
                     # Optional: expand retrieval across query variants
@@ -1957,7 +1991,7 @@ async def unified_rag_pipeline(
                                     else:
                                         try:
                                             exp_cfg = replace(config, max_results=max(1, int(top_k or 1)))
-                                        except Exception:  # noqa: BLE001
+                                        except TypeError:
                                             exp_cfg = config
                                         eq_docs = await _resilient_call(
                                             "retrieval_expansion",
@@ -1971,7 +2005,15 @@ async def unified_rag_pipeline(
                                         )
                                     if eq_docs:
                                         exp_docs.extend(eq_docs)
-                                except Exception as _eq_err:  # noqa: BLE001
+                                except (
+                                    AttributeError,
+                                    ConnectionError,
+                                    OSError,
+                                    RuntimeError,
+                                    TypeError,
+                                    ValueError,
+                                    asyncio.TimeoutError,
+                                ) as _eq_err:
                                     result.errors.append(f"Query expansion retrieval failed: {eq}: {str(_eq_err)}")
                                     continue
 
@@ -1993,7 +2035,15 @@ async def unified_rag_pipeline(
                                 result.metadata["query_expansion"]["retrieval_queries"] = len(extra_queries)
                                 result.metadata["query_expansion"]["retrieval_added"] = int(added)
                             result.timings["query_expansion_retrieval"] = time.time() - exp_start
-                        except Exception as _exp_err:  # noqa: BLE001
+                        except (
+                            AttributeError,
+                            ConnectionError,
+                            OSError,
+                            RuntimeError,
+                            TypeError,
+                            ValueError,
+                            asyncio.TimeoutError,
+                        ) as _exp_err:
                             result.errors.append(f"Query expansion retrieval failed: {str(_exp_err)}")
 
                     result.documents = documents
@@ -2056,7 +2106,15 @@ async def unified_rag_pipeline(
                                 else:
                                     result.metadata["prf"]["second_pass_performed"] = False
                                     result.metadata["prf"]["second_pass_added"] = 0
-                        except Exception as _prf_err:  # noqa: BLE001
+                        except (
+                            AttributeError,
+                            ConnectionError,
+                            OSError,
+                            RuntimeError,
+                            TypeError,
+                            ValueError,
+                            asyncio.TimeoutError,
+                        ) as _prf_err:
                             result.errors.append(f"PRF second-pass retrieval failed: {str(_prf_err)}")
 
                     # Optional: guided query decomposition to broaden recall for multi-part queries
@@ -2085,7 +2143,7 @@ async def unified_rag_pipeline(
                                     acfg = _ACfg(enable_query_decomposition=True, subgoal_max=int(subgoal_max))
                                     subqueries = _agentic_decompose(q_norm, acfg) or []
                                     used_agentic = True
-                                except Exception:  # noqa: BLE001
+                                except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                                     used_agentic = False
 
                             if not used_agentic:
@@ -2115,7 +2173,7 @@ async def unified_rag_pipeline(
                             # Apply max_subqueries cap if provided (includes primary query implicitly)
                             try:
                                 max_sub = int(max_subqueries or 0)
-                            except Exception:  # noqa: BLE001
+                            except (TypeError, ValueError):
                                 max_sub = 0
                             if max_sub and len(subqueries) > max_sub:
                                 subqueries = subqueries[: max_sub]
@@ -2131,7 +2189,7 @@ async def unified_rag_pipeline(
                             time_budget = float(subquery_time_budget_sec) if subquery_time_budget_sec else None
                             try:
                                 doc_budget = int(subquery_doc_budget) if subquery_doc_budget is not None else None
-                            except Exception:  # noqa: BLE001
+                            except (TypeError, ValueError):
                                 doc_budget = None
 
                             base_ids = {d.id for d in result.documents}
@@ -2143,13 +2201,13 @@ async def unified_rag_pipeline(
                                     subquery_max_results = max(1, int(top_k or 1))
                                     if doc_budget is not None:
                                         subquery_max_results = max(1, min(subquery_max_results, int(doc_budget)))
-                                except Exception:  # noqa: BLE001
+                                except (TypeError, ValueError):
                                     subquery_max_results = max(1, int(top_k or 1))
 
                                 async def _fetch_subquery(sq: str) -> list[Document]:
                                     try:
                                         sq_cfg = replace(config, max_results=subquery_max_results)
-                                    except Exception:  # noqa: BLE001
+                                    except TypeError:
                                         sq_cfg = config
                                     res = await _resilient_call(
                                         "retrieval_decomposition",
@@ -2167,7 +2225,7 @@ async def unified_rag_pipeline(
                                 subqueries_to_run = list(subqueries[1:])
                                 try:
                                     max_workers = max(1, int(subquery_max_concurrency or 1))
-                                except Exception:  # noqa: BLE001
+                                except (TypeError, ValueError):
                                     max_workers = 3
                                 max_workers = min(max_workers, len(subqueries_to_run)) or 1
                                 sem = asyncio.Semaphore(max_workers)
@@ -2188,8 +2246,18 @@ async def unified_rag_pipeline(
                                     for task in done:
                                         try:
                                             task.result()
-                                        except Exception as _sq_err:  # noqa: BLE001
-                                            result.errors.append(f"Decomposition subquery retrieval failed: {_sq_err}")
+                                        except (
+                                            AttributeError,
+                                            ConnectionError,
+                                            OSError,
+                                            RuntimeError,
+                                            TypeError,
+                                            ValueError,
+                                            asyncio.TimeoutError,
+                                        ) as _sq_err:
+                                            result.errors.append(
+                                                f"Decomposition subquery retrieval failed: {_sq_err}"
+                                            )
 
                                 for sq in subqueries_to_run:
                                     if time_budget is not None and (time.time() - decomp_start) >= time_budget:
@@ -2220,7 +2288,7 @@ async def unified_rag_pipeline(
                                         key=lambda d: getattr(d, "score", 0.0),
                                         reverse=True,
                                     )[: top_k]
-                                except Exception:  # noqa: BLE001
+                                except (TypeError, ValueError):
                                     # Fallback: leave documents in current order
                                     pass
 
@@ -2229,7 +2297,15 @@ async def unified_rag_pipeline(
                             meta_decomp["time_budget_sec"] = float(time_budget) if time_budget is not None else None
                             meta_decomp["doc_budget"] = int(doc_budget) if doc_budget is not None else None
                             result.metadata["decomposition"] = meta_decomp
-                        except Exception as _dec_err:  # noqa: BLE001
+                        except (
+                            AttributeError,
+                            ConnectionError,
+                            OSError,
+                            RuntimeError,
+                            TypeError,
+                            ValueError,
+                            asyncio.TimeoutError,
+                        ) as _dec_err:
                             result.errors.append(f"Query decomposition failed: {str(_dec_err)}")
 
                     # Attach retrieval guidance prompt in metadata for downstream awareness/debugging
@@ -2237,7 +2313,7 @@ async def unified_rag_pipeline(
                         _rg = load_prompt("rag", "retrieval_guidance")
                         if _rg:
                             result.metadata["retrieval_guidance"] = _rg
-                    except Exception:  # noqa: BLE001
+                    except (ImportError, OSError, RuntimeError, TypeError, ValueError):
                         pass
                     result.metadata["sources_searched"] = sources
                     result.metadata["documents_retrieved"] = len(documents)
@@ -2262,7 +2338,7 @@ async def unified_rag_pipeline(
                                         difficulty = "medium"
                                     else:
                                         difficulty = "hard"
-                            except Exception:  # noqa: BLE001
+                            except (AttributeError, RuntimeError, TypeError, ValueError):
                                 return "unknown"
                             return difficulty
                         observe_histogram("rag_phase_duration_seconds", result.timings["retrieval"], labels={"phase": "retrieval", "difficulty": _difficulty(result.documents or [])})
@@ -2271,14 +2347,23 @@ async def unified_rag_pipeline(
                             try:
                                 _otel_span.set_attribute("rag.query_difficulty", _difficulty(result.documents or []))
                                 _otel_span.set_attribute("rag.doc_count", int(len(result.documents or [])))
-                            except Exception:  # noqa: BLE001
+                            except (AttributeError, RuntimeError, TypeError, ValueError):
                                 pass
-                    except Exception:  # noqa: BLE001
+                    except (ImportError, RuntimeError, TypeError, ValueError):
                         pass
                     if metrics:
                         metrics.retrieval_time = result.timings["retrieval"]
 
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+                sqlite3.Error,
+            ) as e:
                 result.errors.append(f"Document retrieval failed: {str(e)}")
                 logger.error(f"Retrieval error: {e}")
                 # Sample payload exemplar on retrieval failure
@@ -2292,7 +2377,7 @@ async def unified_rag_pipeline(
                         user_id=user_id,
                         namespace=index_namespace,
                     )
-                except Exception:  # noqa: BLE001
+                except (ImportError, OSError, RuntimeError, TypeError, ValueError):
                     pass
 
                 # On retrieval failure, attempt a best-effort Media DB FTS fallback.
@@ -2326,14 +2411,23 @@ async def unified_rag_pipeline(
                             if isinstance(result.metadata, dict):
                                 result.metadata.setdefault("fallbacks", {})
                                 result.metadata["fallbacks"]["media_db_fts_on_error"] = True
-                    except Exception as _fb_err:  # noqa: BLE001
+                    except (
+                        AttributeError,
+                        ConnectionError,
+                        OSError,
+                        RuntimeError,
+                        TypeError,
+                        ValueError,
+                        asyncio.TimeoutError,
+                        sqlite3.Error,
+                    ) as _fb_err:
                         result.errors.append(f"Media DB fallback retrieval on error failed: {str(_fb_err)}")
             finally:
                 # Ensure OTEL span is closed
                 if _otel_cm is not None:
                     try:
                         _otel_cm.__exit__(None, None, None)
-                    except Exception:  # noqa: BLE001
+                    except (ImportError, RuntimeError, TypeError, ValueError):
                         pass
 
         # ========== MULTI-VECTOR PASSAGES (optional, pre-rerank) ==========
@@ -2358,7 +2452,7 @@ async def unified_rag_pipeline(
                             used_precomputed = True
                         else:
                             result.metadata["multi_vector"]["precomputed_spans"] = False
-                    except Exception:  # noqa: BLE001
+                    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                         # If precomputed path fails, fall back silently to on-the-fly spans
                         result.metadata.setdefault("multi_vector", {})
                         result.metadata["multi_vector"]["precomputed_spans"] = False
@@ -2388,14 +2482,22 @@ async def unified_rag_pipeline(
                         })
                 else:
                     result.errors.append("Multi-vector module not available")
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Multi-vector passages failed: {e}")
             finally:
                 result.timings["multi_vector"] = time.time() - mv_start
                 try:
                     from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
                     observe_histogram("rag_phase_duration_seconds", result.timings["multi_vector"], labels={"phase": "multi_vector", "difficulty": str(result.metadata.get("query_intent", "na"))})
-                except Exception:  # noqa: BLE001
+                except (ImportError, RuntimeError, TypeError, ValueError):
                     pass
 
         # ========== NUMERIC/TABLE-AWARE BOOST (optional, pre-rerank) ==========
@@ -2405,7 +2507,7 @@ async def unified_rag_pipeline(
             try:
                 import re as _re
                 q_has_num = bool(_re.search(r"\d", query)) or bool(_re.search(r"\b(percent|percentage|million|billion|thousand|\$|usd|eur|kg|g|lb|%|k|m|b)\b", query, _re.I))
-            except Exception:  # noqa: BLE001
+            except (TypeError, ValueError):
                 q_has_num = False
             if q_has_num:
                 affected = 0
@@ -2424,7 +2526,7 @@ async def unified_rag_pipeline(
                                 md["numeric_table_boost"] = True
                                 d.metadata = md
                                 affected += 1
-                        except Exception:  # noqa: BLE001
+                        except (AttributeError, TypeError, ValueError):
                             continue
                 # Always emit the metadata block when numeric intent is detected
                 result.metadata["numeric_table_boost"] = {"enabled": True, "affected": int(affected)}
@@ -2443,7 +2545,7 @@ async def unified_rag_pipeline(
                         _cfg = load_and_log_configs() or {}
                         _prov = (_cfg.get("RAG_DEFAULT_LLM_PROVIDER") or "openai").strip()
                         _model = (_cfg.get("RAG_DEFAULT_LLM_MODEL") or "gpt-4o-mini").strip()
-                    except Exception:  # noqa: BLE001
+                    except (ImportError, AttributeError, OSError, TypeError, ValueError):
                         _prov, _model = "openai", "gpt-4o-mini"
                     prompt = (
                         "You help a search system identify missing information.\n"
@@ -2460,9 +2562,17 @@ async def unified_rag_pipeline(
                     if isinstance(llm_out, str):
                         try:
                             followups = _json.loads(llm_out)
-                        except Exception:  # noqa: BLE001
+                        except (TypeError, ValueError):
                             followups = [s.strip("- ") for s in llm_out.splitlines() if s.strip()]
-                except Exception:  # noqa: BLE001
+                except (
+                    AttributeError,
+                    ConnectionError,
+                    OSError,
+                    RuntimeError,
+                    TypeError,
+                    ValueError,
+                    asyncio.TimeoutError,
+                ):
                     # Fallback
                     followups = [f"detailed {query}", f"examples {query}"]
                 followups = [q for q in followups if isinstance(q, str) and q.strip()][:max_followup_searches]
@@ -2478,7 +2588,14 @@ async def unified_rag_pipeline(
                     ]
                     try:
                         follow_results = await asyncio.gather(*tasks)
-                    except Exception:  # noqa: BLE001
+                    except (
+                        ConnectionError,
+                        OSError,
+                        RuntimeError,
+                        TypeError,
+                        ValueError,
+                        asyncio.TimeoutError,
+                    ):
                         follow_results = []
                     # Merge by id, keep higher score
                     merged = {d.id: d for d in result.documents}
@@ -2490,7 +2607,15 @@ async def unified_rag_pipeline(
                     result.documents = sorted(merged.values(), key=lambda x: getattr(x, "score", 0.0), reverse=True)[:top_k]
                     result.metadata["followups"] = followups
                 result.timings["gap_analysis"] = time.time() - ga_start
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Gap analysis failed: {e}")
 
         # ========== KEYWORD FILTERING ==========
@@ -2524,11 +2649,19 @@ async def unified_rag_pipeline(
                         from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                         if int(summary.get("affected", 0)) > 0:
                             increment_counter("rag_injection_chunks_downweighted_total", int(summary.get("affected", 0)))
-                    except Exception:  # noqa: BLE001
+                    except (ImportError, RuntimeError, TypeError, ValueError):
                         pass
                 else:
                     result.errors.append("Injection filter module not available")
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Injection filtering failed: {str(e)}")
             finally:
                 result.timings["injection_filter"] = time.time() - inj_start
@@ -2550,7 +2683,7 @@ async def unified_rag_pipeline(
                 result.documents = filtered_docs
                 result.metadata["chunk_type_filter_before"] = before_count
                 result.metadata["chunk_type_filter_after"] = len(result.documents)
-            except Exception:  # noqa: BLE001
+            except (AttributeError, TypeError, ValueError):
                 pass
 
         # ========== CONTENT POLICY FILTERS & SANITATION ==========
@@ -2563,7 +2696,7 @@ async def unified_rag_pipeline(
                         dropped = gate_docs_by_ocr_confidence(result.documents, float(ocr_confidence_threshold))
                         if dropped > 0:
                             increment_counter("rag_ocr_dropped_docs_total", dropped)
-                    except Exception:  # noqa: BLE001
+                    except (ImportError, RuntimeError, TypeError, ValueError):
                         pass
                 # HTML sanitation
                 if enable_html_sanitizer:
@@ -2575,13 +2708,13 @@ async def unified_rag_pipeline(
                             if after != before:
                                 d.content = after
                                 sanitized += 1
-                        except Exception:  # noqa: BLE001
+                        except (AttributeError, TypeError, ValueError):
                             continue
                     try:
                         if sanitized > 0:
                             from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                             increment_counter("rag_sanitized_docs_total", sanitized)
-                    except Exception:  # noqa: BLE001
+                    except (ImportError, RuntimeError, TypeError, ValueError):
                         pass
                 # Content policy (PII/PHI)
                 if enable_content_policy_filter:
@@ -2598,9 +2731,9 @@ async def unified_rag_pipeline(
                         from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                         if int(summary.get("affected", 0)) > 0:
                             increment_counter("rag_policy_filtered_chunks_total", int(summary.get("affected", 0)), labels={"mode": str(content_policy_mode or "redact")})
-                    except Exception:  # noqa: BLE001
+                    except (ImportError, RuntimeError, TypeError, ValueError):
                         pass
-            except Exception:  # noqa: BLE001
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 # Non-fatal: continue
                 pass
 
@@ -2642,7 +2775,15 @@ async def unified_rag_pipeline(
             except ImportError:
                 result.errors.append("Security filter module not available")
                 logger.warning("Security filter requested but module not available")
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Security filter failed: {str(e)}")
                 logger.error(f"Security filter error: {e}")
 
@@ -2677,7 +2818,7 @@ async def unified_rag_pipeline(
                     from tldw_Server_API.app.core.Ingestion_Media_Processing.VLM.registry import (
                         get_backend as _get_vlm_backend,
                     )
-                except Exception:  # noqa: BLE001
+                except ImportError:
                     _get_vlm_backend = lambda name=None: None
 
                 # Pick backend
@@ -2711,7 +2852,7 @@ async def unified_rag_pipeline(
                             else:
                                 # Unsupported: not a local PDF path
                                 continue
-                        except Exception:  # noqa: BLE001
+                        except (OSError, TypeError, ValueError):
                             continue
 
                         # Use document-level VLM when available
@@ -2758,7 +2899,7 @@ async def unified_rag_pipeline(
                                                     "bbox": list(getattr(det, "bbox", [0.0, 0.0, 0.0, 0.0])),
                                                     "page": i,
                                                 })
-                                except Exception:  # noqa: BLE001
+                                except (ImportError, OSError, RuntimeError, TypeError, ValueError):
                                     continue
 
                             # Convert detections into lightweight Documents for reranking/search
@@ -2790,7 +2931,15 @@ async def unified_rag_pipeline(
                         # Extend document list for downstream processing/reranking
                         result.documents.extend(vlm_added)
                 result.timings["vlm_late_chunking"] = time.time() - vlm_start
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"VLM late-chunking failed: {e}")
                 logger.warning(f"VLM late-chunking failed: {e}")
 
@@ -2857,7 +3006,15 @@ async def unified_rag_pipeline(
                         )
                         # Filter out already-seen documents
                         return [d for d in new_docs if d.id not in exclude_ids]
-                    except Exception as e:  # noqa: BLE001
+                    except (
+                        AttributeError,
+                        ConnectionError,
+                        OSError,
+                        RuntimeError,
+                        TypeError,
+                        ValueError,
+                        asyncio.TimeoutError,
+                    ) as e:
                         logger.warning(f"Additional retrieval failed: {e}")
                         return []
 
@@ -2880,7 +3037,15 @@ async def unified_rag_pipeline(
                 }
                 result.timings["evidence_accumulation"] = time.time() - accumulation_start
 
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Evidence accumulation failed: {e}")
                 logger.warning(f"Evidence accumulation error: {e}")
 
@@ -2892,7 +3057,7 @@ async def unified_rag_pipeline(
                 result.metadata.setdefault("personalization", {})["boost_applied_pre_rerank"] = True
         except ValueError as exc:
             logger.debug(f"Personalization boost disabled for user_id={feedback_user_id or user_id}: {exc}")
-        except Exception:  # noqa: BLE001
+        except (AttributeError, OSError, RuntimeError, TypeError, sqlite3.Error):
             pass
 
         # ========== SELF-CORRECTING RAG: DOCUMENT GRADING (Stage 1) ==========
@@ -2957,10 +3122,18 @@ async def unified_rag_pipeline(
                             _span.set_attribute("rag.docs_graded", grading_metadata.get("total_graded", 0))
                             _span.set_attribute("rag.docs_passed", grading_metadata.get("filtered_count", 0))
                             _span.set_attribute("rag.avg_relevance", avg_relevance)
-                    except Exception:  # noqa: BLE001
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         pass
 
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Document grading failed: {e}")
                 logger.warning(f"Document grading error: {e}")
                 result.metadata["document_grading"] = {"enabled": True, "error": str(e)}
@@ -3100,7 +3273,15 @@ async def unified_rag_pipeline(
                                     current_query = rewritten_query
                                     break
 
-                        except Exception as ret_err:  # noqa: BLE001
+                        except (
+                            AttributeError,
+                            ConnectionError,
+                            OSError,
+                            RuntimeError,
+                            TypeError,
+                            ValueError,
+                            asyncio.TimeoutError,
+                        ) as ret_err:
                             logger.warning(f"Retrieval with rewritten query failed: {ret_err}")
                             rewrite_attempts[-1]["error"] = str(ret_err)
 
@@ -3122,7 +3303,15 @@ async def unified_rag_pipeline(
 
                 result.timings["query_rewrite_loop"] = time.time() - rewrite_loop_start
 
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Query rewriting loop failed: {e}")
                 logger.warning(f"Query rewriting loop error: {e}")
                 result.metadata["query_rewrite_loop"] = {"enabled": True, "error": str(e)}
@@ -3148,9 +3337,9 @@ async def unified_rag_pipeline(
                         for _k, _v in _attrs.items():
                             try:
                                 _otel_span_rk.set_attribute(_k, _v)
-                            except Exception:  # noqa: BLE001
+                            except (AttributeError, RuntimeError, TypeError, ValueError):
                                 pass
-                    except Exception:  # noqa: BLE001
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         _otel_cm_rk = None
                         _otel_span_rk = None
                 if create_reranker and RerankingStrategy and RerankingConfig:
@@ -3196,7 +3385,7 @@ async def unified_rag_pipeline(
                                             model_override=self.model_name,
                                         )
                                 llm_client = _LLMClient(prov, model)
-                        except Exception:  # noqa: BLE001
+                        except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
                             selected_strategy = RerankingStrategy.FLASHRANK
 
                     # Determine model for reranker when applicable
@@ -3207,7 +3396,7 @@ async def unified_rag_pipeline(
                             cfg = load_and_log_configs()
                             if not isinstance(cfg, dict):
                                 cfg = {}
-                        except Exception:  # noqa: BLE001
+                        except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
                             cfg = {}
                         # Precedence: explicit param -> env/config
                         model_name_for_reranker = reranking_model or cfg.get("RAG_LLAMA_RERANKER_MODEL")
@@ -3217,7 +3406,7 @@ async def unified_rag_pipeline(
                             cfg = load_and_log_configs()
                             if not isinstance(cfg, dict):
                                 cfg = {}
-                        except Exception:  # noqa: BLE001
+                        except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
                             cfg = {}
                         model_name_for_reranker = reranking_model or cfg.get("RAG_TRANSFORMERS_RERANKER_MODEL")
 
@@ -3245,9 +3434,9 @@ async def unified_rag_pipeline(
                         if _otel_span_rk is not None:
                             try:
                                 _otel_span_rk.set_attribute("rag.doc_count", int(len(result.documents or [])))
-                            except Exception:  # noqa: BLE001
+                            except (AttributeError, RuntimeError, TypeError, ValueError):
                                 pass
-                    except Exception:  # noqa: BLE001
+                    except (ImportError, RuntimeError, TypeError, ValueError):
                         pass
                     if metrics:
                         metrics.reranking_time = result.timings["reranking"]
@@ -3259,7 +3448,7 @@ async def unified_rag_pipeline(
                             result.metadata["reranking_calibration"].update(getattr(reranker, 'last_metadata'))
                             # Attach learned-fusion specific decoration when applicable
                             _decorate_calibration_metadata()
-                    except Exception:  # noqa: BLE001
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         pass
 
                     # For non Two-Tier strategies, if learned fusion is requested but no
@@ -3278,25 +3467,25 @@ async def unified_rag_pipeline(
                                     # a single rerank score available here.
                                     try:
                                         bias = float(_os_lf.getenv("RAG_RERANK_CALIB_BIAS", "-1.5"))
-                                    except Exception:  # noqa: BLE001
+                                    except (TypeError, ValueError):
                                         bias = -1.5
                                     try:
                                         w_ce = float(_os_lf.getenv("RAG_RERANK_CALIB_W_CE", "2.5"))
-                                    except Exception:  # noqa: BLE001
+                                    except (TypeError, ValueError):
                                         w_ce = 2.5
                                     try:
                                         raw = float(getattr(top_doc, "score", 0.0) or 0.0)
-                                    except Exception:  # noqa: BLE001
+                                    except (TypeError, ValueError):
                                         raw = 0.0
                                     logit = bias + (w_ce * raw)
                                     try:
                                         fused_prob = 1.0 / (1.0 + _math_lf.exp(-logit))
-                                    except Exception:  # noqa: BLE001
+                                    except (TypeError, ValueError):
                                         fused_prob = 0.5
                                     # Threshold from env (same as Two-Tier gating default)
                                     try:
                                         thr = float(_os_lf.getenv("RAG_MIN_RELEVANCE_PROB", "0.35"))
-                                    except Exception:  # noqa: BLE001
+                                    except (TypeError, ValueError):
                                         thr = 0.35
                                     gated_flag = fused_prob < thr
                                     result.metadata["reranking_calibration"] = {
@@ -3308,13 +3497,21 @@ async def unified_rag_pipeline(
                                     }
                                     # Ensure learned-fusion metadata decoration is applied
                                     _decorate_calibration_metadata()
-                        except Exception:  # noqa: BLE001
+                        except (AttributeError, TypeError, ValueError):
                             pass
 
                 else:
                     result.errors.append("Reranking module not available")
                     logger.warning("Reranking requested but module not available")
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Reranking failed: {str(e)}")
                 logger.error(f"Reranking error: {e}")
                 # Sample payload exemplar on reranking failure
@@ -3328,13 +3525,13 @@ async def unified_rag_pipeline(
                         user_id=user_id,
                         namespace=index_namespace,
                     )
-                except Exception:  # noqa: BLE001
+                except (ImportError, RuntimeError, TypeError, ValueError):
                     pass
             finally:
                 if _otel_cm_rk is not None:
                     try:
                         _otel_cm_rk.__exit__(None, None, None)
-                    except Exception:  # noqa: BLE001
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         pass
 
         # ========== SELF-CORRECTING RAG: WEB SEARCH FALLBACK (Stage 3) ==========
@@ -3397,7 +3594,7 @@ async def unified_rag_pipeline(
                                     _span.set_attribute("rag.phase", "web_fallback")
                                     _span.set_attribute("rag.web_results", web_metadata.get("web_results_count", 0))
                                     _span.set_attribute("rag.engine", web_search_engine)
-                            except Exception:  # noqa: BLE001
+                            except (AttributeError, RuntimeError, TypeError, ValueError):
                                 pass
                 else:
                     result.metadata["web_fallback"] = {
@@ -3410,7 +3607,15 @@ async def unified_rag_pipeline(
 
                 result.timings["web_fallback"] = time.time() - web_fallback_start
 
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Web fallback failed: {e}")
                 logger.warning(f"Web fallback error: {e}")
                 result.metadata["web_fallback"] = {"enabled": True, "error": str(e)}
@@ -3425,7 +3630,7 @@ async def unified_rag_pipeline(
                         if not u:
                             return None
                         return urllib.parse.urlparse(str(u)).hostname
-                    except Exception:  # noqa: BLE001
+                    except (AttributeError, TypeError, ValueError):
                         return None
                 hosts = []
                 sources_ = []
@@ -3449,13 +3654,13 @@ async def unified_rag_pipeline(
                         elif isinstance(created, str) and created:
                             from datetime import datetime
                             ts = datetime.fromisoformat(created.replace('Z','+00:00')).timestamp()
-                    except Exception:  # noqa: BLE001
+                    except (TypeError, ValueError):
                         ts = None
                     if ts is not None:
                         ages.append(max(0.0, (now_ts - ts) / 86400.0))
                     try:
                         scores.append(float(getattr(d, 'score', d.get('score', 0.0) if isinstance(d, dict) else 0.0)))
-                    except Exception:  # noqa: BLE001
+                    except (TypeError, ValueError):
                         scores.append(0.0)
                 n = max(1, len(docs))
                 uniq_hosts = len(set(hosts)) if hosts else 0
@@ -3476,7 +3681,7 @@ async def unified_rag_pipeline(
                 def _title(md):
                     try:
                         return (md.get('title') or '') if isinstance(md, dict) else ''
-                    except Exception:  # noqa: BLE001
+                    except (AttributeError, TypeError, ValueError):
                         return ''
                 top_contexts = []
                 for d in docs[: min(10, n)]:
@@ -3494,7 +3699,7 @@ async def unified_rag_pipeline(
                     "topicality": round(float(topicality), 4),
                     "top_contexts": top_contexts,
                 }
-        except Exception:  # noqa: BLE001
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             pass
 
         # ========== SIBLING INCLUSION ==========
@@ -3532,14 +3737,14 @@ async def unified_rag_pipeline(
                     result.documents.extend(sibling_added)
                 result.metadata["siblings_added_count"] = len(sibling_added)
                 result.timings["sibling_inclusion"] = time.time() - siblings_start
-            except Exception as e:  # noqa: BLE001
+            except (AttributeError, TypeError, ValueError) as e:
                 result.errors.append(f"Sibling inclusion failed: {str(e)}")
 
         # Cap documents to top_k when reranking is disabled
         if (not enable_reranking or reranking_strategy == "none") and result.documents:
             try:
                 max_docs = int(top_k or 0)
-            except Exception:  # noqa: BLE001
+            except (TypeError, ValueError):
                 max_docs = 0
             if max_docs > 0 and len(result.documents) > max_docs:
                 try:
@@ -3548,7 +3753,7 @@ async def unified_rag_pipeline(
                         key=lambda d: getattr(d, "score", 0.0),
                         reverse=True,
                     )[:max_docs]
-                except Exception:  # noqa: BLE001
+                except (AttributeError, TypeError, ValueError):
                     result.documents = list(result.documents)[:max_docs]
 
         evidence_chain_result = None
@@ -3604,7 +3809,15 @@ async def unified_rag_pipeline(
                 else:
                     result.errors.append("Citation module not available")
                     logger.warning("Citations requested but module not available")
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Citation generation failed: {str(e)}")
                 logger.error(f"Citation error: {e}")
 
@@ -3647,10 +3860,18 @@ async def unified_rag_pipeline(
                             _span.set_attribute("rag.phase", "knowledge_strips")
                             _span.set_attribute("rag.total_strips", strips_metadata.get("total_strips", 0))
                             _span.set_attribute("rag.filtered_strips", strips_metadata.get("filtered_strips", 0))
-                    except Exception:  # noqa: BLE001
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         pass
 
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Knowledge strips processing failed: {e}")
                 logger.warning(f"Knowledge strips error: {e}")
                 result.metadata["knowledge_strips"] = {"enabled": True, "error": str(e)}
@@ -3682,7 +3903,15 @@ async def unified_rag_pipeline(
 
                 result.timings["evidence_chains"] = time.time() - chain_start
 
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Evidence chain building failed: {e}")
                 logger.warning(f"Evidence chains error: {e}")
 
@@ -3697,7 +3926,7 @@ async def unified_rag_pipeline(
                 if "fused_score" not in _cal and "top_doc_prob" in _cal:
                     try:
                         _cal["fused_score"] = float(_cal.get("top_doc_prob") or 0.0)
-                    except Exception:  # noqa: BLE001
+                    except (TypeError, ValueError):
                         pass
                 if enable_learned_fusion:
                     _cal["enabled"] = True
@@ -3705,7 +3934,7 @@ async def unified_rag_pipeline(
                     _cal.setdefault("version", calibrator_version)
                 # Decision will be finalized in the gated branch below
                 result.metadata["reranking_calibration"] = _cal
-        except Exception:  # noqa: BLE001
+        except (AttributeError, TypeError, ValueError):
             gated_generation = False
 
         if enable_generation and not gated_generation and not result.cache_hit:
@@ -3728,9 +3957,9 @@ async def unified_rag_pipeline(
                         for _k, _v in _attrs.items():
                             try:
                                 _otel_span_gen.set_attribute(_k, _v)
-                            except Exception:  # noqa: BLE001
+                            except (AttributeError, RuntimeError, TypeError, ValueError):
                                 pass
-                    except Exception:  # noqa: BLE001
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         _otel_cm_gen = None
                         _otel_span_gen = None
                 # Strict extractive path: assemble answer from retrieved spans only
@@ -3760,7 +3989,7 @@ async def unified_rag_pipeline(
                                 if len(chosen) >= max_sents:
                                     break
                         result.generated_answer = " " .join(chosen).strip()
-                    except Exception as _se:  # noqa: BLE001
+                    except (AttributeError, TypeError, ValueError) as _se:
                         result.errors.append(f"Strict extractive assembly failed: {_se}")
                         result.generated_answer = None
                 elif AnswerGenerator:
@@ -3793,7 +4022,7 @@ async def unified_rag_pipeline(
                         else:
                             try:
                                 d_ans_text = "".join(str(x) for x in d_ans)
-                            except Exception:  # noqa: BLE001
+                            except (TypeError, ValueError):
                                 d_ans_text = str(d_ans)
                         d_dt = time.time() - d_start
 
@@ -3816,7 +4045,7 @@ async def unified_rag_pipeline(
                             c_start = time.time()
                             c_text = sgl.analyze(api_name="openai", input_data="", custom_prompt_arg=crit_prompt, model_override=None)
                             c_dt = time.time() - c_start
-                        except Exception:  # noqa: BLE001
+                        except (ImportError, ConnectionError, OSError, RuntimeError, TypeError, ValueError, asyncio.TimeoutError):
                             c_text = "- Ensure claims are supported by provided snippets.\n- Add missing specifics.\n- Clarify ambiguous statements."
                         if isinstance(c_text, str):
                             c_text_val = c_text
@@ -3825,7 +4054,7 @@ async def unified_rag_pipeline(
                         else:
                             try:
                                 c_text_val = "".join(str(x) for x in c_text)
-                            except Exception:  # noqa: BLE001
+                            except (TypeError, ValueError):
                                 c_text_val = str(c_text)
 
                         # Check budget
@@ -3876,9 +4105,9 @@ async def unified_rag_pipeline(
                             try:
                                 _ans_len = len((result.generated_answer or ""))
                                 _otel_span_gen.set_attribute("rag.answer_length", int(_ans_len))
-                            except Exception:  # noqa: BLE001
+                            except (AttributeError, RuntimeError, TypeError, ValueError):
                                 pass
-                    except Exception:  # noqa: BLE001
+                    except (ImportError, RuntimeError, TypeError, ValueError):
                         pass
                     if metrics:
                         metrics.generation_time = result.timings["answer_generation"]
@@ -3886,7 +4115,15 @@ async def unified_rag_pipeline(
             except ImportError:
                 result.errors.append("Generation module not available")
                 logger.warning("Answer generation requested but module not available")
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Answer generation failed: {str(e)}")
                 logger.error(f"Generation error: {e}")
                 try:
@@ -3899,13 +4136,13 @@ async def unified_rag_pipeline(
                         user_id=user_id,
                         namespace=index_namespace,
                     )
-                except Exception:  # noqa: BLE001
+                except (ImportError, RuntimeError, TypeError, ValueError):
                     pass
             finally:
                 if _otel_cm_gen is not None:
                     try:
                         _otel_cm_gen.__exit__(None, None, None)
-                    except Exception:  # noqa: BLE001
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         pass
         elif enable_generation and gated_generation:
             # Record a metadata entry and bump a metric for observability
@@ -3917,7 +4154,7 @@ async def unified_rag_pipeline(
             try:
                 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                 increment_counter("rag_generation_gated_total", 1, labels={"strategy": "two_tier"})
-            except Exception:  # noqa: BLE001
+            except (ImportError, RuntimeError, TypeError, ValueError):
                 pass
             # Sample payload exemplar when generation is gated
             try:
@@ -3930,7 +4167,7 @@ async def unified_rag_pipeline(
                     user_id=user_id,
                     namespace=index_namespace,
                 )
-            except Exception:  # noqa: BLE001
+            except (ImportError, RuntimeError, TypeError, ValueError):
                 pass
 
             # Decide abstention policy for calibration-based gating.
@@ -3951,7 +4188,7 @@ async def unified_rag_pipeline(
                     if isinstance(cal, dict):
                         cal["decision"] = effective_policy
                         result.metadata["reranking_calibration"] = cal
-            except Exception:  # noqa: BLE001
+            except (AttributeError, TypeError, ValueError):
                 pass
 
             # Abstention / clarifying question path based on effective policy
@@ -3964,14 +4201,14 @@ async def unified_rag_pipeline(
                             try:
                                 domain = analysis_domain
                                 clar_q = f"Please clarify: what specific aspect of '{query}' should I focus on{f' in {domain}' if domain else ''}?"
-                            except Exception:  # noqa: BLE001
+                            except (AttributeError, TypeError, ValueError):
                                 clar_q = None
                         if not clar_q:
                             clar_q = f"Could you clarify which specific details about '{query}' you need?"
                         result.generated_answer = clar_q
                     elif effective_policy == "decline":
                         result.generated_answer = "I don’t have sufficient grounded evidence to answer confidently. Please clarify your question or provide more context."
-                except Exception:  # noqa: BLE001
+                except (AttributeError, TypeError, ValueError):
                     pass
 
         # ========== HARD CITATIONS (per-sentence) ==========
@@ -3993,7 +4230,7 @@ async def unified_rag_pipeline(
                             try:
                                 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                                 increment_counter("rag_missing_hard_citations_total", 1)
-                            except Exception:  # noqa: BLE001
+                            except (ImportError, RuntimeError, TypeError, ValueError):
                                 pass
                             # Honor low_confidence_behavior
                             if low_confidence_behavior == "ask":
@@ -4005,9 +4242,9 @@ async def unified_rag_pipeline(
                         try:
                             from tldw_Server_API.app.core.Metrics.metrics_manager import set_gauge
                             set_gauge("rag_hard_citation_coverage", cov, labels={"strategy": "standard"})
-                        except Exception:  # noqa: BLE001
+                        except (ImportError, RuntimeError, TypeError, ValueError):
                             pass
-        except Exception as e:  # noqa: BLE001
+        except (AttributeError, RuntimeError, TypeError, ValueError) as e:
             result.errors.append(f"Hard citations mapping failed: {str(e)}")
 
         # ========== QUOTE-LEVEL CITATIONS ==========
@@ -4016,7 +4253,7 @@ async def unified_rag_pipeline(
                 qc = build_quote_citations(result.generated_answer, result.documents or [])
                 if isinstance(qc, dict):
                     result.metadata["quote_citations"] = qc
-        except Exception as e:  # noqa: BLE001
+        except (AttributeError, RuntimeError, TypeError, ValueError) as e:
             result.errors.append(f"Quote citations mapping failed: {str(e)}")
 
         # ========== FAST GROUNDEDNESS CHECK (Self-Correcting RAG Stage 5) ==========
@@ -4041,7 +4278,15 @@ async def unified_rag_pipeline(
                     # If highly confident grounded, can optionally skip full claims
                     if fast_grounded and fast_groundedness_confidence >= 0.9:
                         result.metadata["fast_groundedness"]["skip_full_claims"] = True
-        except Exception as e:  # noqa: BLE001
+        except (
+            AttributeError,
+            ConnectionError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            asyncio.TimeoutError,
+        ) as e:
             result.errors.append(f"Fast groundedness check failed: {str(e)}")
 
         # ========== CLAIMS & FACTUALITY ==========
@@ -4073,7 +4318,7 @@ async def unified_rag_pipeline(
                         user_id_val = None
                         try:
                             user_id_val = int(user_id) if user_id is not None else None
-                        except Exception:  # noqa: BLE001
+                        except (TypeError, ValueError):
                             user_id_val = None
                         job_context = ClaimsJobContext(
                             user_id=user_id_val,
@@ -4089,18 +4334,18 @@ async def unified_rag_pipeline(
                                 settings_obj = _settings
                             elif hasattr(_settings, "dict"):
                                 settings_obj = _settings.dict()
-                        except Exception:  # noqa: BLE001
+                        except (ImportError, AttributeError, TypeError):
                             settings_obj = None
                         budget_usd = kwargs.get("claims_budget_usd")
                         budget_tokens = kwargs.get("claims_budget_tokens")
                         budget_strict = kwargs.get("claims_budget_strict")
                         try:
                             budget_usd = float(budget_usd) if budget_usd is not None else None
-                        except Exception:  # noqa: BLE001
+                        except (TypeError, ValueError):
                             budget_usd = None
                         try:
                             budget_tokens = int(budget_tokens) if budget_tokens is not None else None
-                        except Exception:  # noqa: BLE001
+                        except (TypeError, ValueError):
                             budget_tokens = None
                         if isinstance(budget_strict, str):
                             budget_strict = budget_strict.strip().lower() in {"1", "true", "yes", "on"}
@@ -4171,12 +4416,28 @@ async def unified_rag_pipeline(
                                         try:
                                             more = await retr.retrieve(query=c_text)
                                             docs.extend(more)
-                                        except Exception:  # noqa: BLE001
+                                        except (
+                                            AttributeError,
+                                            ConnectionError,
+                                            OSError,
+                                            RuntimeError,
+                                            TypeError,
+                                            ValueError,
+                                            asyncio.TimeoutError,
+                                        ):
                                             pass
                                 # Sort and cap
                                 docs = sorted(docs, key=lambda d: getattr(d, 'score', 0.0), reverse=True)
                                 return docs[:top_k]
-                        except Exception as e:  # noqa: BLE001
+                        except (
+                            AttributeError,
+                            ConnectionError,
+                            OSError,
+                            RuntimeError,
+                            TypeError,
+                            ValueError,
+                            asyncio.TimeoutError,
+                        ) as e:
                             logger.debug(f"Per-claim retrieval fallback to base docs due to error: {e}")
                         return result.documents[:top_k] if result.documents else []
 
@@ -4195,7 +4456,7 @@ async def unified_rag_pipeline(
                                     mid = d.metadata.get("media_id") if isinstance(d.metadata, dict) else None
                                     if mid is not None:
                                         media_ids.append(int(mid))
-                                except Exception:  # noqa: BLE001
+                                except (TypeError, ValueError):
                                     continue
                             media_ids = list(dict.fromkeys(media_ids))[:5]
                             if media_ids:
@@ -4208,7 +4469,7 @@ async def unified_rag_pipeline(
                                     pre_claims.extend([r[0] for r in rows])
                             try:
                                 db.close_connection()
-                            except Exception:  # noqa: BLE001
+                            except (AttributeError, RuntimeError, TypeError, ValueError, sqlite3.Error):
                                 pass
                         if pre_claims:
                             # Verify these claims directly, skipping extraction
@@ -4289,7 +4550,15 @@ async def unified_rag_pipeline(
                             claims_payload = claims_run.get("claims")
                             factuality_payload = claims_run.get("summary")
                             verifications = claims_run.get("verifications", [])
-                    except Exception as _eclaims:  # noqa: BLE001
+                    except (
+                        AttributeError,
+                        ConnectionError,
+                        OSError,
+                        RuntimeError,
+                        TypeError,
+                        ValueError,
+                        asyncio.TimeoutError,
+                    ) as _eclaims:
                         logger.debug(f"Pre-extracted claims path failed: {_eclaims}")
                         claims_run = await engine.run(
                             answer=result.generated_answer,
@@ -4327,9 +4596,17 @@ async def unified_rag_pipeline(
                                 metadata={"source": "unified_pipeline"},
                             )
                             result.metadata["verification_report"] = report.to_dict()
-                        except Exception as _ereport:  # noqa: BLE001
+                        except (ImportError, RuntimeError, TypeError, ValueError) as _ereport:
                             logger.debug(f"Verification report generation failed: {_ereport}")
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Claims analysis failed: {str(e)}")
                 logger.error(f"Claims analysis error: {e}")
 
@@ -4348,7 +4625,7 @@ async def unified_rag_pipeline(
                         try:
                             from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                             increment_counter("rag_numeric_mismatches_total", len(nf.missing))
-                        except Exception:  # noqa: BLE001
+                        except (ImportError, RuntimeError, TypeError, ValueError):
                             pass
                         # Optional corrective action
                         if enable_numeric_fidelity and numeric_fidelity_behavior in {"retry", "ask", "decline"}:
@@ -4362,7 +4639,15 @@ async def unified_rag_pipeline(
                                         for tok in list(nf.missing)[:3]:
                                             try:
                                                 numeric_added.extend(await mdr.retrieve(query=f"{query} {tok}", sources=[DataSource.MEDIA_DB], config=conf, index_namespace=index_namespace))
-                                            except Exception:  # noqa: BLE001
+                                            except (
+                                                AttributeError,
+                                                ConnectionError,
+                                                OSError,
+                                                RuntimeError,
+                                                TypeError,
+                                                ValueError,
+                                                asyncio.TimeoutError,
+                                            ):
                                                 continue
                                         if numeric_added:
                                             # Merge with existing docs and optionally re-rerank in place
@@ -4384,16 +4669,32 @@ async def unified_rag_pipeline(
                                                         result.generated_answer = regen.get("answer")
                                                     elif isinstance(regen, str):
                                                         result.generated_answer = regen
-                                                except Exception:  # noqa: BLE001
+                                                except (
+                                                    AttributeError,
+                                                    ConnectionError,
+                                                    OSError,
+                                                    RuntimeError,
+                                                    TypeError,
+                                                    ValueError,
+                                                    asyncio.TimeoutError,
+                                                ):
                                                     pass
-                                except Exception:  # noqa: BLE001
+                                except (
+                                    AttributeError,
+                                    ConnectionError,
+                                    OSError,
+                                    RuntimeError,
+                                    TypeError,
+                                    ValueError,
+                                    asyncio.TimeoutError,
+                                ):
                                     pass
                             elif numeric_fidelity_behavior == "ask":
                                 note = "\n\n[Note] Some numeric values could not be verified against sources. Please clarify or provide references."
                                 result.generated_answer = (result.generated_answer or "") + note
                             elif numeric_fidelity_behavior == "decline":
                                 result.generated_answer = "Insufficient evidence to verify numeric claims in the current context."
-        except Exception as e:  # noqa: BLE001
+        except (AttributeError, RuntimeError, TypeError, ValueError) as e:
             result.errors.append(f"Numeric fidelity check failed: {str(e)}")
 
         # ========== POST-GENERATION VERIFICATION (ADAPTIVE) ==========
@@ -4404,7 +4705,7 @@ async def unified_rag_pipeline(
                 try:
                     import os
                     adaptive_time_budget_sec = float(os.getenv("RAG_ADAPTIVE_TIME_BUDGET_SEC", "0")) or None
-                except Exception:  # noqa: BLE001
+                except (TypeError, ValueError):
                     adaptive_time_budget_sec = None
             if enable_post_verification and result.generated_answer and PostGenerationVerifier:
                 verifier = PostGenerationVerifier(
@@ -4442,7 +4743,7 @@ async def unified_rag_pipeline(
                 try:
                     from tldw_Server_API.app.core.Metrics.metrics_manager import set_gauge
                     set_gauge("rag_nli_unsupported_ratio", float(vres.unsupported_ratio or 0.0), labels={"strategy": "standard"})
-                except Exception:  # noqa: BLE001
+                except (ImportError, RuntimeError, TypeError, ValueError):
                     pass
                 # Optionally override final answer on successful repair
                 if vres.fixed and vres.new_answer:
@@ -4458,7 +4759,7 @@ async def unified_rag_pipeline(
                     try:
                         from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                         increment_counter("rag_nli_low_confidence_total", 1)
-                    except Exception:  # noqa: BLE001
+                    except (ImportError, RuntimeError, TypeError, ValueError):
                         pass
                     if low_confidence_behavior == "ask":
                         note = "\n\n[Note] Evidence is insufficient; please clarify or provide more context."
@@ -4477,7 +4778,7 @@ async def unified_rag_pipeline(
                             user_id=user_id,
                             namespace=index_namespace,
                         )
-                except Exception:  # noqa: BLE001
+                except (ImportError, RuntimeError, TypeError, ValueError):
                     pass
 
                 # Optional: bounded full pipeline rerun to seek a better answer
@@ -4601,7 +4902,7 @@ async def unified_rag_pipeline(
                                 # fallback to existing metadata if available
                                 try:
                                     old_nf_missing = len((result.metadata.get("numeric_fidelity") or {}).get("missing", [])) if isinstance(result.metadata, dict) else None
-                                except Exception:  # noqa: BLE001
+                                except (AttributeError, TypeError, ValueError):
                                     old_nf_missing = None
                             if check_numeric_fidelity and (new_result.generated_answer or "").strip():
                                 new_nf = check_numeric_fidelity(new_result.generated_answer, new_result.documents or [])
@@ -4613,7 +4914,7 @@ async def unified_rag_pipeline(
                             try:
                                 cov_raw = (result.metadata.get("hard_citations") or {}).get("coverage") if isinstance(result.metadata, dict) else None
                                 old_cov = float(cov_raw) if cov_raw is not None else None
-                            except Exception:  # noqa: BLE001
+                            except (TypeError, ValueError):
                                 old_cov = None
                             if build_hard_citations and (new_result.generated_answer or "").strip():
                                 hc2 = build_hard_citations(new_result.generated_answer, new_result.documents or [], claims_payload=None)
@@ -4628,7 +4929,7 @@ async def unified_rag_pipeline(
                             if adopt and (old_cov is not None and new_cov is not None):
                                 if new_cov < old_cov:
                                     adopt = False
-                        except Exception:  # noqa: BLE001
+                        except (AttributeError, TypeError, ValueError):
                             # On checker failure, keep original adoption decision
                             pass
                         dur = time.time() - rerun_start
@@ -4655,7 +4956,7 @@ async def unified_rag_pipeline(
                             if adopt:
                                 increment_counter("rag_adaptive_rerun_adopted_total", 1)
                             observe_histogram("rag_adaptive_rerun_duration_seconds", dur, labels={"adopted": "true" if adopt else "false"})
-                        except Exception:  # noqa: BLE001
+                        except (AttributeError, RuntimeError, TypeError, ValueError):
                             pass
                         # Budget check and metric
                         try:
@@ -4663,7 +4964,7 @@ async def unified_rag_pipeline(
                                 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
                                 increment_counter("rag_phase_budget_exhausted_total", 1, labels={"phase": "adaptive_rerun"})
                                 result.metadata["adaptive_rerun"]["budget_exhausted"] = True
-                        except Exception:  # noqa: BLE001
+                        except (ImportError, RuntimeError, TypeError, ValueError):
                             pass
                         if adopt:
                             # Replace documents, citations and answer with rerun outputs
@@ -4671,10 +4972,26 @@ async def unified_rag_pipeline(
                             result.citations = new_result.citations
                             result.metadata.update({k: v for k, v in (new_result.metadata or {}).items()})
                             result.generated_answer = new_result.generated_answer
-                except Exception as _er:  # noqa: BLE001
+                except (
+                    AttributeError,
+                    ConnectionError,
+                    OSError,
+                    RuntimeError,
+                    TypeError,
+                    ValueError,
+                    asyncio.TimeoutError,
+                ) as _er:
                     result.errors.append(f"Adaptive rerun failed: {str(_er)}")
                     logger.debug(f"Adaptive rerun error: {_er}")
-        except Exception as e:  # noqa: BLE001
+        except (
+            AttributeError,
+            ConnectionError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            asyncio.TimeoutError,
+        ) as e:
             # Non-fatal: log and continue
             result.errors.append(f"Post-verification failed: {str(e)}")
             logger.warning(f"Post-verification error: {e}")
@@ -4717,7 +5034,15 @@ async def unified_rag_pipeline(
                     if debug_mode:
                         result.metadata["evidence_chains_full"] = evidence_chain_result.to_dict()
 
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Post-generation evidence chain update failed: {e}")
                 logger.debug(f"Evidence chain update error: {e}")
 
@@ -4734,7 +5059,15 @@ async def unified_rag_pipeline(
                         timeout_sec=utility_grading_timeout_sec,
                     )
                     result.metadata["utility_grade"] = ug_meta
-        except Exception as e:  # noqa: BLE001
+        except (
+            AttributeError,
+            ConnectionError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            asyncio.TimeoutError,
+        ) as e:
             result.errors.append(f"Utility grading failed: {str(e)}")
 
         # ========== USER FEEDBACK ==========
@@ -4754,7 +5087,7 @@ async def unified_rag_pipeline(
                                 result.documents = store.boost_documents(result.documents, corpus=index_namespace)
                         except ValueError as exc:
                             logger.debug(f"Personalization boost disabled for user_id={feedback_user_id or user_id}: {exc}")
-                        except Exception:  # noqa: BLE001
+                        except (AttributeError, RuntimeError, TypeError, ValueError):
                             pass
                     # Record anonymized search analytics
                     try:
@@ -4764,7 +5097,15 @@ async def unified_rag_pipeline(
                             cache_hit=bool(result.cache_hit),
                             latency_ms=(time.time() - start_time) * 1000.0,
                         )
-                    except Exception:  # noqa: BLE001
+                    except (
+                        AttributeError,
+                        ConnectionError,
+                        OSError,
+                        RuntimeError,
+                        TypeError,
+                        ValueError,
+                        asyncio.TimeoutError,
+                    ):
                         pass
 
                     result.timings["feedback"] = time.time() - feedback_start
@@ -4772,7 +5113,15 @@ async def unified_rag_pipeline(
             except ImportError:
                 result.errors.append("Feedback module not available")
                 logger.warning("Feedback requested but module not available")
-            except Exception as e:  # noqa: BLE001
+            except (
+                AttributeError,
+                ConnectionError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+                asyncio.TimeoutError,
+            ) as e:
                 result.errors.append(f"Feedback system failed: {str(e)}")
                 logger.error(f"Feedback error: {e}")
 
@@ -4841,7 +5190,7 @@ async def unified_rag_pipeline(
                                 await set_fn(cq, cache_payload, ttl=cache_ttl)
                             else:
                                 set_fn(cq, cache_payload, ttl=cache_ttl)
-            except Exception as e:  # noqa: BLE001
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 logger.error(f"Cache storage error: {e}")
 
         # ========== OBSERVABILITY ==========
@@ -4876,7 +5225,15 @@ async def unified_rag_pipeline(
             except ImportError:
                 result.errors.append("Performance monitor not available")
 
-    except Exception as e:  # noqa: BLE001
+    except (
+        AttributeError,
+        ConnectionError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        asyncio.TimeoutError,
+    ) as e:
         result.errors.append(f"Pipeline error: {str(e)}")
         logger.error(f"Unified pipeline error: {e}")
         if fallback_on_error:
@@ -4905,7 +5262,7 @@ async def unified_rag_pipeline(
                 try:
                     collector = MetricsCollector()
                     collector.end_query(metrics)
-                except Exception as e:  # noqa: BLE001
+                except (RuntimeError, TypeError, ValueError) as e:
                     logger.error(f"Metrics recording error: {e}")
 
         # Debug output if requested
@@ -4913,7 +5270,7 @@ async def unified_rag_pipeline(
             try:
                 _qh = hashlib.md5((query or "").encode("utf-8")).hexdigest()[:8]
                 logger.debug(f"Query hash={_qh} len={len(query or '')}")
-            except Exception:  # noqa: BLE001
+            except (AttributeError, TypeError, ValueError):
                 logger.debug("Received query (hash unavailable)")
             logger.debug(f"Documents found: {len(result.documents)}")
             logger.debug(f"Cache hit: {result.cache_hit}")
@@ -4929,7 +5286,7 @@ async def unified_rag_pipeline(
             try:
                 if getattr(d, 'source', None) is not None:
                     md.setdefault('source', getattr(d, 'source').value)
-            except Exception:  # noqa: BLE001
+            except (AttributeError, TypeError, ValueError):
                 pass
             doc_dicts.append({
                 "id": d.id,
@@ -4954,7 +5311,7 @@ async def unified_rag_pipeline(
             claims=claims_payload,
             factuality=factuality_payload,
         )
-    except Exception:  # noqa: BLE001
+    except (ImportError, TypeError, ValueError):
         # Fallback: return a minimal dict if Pydantic is not available
         return {
             "documents": [
@@ -5012,7 +5369,7 @@ async def unified_batch_pipeline(
                         out.append(" ")
                         prev_space = True
             return "".join(out).strip()
-        except Exception:  # noqa: BLE001
+        except (AttributeError, TypeError):
             return q or ""
 
     # Group indices by normalized query (identicals)
@@ -5049,7 +5406,7 @@ async def unified_batch_pipeline(
                 s = math.sqrt(sum((float(x) or 0.0) ** 2 for x in v))
                 if s > 0:
                     return [float(x) / s for x in v]
-            except Exception:  # noqa: BLE001
+            except (TypeError, ValueError):
                 pass
             return v
         vecs = [_norm(v) for v in (vectors or [])]
@@ -5057,13 +5414,13 @@ async def unified_batch_pipeline(
         def _cos(a, b):
             try:
                 return float(sum((ai * bi) for ai, bi in zip(a, b)))
-            except Exception:  # noqa: BLE001
+            except (TypeError, ValueError):
                 return 0.0
         # Threshold from env or default 0.9
         import os as _os
         try:
             thr = float(_os.getenv('RAG_BATCH_NEAR_DUP_THRESHOLD', '0.9'))
-        except Exception:  # noqa: BLE001
+        except (TypeError, ValueError):
             thr = 0.9
         used = set()
         for i, vi in enumerate(vecs):
@@ -5080,7 +5437,7 @@ async def unified_batch_pipeline(
                 if _cos(vi, vj) >= thr:
                     clusters[i].append(j)
                     used.add(j)
-    except Exception:  # noqa: BLE001
+    except (ImportError, RuntimeError, TypeError, ValueError):
         # Fallback: each unique becomes its own cluster
         clusters = {i: [i] for i in range(len(unique_keys))}
 
@@ -5142,7 +5499,7 @@ async def unified_batch_pipeline(
         if reuse_count > 0:
             from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
             increment_counter("rag_batch_query_reuse_total", reuse_count)
-    except Exception:  # noqa: BLE001
+    except (ImportError, RuntimeError, TypeError, ValueError):
         pass
 
     for i, res in enumerate(final_results):
@@ -5278,5 +5635,5 @@ def compute_temporal_range_from_query(query: str) -> Optional[dict[str, str]]:
         if start_dt is None or end_dt is None:
             return None
         return {"start": start_dt.isoformat(), "end": end_dt.isoformat()}
-    except Exception:  # noqa: BLE001
+    except (AttributeError, TypeError, ValueError):
         return None

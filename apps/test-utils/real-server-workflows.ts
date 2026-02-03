@@ -2203,7 +2203,7 @@ const deleteWorldBookByName = async (
   name: string
 ) => {
   const normalized = serverUrl.replace(/\/$/, "")
-  const list = await fetchWithKey(
+  const list = await fetchWithKeyTimeout(
     `${normalized}/api/v1/characters/world-books`,
     apiKey
   ).catch(() => null)
@@ -2212,7 +2212,7 @@ const deleteWorldBookByName = async (
   const books = parseListPayload(payload, ["world_books"])
   const match = books.find((b: any) => String(b?.name || "") === name)
   if (!match?.id) return
-  await fetchWithKey(
+  await fetchWithKeyTimeout(
     `${normalized}/api/v1/characters/world-books/${encodeURIComponent(
       String(match.id)
     )}`,
@@ -4949,6 +4949,7 @@ test.describe("Real server end-to-end workflows", () => {
         if (!w.__tldw_downloadCaptureInstalled) {
           w.__tldw_downloadCaptureInstalled = true
           const originalClick = HTMLAnchorElement.prototype.click
+          w.__tldw_originalAnchorClick = originalClick
           HTMLAnchorElement.prototype.click = function (...args) {
             try {
               w.__tldw_lastDownload = {
@@ -4958,6 +4959,14 @@ test.describe("Real server end-to-end workflows", () => {
               }
             } catch {
               // ignore capture errors
+            }
+            const name = (this as HTMLAnchorElement).download || ""
+            if (
+              typeof name === "string" &&
+              name.toLowerCase().endsWith(".json") &&
+              ((this as HTMLAnchorElement).href || "").startsWith("blob:")
+            ) {
+              return
             }
             return originalClick.apply(this, args as any)
           }
@@ -4975,6 +4984,14 @@ test.describe("Real server end-to-end workflows", () => {
         undefined,
         { timeout: 15000 }
       )
+      await page.evaluate(() => {
+        const w = window as any
+        if (w.__tldw_originalAnchorClick) {
+          HTMLAnchorElement.prototype.click = w.__tldw_originalAnchorClick
+          delete w.__tldw_originalAnchorClick
+          delete w.__tldw_downloadCaptureInstalled
+        }
+      })
 
       await row.getByRole("button", { name: /Stats/i }).click()
       const statsModal = page.getByRole("dialog", {
@@ -4992,9 +5009,18 @@ test.describe("Real server end-to-end workflows", () => {
         listRows.filter({ hasText: worldBookName })
       ).toHaveCount(0, { timeout: 20000 })
     } finally {
-      await driver.close()
-      await deleteWorldBookByName(normalizedServerUrl, apiKey, worldBookName)
-      await deleteCharacterByName(normalizedServerUrl, apiKey, characterName)
+      await Promise.race([
+        driver.close(),
+        new Promise((resolve) => setTimeout(resolve, 10000))
+      ])
+      await Promise.race([
+        deleteWorldBookByName(normalizedServerUrl, apiKey, worldBookName),
+        new Promise((resolve) => setTimeout(resolve, 10000))
+      ])
+      await Promise.race([
+        deleteCharacterByName(normalizedServerUrl, apiKey, characterName),
+        new Promise((resolve) => setTimeout(resolve, 10000))
+      ])
     }
   })
 
