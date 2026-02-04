@@ -1,67 +1,55 @@
-# PRD: Per-User TTS History Model
+# PRD: Per‑User TTS History (Backend)
 
 Owner:
 Date: 2026-02-04
 Status: Draft
 Target Release:
-Document Version: v1.0
+Document Version: v2.0
 
 ---
 
-## 1) Summary
+## 1) Problem / Why Now
 
-Add a per-user TTS history system that persists generation metadata and artifacts so users can search, favorite, and replay outputs. This is the backend foundation for history UI and auditability across streaming and job-based TTS.
-
----
-
-## 2) Problem Statement
-
-Currently, TTS outputs are ephemeral for many flows:
-- Users cannot reliably find, filter, or replay previous generations.
-- There is no unified record for metadata like duration, model, voice, or params.
-- Long-form TTS jobs produce artifacts but lack a structured history entry.
-
-This results in poor discoverability, weak analytics, and limited UX improvement opportunities.
+TTS outputs are currently transient for many flows. Users cannot reliably find, replay, or compare generations, and we have no canonical record of model/voice/params, duration, or segment health. Long‑form jobs produce artifacts but no structured history entry. This blocks UX features (favorites, search) and makes reliability analysis hard.
 
 ---
 
-## 3) Goals and Non-Goals
+## 2) Goals (Measurable)
 
-### Goals
-
-1. Persist a canonical per-user history row for each TTS generation (streaming + job).
-2. Store rich metadata (duration, model, voice, params, status, segments).
-3. Provide query APIs with pagination, search, and favorites.
-4. Link history rows to output artifacts when present.
-5. Support future UX features (favorites, history search, replay).
-
-### Non-Goals
-
-- Full UI redesign (front-end work is out of scope here).
-- Audio transcription history (this is TTS‑only).
-- Complex analytics dashboards (basic retrieval only).
+1. **Durable history**: 100% of TTS runs (job + non‑job) create a history row within 2 seconds of completion.
+2. **Queryable**: history list supports pagination + filters + favorites, returns in < 200ms p95 on 10k rows.
+3. **Replay‑ready**: history row can link to output artifact(s) when available.
+4. **Reliability metadata**: includes segment‑level warnings/errors and retry attempts when present.
 
 ---
 
-## 4) Users and Personas
+## 3) Non‑Goals
 
-1. Researcher — replays narrations and wants to find specific output by model/voice.
-2. Creator — saves and favorites best takes for reuse.
-3. Power User — wants metadata to compare models/params.
+- UI work (history panel, favorites UI) — separate ticket.
+- STT history or voice cloning reference history.
+- Analytics dashboards beyond basic metrics.
 
 ---
 
-## 5) User Journeys
+## 4) Scope
 
-### A) Replay a previous generation
-1. Generate TTS output.
-2. History row is created with artifact link.
-3. Later, user searches by keyword and replays.
+**In scope**
+- New `tts_history` table + access layer.
+- History write paths for: audio.speech (stream + non‑stream) and TTS job worker.
+- New API endpoints for list + favorite toggle (+ optional detail).
+- Minimal retention controls and privacy options.
 
-### B) Favorite a best take
-1. Generate several variants.
-2. User marks favorites via API or UI.
-3. Favorites list is quickly filtered.
+**Out of scope**
+- Advanced full‑text ranking beyond basic query (v1 ok with `LIKE` or FTS if already available).
+- Cross‑user sharing or public history.
+
+---
+
+## 5) Users / Use Cases
+
+1. **Power user**: Find prior outputs by keyword, model, voice.
+2. **Creator**: Favorite the best take and replay it.
+3. **Researcher**: Compare runs using metadata (params, duration, status).
 
 ---
 
@@ -69,68 +57,77 @@ This results in poor discoverability, weak analytics, and limited UX improvement
 
 ### 6.1 Data Model
 
-Create `tts_history` table with:
-- `id` (pk), `user_id`, `created_at`
-- `text` (optional) or `text_hash` (required) and `text_length`
-- `provider`, `model`
-- `voice_info` (JSON; voice id + label + provider-specific data)
-- `format`, `duration_ms`, `generation_time_ms`
-- `params_json` (JSON; includes extra_params, speed, pitch, etc.)
-- `status` (`success` | `partial` | `failed`)
-- `segments_json` (JSON; per-segment status, attempts, error, duration)
-- `favorite` (bool, default false)
-- `job_id` (optional), `output_id` (optional), `artifact_ids` (optional list)
+Create `tts_history` with the following fields (SQLite + Postgres):
 
-Decision point: store `text`?
-- Option A: store full text (improves search).
-- Option B: store only `text_hash` + `text_length` (privacy-first; search requires client-provided index).
-- Default recommendation: store `text` unless `TTS_HISTORY_STORE_TEXT=false`.
+- `id` (PK, int)
+- `user_id` (TEXT, required)
+- `created_at` (ISO timestamp)
+- `text` (TEXT, nullable) — only if `TTS_HISTORY_STORE_TEXT=true`
+- `text_hash` (TEXT, required) — sha256 of normalized text
+- `text_length` (INT)
+- `provider` (TEXT)
+- `model` (TEXT)
+- `voice_info` (JSON)
+- `format` (TEXT)
+- `duration_ms` (INT)
+- `generation_time_ms` (INT)
+- `params_json` (JSON) — extra_params + speed/pitch/volume etc.
+- `status` (TEXT enum: success|partial|failed)
+- `segments_json` (JSON) — segment status/attempts/errors
+- `favorite` (BOOL default false)
+- `job_id` (INT nullable)
+- `output_id` (INT nullable)
+- `artifact_ids` (JSON list nullable)
+- `error_message` (TEXT nullable)
 
-### 6.2 Write Path
+**Indexes**
+- `(user_id, created_at DESC)`
+- `(user_id, favorite)`
+- `(user_id, provider)`
+- `(user_id, model)`
+- optional `(user_id, text_hash)`
 
-- Streaming / non-job TTS: write history row at end of response.
-- Job-based TTS: write history row when artifact is created.
-- Include `segments_json` when chunking/segment metadata exists.
+### 6.2 History Write Path
 
-### 6.3 Read APIs
+**Non‑job TTS** (audio.speech):
+- Write a history row when generation completes.
+- If streaming: write at end of stream (after last chunk).
+- If failure: write status=`failed` with `error_message` (configurable; see 6.4).
 
-Add:
-- `GET /api/v1/audio/history`
-  - Query params: `q`, `favorite`, `provider`, `model`, `limit`, `offset`, `from`, `to`
-- `PATCH /api/v1/audio/history/{id}`
-  - Body: `{"favorite": true|false}`
-- Optional: `GET /api/v1/audio/history/{id}` for detail & replay metadata.
+**Job‑based TTS**:
+- Worker writes a history row after output artifact creation.
+- Links `job_id`, `output_id`, and `artifact_ids` (if multiple).
 
----
+### 6.3 Segment Metadata
 
-## 7) Non-Functional Requirements
+If chunking/segment metadata exists (from ticket 5):
+- Store `segments_json` with schema:
+  ```json
+  [{"index":0,"status":"success|failed","attempts":2,"error":"...","duration_ms":1234}]
+  ```
+- If absent, store `null`.
 
-- Must not exceed +5ms per request on average for history insert.
-- Must enforce user isolation (no cross-user reads).
-- Must handle large metadata JSON safely.
-- Must support deletion/retention policies in future.
+### 6.4 Text Storage & Privacy (Config)
 
----
+Add config flags:
+- `TTS_HISTORY_ENABLED` (default true)
+- `TTS_HISTORY_STORE_TEXT` (default true)
+- `TTS_HISTORY_STORE_FAILED` (default true)
 
-## 8) Data Retention & Privacy
+If `STORE_TEXT=false`, only save `text_hash` + `text_length`.
+Text must never be logged.
 
-- Default retention: align with outputs retention.
-- If `text` storage is enabled, it should be sanitized and never logged.
-- Add configuration to disable text storage or hash only.
+### 6.5 API Endpoints
 
----
-
-## 9) Metrics & Observability
-
-- `tts_history_writes_total` (success/failure)
-- `tts_history_reads_total` (query volume)
-- `tts_history_write_latency_ms`
-
----
-
-## 10) API Contracts (Detailed)
-
-### `GET /api/v1/audio/history`
+#### `GET /api/v1/audio/history`
+Query:
+- `q` (string; matches `text` if stored, else ignored)
+- `favorite` (bool)
+- `provider` (string)
+- `model` (string)
+- `limit` (1–200)
+- `offset` (>=0)
+- `from` / `to` (timestamps)
 
 Response:
 ```json
@@ -146,7 +143,9 @@ Response:
       "duration_ms": 12345,
       "format": "mp3",
       "status": "success",
-      "favorite": false
+      "favorite": false,
+      "job_id": 55,
+      "output_id": 777
     }
   ],
   "total": 321,
@@ -155,36 +154,77 @@ Response:
 }
 ```
 
-### `PATCH /api/v1/audio/history/{id}`
-
+#### `PATCH /api/v1/audio/history/{id}`
+Body:
 ```json
 { "favorite": true }
 ```
 
----
+#### Optional
+`GET /api/v1/audio/history/{id}` for full metadata + segment list.
 
-## 11) Rollout Plan
+### 6.6 Access Control
 
-1. Add schema + migration.
-2. Write path integration for streaming + jobs.
-3. Add read APIs and pagination.
-4. Add favorite toggle.
-5. Wire to WebUI (future ticket).
+- Only the owner can read/update a row.
+- Admin access only via existing admin patterns.
 
 ---
 
-## 12) Risks & Mitigations
+## 7) Non‑Functional Requirements
 
-Risk: Storing full text increases privacy exposure.
-Mitigation: Config to disable text storage; use hash-only mode.
+- Insert overhead: +5ms p95 per request on average.
+- Query p95 < 200ms for 10k history rows per user.
+- JSON metadata size capped (e.g., 64KB) — drop or truncate segments if exceeded.
 
-Risk: Large JSON metadata bloat.
-Mitigation: Clamp per‑segment metadata size; drop oversized arrays.
+---
+
+## 8) Error Handling / Edge Cases
+
+- If history insert fails: do not fail TTS response; log once with request_id.
+- For job failures: still write a failed history row if `STORE_FAILED=true`.
+- If artifacts are deleted later: history remains, but `output_id` may be stale.
+
+---
+
+## 9) Migration / Backfill
+
+- New migration for `tts_history` table and indexes.
+- No backfill (v1). Optional future: infer from outputs.
+
+---
+
+## 10) Observability
+
+Metrics:
+- `tts_history_writes_total` (labels: status, provider)
+- `tts_history_reads_total` (labels: favorite, provider)
+- `tts_history_write_latency_ms`
+
+Logs:
+- Only metadata; never log `text`.
+
+---
+
+## 11) Testing
+
+- Unit: history insert with/without text storage.
+- Unit: list filters + favorite toggle.
+- Integration: end‑to‑end job -> artifact -> history entry.
+
+---
+
+## 12) Rollout Plan
+
+1. Add schema + data access layer.
+2. Write path integration (audio.speech + worker).
+3. Add list + favorite endpoints.
+4. Add metrics and logs.
+5. Enable by default; allow env‑based disable.
 
 ---
 
 ## 13) Open Questions
 
-1. Should we store full text by default or hash-only?
-2. Should history be created for failed requests?
-3. Should history rows auto-delete when artifacts expire?
+1. Store full text by default or hash‑only?
+2. Should failed requests always create history rows?
+3. Should history rows expire with artifact retention?
