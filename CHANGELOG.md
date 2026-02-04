@@ -20,7 +20,7 @@ and this project adheres to Some kind of Versioning
 ## [0.1.20] 2026-02-01
 
 ### Added
-- 
+- webui/extension fixes+improvements
 
 ### Changed
 - CodeQL Bugfixes
