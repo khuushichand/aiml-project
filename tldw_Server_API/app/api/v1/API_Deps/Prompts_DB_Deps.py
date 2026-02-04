@@ -47,7 +47,6 @@ if not SERVER_CLIENT_ID:
 
 # --- Global Cache for Prompts DB Instances (managed by prompts_interop, but we track paths) ---
 MAX_CACHED_PROMPTS_DB_INSTANCES = settings.get("MAX_CACHED_PROMPTS_DB_INSTANCES", 20)
-_prompts_db_paths_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_PROMPTS_DB_INSTANCES)
 _prompts_cache_lock = asyncio.Lock()
 
 # --- Helper Functions ---
@@ -95,12 +94,14 @@ def _close_prompts_db_instance(
 def _on_prompts_db_eviction(cache_key: tuple[int, str], db_instance: PromptsDatabase) -> None:
     _close_prompts_db_instance(cache_key, db_instance, reason="evicted")
     if _user_db_locks is not None:
+        # NOTE: LRUCache.pop() does not trigger eviction callbacks; safe while holding _prompts_cache_lock.
         _user_db_locks.pop(cache_key, None)
 
 
 def _on_prompts_lock_eviction(cache_key: tuple[int, str], _lock: asyncio.Lock) -> None:
     if _user_db_instances is None:
         return
+    # NOTE: LRUCache.pop() does not trigger eviction callbacks; safe while holding _prompts_cache_lock.
     db_instance = _user_db_instances.pop(cache_key, None)
     if db_instance:
         _close_prompts_db_instance(cache_key, db_instance, reason="lock-evicted")
@@ -224,8 +225,6 @@ async def get_prompts_db_for_user(
             is_alive = await asyncio.to_thread(_is_db_instance_alive, db_instance)
             if is_alive:
                 logger.debug(f"Using cached PromptsDatabase instance for user_id: {user_id}")
-                async with _prompts_cache_lock:
-                    _user_db_locks[cache_key] = user_specific_lock
                 return db_instance
             logger.warning(f"Cached PromptsDatabase for user {user_id} inactive. Re-creating.")
             async with _prompts_cache_lock:

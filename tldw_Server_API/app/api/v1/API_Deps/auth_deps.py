@@ -1563,11 +1563,17 @@ async def enforce_rbac_rate_limit(
         if candidates:
             limit_per_min = min([c[0] for c in candidates if c[0] is not None]) if any(c[0] for c in candidates) else None
             burst = min([c[1] for c in candidates if c[1] is not None]) if any(c[1] for c in candidates) else None
-            logger.debug(f"RBAC rate-limit selected for user {user_id}, resource {resource}: rpm={limit_per_min}, burst={burst}")
+            logger.debug(
+                "RBAC rate-limit selected for user {}, resource {}: rpm={}, burst={}",
+                user_id,
+                resource,
+                limit_per_min,
+                burst,
+            )
         else:
-            logger.debug(f"RBAC rate-limit: no configured limits for user {user_id}, resource {resource}")
+            logger.debug("RBAC rate-limit: no configured limits for user {}, resource {}", user_id, resource)
     except Exception as e:
-        logger.debug(f"RBAC rate-limit selection failed: {e}")
+        logger.debug("RBAC rate-limit selection failed: {}", e)
 
 
 def rbac_rate_limit(resource: str):

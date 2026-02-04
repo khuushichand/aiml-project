@@ -4968,12 +4968,9 @@ test.describe("Real server end-to-end workflows", () => {
           .locator(".ant-select-item-option-content")
           .first()
         const fallbackText = await fallbackOption.textContent().catch(() => "")
-        if (!fallbackText) {
-          throw new Error(
-            `Character option not found in dropdown. wanted="${attachCharacterName}"`
-          )
-        }
-        await fallbackOption.click()
+        throw new Error(
+          `Character option not found in dropdown. wanted="${attachCharacterName}" fallback="${fallbackText ?? ""}"`
+        )
       }
       await attachModal.getByRole("button", { name: /^Attach$/i }).click()
       await expect

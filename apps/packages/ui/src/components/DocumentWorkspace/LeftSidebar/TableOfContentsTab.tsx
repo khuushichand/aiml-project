@@ -11,6 +11,9 @@ interface TocEntryProps {
   currentPage: number
   documentType: DocumentType | null
   onNavigate: (page: number, href?: string) => void
+  itemId: string
+  focusedItemId: string | null
+  onFocusItem: (id: string) => void
   depth?: number
 }
 
@@ -19,11 +22,16 @@ const TocEntry: React.FC<TocEntryProps> = ({
   currentPage,
   documentType,
   onNavigate,
+  itemId,
+  focusedItemId,
+  onFocusItem,
   depth = 0
 }) => {
   const { t } = useTranslation(["option", "common"])
   const [expanded, setExpanded] = React.useState(true)
   const hasChildren = item.children && item.children.length > 0
+  const treeItemRef = React.useRef<HTMLDivElement | null>(null)
+  const isFocusable = focusedItemId === itemId
 
   // Determine if this item or any of its children contains the current page
   const containsCurrentPage = React.useMemo(() => {
@@ -42,11 +50,13 @@ const TocEntry: React.FC<TocEntryProps> = ({
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation()
     onNavigate(item.page, item.href)
+    treeItemRef.current?.focus()
   }
 
   const handleToggle = (e: React.MouseEvent) => {
     e.stopPropagation()
     setExpanded(!expanded)
+    treeItemRef.current?.focus()
   }
 
   // Indent based on depth (max 4 levels of indent)
@@ -55,16 +65,102 @@ const TocEntry: React.FC<TocEntryProps> = ({
   // For EPUB, don't show page numbers (they're meaningless)
   const showPageNumber = documentType === "pdf"
 
+  const focusTreeItem = React.useCallback(
+    (target: HTMLElement | null) => {
+      if (!target) return
+      const targetId = target.dataset.tocId
+      if (targetId) {
+        onFocusItem(targetId)
+      }
+      target.focus()
+    },
+    [onFocusItem]
+  )
+
+  const moveFocus = React.useCallback(
+    (direction: "next" | "prev" | "first" | "last") => {
+      const root = treeItemRef.current?.closest<HTMLElement>('[role="tree"]')
+      if (!root || !treeItemRef.current) return
+      const items = Array.from(
+        root.querySelectorAll<HTMLElement>('[role="treeitem"]')
+      )
+      if (items.length === 0) return
+      const currentIndex = items.indexOf(treeItemRef.current)
+      if (currentIndex === -1) return
+      let target: HTMLElement | undefined
+      if (direction === "next") {
+        target = items[currentIndex + 1]
+      } else if (direction === "prev") {
+        target = items[currentIndex - 1]
+      } else if (direction === "first") {
+        target = items[0]
+      } else {
+        target = items[items.length - 1]
+      }
+      if (target) {
+        focusTreeItem(target)
+      }
+    },
+    [focusTreeItem]
+  )
+
   return (
     <div
+      ref={treeItemRef}
       role="treeitem"
       aria-expanded={hasChildren ? expanded : undefined}
       aria-current={isActive ? "page" : undefined}
-      tabIndex={0}
+      data-toc-id={itemId}
+      tabIndex={isFocusable ? 0 : -1}
+      onFocus={() => onFocusItem(itemId)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault()
           onNavigate(item.page, item.href)
+        }
+        if (e.key === "ArrowRight" && hasChildren && !expanded) {
+          e.preventDefault()
+          setExpanded(true)
+        }
+        if (e.key === "ArrowRight" && hasChildren && expanded) {
+          e.preventDefault()
+          const firstChild = treeItemRef.current?.querySelector<HTMLElement>(
+            '[role="treeitem"]'
+          )
+          if (firstChild) {
+            focusTreeItem(firstChild)
+          }
+        }
+        if (e.key === "ArrowLeft") {
+          if (hasChildren && expanded) {
+            e.preventDefault()
+            setExpanded(false)
+            return
+          }
+          const parentItem =
+            treeItemRef.current?.parentElement?.closest<HTMLElement>(
+              '[role="treeitem"]'
+            )
+          if (parentItem) {
+            e.preventDefault()
+            focusTreeItem(parentItem)
+          }
+        }
+        if (e.key === "ArrowDown") {
+          e.preventDefault()
+          moveFocus("next")
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault()
+          moveFocus("prev")
+        }
+        if (e.key === "Home") {
+          e.preventDefault()
+          moveFocus("first")
+        }
+        if (e.key === "End") {
+          e.preventDefault()
+          moveFocus("last")
         }
       }}
     >
@@ -80,7 +176,9 @@ const TocEntry: React.FC<TocEntryProps> = ({
         {hasChildren ? (
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={handleToggle}
+            tabIndex={-1}
             className="shrink-0 rounded p-0.5 hover:bg-hover-deep"
             aria-label={
               expanded
@@ -101,7 +199,9 @@ const TocEntry: React.FC<TocEntryProps> = ({
 
         <button
           type="button"
+          onMouseDown={(e) => e.preventDefault()}
           onClick={handleClick}
+          tabIndex={-1}
           className="flex min-w-0 flex-1 items-center gap-1 text-left"
         >
           <span className="flex-1 truncate" title={item.title}>
@@ -133,6 +233,9 @@ const TocEntry: React.FC<TocEntryProps> = ({
               currentPage={currentPage}
               documentType={documentType}
               onNavigate={onNavigate}
+              itemId={`${itemId}-${idx}`}
+              focusedItemId={focusedItemId}
+              onFocusItem={onFocusItem}
               depth={depth + 1}
             />
           ))}
@@ -148,6 +251,8 @@ export const TableOfContentsTab: React.FC = () => {
   const activeDocumentType = useDocumentWorkspaceStore((s) => s.activeDocumentType)
   const currentPage = useDocumentWorkspaceStore((s) => s.currentPage)
   const setCurrentPage = useDocumentWorkspaceStore((s) => s.setCurrentPage)
+  const [focusedItemId, setFocusedItemId] = React.useState<string | null>(null)
+  const lastDocumentIdRef = React.useRef<number | null>(null)
 
   // For PDF, fetch outline from server
   // For EPUB, outline comes from the viewer component via custom event
@@ -217,6 +322,23 @@ export const TableOfContentsTab: React.FC = () => {
   const outline = activeDocumentType === "epub" ? epubOutline : pdfOutline?.items
   const isLoading = activeDocumentType === "epub" ? epubLoading : pdfLoading
   const error = activeDocumentType === "epub" ? null : pdfError
+  const hasOutline = !!outline && outline.length > 0
+
+  React.useEffect(() => {
+    if (!hasOutline) {
+      if (focusedItemId !== null) {
+        setFocusedItemId(null)
+      }
+      lastDocumentIdRef.current = activeDocumentId
+      return
+    }
+
+    const documentChanged = activeDocumentId !== lastDocumentIdRef.current
+    if (documentChanged || focusedItemId === null) {
+      setFocusedItemId("0")
+    }
+    lastDocumentIdRef.current = activeDocumentId
+  }, [activeDocumentId, hasOutline, focusedItemId])
 
   if (!activeDocumentId) {
     return (
@@ -257,7 +379,7 @@ export const TableOfContentsTab: React.FC = () => {
     )
   }
 
-  if (!outline || outline.length === 0) {
+  if (!hasOutline) {
     return (
       <div className="flex h-full items-center justify-center p-4">
         <Empty
@@ -296,6 +418,9 @@ export const TableOfContentsTab: React.FC = () => {
             currentPage={currentPage}
             documentType={activeDocumentType}
             onNavigate={handleNavigate}
+            itemId={`${idx}`}
+            focusedItemId={focusedItemId}
+            onFocusItem={setFocusedItemId}
           />
         ))}
       </div>

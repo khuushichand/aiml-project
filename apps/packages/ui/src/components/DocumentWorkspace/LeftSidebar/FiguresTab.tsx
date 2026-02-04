@@ -20,7 +20,9 @@ export const FiguresTab: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const activeDocumentId = useDocumentWorkspaceStore((s) => s.activeDocumentId)
   const activeDocumentType = useDocumentWorkspaceStore((s) => s.activeDocumentType)
-  const openDocuments = useDocumentWorkspaceStore((s) => s.openDocuments)
+  const activeDocument = useDocumentWorkspaceStore((s) =>
+    s.openDocuments.find((doc) => doc.id === s.activeDocumentId)
+  )
   const currentPage = useDocumentWorkspaceStore((s) => s.currentPage)
   const setCurrentPage = useDocumentWorkspaceStore((s) => s.setCurrentPage)
   const totalPages = useDocumentWorkspaceStore((s) => s.totalPages)
@@ -28,7 +30,6 @@ export const FiguresTab: React.FC = () => {
   const [numPages, setNumPages] = React.useState<number>(0)
   const [loadError, setLoadError] = React.useState<string | null>(null)
 
-  const activeDocument = openDocuments.find((doc) => doc.id === activeDocumentId)
   const documentUrl = activeDocument?.url
   const pageCount = totalPages || numPages
 

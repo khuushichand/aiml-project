@@ -71,9 +71,10 @@ Bring character chat closer to SillyTavern behavior: deterministic character dat
   - Text blocks are concatenated only when both source and target blocks have `appendable=true`.
 - Prompt assembly order/precedence:
   - Apply preset template to build the base prompt (system + examples + scenario/personality) first.
-  - Apply Actor/World Book injections after preset formatting using existing injection order.
+  - Inject Prose Dials / Style Guide (Feature K) after preset formatting.
+  - Apply Actor/World Book injections after the Style Guide using existing injection order.
   - Conflict resolution/precedence:
-    - "Later injection" means Actor/World Book injections applied after preset template formatting (preset → then Actor/World Book).
+    - "Later injection" means Actor/World Book injections applied after preset template formatting and Prose Dials (preset → Style Guide → Actor/World Book).
     - Scalar parameters (temperature, top_p, penalties, stop strings): later injection overrides earlier values on key conflict.
     - System instructions and other text blocks: later injection replaces earlier values on conflict unless both blocks are `appendable=true`, in which case concatenate.
 
@@ -197,7 +198,7 @@ Bring character chat closer to SillyTavern behavior: deterministic character dat
 
 ### Requirements
 - Preserve chat history attribution per character.
-- Interaction rules with Features C/H/D:
+- Interaction rules with Features C/H/D/K:
   - Greeting inclusion (Feature C + I):
     - greetingScope / perCharacterGreeting controls whether greetings are per chat or per character.
     - per chat: a single greeting toggle applies to the whole conversation regardless of speaker.
@@ -213,6 +214,10 @@ Bring character chat closer to SillyTavern behavior: deterministic character dat
     - shared: one author note applies to all turns.
     - per character: only the speaking character memory block is injected for that turn.
     - both: shared note is injected first, then the speaking character memory block.
+  - Prose Dials (Feature K + I):
+    - No dialScope control for MVP; per-chat override applies to all characters in the chat.
+    - On each turn: per-message macro (if set) wins; otherwise use per-chat override; otherwise use the speaking character's defaults.
+    - Per-message macro applies to the next response regardless of which character is speaking.
 
 ### Scope Interaction Decision Matrix
 Legend:
@@ -270,25 +275,31 @@ Legend:
   - Feature C greeting toggle: `greetingEnabled` stored locally and synced to server history metadata.
   - Feature D author's note: shared note stored as `authorNote`; per-character notes stored in `characterMemoryById` map. Both stored locally and synced to server history metadata.
   - Feature H per-chat generation preset: `chatPresetOverrideId` + `presetScope` stored locally and synced to server history metadata.
+  - Feature K per-chat Prose Dials override: `proseDialsOverride` stored locally and synced to server history metadata.
   - Data model fields:
     - `greetingScope` stored in per-chat settings (local + server metadata).
     - `presetScope` stored in per-chat settings (local + server metadata).
     - `memoryScope` stored in per-chat settings (local + server metadata).
     - `chatPresetOverrideId` stored in per-chat settings (local + server metadata).
     - `characterMemoryById` stored in per-chat settings (local + server metadata).
+    - `proseDialsOverride` stored in per-chat settings (local + server metadata).
+- Per-character Prose Dials defaults stored in `character.extensions.proseDials`.
 
 ## Token Budget Allocation
-- Total supplemental injection budget: 1200 tokens per prompt across Features A/B/D/F + Actor/World Book.
+- Total supplemental injection budget: 1320 tokens per prompt across Features A/B/D/F/K + Actor/World Book.
+- Rationale: add a dedicated 120-token Style Guide budget for Prose Dials without squeezing existing feature caps.
 - Feature A greeting: max 120 tokens (truncate to fit).
 - Feature D author's note: max 240 tokens total (shared + active character note combined).
 - Feature B per-character presets: max 180 tokens.
+- Feature K Prose Dials / Style Guide: max 120 tokens (truncate example snippet first).
 - Feature F lorebook entries: max 420 tokens total; cap individual entries at 140 tokens and include highest-score entries until budget is exhausted.
 - Actor/World Book injections: max 240 tokens combined (actor up to 160, world up to 80).
 - Allocation/overflow strategy:
-  - Priority order for retention: presets (B) > author's note (D) > lorebook (F) > actor/world > greeting (A).
-  - Apply per-feature caps first; if still over the 1200-token total after capping (tokenization variance), drop or further truncate lowest-priority sections in order.
+  - Priority order for retention: presets (B) > Prose Dials / Style Guide (K) > author's note (D) > lorebook (F) > actor/world > greeting (A).
+  - Prose Dials / Style Guide precedence: per-message macro > per-chat override > per-character default; when trimming, keep only the highest-precedence source, truncate the example snippet first, then drop the Style Guide per the priority order if still over budget.
+  - Apply per-feature caps first; if still over the 1320-token total after capping (tokenization variance), drop or further truncate lowest-priority sections in order.
   - Prompt Preview (Feature G) shows per-section token counts, flags any truncated section, and displays a warning when the total exceeds 90% (caution) or hits the hard cap (error).
-  - Prompt assembly enforces caps and total limit; performance tests assert total supplemental tokens never exceed 1200 and record truncation events.
+  - Prompt assembly enforces caps and total limit; performance tests assert total supplemental tokens never exceed 1320 and record truncation events.
 
 ## Migration Strategy (New Fields)
 - Legacy characters/chats without new fields receive safe defaults:
@@ -297,9 +308,11 @@ Legend:
   - memoryScope: "shared" (single author's note per chat).
   - chatPresetOverrideId: null (no override, use character preset).
   - characterMemoryById: {} (empty map, no per-character memory).
+  - proseDialsOverride: null or {} (no per-chat override, use character defaults if present).
+  - character.extensions.proseDials: {} (no defaults; skip Style Guide injection).
 - Existing greeting behavior (auto-select random) preserved for legacy chats until user explicitly picks a greeting.
 - Existing prompt assembly logic unaffected for non-character chats.
-- Data schema version bump required; target schemaVersion = 2. Rollback plan:
+- Data schema version bump required; target schemaVersion = 3. Rollback plan:
   older clients ignore new per-chat settings fields and continue using legacy
   fields; avoid destructive transforms and keep new fields intact for
   re-upgrade.
@@ -311,7 +324,7 @@ Legend:
 
 ## Migration Plan
 - Add `schemaVersion` and `updatedAt` to per-chat settings records; default
-  `schemaVersion` to 1 for existing data and set new records to 2.
+  `schemaVersion` to 1 for existing data and set new records to 3.
 - On upgrade, migrate existing local keys (historyId/serverChatId) into the new per-chat settings record; set `updatedAt` to the local record timestamp.
 - For server-backed chats, perform one-time reconciliation:
   - If server metadata is missing, push local record.
@@ -323,6 +336,7 @@ Legend:
 - How to reconcile server-backed chats vs local histories?
 - Performance: cumulative token overhead from preset + author's note + greeting + lorebook + actor/world book injections may exceed model context limits or increase latency. Define token budgets per feature and add warnings in prompt preview (Feature G).
 - Performance testing: include load tests for multi-character chats with all features active to measure prompt assembly time and token counts.
+- Future consideration: auto-summarization past a threshold while preserving pinned messages (avoid compressing pinned content).
 
 ## Testing
 - Manual: switch characters, reroll greeting, refresh, confirm persistence.
@@ -342,9 +356,6 @@ Legend:
 
 
 
-
-### Extra:
-Allow for auto-summarization past a certain threshold, while also allowing for 'pinned' messages to be avoided in compression
 
 ---
 
@@ -395,7 +406,7 @@ Introduce lightweight, user-facing “Prose Dials” that shape output style (de
 
 ## Data & Persistence
 - Per-character defaults: store in `character.extensions.proseDials`.
-- Per-chat overrides: store in per-chat settings (local + server metadata, same storage strategy as Feature A/C/D/H).
+- Per-chat overrides: store in per-chat settings as `proseDialsOverride` (local + server metadata, same storage strategy as Feature A/C/D/H).
 - Per-message macro: stored only in in-memory state (cleared after use).
 
 **Proposed shape**
@@ -447,6 +458,9 @@ Style Guide:
 ---
 
 ## Testing
-- Unit: precedence resolution (message > chat > character).
-- Integration: prompt assembly includes style guide, respects budget and truncation.
+- Unit: precedence resolution (message > chat > character); truncate example snippet first; drop Style Guide when over budget after caps.
+- Integration: prompt assembly includes Style Guide between preset and Actor/World Book; respects 120-token cap and retention order.
+- E2E: per-character defaults → per-chat overrides → per-message macros across refresh and character switching (including multi-character turns).
+- Regression: non-character chats and single-character chats remain unaffected by Style Guide injection.
+- Performance: measure token counts and prompt assembly time with A/B/C/D/F/K all active; validate total supplemental budget and truncation behavior.
 - UI: dial changes persist across refresh and character switch.

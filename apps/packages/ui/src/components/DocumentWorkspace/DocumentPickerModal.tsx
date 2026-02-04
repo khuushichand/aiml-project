@@ -469,39 +469,40 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
   )
 }
 
-function extractMediaId(data: any): string | number | null {
+function extractMediaId(data: unknown): string | number | null {
   const visited = new WeakSet<object>()
   return extractMediaIdInternal(data, visited)
 }
 
 function extractMediaIdInternal(
-  data: any,
+  data: unknown,
   visited: WeakSet<object>
 ): string | number | null {
   if (!data || typeof data !== "object") return null
+  const record = data as Record<string, unknown>
   if (Array.isArray(data)) {
     return data.length > 0 ? extractMediaIdInternal(data[0], visited) : null
   }
-  if (visited.has(data as object)) return null
-  visited.add(data as object)
+  if (visited.has(record)) return null
+  visited.add(record)
 
-  if ("results" in data && Array.isArray((data as any).results) && (data as any).results.length > 0) {
-    return extractMediaIdInternal((data as any).results[0], visited)
+  if ("results" in record && Array.isArray(record.results) && record.results.length > 0) {
+    return extractMediaIdInternal(record.results[0], visited)
   }
-  if ("result" in data && (data as any).result) {
-    return extractMediaIdInternal((data as any).result, visited)
+  if ("result" in record && record.result) {
+    return extractMediaIdInternal(record.result, visited)
   }
-  if ("media" in data && (data as any).media) {
-    return extractMediaIdInternal((data as any).media, visited)
+  if ("media" in record && record.media) {
+    return extractMediaIdInternal(record.media, visited)
   }
 
   const direct =
-    (data as any).id ??
-    (data as any).media_id ??
-    (data as any).db_id ??
-    (data as any).pk ??
-    (data as any).uuid
-  if (direct !== undefined && direct !== null) return direct
+    record.id ??
+    record.media_id ??
+    record.db_id ??
+    record.pk ??
+    record.uuid
+  if (typeof direct === "string" || typeof direct === "number") return direct
 
   return null
 }

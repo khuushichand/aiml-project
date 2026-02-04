@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import Form, HTTPException, status
+from fastapi import Form, status
 from loguru import logger
 from pydantic import ValidationError
 
@@ -15,6 +15,7 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     ProcessPDFsForm,
     ProcessVideosForm,
 )
+from tldw_Server_API.app.core.exceptions import APIValidationError
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
     resolve_default_transcription_model,
 )
@@ -69,6 +70,7 @@ def _resolve_transcription_model_or_default(
     fallback_whisper_model: str,
     context: str,
 ) -> str:
+    """Return a validated transcription model or the configured default."""
     model = (transcription_model or "").strip()
     default_model = resolve_default_transcription_model(fallback_whisper_model)
     if model and model not in TRANSCRIPTION_MODEL_ENUM:
@@ -99,9 +101,9 @@ def _raise_422(exc: ValidationError) -> None:
                 for k, v in ctx.items()
             }
         serializable_errors.append(err)
-    raise HTTPException(
-        status_code=HTTP_422_UNPROCESSABLE,
+    raise APIValidationError(
         detail=serializable_errors,
+        status_code=HTTP_422_UNPROCESSABLE,
     ) from exc
 
 

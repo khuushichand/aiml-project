@@ -31,6 +31,7 @@ import {
   Table2
 } from "lucide-react"
 import type { HeaderShortcutId } from "@/services/settings/ui-settings"
+import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
 
 export type HeaderShortcutItem = {
   id: HeaderShortcutId
@@ -111,7 +112,7 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
       },
       {
         id: "document-workspace",
-        to: "/document-workspace",
+        to: DOCUMENT_WORKSPACE_PATH,
         icon: FileSearch,
         labelKey: "option:header.documentWorkspace",
         labelDefault: "Document Workspace"

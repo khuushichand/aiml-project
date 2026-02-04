@@ -93,12 +93,14 @@ agent_args = ["code"]
 3. Set required env vars:
 
 ```bash
-ACP_SANDBOX_ENABLED=1
-ACP_SANDBOX_AGENT_COMMAND=claude
-SANDBOX_ENABLE_EXECUTION=1
-SANDBOX_BACKGROUND_EXECUTION=1
-SANDBOX_DOCKER_BIND_WORKSPACE=1
+export ACP_SANDBOX_ENABLED=1
+export ACP_SANDBOX_AGENT_COMMAND=claude
+export SANDBOX_ENABLE_EXECUTION=1
+export SANDBOX_BACKGROUND_EXECUTION=1
+export SANDBOX_DOCKER_BIND_WORKSPACE=1
 ```
+
+Start `tldw_server` from the same shell (or ensure your service manager passes these env vars) so the server process inherits the sandbox settings.
 
 **Key settings explained:**
 

@@ -21,6 +21,7 @@ SENSITIVE_FORM_FIELDS = {"api_key_vector_db"}
 
 
 def _sanitize_validation_errors(exc: ValidationError) -> list[dict[str, Any]]:
+    """Sanitize Pydantic ValidationError details for safe API exposure."""
     serializable_errors: list[dict[str, Any]] = []
     for error in exc.errors():
         err = error.copy()

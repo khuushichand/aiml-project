@@ -39,6 +39,7 @@ import OptionLayout from "~/components/Layouts/Layout"
 import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
 import { createSettingsRoute } from "./settings-route"
 import { Navigate } from "react-router-dom"
+import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
 
 // Eagerly loaded routes for instant navigation on frequently visited pages
 import OptionIndex from "./option-index"
@@ -617,7 +618,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   {
     kind: "options",
-    path: "/document-workspace",
+    path: DOCUMENT_WORKSPACE_PATH,
     element: <OptionDocumentWorkspace />,
     nav: {
       group: "workspace",

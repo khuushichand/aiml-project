@@ -236,6 +236,9 @@ export function useDocumentMetadata(mediaId: number | null) {
             "modified",
           ])
       )
+      const parsedAuthors = parseAuthors(response.author)
+      const authors =
+        parsedAuthors && parsedAuthors.length > 0 ? parsedAuthors : metadataAuthor
 
       return {
         id: response.media_id ?? response.id ?? mediaId,
@@ -244,7 +247,7 @@ export function useDocumentMetadata(mediaId: number | null) {
           response.title ||
           metadataTitle ||
           "Untitled",
-        authors: parseAuthors(response.author) || metadataAuthor,
+        authors,
         creator: metadataCreator,
         producer: metadataProducer,
         fileName: metadataFileName,

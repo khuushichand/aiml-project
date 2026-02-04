@@ -228,7 +228,30 @@ export const ACPPlayground: React.FC = () => {
           className="lg:hidden"
           styles={{ body: { padding: 0 } }}
         >
-          <ACPToolsPanel />
+          <Tabs
+            activeKey={rightTab}
+            onChange={(key) => setRightTab(key as typeof rightTab)}
+            items={[
+              {
+                key: "tools",
+                label: t("playground:acp.tools", "Tools"),
+                children: (
+                  <ACPToolsPanel
+                    onHide={() => {
+                      setRightPaneOpen(false)
+                      setRightDrawerOpen(false)
+                    }}
+                  />
+                ),
+              },
+              {
+                key: "workspace",
+                label: t("playground:acp.workspace", "Workspace"),
+                children: <ACPWorkspacePanel />,
+              },
+            ]}
+            className="h-full [&_.ant-tabs-content]:h-full [&_.ant-tabs-content-holder]:flex-1 [&_.ant-tabs-tabpane]:h-full"
+          />
         </Drawer>
       </div>
 

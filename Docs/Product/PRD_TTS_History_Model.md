@@ -57,35 +57,53 @@ TTS outputs are currently transient for many flows. Users cannot reliably find, 
 
 ### 6.1 Data Model
 
+**Storage location**
+- SQLite default: per‑user `Databases/user_databases/<user_id>/Media_DB_v2.db`.
+- Postgres deployments: shared `tts_history` table keyed by `user_id`.
+
 Create `tts_history` with the following fields (SQLite + Postgres):
 
 - `id` (PK, int)
 - `user_id` (TEXT, required)
 - `created_at` (ISO timestamp)
 - `text` (TEXT, nullable) — only if `TTS_HISTORY_STORE_TEXT=true`
-- `text_hash` (TEXT, required) — sha256 of normalized text
-- `text_length` (INT)
+- `text_hash` (TEXT, required) — HMAC‑SHA256 of normalized text using `TTS_HISTORY_HASH_KEY` (always stored)
+- `text_length` (INT) — Unicode codepoint length of normalized text
 - `provider` (TEXT)
 - `model` (TEXT)
+- `voice_id` (TEXT) — normalized voice identifier for filtering
+- `voice_name` (TEXT) — human‑readable voice label
 - `voice_info` (JSON)
 - `format` (TEXT)
 - `duration_ms` (INT)
 - `generation_time_ms` (INT)
 - `params_json` (JSON) — extra_params + speed/pitch/volume etc.
 - `status` (TEXT enum: success|partial|failed)
-- `segments_json` (JSON) — segment status/attempts/errors
+- `segments_json` (JSON) — segment metadata object (see 6.3)
 - `favorite` (BOOL default false)
 - `job_id` (INT nullable)
 - `output_id` (INT nullable)
 - `artifact_ids` (JSON list nullable)
+- `artifact_deleted_at` (ISO timestamp nullable) — set if artifacts are purged
 - `error_message` (TEXT nullable)
+
+**Text storage rules**
+- If `TTS_HISTORY_STORE_TEXT=true`, store both plaintext `text` (for search) and `text_hash` + `text_length` (for dedup/privacy).
+- If `TTS_HISTORY_STORE_TEXT=false`, store only `text_hash` + `text_length` and keep `text` null (no plaintext).
+- `text_hash` must always be computed from the original request text when available (after normalization) and stored even when `text` is present so downstream dedup/lookup is consistent.
 
 **Indexes**
 - `(user_id, created_at DESC)`
 - `(user_id, favorite)`
 - `(user_id, provider)`
 - `(user_id, model)`
+- `(user_id, voice_id)`
 - optional `(user_id, text_hash)`
+
+**Text normalization & hashing**
+- Normalize by: Unicode NFKC, normalize newlines to `\n`, trim leading/trailing whitespace, collapse internal whitespace to single spaces.
+- `text_hash` uses HMAC‑SHA256 with `TTS_HISTORY_HASH_KEY` (per deployment).
+- `text_length` is computed from the normalized text.
 
 ### 6.2 History Write Path
 
@@ -93,6 +111,8 @@ Create `tts_history` with the following fields (SQLite + Postgres):
 - Write a history row when generation completes.
 - If streaming: write at end of stream (after last chunk).
 - If failure: write status=`failed` with `error_message` (configurable; see 6.4).
+- `duration_ms` should come from provider metadata or audio header when available; otherwise store `null`.
+- `generation_time_ms` is wall‑clock from request start to final chunk/response.
 
 **Job‑based TTS**:
 - Worker writes a history row after output artifact creation.
@@ -103,8 +123,21 @@ Create `tts_history` with the following fields (SQLite + Postgres):
 If chunking/segment metadata exists (from ticket 5):
 - Store `segments_json` with schema:
   ```json
-  [{"index":0,"status":"success|failed","attempts":2,"error":"...","duration_ms":1234}]
+  {
+    "segments": [
+      {"index":0,"status":"success|failed","attempts":2,"error":"...","duration_ms":1234}
+    ],
+    "summary": {
+      "total": 10,
+      "success": 9,
+      "failed": 1,
+      "total_duration_ms": 12000,
+      "max_attempts": 3
+    },
+    "truncated": false
+  }
   ```
+- If serialized `segments_json` exceeds 64KB, truncate by dropping successful segments first, keep up to the most recent 256 failed segments, then add most recent successes to fill remaining space. Always preserve `summary` and set `truncated=true`.
 - If absent, store `null`.
 
 ### 6.4 Text Storage & Privacy (Config)
@@ -113,20 +146,26 @@ Add config flags:
 - `TTS_HISTORY_ENABLED` (default true)
 - `TTS_HISTORY_STORE_TEXT` (default true)
 - `TTS_HISTORY_STORE_FAILED` (default true)
+- `TTS_HISTORY_HASH_KEY` (required for HMAC; use deployment secret)
 
 If `STORE_TEXT=false`, only save `text_hash` + `text_length`.
-Text must never be logged.
+When `STORE_TEXT=false`, keyword search is unavailable (see API). Text must never be logged.
 
 ### 6.5 API Endpoints
 
 #### `GET /api/v1/audio/history`
 Query:
-- `q` (string; matches `text` if stored, else ignored)
+- `q` (string; matches `text` if stored; otherwise 400 with clear error)
+- `text_exact` (string; server computes HMAC and matches `text_hash` exactly)
 - `favorite` (bool)
 - `provider` (string)
 - `model` (string)
+- `voice_id` (string)
+- `voice_name` (string)
 - `limit` (1–200)
 - `offset` (>=0)
+- `cursor` (string; optional keyset cursor `created_at|id`; if set, `offset` ignored)
+- `include_total` (bool; default false)
 - `from` / `to` (timestamps)
 
 Response:
@@ -136,21 +175,26 @@ Response:
     {
       "id": 123,
       "created_at": "...",
+      "has_text": true,
       "text_preview": "first 120 chars...",
       "provider": "qwen3_tts",
       "model": "...",
+      "voice_id": "alloy",
+      "voice_name": "Alloy",
       "voice_info": {},
       "duration_ms": 12345,
       "format": "mp3",
       "status": "success",
       "favorite": false,
       "job_id": 55,
-      "output_id": 777
+      "output_id": 777,
+      "artifact_deleted_at": null
     }
   ],
   "total": 321,
   "limit": 50,
-  "offset": 0
+  "offset": 0,
+  "next_cursor": "2026-02-04T12:00:00Z|123"
 }
 ```
 
@@ -163,10 +207,25 @@ Body:
 #### Optional
 `GET /api/v1/audio/history/{id}` for full metadata + segment list.
 
+#### Optional
+`DELETE /api/v1/audio/history/{id}` to remove a single history row (soft delete; hard purge controlled by retention settings).
+
 ### 6.6 Access Control
 
 - Only the owner can read/update a row.
 - Admin access only via existing admin patterns.
+- Delete follows the same access rules.
+
+### 6.7 Retention & Deletion
+
+Config:
+- `TTS_HISTORY_RETENTION_DAYS` (default 90; 0 disables age‑based purge)
+- `TTS_HISTORY_MAX_ROWS_PER_USER` (default 10_000; 0 disables row cap)
+- `TTS_HISTORY_PURGE_INTERVAL_HOURS` (default 24)
+
+Behavior:
+- Purge job deletes oldest rows beyond retention and/or row cap.
+- Artifact retention is independent; when artifacts are deleted, update history rows to set `artifact_deleted_at` and clear `output_id`/`artifact_ids`.
 
 ---
 
@@ -175,6 +234,7 @@ Body:
 - Insert overhead: +5ms p95 per request on average.
 - Query p95 < 200ms for 10k history rows per user.
 - JSON metadata size capped (e.g., 64KB) — drop or truncate segments if exceeded.
+- For large datasets, prefer `cursor` pagination and `include_total=false` to maintain p95.
 
 ---
 
@@ -182,7 +242,8 @@ Body:
 
 - If history insert fails: do not fail TTS response; log once with request_id.
 - For job failures: still write a failed history row if `STORE_FAILED=true`.
-- If artifacts are deleted later: history remains, but `output_id` may be stale.
+- If artifacts are deleted later: history remains; references are cleared and `artifact_deleted_at` is set.
+- If `q` is provided while `STORE_TEXT=false`, return 400 with a clear error message.
 
 ---
 
@@ -209,7 +270,12 @@ Logs:
 
 - Unit: history insert with/without text storage.
 - Unit: list filters + favorite toggle.
+- Unit: `q` rejected when `STORE_TEXT=false`; `text_exact` matches hash.
+- Unit: voice filters (`voice_id`, `voice_name`) and index coverage.
+- Unit: segment truncation policy preserves failed segments and sets `truncated=true`.
 - Integration: end‑to‑end job -> artifact -> history entry.
+- Integration: streaming failure produces `failed` history row with `error_message`.
+- Integration: artifact purge clears references and sets `artifact_deleted_at`.
 
 ---
 
@@ -223,8 +289,8 @@ Logs:
 
 ---
 
-## 13) Open Questions
+## 13) Decisions
 
-1. Store full text by default or hash‑only?
-2. Should failed requests always create history rows?
-3. Should history rows expire with artifact retention?
+1. Store full text by default; allow hash‑only via `TTS_HISTORY_STORE_TEXT=false`.
+2. Failed requests create history rows when `TTS_HISTORY_STORE_FAILED=true` (default true).
+3. History retention is independent of artifact retention; artifact deletions clear references but keep history.

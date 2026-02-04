@@ -301,10 +301,10 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
       setChunks([])
       setPdfMetadata(null)
 
-      const options = buildChunkingOptions()
+      const builtOptions = buildChunkingOptions()
 
       try {
-        const response = await processPdfForChunking(pdfFile, options, {
+        const response = await processPdfForChunking(pdfFile, builtOptions, {
           pdf_parsing_engine: pdfParsingEngine,
           enable_ocr: enableOcr,
           ocr_backend: ocrBackend,
@@ -333,7 +333,7 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
         setLastResponse({
           chunks: result.chunks ?? [],
           original_file_name: result.input_ref ?? pdfFile.name,
-          applied_options: options
+          applied_options: builtOptions
         })
       } catch (err: unknown) {
         const errorMsg =
@@ -358,14 +358,14 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
     setError(null)
     setChunks([])
 
-    const options = buildChunkingOptions()
+    const builtOptions = buildChunkingOptions()
 
     try {
       let response: ChunkingResponse
       if (inputFile && requestMode === "file") {
-        response = await chunkFile(inputFile, options)
+        response = await chunkFile(inputFile, builtOptions)
       } else {
-        response = await chunkText(inputText, options, inputFile?.name)
+        response = await chunkText(inputText, builtOptions, inputFile?.name)
       }
       setChunks(response.chunks)
       setLastResponse(response)
@@ -551,7 +551,9 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
       if (pdfUrl) {
         try {
           URL.revokeObjectURL(pdfUrl)
-        } catch {}
+        } catch (error) {
+          console.debug("Failed to revoke PDF URL:", error)
+        }
       }
       const url = URL.createObjectURL(file)
       setPdfFile(file)
@@ -567,7 +569,9 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
       if (pdfUrl) {
         try {
           URL.revokeObjectURL(pdfUrl)
-        } catch {}
+        } catch (error) {
+          console.debug("Failed to revoke PDF URL:", error)
+        }
       }
       setPdfUrl(null)
       setPdfMetadata(null)

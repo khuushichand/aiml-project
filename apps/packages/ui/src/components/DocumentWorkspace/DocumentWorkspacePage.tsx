@@ -54,7 +54,7 @@ const DocumentPickerModal = React.lazy(() => import("./DocumentPickerModal"))
 /**
  * Left sidebar tab content for the document workspace layout.
  */
-const LeftSidebarContent: React.FC<{ onHide?: () => void }> = ({ onHide }) => {
+const LeftSidebarContent: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const activeSidebarTab = useDocumentWorkspaceStore((s) => s.activeSidebarTab)
   const setActiveSidebarTab = useDocumentWorkspaceStore(
@@ -128,7 +128,7 @@ const LeftSidebarContent: React.FC<{ onHide?: () => void }> = ({ onHide }) => {
 /**
  * Right panel tab content for chat, notes, citations, and quizzes.
  */
-const RightPanelContent: React.FC<{ onHide?: () => void }> = ({ onHide }) => {
+const RightPanelContent: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const activeRightTab = useDocumentWorkspaceStore((s) => s.activeRightTab)
   const setActiveRightTab = useDocumentWorkspaceStore(
@@ -542,6 +542,15 @@ export const DocumentWorkspacePage: React.FC = () => {
             )
             return
           }
+          if (status === 401 || status === 403) {
+            message.error(
+              t(
+                "option:documentWorkspace.fileUnauthorized",
+                "You don't have permission to access this document."
+              )
+            )
+            return
+          }
           throw err
         }
 
@@ -777,7 +786,7 @@ export const DocumentWorkspacePage: React.FC = () => {
           {/* Left pane - Sidebar (desktop) */}
           {leftPaneOpen && (
             <aside className="hidden h-full min-h-0 w-72 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col">
-              <LeftSidebarContent onHide={() => setLeftPaneOpen(false)} />
+              <LeftSidebarContent />
             </aside>
           )}
 
@@ -811,7 +820,7 @@ export const DocumentWorkspacePage: React.FC = () => {
           {/* Right pane - Chat/Annotations (desktop) */}
           {rightPaneOpen && (
             <aside className="hidden w-80 shrink-0 border-l border-border bg-surface lg:flex lg:flex-col">
-              <RightPanelContent onHide={() => setRightPaneOpen(false)} />
+              <RightPanelContent />
             </aside>
           )}
 

@@ -3,7 +3,7 @@ import { useStorage } from "@plasmohq/storage/hook"
 import { Empty } from "antd"
 import { Terminal as TerminalIcon } from "lucide-react"
 import { Terminal } from "xterm"
-import { FitAddon } from "xterm-addon-fit"
+import { FitAddon } from "@xterm/addon-fit"
 import "xterm/css/xterm.css"
 
 import { useACPSessionsStore } from "@/store/acp-sessions"
@@ -22,6 +22,8 @@ export const ACPWorkspacePanel: React.FC = () => {
   const terminalRef = React.useRef<Terminal | null>(null)
   const fitAddonRef = React.useRef<FitAddon | null>(null)
   const wsRef = React.useRef<WebSocket | null>(null)
+  const resizeTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const fitTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const activeSessionId = useACPSessionsStore((s) => s.activeSessionId)
   const activeSession = useACPSessionsStore((s) =>
@@ -33,7 +35,7 @@ export const ACPWorkspacePanel: React.FC = () => {
   const [apiKey] = useStorage("apiKey", "")
   const [accessToken] = useStorage("accessToken", "")
 
-  const sshPath = activeSession?.sshWsUrl || (activeSessionId ? `/api/v1/acp/sessions/${activeSessionId}/ssh` : "")
+  const sshPath = activeSession?.sshWsUrl || ""
 
   React.useEffect(() => {
     if (!activeSessionId || !sshPath || !containerRef.current) return
@@ -91,19 +93,45 @@ export const ACPWorkspacePanel: React.FC = () => {
       }
     })
 
-    const disposeResize = term.onResize(({ cols, rows }) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "resize", cols, rows }))
+    const scheduleResize = (cols: number, rows: number) => {
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current)
       }
+      resizeTimeoutRef.current = setTimeout(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "resize", cols, rows }))
+        }
+      }, 100)
+    }
+
+    const disposeResize = term.onResize(({ cols, rows }) => {
+      scheduleResize(cols, rows)
     })
 
-    const handleResize = () => fitAddon.fit()
+    const scheduleFit = () => {
+      if (fitTimeoutRef.current) {
+        clearTimeout(fitTimeoutRef.current)
+      }
+      fitTimeoutRef.current = setTimeout(() => {
+        fitAddon.fit()
+      }, 100)
+    }
+
+    const handleResize = () => scheduleFit()
     window.addEventListener("resize", handleResize)
 
     return () => {
       disposeInput.dispose()
       disposeResize.dispose()
       window.removeEventListener("resize", handleResize)
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current)
+        resizeTimeoutRef.current = null
+      }
+      if (fitTimeoutRef.current) {
+        clearTimeout(fitTimeoutRef.current)
+        fitTimeoutRef.current = null
+      }
       ws.close()
       term.dispose()
       terminalRef.current = null

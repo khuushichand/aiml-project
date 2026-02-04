@@ -29,7 +29,7 @@ MAX_ENRICHMENT_REFS = 20
 SEMANTIC_SCHOLAR_DELAY = 0.2  # 200ms = max 5 requests/sec
 
 # Reference section detection patterns
-REFERENCES_PARSER_VERSION = "3"
+REFERENCES_PARSER_VERSION = "4"
 REFERENCE_SECTION_PATTERNS = [
     # Common headings (optional numbering/roman numerals, optional colon)
     r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*references?\s*:?\s*$",
@@ -129,6 +129,7 @@ def _split_references(refs_text: str) -> list[str]:
     # Fix common PDF hyphenation across line breaks
     refs_text = re.sub(r"(\w)-\n(\w)", r"\1\2", refs_text)
     refs_text = refs_text.replace("\r\n", "\n").replace("\r", "\n")
+    refs_text = refs_text.strip()
 
     # Try numbered list format: [1], 1., 1), etc.
     numbered_pattern = r"(?m)^\s*(?:\[\d+\]|\d+[\.\)])\s+"
@@ -151,6 +152,19 @@ def _split_references(refs_text: str) -> list[str]:
             return True
         # "Surname et al." pattern
         if re.search(r"^[A-Z][A-Za-z'’.\-]+(?:\s+et\s+al\.)\b", line):
+            return True
+        return False
+
+    def _looks_like_reference(text: str) -> bool:
+        if not text or len(text) < 30:
+            return False
+        if re.search(DOI_PATTERN, text, re.IGNORECASE):
+            return True
+        if re.search(ARXIV_PATTERN, text, re.IGNORECASE):
+            return True
+        if re.search(ARXIV_OLD_PATTERN, text, re.IGNORECASE):
+            return True
+        if re.search(YEAR_PATTERN, text):
             return True
         return False
 
@@ -194,6 +208,30 @@ def _split_references(refs_text: str) -> list[str]:
             potential_refs.append(current_ref.strip())
         if len(potential_refs) > len(references):
             references = potential_refs
+
+    # Final fallback: split on author-start patterns in fully normalized text
+    if len(references) < 5:
+        normalized = re.sub(r"\s+", " ", refs_text).strip()
+        author_start = re.compile(
+            r"(?:^|(?<=\.\s))([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){0,2},\s*[A-Z])"
+        )
+        starts = [m.start(1) for m in author_start.finditer(normalized)]
+        if starts:
+            if starts[0] != 0:
+                starts = [0] + starts
+            segments: list[str] = []
+            for idx, start in enumerate(starts):
+                end = starts[idx + 1] if idx + 1 < len(starts) else len(normalized)
+                segment = normalized[start:end].strip(" ;,.")
+                if len(segment) > 30:
+                    segments.append(segment)
+            if len(segments) > len(references):
+                references = segments
+
+    # Filter out lines that do not look like references, but keep a minimum set
+    filtered = [ref for ref in references if _looks_like_reference(ref)]
+    if len(filtered) >= 3:
+        references = filtered
 
     return references[:100]  # Limit to 100 references
 

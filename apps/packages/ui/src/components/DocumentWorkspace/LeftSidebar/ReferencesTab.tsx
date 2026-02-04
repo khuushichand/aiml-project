@@ -21,6 +21,30 @@ import {
 } from "@/hooks/document-workspace"
 import { useConnectionStore } from "@/store/connection"
 
+const hashReferenceText = (value: string): string => {
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+const getReferenceKey = (reference: ReferenceEntry, index: number): string => {
+  const stableId =
+    reference.doi || reference.arxiv_id || reference.semantic_scholar_id
+  if (stableId) {
+    return stableId
+  }
+
+  const rawText = reference.raw_text?.trim()
+  if (rawText) {
+    return `ref-${hashReferenceText(rawText)}`
+  }
+
+  return `ref-${index}`
+}
+
 /**
  * Single reference card display.
  */
@@ -484,7 +508,7 @@ export const ReferencesTab: React.FC = () => {
           <div className="space-y-2">
             {filteredReferences.map((ref, idx) => (
               <ReferenceCard
-                key={ref.doi || ref.arxiv_id || ref.semantic_scholar_id || idx}
+                key={getReferenceKey(ref, idx)}
                 reference={ref}
                 index={idx}
               />

@@ -56,9 +56,7 @@ const normalizeModuleList = (modules: string[] | null | undefined): string[] => 
 
 const areModuleListsEqual = (left: string[], right: string[]): boolean => {
   if (left.length !== right.length) return false
-  const leftSet = new Set(left)
-  if (leftSet.size !== right.length) return false
-  return right.every((value) => leftSet.has(value))
+  return left.every((value, index) => value === right[index])
 }
 
 export const useMcpTools = (): McpToolsStatus => {
@@ -88,6 +86,12 @@ export const useMcpTools = (): McpToolsStatus => {
     () => normalizeModuleList(storedModule),
     [storedModule]
   )
+  const toolStateRef = React.useRef({
+    toolCatalog,
+    toolCatalogId,
+    toolModules: normalizedToolModules,
+    toolCatalogStrict
+  })
   const healthQuery = useQuery({
     queryKey: ["mcp-health"],
     queryFn: async () => apiSend({ path: "/api/v1/mcp/health", method: "GET" }),
@@ -119,6 +123,7 @@ export const useMcpTools = (): McpToolsStatus => {
       toolCatalogStrict
     ],
     queryFn: async () => {
+      let discoveryError: unknown
       try {
         const tools = await fetchMcpToolsViaDiscovery({
           catalog: toolCatalog,
@@ -128,13 +133,20 @@ export const useMcpTools = (): McpToolsStatus => {
           catalogStrict: toolCatalogStrict
         })
         return tools
-      } catch {
+      } catch (err) {
+        discoveryError = err
         return await fetchMcpTools({
           catalog: toolCatalog,
           catalogId: toolCatalogId,
           module:
             normalizedToolModules.length > 0 ? normalizedToolModules : undefined,
           catalogStrict: toolCatalogStrict
+        }).catch((fallbackErr) => {
+          console.warn("MCP tools fetch failed", {
+            discoveryError,
+            fallbackErr
+          })
+          throw fallbackErr
         })
       }
     },
@@ -187,7 +199,7 @@ export const useMcpTools = (): McpToolsStatus => {
   const tools = (toolsQuery.data ?? []).filter((tool) => {
     if (!tool || typeof tool !== "object") return false
     if (!("canExecute" in tool)) return true
-    return Boolean((tool as McpToolDefinition).canExecute)
+    return (tool as McpToolDefinition).canExecute !== false
   })
   const toolsAvailable = toolsQuery.isLoading ? null : tools.length > 0
   const catalogs = catalogsQuery.data ?? []
@@ -219,28 +231,39 @@ export const useMcpTools = (): McpToolsStatus => {
   }, [healthState, setHealthState])
 
   React.useEffect(() => {
-    if (storedCatalog !== toolCatalog) {
+    toolStateRef.current = {
+      toolCatalog,
+      toolCatalogId,
+      toolModules: normalizedToolModules,
+      toolCatalogStrict
+    }
+  }, [toolCatalog, toolCatalogId, normalizedToolModules, toolCatalogStrict])
+
+  React.useEffect(() => {
+    const current = toolStateRef.current
+    const normalizedCatalogId = storedCatalogId ?? null
+    if (storedCatalog !== current.toolCatalog) {
       setToolCatalog(storedCatalog)
     }
-  }, [setToolCatalog, storedCatalog, toolCatalog])
-
-  React.useEffect(() => {
-    if (storedCatalogId !== toolCatalogId) {
-      setToolCatalogId(storedCatalogId ?? null)
+    if (normalizedCatalogId !== current.toolCatalogId) {
+      setToolCatalogId(normalizedCatalogId)
     }
-  }, [setToolCatalogId, storedCatalogId, toolCatalogId])
-
-  React.useEffect(() => {
-    if (!areModuleListsEqual(normalizedStoredModules, normalizedToolModules)) {
+    if (!areModuleListsEqual(normalizedStoredModules, current.toolModules)) {
       setToolModules(normalizedStoredModules)
     }
-  }, [normalizedStoredModules, normalizedToolModules, setToolModules])
-
-  React.useEffect(() => {
-    if (storedStrict !== toolCatalogStrict) {
+    if (storedStrict !== current.toolCatalogStrict) {
       setToolCatalogStrict(storedStrict)
     }
-  }, [setToolCatalogStrict, storedStrict, toolCatalogStrict])
+  }, [
+    normalizedStoredModules,
+    setToolCatalog,
+    setToolCatalogId,
+    setToolCatalogStrict,
+    setToolModules,
+    storedCatalog,
+    storedCatalogId,
+    storedStrict
+  ])
 
   React.useEffect(() => {
     if (!hasMcp && !loading) {

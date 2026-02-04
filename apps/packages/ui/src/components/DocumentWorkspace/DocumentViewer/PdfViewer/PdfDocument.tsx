@@ -294,6 +294,25 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
     [viewMode, virtualScrollEnabled, totalPageCount, currentPage, onPageChange]
   )
 
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current) {
+        cancelAnimationFrame(scrollRafRef.current)
+        scrollRafRef.current = null
+      }
+      if (scrollTimeoutRef.current) {
+        window.clearTimeout(scrollTimeoutRef.current)
+        scrollTimeoutRef.current = null
+      }
+      if (wheelResetRef.current) {
+        window.clearTimeout(wheelResetRef.current)
+        wheelResetRef.current = null
+      }
+      isUserScrollingRef.current = false
+      wheelAccumulatorRef.current = 0
+    }
+  }, [])
+
   if (!url) {
     return (
       <div className="flex h-full items-center justify-center p-4">

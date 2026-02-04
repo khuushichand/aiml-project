@@ -31,6 +31,7 @@ import { ChatSidebar } from "@/components/Common/ChatSidebar"
 import { EventOnlyHosts } from "@/components/Common/EventHosts"
 import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import { setSettingsReturnTo } from "@/utils/settings-return"
+import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
 
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
@@ -107,7 +108,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const { demoEnabled } = useDemoMode()
   const [showChatSidebar] = useChatSidebar()
   const location = useLocation()
-  const isDocumentWorkspace = location.pathname === "/document-workspace"
+  const isDocumentWorkspace = location.pathname === DOCUMENT_WORKSPACE_PATH
   const { clearChat, useOCR, chatMode, setChatMode, webSearch, setWebSearch } =
     useMessageOption()
   const queryClient = useQueryClient()

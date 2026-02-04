@@ -167,7 +167,11 @@ class ConfigMigrator:
         self.existing_env_keys = existing
         return existing
 
-    def write_env_file(self, keys: dict[str, str], preserve_existing: bool = True):
+    def write_env_file(
+        self,
+        keys: dict[str, str],
+        preserve_existing: bool = True,
+    ) -> None:
         """Write the .env file with migrated keys"""
         # Read template for structure
         template_lines = []

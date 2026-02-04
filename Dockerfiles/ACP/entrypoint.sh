@@ -33,17 +33,46 @@ SSHD
 /usr/sbin/sshd -D -e &
 
 mkdir -p "/home/${USER_NAME}/.tldw-agent"
-cat <<CFG > "/home/${USER_NAME}/.tldw-agent/config.yaml"
-agent:
-  command: "${ACP_AGENT_COMMAND:-}"
-  args: ${ACP_AGENT_ARGS_JSON:-[]}
-  env: ${ACP_AGENT_ENV_JSON:-{}}
-workspace:
-  allowed_roots:
-    - "${WORKSPACE_ROOT}"
-terminal:
-  enabled: true
-CFG
+python3 - <<'PY' > "/home/${USER_NAME}/.tldw-agent/config.yaml"
+import json
+import os
+import sys
+
+
+def load_json(name: str, default: str):
+    raw = os.environ.get(name, default)
+    if raw == "":
+        raw = default
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"Invalid JSON for {name}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+args = load_json("ACP_AGENT_ARGS_JSON", "[]")
+if not isinstance(args, list):
+    print("ACP_AGENT_ARGS_JSON must be a JSON array.", file=sys.stderr)
+    sys.exit(1)
+
+env = load_json("ACP_AGENT_ENV_JSON", "{}")
+if not isinstance(env, dict):
+    print("ACP_AGENT_ENV_JSON must be a JSON object.", file=sys.stderr)
+    sys.exit(1)
+
+command = os.environ.get("ACP_AGENT_COMMAND", "")
+workspace_root = os.environ.get("ACP_WORKSPACE_ROOT", "/workspace")
+
+print("agent:")
+print(f"  command: {json.dumps(command)}")
+print(f"  args: {json.dumps(args)}")
+print(f"  env: {json.dumps(env)}")
+print("workspace:")
+print("  allowed_roots:")
+print(f"    - {json.dumps(workspace_root)}")
+print("terminal:")
+print("  enabled: true")
+PY
 
 chown -R "${USER_NAME}:${USER_NAME}" "/home/${USER_NAME}/.tldw-agent"
 
