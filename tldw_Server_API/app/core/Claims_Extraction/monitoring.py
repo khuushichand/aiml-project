@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 
 _CLAIMS_METRICS_REGISTERED = False
-_CLAIMS_PROVIDER_STATS: dict[tuple[str, str], "ClaimsProviderStats"] = {}
+_CLAIMS_PROVIDER_STATS: dict[tuple[str, str], ClaimsProviderStats] = {}
 _CLAIMS_PROVIDER_STATS_LOCK = threading.Lock()
 
 

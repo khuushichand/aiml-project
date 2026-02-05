@@ -45,7 +45,7 @@ class PolicyLoader:
         reload: PolicyReloadConfig | None = None,
         *,
         time_source: Callable[[], float] = time.monotonic,
-        store: "PolicyStoreProtocol" | None = None,
+        store: PolicyStoreProtocol | None = None,
     ) -> None:
         self._path = Path(path)
         self._reload_cfg = reload or PolicyReloadConfig(enabled=True, interval_sec=10)

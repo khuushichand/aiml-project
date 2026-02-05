@@ -259,7 +259,7 @@ async def _process_document_like_item(*args, **kwargs):  # type: ignore[override
         persistence as _persistence_mod,
     )
 
-    impl = getattr(_persistence_mod, "process_document_like_item")
+    impl = _persistence_mod.process_document_like_item
     return await impl(*args, **kwargs)
 
 

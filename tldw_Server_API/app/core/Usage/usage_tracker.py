@@ -30,12 +30,12 @@ except Exception:  # pragma: no cover - safe fallback
     LedgerEntry = None  # type: ignore
     ResourceDailyLedger = None  # type: ignore
 
-_tokens_daily_ledger: "ResourceDailyLedger" | None = None  # type: ignore[name-defined]
+_tokens_daily_ledger: ResourceDailyLedger | None = None  # type: ignore[name-defined]
 _tokens_daily_ledger_lock = asyncio.Lock()
 _tokens_legacy_backfill_done: set[str] = set()
 
 
-async def _get_tokens_daily_ledger() -> "ResourceDailyLedger" | None:
+async def _get_tokens_daily_ledger() -> ResourceDailyLedger | None:
     global _tokens_daily_ledger
     if ResourceDailyLedger is None or LedgerEntry is None:
         return None

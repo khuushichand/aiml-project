@@ -799,7 +799,7 @@ def perform_transcription(
                     _assert_no_symlink(diarized_json_path, label="Diarized transcript cache file")
                     logging.info(f"Diarized file already exists (overwrite=False): {diarized_json_path}")
                     try:
-                        with open(diarized_json_path, 'r', encoding='utf-8') as file:
+                        with open(diarized_json_path, encoding='utf-8') as file:
                             loaded_data = json.load(file)
                         if isinstance(loaded_data, dict) and "segments" in loaded_data:
                             segments = loaded_data["segments"]
@@ -810,7 +810,7 @@ def perform_transcription(
 
                         # Basic validation
                         if isinstance(segments, list) and all(isinstance(s, dict) and 'Text' in s for s in segments):
-                            logging.debug(f"Loaded valid diarized segments from existing file.")
+                            logging.debug("Loaded valid diarized segments from existing file.")
                             return audio_file_path, segments
                         else:
                             logging.warning(f"Existing diarized file {diarized_json_path} has invalid format")
@@ -880,7 +880,7 @@ def perform_transcription(
 
                 if diarize:
                     # First, get the transcription segments via the unified STT helper
-                    logging.info(f"Generating transcription for diarization")
+                    logging.info("Generating transcription for diarization")
                     artifact = run_stt_batch_via_registry(
                         audio_file_path,
                         transcription_model,
@@ -898,7 +898,7 @@ def perform_transcription(
 
                     # Now perform diarization
                     try:
-                        logging.info(f"Performing speaker diarization...")
+                        logging.info("Performing speaker diarization...")
                         diarization_service = DiarizationService()
 
                         if not diarization_service.is_available:
@@ -931,7 +931,7 @@ def perform_transcription(
                         logging.warning("Proceeding with transcription only due to diarization error.")
                         # Add a warning to the first segment if possible
                         if transcription_segments:
-                            transcription_segments[0]['Text'] = f"[Note: Speaker diarization failed] " + transcription_segments[0].get('Text', '')
+                            transcription_segments[0]['Text'] = "[Note: Speaker diarization failed] " + transcription_segments[0].get('Text', '')
                         return audio_file_path, transcription_segments
 
                     except Exception as e:
@@ -948,7 +948,7 @@ def perform_transcription(
                 _assert_no_symlink(segments_json_path, label="Transcript cache file")
                 logging.info(f"Segments file already exists (overwrite=False): {segments_json_path}")
                 try:
-                    with open(segments_json_path, 'r', encoding='utf-8') as file:
+                    with open(segments_json_path, encoding='utf-8') as file:
                         loaded_data = json.load(file)
                     # Handle potential structures: {'segments': [...]} or just [...]
                     if isinstance(loaded_data, dict) and "segments" in loaded_data:
@@ -960,7 +960,7 @@ def perform_transcription(
 
                     # Basic validation
                     if isinstance(segments, list) and all(isinstance(s, dict) and 'Text' in s for s in segments):
-                        logging.debug(f"Loaded valid segments from existing file.")
+                        logging.debug("Loaded valid segments from existing file.")
                         return audio_file_path, segments
                     else:
                         logging.warning(f"Existing segments file {segments_json_path} has invalid format, regenerating.")
@@ -3437,7 +3437,7 @@ def validate_audio_file(file_path: str, *, base_dir: Optional[Path] = None) -> t
             if stream.get('channels', 0) == 0:
                 return False, "Audio stream has 0 channels"
 
-        except (json.JSONDecodeError, KeyError) as e:
+        except (json.JSONDecodeError, KeyError):
             # If we can't parse the output, try simpler check
             if not result.stdout.strip():
                 return False, "No audio stream detected"
@@ -3574,7 +3574,7 @@ def convert_to_wav(
     # path changes (for example, if FFMPEG_PATH/env is updated).
     global _FFMPEG_VERSION_CHECKED, _FFMPEG_CMD_FOR_VERSION
     try:
-        if not _FFMPEG_VERSION_CHECKED or _FFMPEG_CMD_FOR_VERSION != ffmpeg_cmd:
+        if not _FFMPEG_VERSION_CHECKED or ffmpeg_cmd != _FFMPEG_CMD_FOR_VERSION:
             subprocess.run(
                 [ffmpeg_cmd, "-version"],
                 check=True,

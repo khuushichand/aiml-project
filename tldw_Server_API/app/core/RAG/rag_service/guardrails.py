@@ -685,8 +685,8 @@ class _AllowlistHTMLStripper(HTMLParser):
 def sanitize_html_allowlist(text: str, allowed_tags: list[str] | None = None, allowed_attrs: list[str] | None = None) -> str:
     if not isinstance(text, str) or not text:
         return text or ""
-    tags = set((allowed_tags or ["p", "b", "i", "strong", "em", "code", "pre", "ul", "ol", "li", "br"]))
-    attrs = set((allowed_attrs or ["href", "title"]))
+    tags = set(allowed_tags or ["p", "b", "i", "strong", "em", "code", "pre", "ul", "ol", "li", "br"])
+    attrs = set(allowed_attrs or ["href", "title"])
     stripper = _AllowlistHTMLStripper(tags, attrs)
     try:
         stripper.feed(text)

@@ -5,6 +5,7 @@ This is the new, simplified RAG API that uses the unified pipeline.
 All features are accessible through explicit parameters.
 """
 
+import asyncio
 import hashlib
 import inspect
 import json
@@ -275,7 +276,7 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
                 pass
         # Nested `.document` attribute that may itself be an object
         if hasattr(obj, 'document'):
-            doc_obj = getattr(obj, 'document')
+            doc_obj = obj.document
             if isinstance(doc_obj, dict):
                 if key in doc_obj:
                     return doc_obj.get(key, default)
@@ -317,15 +318,16 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
             "score": float(score) if isinstance(score, (int, float)) else 0.0,
         })
 
+    _meta = result.metadata or {}
     return UnifiedRAGResponse(
         documents=documents,
         query=result.query,
         expanded_queries=result.expanded_queries,
-        metadata=result.metadata,
+        metadata=_meta,
         timings=result.timings,
         citations=result.citations,
-        academic_citations=(result.metadata or {}).get("academic_citations", []),
-        chunk_citations=(result.metadata or {}).get("chunk_citations", []),
+        academic_citations=_meta.get("academic_citations", []),
+        chunk_citations=_meta.get("chunk_citations", []),
         feedback_id=result.feedback_id,
         generated_answer=result.generated_answer,
         cache_hit=result.cache_hit,
@@ -334,6 +336,8 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
         total_time=result.total_time,
         claims=getattr(result, 'claims', None),
         factuality=getattr(result, 'factuality', None),
+        retrieval_metrics=_meta.get("retrieval_metrics"),
+        faithfulness=_meta.get("faithfulness"),
     )
 
 
@@ -1328,6 +1332,196 @@ async def simple_search_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Search failed due to an internal error."
+        ) from e
+
+
+@router.post(
+    "/batch/resume/{checkpoint_id}",
+    response_model=UnifiedBatchResponse,
+    summary="Resume interrupted batch",
+    description="Resume a batch RAG operation from a checkpoint.",
+    dependencies=[
+        Depends(check_rate_limit),
+        Depends(require_permissions(MEDIA_READ)),
+    ],
+)
+async def resume_batch_endpoint(
+    checkpoint_id: str,
+    request_raw: Request,
+    response: Response,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Resume a batch RAG operation from a previously saved checkpoint."""
+    try:
+        from tldw_Server_API.app.core.RAG.rag_service.checkpoint import CheckpointManager
+
+        manager = CheckpointManager()
+        checkpoint = manager.load_by_id(checkpoint_id)
+
+        if checkpoint.is_complete:
+            return UnifiedBatchResponse(
+                results=[],
+                total_queries=checkpoint.total_items,
+                successful=checkpoint.completed_items,
+                failed=0,
+                total_time=0.0,
+            )
+
+        # Extract remaining queries from config
+        all_queries: list[str] = checkpoint.config.get("queries", [])
+        total_queries = len(all_queries)
+
+        def _completed_indices_from_checkpoint() -> set[int]:
+            indices: set[int] = set()
+            for entry in checkpoint.results or []:
+                if not isinstance(entry, dict):
+                    continue
+                status = entry.get("status")
+                if status == "in_progress":
+                    continue
+                raw_idx = entry.get("query_index")
+                if isinstance(raw_idx, str):
+                    try:
+                        raw_idx = int(raw_idx)
+                    except (TypeError, ValueError):
+                        raw_idx = None
+                if isinstance(raw_idx, int) and 0 <= raw_idx < total_queries:
+                    indices.add(raw_idx)
+            if not indices and checkpoint.completed_items:
+                count = min(checkpoint.completed_items, total_queries)
+                indices.update(range(count))
+            return indices
+
+        completed_indices = _completed_indices_from_checkpoint()
+        remaining_indices = [i for i in range(total_queries) if i not in completed_indices]
+        remaining_queries = [all_queries[i] for i in remaining_indices]
+
+        if not remaining_queries:
+            return UnifiedBatchResponse(
+                results=[],
+                total_queries=checkpoint.total_items,
+                successful=checkpoint.completed_items,
+                failed=0,
+                total_time=0.0,
+            )
+
+        # Extract kwargs from checkpoint config
+        kwargs = {k: v for k, v in checkpoint.config.items() if k not in ("queries", "max_concurrent")}
+        max_concurrent = checkpoint.config.get("max_concurrent", 5)
+
+        db_paths = {
+            "media_db_path": media_db.db_path if media_db else None,
+            "notes_db_path": chacha_db.db_path if chacha_db else None,
+            "character_db_path": chacha_db.db_path if chacha_db else None,
+        }
+        kwargs.update(db_paths)
+        kwargs["user_id"] = current_user.username if current_user else kwargs.get("user_id")
+
+        start_time = time.time()
+
+        # Track checkpoint state for incremental saves via per-query callback
+        _cp_state = [checkpoint]  # mutable cell to update from closure
+        _saved_indices: set[int] = set()
+        _cp_lock = asyncio.Lock()
+
+        async def _on_query_done(
+            query_index: int,
+            query_text: str,
+            result: Optional[Any],
+            error: Optional[BaseException],
+        ) -> None:
+            """Save checkpoint progress incrementally per completed query."""
+            status = "ok"
+            errors: list[str] = []
+            if error is not None:
+                status = "error"
+                errors = [str(error)]
+            else:
+                result_errors = getattr(result, "errors", None)
+                if result_errors:
+                    status = "error"
+                    errors = [str(e) for e in result_errors]
+
+            payload: dict[str, Any] = {
+                "query_index": int(query_index),
+                "query": query_text,
+                "status": status,
+            }
+            if errors:
+                payload["errors"] = errors
+
+            try:
+                async with _cp_lock:
+                    _cp_state[0] = manager.save_progress(_cp_state[0], payload)
+                    _saved_indices.add(int(query_index))
+            except Exception as _cp_err:  # noqa: BLE001 - checkpoint should not fail request
+                logger.warning(f"Checkpoint incremental save failed: {_cp_err}")
+
+        results = await unified_batch_pipeline(
+            queries=remaining_queries,
+            max_concurrent=max_concurrent,
+            on_query_done=_on_query_done,
+            query_indices=remaining_indices,
+            media_db=media_db,
+            chacha_db=chacha_db,
+            **kwargs,
+        )
+
+        responses = [convert_result_to_response(r) for r in results]
+        successful = sum(1 for r in results if not r.errors)
+        failed = len(results) - successful
+        total_time = time.time() - start_time
+
+        # Final checkpoint update for any queries not captured by incremental saves
+        missing_results: list[dict[str, Any]] = []
+        for local_idx, global_idx in enumerate(remaining_indices):
+            if global_idx in _saved_indices:
+                continue
+            res = results[local_idx] if local_idx < len(results) else None
+            errors: list[str] = []
+            if isinstance(res, BaseException):
+                errors = [str(res)]
+            else:
+                result_errors = getattr(res, "errors", None)
+                if result_errors:
+                    errors = [str(e) for e in result_errors]
+            payload: dict[str, Any] = {
+                "query_index": int(global_idx),
+                "query": remaining_queries[local_idx] if local_idx < len(remaining_queries) else "",
+                "status": "error" if errors else "ok",
+            }
+            if errors:
+                payload["errors"] = errors
+            missing_results.append(payload)
+        if missing_results:
+            manager.save_batch_progress(_cp_state[0], missing_results)
+
+        return UnifiedBatchResponse(
+            results=responses,
+            total_queries=len(remaining_queries),
+            successful=successful,
+            failed=failed,
+            total_time=total_time,
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Checkpoint '{checkpoint_id}' not found.",
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Batch resume error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Batch resume failed due to an internal error.",
         ) from e
 
 

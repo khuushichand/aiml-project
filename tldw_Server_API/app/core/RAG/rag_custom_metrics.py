@@ -307,9 +307,7 @@ class RAGCustomMetrics:
         for source in sources:
             source_title = source.get('title', '')
             source_id = source.get('id', '')
-            if source_title and source_title in response:
-                sources_referenced += 1
-            elif source_id and source_id in response:
+            if source_title and source_title in response or source_id and source_id in response:
                 sources_referenced += 1
 
         # Calculate attribution score

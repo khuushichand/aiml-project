@@ -35,7 +35,7 @@ def _load_yaml(path: str) -> Optional[dict[str, Any]]:
     except Exception:
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
         if isinstance(data, dict):
             return data
@@ -46,7 +46,7 @@ def _load_yaml(path: str) -> Optional[dict[str, Any]]:
 
 def _load_json(path: str) -> Optional[dict[str, Any]]:
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
             return data
@@ -104,7 +104,7 @@ def load_prompt(module: str, key: str) -> Optional[str]:
     md_path = base + ".md"
     if os.path.exists(md_path):
         try:
-            with open(md_path, "r", encoding="utf-8") as f:
+            with open(md_path, encoding="utf-8") as f:
                 text = f.read()
         except Exception:
             text = ""

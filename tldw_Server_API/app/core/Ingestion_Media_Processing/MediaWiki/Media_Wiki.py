@@ -57,7 +57,7 @@ def load_mediawiki_import_config():
     if not str(config_path).startswith(str(project_root)):
         raise InvalidStoragePathError("Config file path is outside project directory")
 
-    with open(config_path, 'r') as f:
+    with open(config_path) as f:
         return yaml.safe_load(f)
 
 
@@ -293,7 +293,7 @@ def sanitize_wiki_name(wiki_name: str) -> str:
 
     # Limit length to prevent issues
     if len(safe_name) > 100:
-        raise ValueError(f"Wiki name too long (max 100 characters)")
+        raise ValueError("Wiki name too long (max 100 characters)")
 
     return safe_name
 
@@ -349,7 +349,7 @@ def _open_dump_file_text(safe_path: Path):
     if lower.endswith('.xml.gz') or lower.endswith('.gz'):
         return gzip.open(safe_path, mode='rt', encoding='utf-8', errors='ignore')
     # Default to plain XML
-    return open(safe_path, mode='rt', encoding='utf-8', errors='ignore')
+    return open(safe_path, encoding='utf-8', errors='ignore')
 
 
 def parse_mediawiki_dump(
@@ -845,7 +845,7 @@ def load_checkpoint(file_path: str) -> int:
         return 0
 
     try:
-        with open(resolved_path, 'r') as f:
+        with open(resolved_path) as f:
             data = json.load(f)
             return data.get('last_processed_id', 0)
     except (json.JSONDecodeError, OSError):

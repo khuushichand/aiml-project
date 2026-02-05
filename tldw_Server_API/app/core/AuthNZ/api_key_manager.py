@@ -228,7 +228,7 @@ class APIKeyManager:
     def __init__(self, db_pool: Optional[DatabasePool] = None):
         """Initialize API key manager"""
         self._db_pool: Optional[DatabasePool] = None
-        self._repo: Optional["AuthnzApiKeysRepo"] = None
+        self._repo: Optional[AuthnzApiKeysRepo] = None
         # Use the property setter so that any future re-binding of db_pool
         # explicitly clears the cached repository.
         self.db_pool = db_pool

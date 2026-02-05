@@ -1224,7 +1224,7 @@ async def character_chat_completion(
                                 if normalized == "data: [done]":
                                     done_sent = True
                                 yield ensure_sse_line(line)
-                        except Exception as e:
+                        except Exception:
                             logger.exception("Exception occurred in streaming SSE generator.")
                             yield f"data: {json.dumps({'error': 'An internal error has occurred.'})}\n\n"
                         finally:

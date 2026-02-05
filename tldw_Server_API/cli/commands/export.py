@@ -161,7 +161,7 @@ def import_data(ctx, input_file, import_type, dry_run):
         cli_context.load_config()
 
         # Load data from file
-        with open(input_file, 'r', encoding='utf-8') as f:
+        with open(input_file, encoding='utf-8') as f:
             data = json.load(f)
 
         if dry_run:

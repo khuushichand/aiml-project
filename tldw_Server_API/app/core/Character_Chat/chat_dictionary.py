@@ -1376,7 +1376,7 @@ class ChatDictionaryService:
         content: Optional[str] = None
         if isinstance(markdown_or_path, Path):
             fp = markdown_or_path
-            with open(fp, "r", encoding="utf-8") as f:
+            with open(fp, encoding="utf-8") as f:
                 content = f.read()
             if dictionary_name is None:
                 dictionary_name = fp.stem
@@ -1392,7 +1392,7 @@ class ChatDictionaryService:
             dictionary_name = m.group(1).strip() if m else "Imported Dictionary"
 
         # Create dictionary
-        dict_id = self.create_dictionary(dictionary_name, f"Imported from markdown")
+        dict_id = self.create_dictionary(dictionary_name, "Imported from markdown")
 
         try:
             # Parse entries by scanning headings and blocks

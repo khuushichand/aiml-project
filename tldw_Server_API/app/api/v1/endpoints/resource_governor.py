@@ -86,9 +86,7 @@ async def get_resource_governor_policy(
         except Exception:
             snap = None
         needs_reload = False
-        if loader is None:
-            needs_reload = True
-        elif env_path and snap and str(getattr(snap, "source_path", "")) != str(env_path):
+        if loader is None or env_path and snap and str(getattr(snap, "source_path", "")) != str(env_path):
             needs_reload = True
         elif env_store:
             current_store = (getattr(app.state, "rg_policy_store", None) or "file")
@@ -373,7 +371,7 @@ async def rg_diag_peek(
             return JSONResponse({"status": "unavailable", "reason": "governor_not_initialized"}, status_code=503)
         cats = [c.strip() for c in categories.split(",") if c.strip()]
         # Prefer policy-aware peek when policy_id is provided and supported
-        if policy_id and hasattr(gov, "peek_with_policy") and callable(getattr(gov, "peek_with_policy")):
+        if policy_id and hasattr(gov, "peek_with_policy") and callable(gov.peek_with_policy):
             data = gov.peek_with_policy(entity, cats, policy_id)  # type: ignore[attr-defined]
             if inspect.isawaitable(data):
                 data = await data

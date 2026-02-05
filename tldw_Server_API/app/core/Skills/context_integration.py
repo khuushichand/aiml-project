@@ -125,7 +125,7 @@ async def handle_skill_tool_call(
             "execution_mode": result.execution_mode,
             "fork_output": result.fork_output,
         }
-    except SkillNotFoundError as e:
+    except SkillNotFoundError:
         logger.warning(f"Skill not found: {skill_name}")
         return {
             "success": False,

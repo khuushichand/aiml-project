@@ -141,7 +141,7 @@ def generate_registration_codes(user_db: UserDatabase, admin_id: int, count: int
         # Save codes to file
         codes_file = Path("registration_codes.txt")
         with open(codes_file, "w") as f:
-            f.write("Registration Codes (Generated on {})\n".format(datetime.now().isoformat()))
+            f.write(f"Registration Codes (Generated on {datetime.now().isoformat()})\n")
             f.write("="*60 + "\n\n")
             for i, code in enumerate(codes, 1):
                 f.write(f"Code {i}: {code}\n")
@@ -239,7 +239,7 @@ def update_configuration() -> None:
 
     if response == 'y':
         jwt_secret = secrets.token_urlsafe(32)
-        print(f"\n🔑 JWT Secret Key (add to config or environment):")
+        print("\n🔑 JWT Secret Key (add to config or environment):")
         print(f"   JWT_SECRET_KEY={jwt_secret}")
         print("\n⚠️  Keep this secret secure and never commit it to version control!")
 

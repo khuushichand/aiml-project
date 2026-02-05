@@ -417,7 +417,7 @@ async def require_project_write_access(
 ########################################################################################################################
 # Security Configuration
 
-@lru_cache()
+@lru_cache
 def get_security_config() -> SecurityConfig:
     """
     Get security configuration for Prompt Studio.

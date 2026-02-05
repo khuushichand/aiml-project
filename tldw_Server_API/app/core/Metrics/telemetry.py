@@ -662,7 +662,7 @@ def instrument_fastapi_app(app: Any, telemetry_manager: Optional[TelemetryManage
                     "opentelemetry.instrumentation"
                 ):
                     try:
-                        setattr(app, "_tldw_otel_fastapi_instrumented", True)
+                        app._tldw_otel_fastapi_instrumented = True
                     except Exception:
                         pass
                     return True
@@ -675,7 +675,7 @@ def instrument_fastapi_app(app: Any, telemetry_manager: Optional[TelemetryManage
             meter_provider=tm.meter_provider,
         )
         try:
-            setattr(app, "_tldw_otel_fastapi_instrumented", True)
+            app._tldw_otel_fastapi_instrumented = True
         except Exception:
             pass
         return True

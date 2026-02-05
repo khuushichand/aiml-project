@@ -3,6 +3,7 @@
 import base64
 import inspect
 import json
+import time
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -11,21 +12,31 @@ from loguru import logger
 from starlette import status
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import try_get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
     get_usage_event_logger,
 )
+from tldw_Server_API.app.api.v1.endpoints.audio.audio_jobs import get_job_manager
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 from tldw_Server_API.app.core.Audio.error_payloads import _http_error_detail
 from tldw_Server_API.app.core.Audio.tts_service import _raise_for_tts_error
 from tldw_Server_API.app.core.AuthNZ.exceptions import QuotaExceededError, StorageError
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2, get_tts_service_v2
+from tldw_Server_API.app.core.TTS.utils import (
+    build_tts_segments_payload,
+    compute_tts_history_text_hash,
+    parse_bool,
+    tts_history_text_length,
+)
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
-from tldw_Server_API.app.api.v1.endpoints.audio.audio_jobs import get_job_manager
 
 router = APIRouter(
     tags=["Audio"],
@@ -54,6 +65,32 @@ def _audio_shim_attr(name: str):
     if not hasattr(audio_shim, name):
         raise NameError(name)
     return getattr(audio_shim, name)
+
+
+def _tts_history_config() -> dict[str, Any]:
+    return {
+        "enabled": parse_bool(getattr(settings, "TTS_HISTORY_ENABLED", False), default=False),
+        "store_text": parse_bool(getattr(settings, "TTS_HISTORY_STORE_TEXT", True), default=True),
+        "store_failed": parse_bool(getattr(settings, "TTS_HISTORY_STORE_FAILED", True), default=True),
+        "hash_key": getattr(settings, "TTS_HISTORY_HASH_KEY", None),
+    }
+
+
+def _extract_tts_metadata(request_data: OpenAISpeechRequest) -> dict[str, Any]:
+    metadata = getattr(request_data, "_tts_metadata", None)
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _tts_history_error_message(exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        detail = exc.detail
+        if isinstance(detail, (dict, list)):
+            try:
+                return json.dumps(detail, separators=(",", ":"), ensure_ascii=True)
+            except Exception:
+                return str(detail)
+        return str(detail)
+    return str(exc)
 
 
 @router.post(
@@ -172,6 +209,7 @@ async def create_speech(
     request: Request,
     tts_service: TTSServiceV2 = Depends(get_tts_service),
     current_user: User = Depends(get_request_user),
+    media_db: Optional[MediaDatabase] = Depends(try_get_media_db_for_user),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
@@ -193,6 +231,10 @@ async def create_speech(
     request_id = ensure_request_id(request)
 
     provider_hint = _audio_shim_attr("_sanitize_speech_request")(request_data, request_id=request_id)
+    history_cfg = _tts_history_config()
+    history_enabled = bool(media_db) and history_cfg.get("enabled", False)
+    history_written = False
+    start_ts = time.monotonic()
 
     tts_provider_hint = provider_hint
     user_id_int, tts_overrides, byok_tts_resolution = await _audio_shim_attr("_resolve_tts_byok")(
@@ -259,6 +301,123 @@ async def create_speech(
             detail="return_download_link requires stream=false",
         )
 
+    def _record_tts_history(
+        status: str,
+        *,
+        error_message: str | None = None,
+        artifact_ids: list[Any] | None = None,
+        output_id: int | None = None,
+    ) -> None:
+        nonlocal history_written
+        if history_written or not history_enabled:
+            return
+        if status == "failed" and not history_cfg.get("store_failed", True):
+            return
+        if media_db is None:
+            return
+        try:
+            text_hash = compute_tts_history_text_hash(request_data.input, history_cfg.get("hash_key"))
+        except Exception as exc:
+            logger.debug("TTS history: failed to compute text hash: {}", exc)
+            return
+        text_length = tts_history_text_length(request_data.input)
+        text_value = request_data.input if history_cfg.get("store_text", True) else None
+        metadata = _extract_tts_metadata(request_data)
+        provider = metadata.get("provider") or tts_provider_hint
+        model = metadata.get("model") or request_data.model
+        voice_name = metadata.get("voice") or request_data.voice
+        voice_id = metadata.get("voice_id")
+        fmt = metadata.get("format") or request_data.response_format
+
+        duration_ms = None
+        duration_val = metadata.get("duration_ms")
+        if isinstance(duration_val, (int, float)):
+            duration_ms = int(duration_val)
+        else:
+            duration_seconds = metadata.get("duration_seconds") or metadata.get("duration")
+            if isinstance(duration_seconds, (int, float)):
+                duration_ms = int(float(duration_seconds) * 1000)
+
+        params_json: dict[str, Any] = {"speed": request_data.speed}
+        if request_data.extra_params:
+            try:
+                extra_params = dict(request_data.extra_params)
+            except Exception:
+                extra_params = None
+            if extra_params:
+                extra_params.pop("voice_reference", None)
+                params_json["extra_params"] = extra_params
+        if request_data.lang_code:
+            params_json["lang_code"] = request_data.lang_code
+        if request_data.normalization_options is not None:
+            try:
+                params_json["normalization_options"] = model_dump_compat(request_data.normalization_options)
+            except Exception:
+                pass
+
+        voice_info: dict[str, Any] | None = {}
+        meta_voice_info = metadata.get("voice_info")
+        if isinstance(meta_voice_info, dict):
+            voice_info.update(meta_voice_info)
+        if voice_info is not None:
+            voice_info.pop("voice_reference", None)
+        if request_data.voice_reference:
+            if voice_info is not None:
+                voice_info["has_voice_reference"] = True
+        if request_data.reference_duration_min is not None:
+            if voice_info is not None:
+                voice_info["reference_duration_min"] = request_data.reference_duration_min
+        if not voice_info:
+            voice_info = None
+
+        segments_json = build_tts_segments_payload(metadata.get("segments"))
+        generation_time_ms = int(max(0.0, (time.monotonic() - start_ts) * 1000))
+
+        final_status = status
+        if final_status == "success" and parse_bool(metadata.get("partial"), default=False):
+            final_status = "partial"
+
+        try:
+            insert_start = time.monotonic()
+            media_db.create_tts_history_entry(
+                user_id=str(current_user.id),
+                text_hash=text_hash,
+                text=text_value,
+                text_length=text_length,
+                provider=str(provider) if provider is not None else None,
+                model=str(model) if model is not None else None,
+                voice_id=str(voice_id) if voice_id is not None else None,
+                voice_name=str(voice_name) if voice_name is not None else None,
+                voice_info=voice_info,
+                format=str(fmt) if fmt is not None else None,
+                duration_ms=duration_ms,
+                generation_time_ms=generation_time_ms,
+                params_json=params_json if params_json else None,
+                status=final_status,
+                segments_json=segments_json,
+                output_id=output_id,
+                artifact_ids=artifact_ids,
+                error_message=error_message,
+            )
+            try:
+                log_counter(
+                    "tts_history_writes_total",
+                    labels={
+                        "status": str(final_status or "unknown"),
+                        "provider": str(provider or "unknown"),
+                    },
+                )
+                log_histogram(
+                    "tts_history_write_latency_ms",
+                    value=max(0.0, (time.monotonic() - insert_start) * 1000),
+                    labels={"status": str(final_status or "unknown")},
+                )
+            except Exception:
+                pass
+            history_written = True
+        except Exception as exc:
+            logger.debug("TTS history: failed to write record: {}", exc)
+
     try:
         speech_iter = tts_service.generate_speech(
             request_data,
@@ -283,20 +442,29 @@ async def create_speech(
             _raise_for_tts_error(exc, request_id)
 
     async def _stream_chunks(initial_chunk: bytes):
+        stream_failed: Optional[str] = None
+        stream_partial = False
+        stream_completed = False
         try:
             if initial_chunk:
                 if await request.is_disconnected():
                     logger.info("Client disconnected before streaming could start.")
+                    stream_partial = True
                     return
                 yield initial_chunk
             async for chunk in speech_iter:
                 if await request.is_disconnected():
                     logger.info("Client disconnected, stopping audio generation.")
+                    stream_partial = True
                     break
                 yield chunk
-        except HTTPException:
+            if not stream_partial:
+                stream_completed = True
+        except HTTPException as exc:
+            stream_failed = _tts_history_error_message(exc)
             raise
         except Exception as exc:
+            stream_failed = _tts_history_error_message(exc)
             _raise_for_tts_error(exc, request_id)
         finally:
             if byok_tts_resolution is not None:
@@ -304,11 +472,30 @@ async def create_speech(
                     await byok_tts_resolution.touch_last_used()
                 except Exception as exc:
                     logger.debug(f"Failed to update BYOK last_used timestamp: {exc}")
+            status = "success"
+            error_message = None
+            if stream_failed:
+                status = "failed"
+                error_message = stream_failed
+            elif stream_partial:
+                status = "partial"
+                error_message = "client_disconnected"
+            elif not stream_completed:
+                status = "partial"
+            _record_tts_history(status, error_message=error_message)
 
     if request_data.stream:
-        first_chunk = await _pull_first_chunk()
+        try:
+            first_chunk = await _pull_first_chunk()
+        except HTTPException as exc:
+            _record_tts_history("failed", error_message=_tts_history_error_message(exc))
+            raise
+        except Exception as exc:
+            _record_tts_history("failed", error_message=_tts_history_error_message(exc))
+            raise
         if not first_chunk:
             logger.error("Streaming generation resulted in empty audio data.")
+            _record_tts_history("failed", error_message="empty_audio")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Audio generation failed to produce data.",
@@ -324,16 +511,25 @@ async def create_speech(
             },
         )
     # Non-streaming mode: accumulate chunks and return a single response
-    first_chunk = await _pull_first_chunk()
+    try:
+        first_chunk = await _pull_first_chunk()
+    except HTTPException as exc:
+        _record_tts_history("failed", error_message=_tts_history_error_message(exc))
+        raise
+    except Exception as exc:
+        _record_tts_history("failed", error_message=_tts_history_error_message(exc))
+        raise
     all_audio_bytes = b""
     if first_chunk:
         all_audio_bytes += first_chunk
     try:
         async for chunk in speech_iter:
             all_audio_bytes += chunk
-    except HTTPException:
+    except HTTPException as exc:
+        _record_tts_history("failed", error_message=_tts_history_error_message(exc))
         raise
     except Exception as exc:
+        _record_tts_history("failed", error_message=_tts_history_error_message(exc))
         _raise_for_tts_error(exc, request_id)
 
     # Drop any internal boundary markers if present
@@ -341,6 +537,7 @@ async def create_speech(
 
     if not all_audio_bytes:
         logger.error("Non-streaming generation resulted in empty audio data.")
+        _record_tts_history("failed", error_message="empty_audio")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Audio generation failed to produce data."
         )
@@ -373,6 +570,8 @@ async def create_speech(
         except Exception as exc:
             logger.debug(f"Failed to encode alignment metadata header: {exc}")
 
+    output_id: int | None = None
+    artifact_ids: list[Any] | None = None
     if request_data.return_download_link:
         try:
             file_record = await _audio_shim_attr("save_and_register_tts_audio")(
@@ -388,16 +587,24 @@ async def create_speech(
             if file_id:
                 headers["X-Download-Path"] = f"/api/v1/storage/files/{file_id}/download"
                 headers["X-Generated-File-Id"] = str(file_id)
+                artifact_ids = [file_id]
         except QuotaExceededError as exc:
+            _record_tts_history("failed", error_message=_tts_history_error_message(exc))
             raise HTTPException(
                 status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
                 detail=str(exc),
             ) from exc
         except StorageError as exc:
+            _record_tts_history("failed", error_message=_tts_history_error_message(exc))
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=str(exc),
             ) from exc
+        except Exception as exc:
+            _record_tts_history("failed", error_message=_tts_history_error_message(exc))
+            raise
+
+    _record_tts_history("success", artifact_ids=artifact_ids, output_id=output_id)
 
     return Response(
         content=all_audio_bytes,
@@ -612,7 +819,7 @@ async def reset_tts_metrics(
         if provider:
             provider_methods: list[tuple[str, Any]] = []
             if hasattr(tts_service, "reset_metrics"):
-                provider_methods.append(("tts_service.reset_metrics", getattr(tts_service, "reset_metrics")))
+                provider_methods.append(("tts_service.reset_metrics", tts_service.reset_metrics))
             if metrics is not None:
                 for name in ("reset", "clear"):
                     if hasattr(metrics, name):
@@ -631,7 +838,7 @@ async def reset_tts_metrics(
 
         global_methods: list[tuple[str, Any]] = []
         if hasattr(tts_service, "reset_metrics"):
-            global_methods.append(("tts_service.reset_metrics", getattr(tts_service, "reset_metrics")))
+            global_methods.append(("tts_service.reset_metrics", tts_service.reset_metrics))
         if metrics is not None:
             for name in ("reset_all", "clear_all", "reset", "clear"):
                 if hasattr(metrics, name):

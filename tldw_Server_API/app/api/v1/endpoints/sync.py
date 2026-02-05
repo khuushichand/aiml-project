@@ -323,7 +323,7 @@ class ServerSyncProcessor:
             )
             return True, None # Success
 
-        except ConflictError as cf_err:
+        except ConflictError:
             # Optimistic lock failed during direct apply
             logger.warning(f"[{self.user_id}] Optimistic lock failed applying change for {entity} {entity_uuid}. Attempting resolution.")
             # Fetch current state again for resolution
@@ -589,7 +589,7 @@ class ServerSyncProcessor:
             if not force_apply and operation in ['update', 'delete'] and optimistic_lock_sql:
                 if cursor.rowcount == 0:
                     logger.warning(f"[{self.user_id}] Optimistic lock failed applying client change (Sync)...")
-                    raise ConflictError(f"Optimistic lock failed applying client change.", entity=entity, identifier=uuid)
+                    raise ConflictError("Optimistic lock failed applying client change.", entity=entity, identifier=uuid)
                 else:
                     logger.debug(f"[{self.user_id}] Optimistic lock successful applying client change (Sync). Rowcount {cursor.rowcount}.")
             # --- END TEMP ---

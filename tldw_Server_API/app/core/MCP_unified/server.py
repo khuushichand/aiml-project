@@ -339,7 +339,7 @@ class MCPServer:
             )
             if os.path.exists(cfg_path) and yaml is not None:
                 try:
-                    with open(cfg_path, "r") as f:
+                    with open(cfg_path) as f:
                         data = yaml.safe_load(f) or {}
                     modules_cfg = data.get("modules", [])
                     if isinstance(modules_cfg, list):
@@ -498,11 +498,7 @@ class MCPServer:
 
             for conn_id, connection in self.connections.items():
                 # Check for stale connections (no activity for 5 minutes)
-                if (current_time - connection.last_activity).total_seconds() > 300:
-                    stale_connections.append(conn_id)
-
-                # Check for error threshold
-                elif connection.error_count > 10:
+                if (current_time - connection.last_activity).total_seconds() > 300 or connection.error_count > 10:
                     stale_connections.append(conn_id)
 
             # Close stale connections
@@ -592,9 +588,7 @@ class MCPServer:
         allow_bool = {"aliasMode", "compactShape"}
         allow_str = {"order_by"}
         for k, v in incoming.items():
-            if k in allow_bool and isinstance(v, bool):
-                out[k] = v
-            elif k in allow_str and isinstance(v, str):
+            if k in allow_bool and isinstance(v, bool) or k in allow_str and isinstance(v, str):
                 out[k] = v
             elif k in allow_int and isinstance(v, (int, float)):
                 lo, hi = allow_int[k]
@@ -640,9 +634,7 @@ class MCPServer:
             )
         except Exception:
             _is_test_env = False
-        if resolved_ip == "testclient":
-            resolved_ip = "127.0.0.1"
-        elif resolved_ip is None and _is_test_env:
+        if resolved_ip == "testclient" or resolved_ip is None and _is_test_env:
             resolved_ip = "127.0.0.1"
 
         if not controller.is_allowed(resolved_ip) and not _is_test_env:

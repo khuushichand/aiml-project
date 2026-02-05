@@ -326,15 +326,7 @@ async def run_bibliography_generate_adapter(config: dict[str, Any], context: dic
                 entry += f" {publisher}."
             if url:
                 entry += f" Retrieved from {url}"
-        elif citation_format == "mla":
-            entry = f'{author}. "{title}."'
-            if publisher:
-                entry += f" {publisher},"
-            if date:
-                entry += f" {date}."
-            if url:
-                entry += f" {url}."
-        elif citation_format == "chicago":
+        elif citation_format == "mla" or citation_format == "chicago":
             entry = f'{author}. "{title}."'
             if publisher:
                 entry += f" {publisher},"

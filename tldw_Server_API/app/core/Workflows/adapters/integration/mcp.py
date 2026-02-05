@@ -116,7 +116,7 @@ async def run_mcp_tool_adapter(config: dict[str, Any], context: dict[str, Any]) 
             context["add_artifact"](
                 type="mcp_result",
                 uri=f"file://{fpath}",
-                size_bytes=len((fpath.read_bytes() if fpath.exists() else b"")),
+                size_bytes=len(fpath.read_bytes() if fpath.exists() else b""),
                 mime_type="application/json",
                 metadata={"tool_name": tool_name, "module": module_id},
             )

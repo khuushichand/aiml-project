@@ -315,12 +315,12 @@ class SimpleQADataset:
 
         # Determine format
         if path.suffix == '.jsonl':
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, encoding='utf-8') as f:
                 for line in f:
                     if line.strip():
                         questions.append(json.loads(line))
         else:  # Assume JSON
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, encoding='utf-8') as f:
                 data = json.load(f)
 
                 # Handle different JSON structures

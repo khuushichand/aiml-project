@@ -119,7 +119,7 @@ async def process_documents_endpoint(
         if files:
             # Preserve test-time monkeypatching of `media.file_validator_instance`
             # and `_save_uploaded_files` via the `media` shim.
-            save_uploaded_files = getattr(media_mod, "_save_uploaded_files")
+            save_uploaded_files = media_mod._save_uploaded_files
             validator = getattr(
                 media_mod,
                 "file_validator_instance",
@@ -185,7 +185,7 @@ async def process_documents_endpoint(
 
             # Preserve test-time monkeypatching of `_download_url_async`
             # via the media shim.
-            download_url_async = getattr(media_mod, "_download_url_async")
+            download_url_async = media_mod._download_url_async
 
             download_tasks = [
                 download_url_async(
@@ -537,7 +537,7 @@ async def process_documents_endpoint(
                     chunks = _improved_chunking_process(text, chunk_options_dict)
 
                 res["chunks"] = chunks
-    except Exception as exc:
+    except Exception:
         logger.debug("Re-chunking failed during metadata normalization", exc_info=True)
 
     return JSONResponse(status_code=final_status_code, content=batch_result)

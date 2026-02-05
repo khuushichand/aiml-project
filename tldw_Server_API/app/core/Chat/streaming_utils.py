@@ -808,10 +808,10 @@ class StreamingResponseHandler:
             try:
                 # Always attempt to close the upstream stream first
                 try:
-                    if hasattr(stream, "aclose") and callable(getattr(stream, "aclose")):
+                    if hasattr(stream, "aclose") and callable(stream.aclose):
                         # Async generator
                         await stream.aclose()  # type: ignore[attr-defined]
-                    elif hasattr(stream, "close") and callable(getattr(stream, "close")):
+                    elif hasattr(stream, "close") and callable(stream.close):
                         # Sync generator
                         stream.close()  # type: ignore[attr-defined]
                 except Exception as cleanup_err:
@@ -935,10 +935,7 @@ class StreamingResponseHandler:
                     yield f"event: stream_end\ndata: {json.dumps(end_payload)}\n\n"
                 # Ensure final [DONE] sentinel for client compatibility (unless already sent).
                 # If upstream already sent [DONE], defer emission until after stream_end.
-                if self.upstream_done_received and not self.done_sent:
-                    yield "data: [DONE]\n\n"
-                    self.done_sent = True
-                elif not self.done_sent:
+                if self.upstream_done_received and not self.done_sent or not self.done_sent:
                     yield "data: [DONE]\n\n"
                     self.done_sent = True
                 self.upstream_done_received = False

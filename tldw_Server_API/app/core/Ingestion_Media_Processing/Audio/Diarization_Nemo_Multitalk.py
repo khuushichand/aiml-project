@@ -20,7 +20,7 @@ DEFAULT_MAX_SPEAKERS = 4
 DEFAULT_ATT_CONTEXT_SIZE = [70, 13]
 
 
-def _resolve_device(device: str | None) -> "torch.device":
+def _resolve_device(device: str | None) -> torch.device:
     import torch  # type: ignore
 
     if not device or str(device).strip().lower() == "auto":
@@ -278,16 +278,14 @@ def transcribe_with_nemo_multitalk(
             if step_num == 0 and not cfg.pad_and_drop_preencoded
             else streaming_cfg.drop_extra_pre_encoded
         )
-        with torch.inference_mode():
-            with amp_ctx:
-                with torch.no_grad():
-                    multispk_asr_streamer.perform_parallel_streaming_stt_spk(
-                        step_num=step_num,
-                        chunk_audio=chunk_audio,
-                        chunk_lengths=chunk_lengths,
-                        is_buffer_empty=streaming_buffer.is_buffer_empty(),
-                        drop_extra_pre_encoded=drop_extra_pre_encoded,
-                    )
+        with torch.inference_mode(), amp_ctx, torch.no_grad():
+            multispk_asr_streamer.perform_parallel_streaming_stt_spk(
+                step_num=step_num,
+                chunk_audio=chunk_audio,
+                chunk_lengths=chunk_lengths,
+                is_buffer_empty=streaming_buffer.is_buffer_empty(),
+                drop_extra_pre_encoded=drop_extra_pre_encoded,
+            )
 
     multispk_asr_streamer.generate_seglst_dicts_from_parallel_streaming(samples=samples)
     results = multispk_asr_streamer.instance_manager.seglst_dict_list

@@ -717,7 +717,7 @@ class SkillsService:
                         continue
                     if name.startswith(base_dir) and not name.endswith("/"):
                         relative_name = name[len(base_dir) :]
-                        if relative_name and not "/" in relative_name:
+                        if relative_name and "/" not in relative_name:
                             try:
                                 file_content = zf.read(name).decode("utf-8")
                                 supporting_files[relative_name] = file_content

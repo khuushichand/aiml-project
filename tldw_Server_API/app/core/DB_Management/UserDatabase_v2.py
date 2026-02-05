@@ -123,7 +123,7 @@ class UserDatabase:
 
         if schema_path.exists():
             try:
-                with open(schema_path, 'r', encoding='utf-8') as f:
+                with open(schema_path, encoding='utf-8') as f:
                     schema_sql = f.read()
                 schema_statements = self._split_sql_statements(schema_sql)
                 logger.info(f"Database schema loaded from {schema_path}")
@@ -196,7 +196,7 @@ class UserDatabase:
                 )
 
                 if existing.rows:
-                    raise DuplicateUserError(f"Username or email already exists")
+                    raise DuplicateUserError("Username or email already exists")
 
                 # Insert user
                 result = self.backend.execute(
@@ -1114,7 +1114,7 @@ class UserDatabase:
             try:
                 self.backend.execute(role_sql, (name, description, is_system))
             except Exception as exc:  # noqa: BLE001
-                logger.debug(f"Skipping role seed for %s: %s", name, exc)
+                logger.debug("Skipping role seed for %s: %s", name, exc)
 
         # Seed baseline permissions
         default_perms = [

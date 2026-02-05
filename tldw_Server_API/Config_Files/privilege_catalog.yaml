@@ -1,5 +1,5 @@
 version: 1.0.0
-updated_at: 2026-01-23T10:00:00Z
+updated_at: 2026-02-05T00:00:00Z
 scopes:
   - id: media.ingest
     description: Ingest new media assets via upload, URL fetch, or pipeline triggers.
@@ -261,6 +261,23 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/audio-speech
+  - id: audio.history
+    description: List and manage per-user TTS history entries.
+    resource_tags:
+      - audio
+      - tts
+      - history
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-history
   - id: audio.tokenizer
     description: Encode/decode audio tokens for debugging and tooling.
     resource_tags:

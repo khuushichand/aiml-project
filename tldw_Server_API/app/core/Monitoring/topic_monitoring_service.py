@@ -197,7 +197,7 @@ class TopicMonitoringService:
                     self._watchlists_path,
                 )
                 return None
-            with open(self._watchlists_path, "r", encoding="utf-8") as f:
+            with open(self._watchlists_path, encoding="utf-8") as f:
                 data = json.load(f)
             raw = data.get("watchlists") if isinstance(data, dict) else data
             if not isinstance(raw, list):

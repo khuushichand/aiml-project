@@ -42,9 +42,7 @@ class AuthnzStorageQuotasRepo:
         if row is None:
             return {}
         try:
-            if hasattr(row, "keys"):
-                record = dict(row)
-            elif isinstance(row, dict):
+            if hasattr(row, "keys") or isinstance(row, dict):
                 record = dict(row)
             else:
                 record = {}

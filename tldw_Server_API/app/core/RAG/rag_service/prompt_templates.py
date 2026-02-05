@@ -389,7 +389,7 @@ Please base your answer on the provided context and indicate if additional infor
 
     def load_from_file(self, filepath: str) -> None:
         """Load templates from a JSON file."""
-        with open(filepath, 'r') as f:
+        with open(filepath) as f:
             data = json.load(f)
 
         for name, template_data in data.items():

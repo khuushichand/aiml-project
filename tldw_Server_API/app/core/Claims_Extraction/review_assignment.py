@@ -70,7 +70,7 @@ def _claim_review_rule_matches(predicate: dict[str, Any], context: dict[str, Any
         "media_id",
         "extractor",
     }
-    for key in predicate.keys():
+    for key in predicate:
         if key not in supported_keys:
             return False
 

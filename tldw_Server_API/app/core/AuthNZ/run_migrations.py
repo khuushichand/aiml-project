@@ -148,7 +148,7 @@ def main():
 
             # Check final status
             final_status = check_migration_status(db_path)
-            print(f"\n✅ Migrations completed successfully")
+            print("\n✅ Migrations completed successfully")
             print(f"Database is now at version {final_status['current_version']}")
 
         except Exception as e:

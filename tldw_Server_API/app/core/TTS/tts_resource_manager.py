@@ -712,7 +712,7 @@ class TTSResourceManager:
         # Model instance tracking
         self._model_instances: dict[str, weakref.ReferenceType] = {}
         self._registered_models: dict[str, dict[str, Any]] = {}
-        self._model_cache: "OrderedDict[str, ModelCacheEntry]" = OrderedDict()
+        self._model_cache: OrderedDict[str, ModelCacheEntry] = OrderedDict()
         self._model_cache_lock = threading.Lock()
         self._model_cache_evictions = 0
         self._model_cache_max_entries = self._coerce_cache_limit(

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
-import re
 
 from fastapi import HTTPException
 from loguru import logger
@@ -24,6 +24,8 @@ from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.services import admin_scope_service
 from tldw_Server_API.app.services.admin_data_ops_service import (
     build_audit_log_csv as svc_build_audit_log_csv,
+)
+from tldw_Server_API.app.services.admin_data_ops_service import (
     build_audit_log_json as svc_build_audit_log_json,
 )
 
@@ -79,11 +81,7 @@ async def get_security_alert_status() -> SecurityAlertStatusResponse:
             overall_health = "errors"
         else:
             configured_rows = [row for row in sink_rows if row.configured]
-            if status.get("last_dispatch_success") is False:
-                overall_health = "degraded"
-            elif any(row.last_error for row in configured_rows):
-                overall_health = "degraded"
-            elif configured_rows and all(row.last_status is False for row in configured_rows):
+            if status.get("last_dispatch_success") is False or any(row.last_error for row in configured_rows) or configured_rows and all(row.last_status is False for row in configured_rows):
                 overall_health = "degraded"
 
     return SecurityAlertStatusResponse(

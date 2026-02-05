@@ -167,13 +167,13 @@ def load_canary_model():
     cache_key = _get_model_cache_key('canary', 'standard')
 
     if cache_key in _model_cache:
-        logging.debug(f"Using cached Canary model")
+        logging.debug("Using cached Canary model")
         return _model_cache[cache_key]
 
     try:
         import nemo.collections.asr as nemo_asr
-    except ImportError as e:
-        logging.error("Nemo toolkit not installed. Install with: pip install nemo_toolkit[asr]")
+    except ImportError:
+        logging.exception("Nemo toolkit not installed. Install with: pip install nemo_toolkit[asr]")
         return None
 
     try:
@@ -206,7 +206,7 @@ def load_canary_model():
         return model
 
     except Exception as e:
-        logging.error(f"Failed to load Canary model: {e}")
+        logging.exception(f"Failed to load Canary model: {e}")
         return None
 
 
@@ -241,7 +241,7 @@ def load_parakeet_model(variant: str = 'standard'):
         else:  # standard
             return _load_parakeet_standard(device)
     except Exception as e:
-        logging.error(f"Failed to load Parakeet model (variant: {variant}): {e}")
+        logging.exception(f"Failed to load Parakeet model (variant: {variant}): {e}")
         return None
 
 
@@ -250,7 +250,7 @@ def _load_parakeet_standard(device: str):
     try:
         import nemo.collections.asr as nemo_asr
     except ImportError:
-        logging.error("Nemo toolkit not installed. Install with: pip install nemo_toolkit[asr]")
+        logging.exception("Nemo toolkit not installed. Install with: pip install nemo_toolkit[asr]")
         return None
 
     logging.info("Loading Parakeet TDT model from NVIDIA...")
@@ -321,15 +321,15 @@ def _load_parakeet_onnx(device: str):
         model = ONNXParakeetModel(session, tokenizer)
         cache_key = _get_model_cache_key('parakeet', 'onnx')
         _model_cache[cache_key] = model
-        logging.info(f"Successfully loaded Parakeet ONNX model with tokenizer")
+        logging.info("Successfully loaded Parakeet ONNX model with tokenizer")
         return model
 
     except ImportError as e:
-        logging.error(f"Failed to import ONNX implementation: {e}")
-        logging.error("Ensure Audio_Transcription_Parakeet_ONNX.py is available")
+        logging.exception(f"Failed to import ONNX implementation: {e}")
+        logging.exception("Ensure Audio_Transcription_Parakeet_ONNX.py is available")
         return None
     except Exception as e:
-        logging.error(f"Failed to load ONNX model: {e}")
+        logging.exception(f"Failed to load ONNX model: {e}")
         return None
 
 
@@ -367,7 +367,7 @@ def _load_parakeet_mlx():
         logging.warning(f"MLX implementation not available: {e}. Falling back to standard variant.")
         return _load_parakeet_standard('cpu')
     except Exception as e:
-        logging.error(f"Error loading Parakeet MLX model: {e}")
+        logging.exception(f"Error loading Parakeet MLX model: {e}")
         return _load_parakeet_standard('cpu')
 
 
@@ -479,7 +479,7 @@ def transcribe_with_canary(
         return _extract_result(transcriptions)
 
     except Exception as e:
-        logging.error(f"Error during Canary transcription: {e}")
+        logging.exception(f"Error during Canary transcription: {e}")
         return f"[Transcription error: {str(e)}]"
     finally:
         if cleanup_temp and audio_path and os.path.exists(audio_path):
@@ -583,7 +583,7 @@ def transcribe_with_parakeet(
         return result
 
     except Exception as e:
-        logging.error(f"Error during Parakeet transcription: {e}")
+        logging.exception(f"Error during Parakeet transcription: {e}")
         return f"[Transcription error: {str(e)}]"
     finally:
         if cleanup_temp and audio_path and os.path.exists(audio_path):

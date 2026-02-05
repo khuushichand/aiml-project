@@ -64,8 +64,8 @@ class MCTSOptimizer:
 
         def __init__(self, *, parent: Optional["MCTSOptimizer._Node"], segment_index: int, system_text: str, score_bin: Optional[int] = None):
             self.parent = parent
-            self.children: list["MCTSOptimizer._Node"] = []
-            self.children_by_bin: dict[int, "MCTSOptimizer._Node"] = {}
+            self.children: list[MCTSOptimizer._Node] = []
+            self.children_by_bin: dict[int, MCTSOptimizer._Node] = {}
             self.segment_index = segment_index
             self.system_text = system_text
             self.q_sum = 0.0

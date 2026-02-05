@@ -113,7 +113,7 @@ def _get_db_path_for_user(user_id: int) -> Path:
         return DatabasePaths.get_media_db_path(user_id)
     except Exception as e:
         logger.error(f"Could not resolve database directory for user_id {user_id}: {e}", exc_info=True)
-        raise IOError(f"Could not initialize storage directory for user {user_id}.") from e
+        raise OSError(f"Could not initialize storage directory for user {user_id}.") from e
 
 def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
     if not current_user or not isinstance(current_user.id, int):
@@ -207,7 +207,7 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Could not initialize database for user: {e}"
             ) from e
-        except IOError as e:
+        except OSError as e:
             logger.error(f"Failed to get DB path for user {user_id}: {e}", exc_info=True)
             raise HTTPException(
                  status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

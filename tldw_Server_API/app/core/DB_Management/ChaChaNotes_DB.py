@@ -189,7 +189,7 @@ class BackendCursorAdapter:
 class BackendCursorWrapper:
     """Cursor wrapper that routes operations through the configured backend."""
 
-    def __init__(self, db: 'CharactersRAGDB', connection):
+    def __init__(self, db: CharactersRAGDB, connection):
         self._db = db
         self._connection = connection
         self._result: QueryResult | None = None
@@ -254,7 +254,7 @@ class BackendCursorWrapper:
 class BackendConnectionWrapper:
     """Connection wrapper that returns backend-aware cursors."""
 
-    def __init__(self, db: 'CharactersRAGDB', connection):
+    def __init__(self, db: CharactersRAGDB, connection):
         self._db = db
         self._connection = connection
 
@@ -297,7 +297,7 @@ class BackendConnectionWrapper:
 class BackendManagedTransaction:
     """Context manager leveraging the backend's native transaction handling."""
 
-    def __init__(self, db: 'CharactersRAGDB'):
+    def __init__(self, db: CharactersRAGDB):
         self._db = db
         self._raw_conn = None
         self._wrapper = None
@@ -308,7 +308,7 @@ class BackendManagedTransaction:
         self._raw_conn = self._db._get_thread_connection()
         self._depth = getattr(self._db._local, "tx_depth", 0)
         self._managed = self._depth == 0
-        setattr(self._db._local, "tx_depth", self._depth + 1)
+        self._db._local.tx_depth = self._depth + 1
         self._wrapper = BackendConnectionWrapper(self._db, self._raw_conn)
         return self._wrapper
 
@@ -346,7 +346,7 @@ class BackendManagedTransaction:
                             exc_info=True,
                         )
         finally:
-            setattr(self._db._local, "tx_depth", self._depth)
+            self._db._local.tx_depth = self._depth
             self._wrapper = None
             self._raw_conn = None
         return False
@@ -3018,7 +3018,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise CharactersRAGDBError(f"Execute Many failed: {exc}") from exc
 
     # --- Transaction Context ---
-    def transaction(self) -> Union['TransactionContextManager', BackendManagedTransaction]:
+    def transaction(self) -> Union[TransactionContextManager, BackendManagedTransaction]:
         """Return a context manager for database transactions."""
         if self.backend_type == BackendType.SQLITE:
             return TransactionContextManager(self)
@@ -4209,15 +4209,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         if self.backend_type == BackendType.POSTGRESQL:
             try:
-                for fts_table, source_table, columns in self._FTS_CONFIG:
-                    actual_source = self._map_table_for_backend(source_table)
-                    self.backend.create_fts_table(
-                        table_name=fts_table,
-                        source_table=actual_source,
-                        columns=columns,
-                        connection=None,
-                    )
-                self._refresh_postgres_tsvectors()
+                with self.transaction() as conn:
+                    raw_conn = conn._connection
+                    for fts_table, source_table, columns in self._FTS_CONFIG:
+                        actual_source = self._map_table_for_backend(source_table)
+                        self.backend.create_fts_table(
+                            table_name=fts_table,
+                            source_table=actual_source,
+                            columns=columns,
+                            connection=raw_conn,
+                        )
+                    self._refresh_postgres_tsvectors(connection=raw_conn)
             except BackendDatabaseError as exc:
                 raise CharactersRAGDBError(f"Failed to rebuild PostgreSQL FTS structures: {exc}") from exc
             return
@@ -6659,7 +6661,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         try:
             cursor = self.execute_query(base_query, tuple(conversation_ids))
             rows = cursor.fetchall()
-            result: dict[str, int] = {cid: 0 for cid in conversation_ids}
+            result: dict[str, int] = dict.fromkeys(conversation_ids, 0)
             for row in rows:
                 if isinstance(row, dict):
                     conv_id = row.get("conversation_id")
@@ -9310,15 +9312,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         # to be treated as a literal phrase.
 
         # Debug: Log FTS table state to help diagnose E2E test failures
-        try:
-            fts_count = self.execute_query("SELECT COUNT(*) as cnt FROM notes_fts").fetchone()
-            notes_count = self.execute_query("SELECT COUNT(*) as cnt FROM notes WHERE deleted = 0").fetchone()
-            logger.debug(
-                f"search_notes: term='{search_term[:50] if search_term else ''}' notes_fts_count={fts_count['cnt'] if fts_count else 0} "
-                f"notes_count={notes_count['cnt'] if notes_count else 0}"
-            )
-        except Exception as diag_err:
-            logger.debug(f"search_notes diagnostic query failed: {diag_err}")
+        # Only run for SQLite; PostgreSQL uses tsvector columns, not a notes_fts table.
+        if self.backend_type == BackendType.SQLITE:
+            try:
+                fts_count = self.execute_query("SELECT COUNT(*) as cnt FROM notes_fts").fetchone()
+                notes_count = self.execute_query("SELECT COUNT(*) as cnt FROM notes WHERE deleted = 0").fetchone()
+                logger.debug(
+                    f"search_notes: term='{search_term[:50] if search_term else ''}' notes_fts_count={fts_count['cnt'] if fts_count else 0} "
+                    f"notes_count={notes_count['cnt'] if notes_count else 0}"
+                )
+            except Exception as diag_err:
+                logger.debug(f"search_notes diagnostic query failed: {diag_err}")
 
         if self.backend_type == BackendType.POSTGRESQL:
             if not search_term or not str(search_term).strip():

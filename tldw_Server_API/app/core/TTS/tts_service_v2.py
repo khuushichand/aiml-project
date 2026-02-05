@@ -8,9 +8,9 @@ import copy
 import inspect
 import os
 import time
-from dataclasses import replace
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import Any, Optional
 
 #
@@ -25,14 +25,13 @@ from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.Metrics.metrics_manager import MetricDefinition, MetricType
 
 from .adapter_registry import TTSAdapterFactory, TTSProvider, close_tts_factory, get_tts_factory
-from .adapters.base import AudioFormat, TTSCapabilities, TTSAdapter, TTSRequest, TTSResponse
+from .adapters.base import AudioFormat, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse
 from .audio_utils import (
     crossfade_audio,
     evaluate_audio_quality,
     split_text_into_chunks,
     trim_trailing_silence,
 )
-from .streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
 from .circuit_breaker import CircuitBreakerManager, CircuitOpenError, get_circuit_manager
 from .realtime_session import (
     BufferedRealtimeSession,
@@ -40,7 +39,9 @@ from .realtime_session import (
     RealtimeSessionHandle,
     RealtimeTTSSession,
 )
+from .streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
 from .tts_exceptions import (
+    TTSAudioQualityError,
     TTSError,
     TTSFallbackExhaustedError,
     TTSGenerationError,
@@ -49,7 +50,6 @@ from .tts_exceptions import (
     TTSProviderNotConfiguredError,
     TTSResourceError,
     TTSValidationError,
-    TTSAudioQualityError,
     categorize_error,
     is_retryable_error,
 )
@@ -86,7 +86,7 @@ class TTSServiceV2:
         try:
             if hasattr(get_tts_factory, "return_value"):
                 # Patched with mock/AsyncMock
-                self._factory = getattr(get_tts_factory, "return_value")  # type: ignore[assignment]
+                self._factory = get_tts_factory.return_value  # type: ignore[assignment]
             else:
                 # Legacy behavior: only call if it's a regular (non-async) function
                 if not asyncio.iscoroutinefunction(get_tts_factory):
@@ -166,6 +166,54 @@ class TTSServiceV2:
                 return cfg
         except Exception:
             return None
+
+    def _attach_response_metadata(
+        self,
+        target: Any,
+        response: TTSResponse,
+        provider_key: str,
+        request_for_provider: TTSRequest,
+    ) -> None:
+        metadata: dict[str, Any] = {}
+        if isinstance(response.metadata, dict):
+            metadata.update(response.metadata)
+
+        if metadata.get("provider") is None:
+            metadata["provider"] = response.provider or provider_key
+        if metadata.get("model") is None:
+            metadata["model"] = response.model or request_for_provider.model
+        if metadata.get("voice") is None:
+            metadata["voice"] = response.voice_used or request_for_provider.voice
+        if metadata.get("format") is None:
+            fmt_val = None
+            try:
+                fmt_val = response.format.value  # type: ignore[attr-defined]
+            except Exception:
+                try:
+                    fmt_val = str(response.format)
+                except Exception:
+                    fmt_val = None
+            if not fmt_val:
+                try:
+                    fmt_val = request_for_provider.format.value
+                except Exception:
+                    fmt_val = None
+            if fmt_val:
+                metadata["format"] = fmt_val
+        if metadata.get("duration_seconds") is None:
+            duration = response.duration_seconds if response.duration_seconds is not None else response.duration
+            if duration is not None:
+                try:
+                    metadata["duration_seconds"] = float(duration)
+                except Exception:
+                    pass
+        if metadata.get("sample_rate") is None and response.sample_rate:
+            metadata["sample_rate"] = response.sample_rate
+
+        try:
+            target._tts_metadata = metadata
+        except Exception:
+            pass
         return None
 
     def _get_performance_config(self) -> dict[str, Any]:
@@ -1131,7 +1179,7 @@ class TTSServiceV2:
             for prov in fallback_providers:
                 try:
                     req2 = request
-                    setattr(req2, "provider", prov)
+                    req2.provider = prov
                     return await self.generate(req2)
                 except Exception as e:  # keep trying
                     last_exc = e
@@ -1308,8 +1356,8 @@ class TTSServiceV2:
 
         if voice_to_voice_start_ts is not None:
             try:
-                setattr(tts_request, "voice_to_voice_start", voice_to_voice_start_ts)
-                setattr(tts_request, "voice_to_voice_route", voice_to_voice_route_label)
+                tts_request.voice_to_voice_start = voice_to_voice_start_ts
+                tts_request.voice_to_voice_route = voice_to_voice_route_label
             except Exception:
                 pass
 
@@ -1399,11 +1447,12 @@ class TTSServiceV2:
                         response = await _generate_with_adapter()
 
                     if fallback_plan is None and response is not None:
-                        if response.metadata:
-                            try:
-                                setattr(request, "_tts_metadata", response.metadata)
-                            except Exception:
-                                pass
+                        self._attach_response_metadata(
+                            request,
+                            response,
+                            provider_key,
+                            request_for_provider,
+                        )
                         if metadata_only:
                             if response.audio_stream and hasattr(response.audio_stream, "aclose"):
                                 try:
@@ -1668,12 +1717,13 @@ class TTSServiceV2:
             async with self._semaphore:
                 response = await adapter.generate(request_for_provider)
 
-                if response.metadata:
-                    target = metadata_target if metadata_target is not None else request_for_provider
-                    try:
-                        setattr(target, "_tts_metadata", response.metadata)
-                    except Exception:
-                        pass
+                target = metadata_target if metadata_target is not None else request_for_provider
+                self._attach_response_metadata(
+                    target,
+                    response,
+                    provider_key,
+                    request_for_provider,
+                )
 
                 if metadata_only:
                     success = True
@@ -1815,7 +1865,7 @@ class TTSServiceV2:
         )
 
         # Preserve originating model for metrics/diagnostics when available
-        setattr(tts_request, "model", getattr(request, "model", None))
+        tts_request.model = getattr(request, "model", None)
 
         return tts_request
 
@@ -2124,7 +2174,7 @@ class TTSServiceV2:
                 continue
             # Skip providers without registered adapters (e.g., TODO placeholders)
             if registry and hasattr(registry, "_adapter_specs"):
-                specs = getattr(registry, "_adapter_specs")
+                specs = registry._adapter_specs
                 try:
                     if provider not in specs:
                         continue
@@ -2281,7 +2331,7 @@ class TTSServiceV2:
                     getattr(fallback_adapter, "default_model", None)
                     or fallback_provider_key
                 )
-                setattr(request, "model", fallback_model)
+                request.model = fallback_model
                 try:
                     async for chunk in self._generate_with_adapter(
                         fallback_adapter,
@@ -2291,7 +2341,7 @@ class TTSServiceV2:
                     ):
                         yield chunk
                 finally:
-                    setattr(request, "model", original_model)
+                    request.model = original_model
                 logger.info(f"Successfully fell back to {fallback_provider_key}")
                 # Record successful fallback
                 self.metrics.increment(
@@ -2331,7 +2381,7 @@ class TTSServiceV2:
                                 getattr(final_fallback, "default_model", None)
                                 or final_provider_key
                             )
-                            setattr(request, "model", secondary_model)
+                            request.model = secondary_model
                             try:
                                 async for chunk in self._generate_with_adapter(
                                     final_fallback,
@@ -2341,7 +2391,7 @@ class TTSServiceV2:
                                 ):
                                     yield chunk
                             finally:
-                                setattr(request, "model", secondary_original_model)
+                                request.model = secondary_original_model
                             logger.info(f"Final fallback to {final_provider_key} succeeded")
                             # Record successful final fallback
                             self.metrics.increment(
@@ -2356,7 +2406,7 @@ class TTSServiceV2:
                             # Wrap non-TTS errors
                             if not isinstance(final_e, TTSError):
                                 final_e = TTSGenerationError(
-                                    f"Final fallback failed",
+                                    "Final fallback failed",
                                     provider=final_provider_key,
                                     details={"error": str(final_e)}
                                 )
@@ -2377,7 +2427,7 @@ class TTSServiceV2:
                     else:
                         origin_provider = next_failed_provider
                         if self._stream_errors_as_audio:
-                            yield f"ERROR: All fallback providers exhausted".encode()
+                            yield b"ERROR: All fallback providers exhausted"
                         else:
                             raise TTSFallbackExhaustedError("All fallback providers exhausted")
                 else:
@@ -2395,7 +2445,7 @@ class TTSServiceV2:
                     raise TTSGenerationError(f"Unexpected error during fallback: {str(e)}")
         else:
             if self._stream_errors_as_audio:
-                yield f"ERROR: No fallback providers available".encode()
+                yield b"ERROR: No fallback providers available"
             else:
                 raise TTSFallbackExhaustedError("No fallback providers available")
 

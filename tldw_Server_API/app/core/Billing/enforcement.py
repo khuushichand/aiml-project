@@ -722,7 +722,7 @@ async def create_billing_rg_request(
     category: LimitCategory,
     units: int = 1,
     endpoint: str | None = None,
-) -> "RGRequest":
+) -> RGRequest:
     """
     Create a Resource Governor request for billing enforcement.
 

@@ -783,12 +783,12 @@ class ChatCompletionRequest(BaseModel):
         # Only allow alphanumeric, underscore, and hyphen
         if not re.match(r"^[a-zA-Z0-9_-]+$", v):
             raise ValueError(
-                f"Invalid template name format. Only alphanumeric characters, underscores, and hyphens are allowed."
+                "Invalid template name format. Only alphanumeric characters, underscores, and hyphens are allowed."
             )
 
         # Additional security check for path traversal patterns
         if "/" in v or "\\" in v or ".." in v:
-            raise ValueError(f"Invalid template name. Path traversal patterns are not allowed.")
+            raise ValueError("Invalid template name. Path traversal patterns are not allowed.")
 
         return v
 

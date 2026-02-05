@@ -255,7 +255,7 @@ def _activate_scope_context(
             active_team_id=active_team,
             is_admin=is_admin,
         )
-        setattr(request.state, "_content_scope_token", token)
+        request.state._content_scope_token = token
     except Exception as exc:
         logger.debug(
             "Unable to establish content scope context: {}",
@@ -294,7 +294,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
         # query/return semantics for tests. If other modules need similar behavior,
         # it can be extracted into the DB_Management layer.
         class _ConnAdapter:
-            def __init__(self, _conn):
+            def __init__(self, _conn: Any) -> None:
                 self._conn = _conn
                 # Heuristic: asyncpg connection exposes fetchrow; aiosqlite does not
                 self._is_sqlite = not hasattr(self._conn, "fetchrow")
@@ -306,7 +306,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                 # Replace $1, $2 ... with '?'
                 return self._dollar_param.sub("?", query)
 
-            async def execute(self, query: str, *args):
+            async def execute(self, query: str, *args: object) -> Any:
                 # Postgres (asyncpg) supports variadic args; SQLite expects a sequence
                 if not self._is_sqlite:
                     # asyncpg connection
@@ -325,7 +325,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                         raise
                     return cur
 
-            async def fetchval(self, query: str, *args):
+            async def fetchval(self, query: str, *args: object) -> Any | None:
                 if not self._is_sqlite:
                     # asyncpg connection
                     return await self._conn.fetchval(query, *args)
@@ -336,7 +336,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                     row = await cur.fetchone()
                     return row[0] if row else None
 
-            async def fetch(self, query: str, *args):
+            async def fetch(self, query: str, *args: object) -> list[Any]:
                 if not self._is_sqlite:
                     # asyncpg connection
                     rows = await self._conn.fetch(query, *args)
@@ -351,7 +351,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                     except Exception:
                         return rows
 
-            async def fetchrow(self, query: str, *args):
+            async def fetchrow(self, query: str, *args: object) -> Any | None:
                 if not self._is_sqlite:
                     # asyncpg connection
                     return await self._conn.fetchrow(query, *args)
@@ -365,7 +365,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                     except Exception:
                         return row
 
-            async def commit(self):
+            async def commit(self) -> None:
                 if self._is_sqlite:
                     try:
                         await self._conn.commit()
@@ -426,7 +426,7 @@ async def get_session_manager_dep() -> SessionManager:
                     refresh_token: str,
                     ip_address: str = "",
                     user_agent: str = "",
-                ):
+                ) -> dict[str, Any]:
                     async with _get_test_session_lock():
                         with _TEST_SESSION_STATE_GUARD:
                             _TEST_SESSION_STATE["sid"] += 1
@@ -452,25 +452,25 @@ async def get_session_manager_dep() -> SessionManager:
                     _session_id: int = 0,
                     _access_token: str = "",
                     _refresh_token: str = "",
-                    **_kwargs,
-                ):
+                    **_kwargs: object,
+                ) -> bool:
                     # No-op in stub
                     return True
 
-                async def refresh_session(self, *_args, **kwargs):
+                async def refresh_session(self, *_args: object, **kwargs: object) -> dict[str, Any]:
                     return {
                         "session_id": kwargs.get("session_id") or 1,
                         "user_id": kwargs.get("user_id") or 1,
                         "expires_at": datetime.now(timezone.utc).isoformat(),
                     }
 
-                async def get_user_sessions(self, user_id: int):
+                async def get_user_sessions(self, user_id: int) -> list[dict[str, Any]]:
                     async with _get_test_session_lock():
                         with _TEST_SESSION_STATE_GUARD:
                             sessions = list(_TEST_SESSION_STATE["sessions"].values())
                         return [s for s in sessions if s.get("user_id") == user_id]
 
-                async def revoke_session(self, session_id: int, *_args, **_kwargs):
+                async def revoke_session(self, session_id: int, *_args: object, **_kwargs: object) -> bool:
                     async with _get_test_session_lock():
                         with _TEST_SESSION_STATE_GUARD:
                             sess = _TEST_SESSION_STATE["sessions"].get(session_id)
@@ -480,7 +480,7 @@ async def get_session_manager_dep() -> SessionManager:
                             sess["is_active"] = False
                             return True
 
-                async def revoke_all_user_sessions(self, user_id: int):
+                async def revoke_all_user_sessions(self, user_id: int) -> int:
                     async with _get_test_session_lock():
                         with _TEST_SESSION_STATE_GUARD:
                             changed = 0
@@ -1581,7 +1581,7 @@ def rbac_rate_limit(resource: str):
     async def _dep(request: Request, db_pool: DatabasePool = Depends(get_db_pool)):
         await enforce_rbac_rate_limit(request, resource, db_pool)
     try:
-        setattr(_dep, "_tldw_rate_limit_resource", resource)
+        _dep._tldw_rate_limit_resource = resource
     except Exception as exc:
         logger.debug(
             "rbac_rate_limit: unable to attach rate-limit metadata to dependency: {}",
@@ -1969,10 +1969,10 @@ def require_token_scope(
         return None
 
     try:
-        setattr(_checker, "_tldw_endpoint_id", endpoint_id)
-        setattr(_checker, "_tldw_scope_name", scope)
-        setattr(_checker, "_tldw_token_scope", True)
-        setattr(_checker, "_tldw_token_scope_required", str(scope))
+        _checker._tldw_endpoint_id = endpoint_id
+        _checker._tldw_scope_name = scope
+        _checker._tldw_token_scope = True
+        _checker._tldw_token_scope_required = str(scope)
     except Exception as exc:  # noqa: BLE001
         logger.debug(
             "require_token_scope: unable to attach metadata to dependency: {}",

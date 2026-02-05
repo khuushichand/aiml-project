@@ -5,19 +5,63 @@ import { Terminal as TerminalIcon } from "lucide-react"
 import { Terminal } from "xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import "xterm/css/xterm.css"
+import { useTranslation } from "react-i18next"
 
 import { useACPSessionsStore } from "@/store/acp-sessions"
 
-const buildWsUrl = (baseUrl: string, path: string, params: Record<string, string>): string => {
+type WebSocketWithHeaders = new (
+  url: string,
+  protocols?: string | string[],
+  options?: { headers?: Record<string, string> }
+) => WebSocket
+
+const buildWsUrl = (baseUrl: string, path: string): string => {
   const wsBase = baseUrl.replace(/^http/, "ws").replace(/\/$/, "")
   const url = new URL(path.startsWith("/") ? path : `/${path}`, wsBase)
-  Object.entries(params).forEach(([k, v]) => {
-    if (v) url.searchParams.set(k, v)
-  })
   return url.toString()
 }
 
+const buildAuthHeaders = (
+  authMode: string,
+  apiKey: string,
+  accessToken: string
+): Record<string, string> => {
+  if (authMode === "single-user" && apiKey) {
+    return { "X-API-KEY": apiKey }
+  }
+  if (authMode === "multi-user" && accessToken) {
+    return { Authorization: `Bearer ${accessToken}` }
+  }
+  return {}
+}
+
+const buildAuthProtocols = (headers: Record<string, string>): string[] | undefined => {
+  const authHeader = headers.Authorization || headers.authorization
+  if (authHeader?.toLowerCase().startsWith("bearer ")) {
+    return ["bearer", authHeader.slice(7).trim()]
+  }
+  const apiKey = headers["X-API-KEY"] || headers["x-api-key"]
+  if (apiKey) {
+    return ["x-api-key", apiKey]
+  }
+  return undefined
+}
+
+const createWebSocket = (
+  url: string,
+  headers: Record<string, string>,
+  protocols?: string[]
+): WebSocket => {
+  const WsCtor = WebSocket as unknown as WebSocketWithHeaders
+  try {
+    return new WsCtor(url, protocols, { headers })
+  } catch {
+    return new WebSocket(url, protocols)
+  }
+}
+
 export const ACPWorkspacePanel: React.FC = () => {
+  const { t } = useTranslation("playground")
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   const terminalRef = React.useRef<Terminal | null>(null)
   const fitAddonRef = React.useRef<FitAddon | null>(null)
@@ -58,14 +102,10 @@ export const ACPWorkspacePanel: React.FC = () => {
     terminalRef.current = term
     fitAddonRef.current = fitAddon
 
-    const params: Record<string, string> = {}
-    if (authMode === "single-user" && apiKey) {
-      params.api_key = apiKey
-    } else if (authMode === "multi-user" && accessToken) {
-      params.token = accessToken
-    }
-    const wsUrl = buildWsUrl(serverUrl, sshPath, params)
-    const ws = new WebSocket(wsUrl)
+    const headers = buildAuthHeaders(authMode, apiKey, accessToken)
+    const protocols = buildAuthProtocols(headers)
+    const wsUrl = buildWsUrl(serverUrl, sshPath)
+    const ws = createWebSocket(wsUrl, headers, protocols)
     ws.binaryType = "arraybuffer"
     wsRef.current = ws
 
@@ -142,7 +182,12 @@ export const ACPWorkspacePanel: React.FC = () => {
   if (!activeSessionId) {
     return (
       <div className="flex h-full items-center justify-center">
-        <Empty description="Select a session to open the workspace terminal." />
+        <Empty
+          description={t(
+            "playground:acp.workspace.selectSession",
+            "Select a session to open the workspace terminal."
+          )}
+        />
       </div>
     )
   }
@@ -152,7 +197,10 @@ export const ACPWorkspacePanel: React.FC = () => {
       <div className="flex h-full items-center justify-center">
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description="Workspace terminal is unavailable for this session."
+          description={t(
+            "playground:acp.workspace.unavailable",
+            "Workspace terminal is unavailable for this session."
+          )}
         />
       </div>
     )
@@ -162,7 +210,7 @@ export const ACPWorkspacePanel: React.FC = () => {
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-border bg-surface px-3 py-2 text-sm text-text-muted">
         <TerminalIcon className="h-4 w-4" />
-        Workspace Terminal
+        {t("playground:acp.workspace.title", "Workspace Terminal")}
       </div>
       <div ref={containerRef} className="flex-1 bg-black" />
     </div>

@@ -24,7 +24,7 @@ class AuthnzUsersRepo:
     db_pool: DatabasePool
 
     @classmethod
-    async def from_pool(cls) -> "AuthnzUsersRepo":
+    async def from_pool(cls) -> AuthnzUsersRepo:
         """Construct a repository bound to the global AuthNZ DatabasePool."""
         pool = await get_db_pool()
         return cls(db_pool=pool)

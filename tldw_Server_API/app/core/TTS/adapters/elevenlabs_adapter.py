@@ -808,7 +808,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             err = rate_limit_error(self._provider_simple, retry_after=retry)
             # Expose retry_after directly for tests
             try:
-                setattr(err, "retry_after", retry)
+                err.retry_after = retry
             except Exception:
                 pass
             raise err

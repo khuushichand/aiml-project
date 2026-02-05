@@ -382,7 +382,7 @@ class EmbeddingCache:
             if not path.exists():
                 return
 
-            with open(path, 'r') as f:
+            with open(path) as f:
                 data = json.load(f)
 
             with self._lock:

@@ -342,7 +342,7 @@ class CookieManager:
         """Load cookies from storage"""
         if self.storage_path.exists():
             try:
-                with open(self.storage_path, 'r') as f:
+                with open(self.storage_path) as f:
                     self._cookies = json.load(f)
                 logger.info(f"Loaded cookies for {len(self._cookies)} domains")
             except Exception as e:
@@ -2429,7 +2429,7 @@ class EnhancedWebScraper:
     async def load_progress(self, task_name: str, filepath: Path):
         """Load progress from file"""
         if filepath.exists():
-            async with aiofiles.open(filepath, 'r') as f:
+            async with aiofiles.open(filepath) as f:
                 content = await f.read()
                 self._progress[task_name] = json.loads(content)
 

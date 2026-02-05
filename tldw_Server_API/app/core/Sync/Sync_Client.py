@@ -85,7 +85,7 @@ class ClientSyncEngine:
         """Loads the last sync IDs from the state file."""
         try:
             if os.path.exists(self.state_file):
-                with open(self.state_file, 'r') as f:
+                with open(self.state_file) as f:
                     state = json.load(f)
                     self.last_local_log_id_sent = state.get('last_local_log_id_sent', 0)
                     self.last_server_log_id_processed = state.get('last_server_log_id_processed', 0)
@@ -94,7 +94,7 @@ class ClientSyncEngine:
                 logger.info(f"State file {self.state_file} not found, starting from scratch.")
                 # Ensure the initial save happens if the file doesn't exist
                 self._save_sync_state()
-        except (json.JSONDecodeError, IOError, KeyError) as e:
+        except (OSError, json.JSONDecodeError, KeyError) as e:
             logger.error(f"Error loading sync state from {self.state_file}: {e}. Starting from scratch.", exc_info=True)
             self.last_local_log_id_sent = 0
             self.last_server_log_id_processed = 0
@@ -114,7 +114,7 @@ class ClientSyncEngine:
             with open(self.state_file, 'w') as f:
                 json.dump(state, f, indent=4)
             logger.debug(f"Saved sync state to {self.state_file}: {state}")
-        except IOError as e:
+        except OSError as e:
             logger.error(f"Error saving sync state to {self.state_file}: {e}", exc_info=True)
 
     # --- Core Sync Logic ---
@@ -656,7 +656,7 @@ class ClientSyncEngine:
                 if not force_apply and operation in ['update', 'delete'] and optimistic_lock_sql and rows_affected == 0:
                     logger.warning(
                         f"Optimistic lock failed for {entity} UUID {uuid} (Op: {operation}, Expected Base Ver: {expected_base_version}). Rowcount 0.")
-                    raise ConflictError(f"Optimistic lock failed applying change.", entity=entity, identifier=uuid)
+                    raise ConflictError("Optimistic lock failed applying change.", entity=entity, identifier=uuid)
                 elif not force_apply and operation == 'create' and rows_affected == 0:
                     logger.warning(
                         f"'Create' operation for {entity} UUID {uuid} affected 0 rows (INSERT OR IGNORE). Likely benign duplicate.")

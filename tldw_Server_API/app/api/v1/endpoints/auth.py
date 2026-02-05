@@ -982,7 +982,7 @@ async def login(
         log_counter("auth_login_http_error")
         log_histogram("auth_login_duration", time.perf_counter() - start_time)
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("Login error")
         log_counter("auth_login_unexpected_error")
         log_histogram("auth_login_duration", time.perf_counter() - start_time)

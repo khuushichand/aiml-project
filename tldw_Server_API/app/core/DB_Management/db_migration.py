@@ -73,7 +73,7 @@ class Migration:
     @classmethod
     def from_file(cls, filepath: Path) -> 'Migration':
         """Load migration from file"""
-        with open(filepath, 'r') as f:
+        with open(filepath) as f:
             data = json.load(f)
 
         return cls(

@@ -594,11 +594,11 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
         effective_single_user_api_key = None
 
     need_reset = False
-    if effective_db_url and settings.DATABASE_URL != effective_db_url:
+    if effective_db_url and effective_db_url != settings.DATABASE_URL:
         need_reset = True
     if effective_auth_mode and effective_auth_mode.lower() != settings.AUTH_MODE:
         need_reset = True
-    if effective_single_user_api_key and settings.SINGLE_USER_API_KEY != effective_single_user_api_key:
+    if effective_single_user_api_key and effective_single_user_api_key != settings.SINGLE_USER_API_KEY:
         need_reset = True
 
     test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -1108,10 +1108,10 @@ async def create_admin_user():
             expires_in_days=365
         )
 
-        print(f"\n✅ Admin user created successfully!")
+        print("\n✅ Admin user created successfully!")
         print(f"   User ID: {admin_user['id']}")
         print(f"   Username: {admin_user['username']}")
-        print(f"\n🔑 Admin API Key (save this - won't be shown again):")
+        print("\n🔑 Admin API Key (save this - won't be shown again):")
         print(f"   {api_key_result['key']}")
 
         # Ensure user directories exist

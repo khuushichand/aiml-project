@@ -13,8 +13,8 @@
 ####################
 # Import necessary libraries
 import asyncio
-import importlib.util
 import gc
+import importlib.util
 import re
 from datetime import datetime
 from typing import Any, Optional, Union
@@ -342,7 +342,7 @@ def process_pdf(
                 if temp_dir_for_pdf and os.path.isdir(temp_dir_for_pdf):
                     try: shutil.rmtree(temp_dir_for_pdf)
                     except Exception: logging.error(f"Failed secondary cleanup of {temp_dir_for_pdf}")
-                raise IOError(f"Failed to create or write temporary file/dir: {temp_err}") from temp_err
+                raise OSError(f"Failed to create or write temporary file/dir: {temp_err}") from temp_err
 
         elif isinstance(file_input, Path):
             path_str = str(file_input)
@@ -394,9 +394,7 @@ def process_pdf(
                 should_ocr = False
                 if enable_ocr:
                     mode = (ocr_mode or "fallback").lower()
-                    if mode == "always":
-                        should_ocr = True
-                    elif content_text_len < max(ocr_min_page_text_chars, 1):
+                    if mode == "always" or content_text_len < max(ocr_min_page_text_chars, 1):
                         should_ocr = True
 
                 if should_ocr:
@@ -445,7 +443,7 @@ def process_pdf(
                         }
                         # Attach backend-specific metadata if available
                         try:
-                            if hasattr(backend, "describe") and callable(getattr(backend, "describe")):
+                            if hasattr(backend, "describe") and callable(backend.describe):
                                 extra = backend.describe() or {}
                                 if isinstance(extra, dict):
                                     details.update(extra)
@@ -551,9 +549,9 @@ def process_pdf(
              # --- CATCH PDF library errors during metadata specifically ---
              err_msg = str(meta_lib_err)
              # Create user-friendly error message for metadata failure
-             if "password" in err_msg.lower(): meta_fail_reason = f"PDF Error: Password required or invalid."
-             elif isinstance(meta_lib_err, pymupdf.EmptyFileError): meta_fail_reason = f"PDF Error: Input file is empty."
-             elif isinstance(meta_lib_err, pymupdf.FileDataError): meta_fail_reason = f"PDF Error: Corrupted or invalid file data."
+             if "password" in err_msg.lower(): meta_fail_reason = "PDF Error: Password required or invalid."
+             elif isinstance(meta_lib_err, pymupdf.EmptyFileError): meta_fail_reason = "PDF Error: Input file is empty."
+             elif isinstance(meta_lib_err, pymupdf.FileDataError): meta_fail_reason = "PDF Error: Corrupted or invalid file data."
              else: meta_fail_reason = f"PDF Library Error: {err_msg}" # General PDF error
 
              logging.error(f"Metadata extraction failed for {filename}: {meta_fail_reason}", exc_info=True)
@@ -878,7 +876,7 @@ def process_pdf(
         result["status"] = "Error"
         result["error"] = str(fnf_err)
         log_counter("pdf_processing_error", labels={"file_name": filename, "parser": parser, "error": "FileNotFoundError"})
-    except IOError as io_err: # Catch temp file creation errors
+    except OSError as io_err: # Catch temp file creation errors
         logging.error(f"IO error during temp file handling for {filename}: {io_err}", exc_info=True)
         result["status"] = "Error"
         result["error"] = f"Temporary file error: {io_err}"
@@ -892,15 +890,15 @@ def process_pdf(
         if "password" in err_msg.lower():
             log_msg = f"PDF password error for {filename}: {err_msg}"
             err_type_label = "PasswordError"  # Specific label for metrics
-            result["error"] = f"PDF Error: Password required or invalid."  # User-friendly message
+            result["error"] = "PDF Error: Password required or invalid."  # User-friendly message
         elif isinstance(pdf_lib_err, pymupdf.EmptyFileError):
             log_msg = f"PDF empty file error for {filename}: {err_msg}"
             err_type_label = "EmptyFileError"
-            result["error"] = f"PDF Error: Input file is empty."
+            result["error"] = "PDF Error: Input file is empty."
         elif isinstance(pdf_lib_err, pymupdf.FileDataError):
             log_msg = f"PDF file data error for {filename}: {err_msg}"
             err_type_label = "FileDataError"
-            result["error"] = f"PDF Error: Corrupted or invalid file data."
+            result["error"] = "PDF Error: Corrupted or invalid file data."
         else:  # General RuntimeError or other caught types
             log_msg = f"PDF library runtime error for {filename}: {err_msg}"
             err_type_label = type(pdf_lib_err).__name__  # Use 'RuntimeError' usually
@@ -975,7 +973,7 @@ def process_pdf(
                             logging.warning(f"Temp dir cleanup failed, but original status was already {current_status_before_cleanup}. Keeping status.")
                          # --- End modify status handling ---
                      else:
-                         logging.info(f"Retrying temp dir removal after delay...")
+                         logging.info("Retrying temp dir removal after delay...")
                          time.sleep(retry_delay * (attempt + 1))
 
                  except Exception as rm_exc:
@@ -1113,7 +1111,7 @@ async def process_pdf_task(
         return {
             "status": "Error",
             "input_ref": filename,
-            "processing_source": f"bytes_input_task_error",
+            "processing_source": "bytes_input_task_error",
             "media_type": "pdf",
             "parser_used": parser,
             "error": f"Task-level error: {str(e)}",

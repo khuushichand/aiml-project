@@ -144,7 +144,7 @@ def _log_file_lock(timeout: float = _LOG_FILE_LOCK_TIMEOUT):
                 try:
                     fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
-                except (IOError, OSError):
+                except OSError:
                     if time.time() - start_time > timeout:
                         raise RuntimeError(f"Failed to acquire system log lock within {timeout}s")
                     time.sleep(0.05)

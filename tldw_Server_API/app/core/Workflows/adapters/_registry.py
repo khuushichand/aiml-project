@@ -46,13 +46,13 @@ class AdapterRegistry:
             ...
     """
 
-    _instance: "AdapterRegistry" | None = None
+    _instance: AdapterRegistry | None = None
 
     def __init__(self) -> None:
         self._adapters: dict[str, AdapterSpec] = {}
 
     @classmethod
-    def get(cls) -> "AdapterRegistry":
+    def get(cls) -> AdapterRegistry:
         """Get the singleton registry instance."""
         if cls._instance is None:
             cls._instance = cls()

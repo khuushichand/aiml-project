@@ -477,7 +477,7 @@ class PromptsInteropService:
 
     def list_prompts(self):
         db = self._ensure_db()
-        if hasattr(db, "list_prompts") and not isinstance(getattr(db, "list_prompts"), type(self.list_prompts)):
+        if hasattr(db, "list_prompts") and not isinstance(db.list_prompts, type(self.list_prompts)):
             # Try DB adapter method (unit tests mock to return a list)
             try:
                 # If running against a MagicMock in tests, reset call count for per-test assertions
@@ -1031,7 +1031,7 @@ if __name__ == '__main__':
         # 7. Sync Log (Example)
         print("\n--- Sync Log ---")
         sync_entries = get_sync_log_entries(limit=5)
-        print(f"First 5 sync log entries:")
+        print("First 5 sync log entries:")
         for entry in sync_entries:
             print(f"  ID: {entry['change_id']}, Entity: {entry['entity']}, Op: {entry['operation']}, UUID: {entry['entity_uuid']}")
         if sync_entries:

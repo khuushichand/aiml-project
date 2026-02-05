@@ -114,9 +114,7 @@ def format_toc_item(item: Union[epub.Link, epub.Section, Any], level: int) -> st
              Returns an empty string if an error occurs during formatting.
     """
     try:
-        if isinstance(item, epub.Link):
-            title = item.title
-        elif isinstance(item, epub.Section):
+        if isinstance(item, epub.Link) or isinstance(item, epub.Section):
             title = item.title
         else:
             title = str(item)
@@ -897,7 +895,7 @@ def process_epub(
                     # Simple join if not recursive or only one summary
                     final_analysis = "\n\n---\n\n".join(chunk_summaries)
                     if len(chunk_summaries) > 1 : logging.info(f"Combined {len(chunk_summaries)} chunk summaries (non-recursive).")
-                    else: logging.info(f"Using single chunk analysis as final analysis.")
+                    else: logging.info("Using single chunk analysis as final analysis.")
 
             result["analysis"] = final_analysis # Store final combined analysis
             log_counter("epub_chunks_summarized", value=len(chunk_summaries), labels={"file_path": file_path})

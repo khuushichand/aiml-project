@@ -208,8 +208,9 @@ async def get_cache_statistics() -> dict[str, Any]:
 
         # Add additional computed metrics
         if isinstance(stats, dict):
-            # For multi-level cache
-            overall_stats = stats.get("overall", {})
+            # Support both multi-level format ({"overall": {...}}) and
+            # flat SemanticCache format ({"hit_rate": ..., ...}).
+            overall_stats = stats.get("overall", stats)
             hit_rate = overall_stats.get("hit_rate", 0)
 
             # Determine cache effectiveness
@@ -422,6 +423,172 @@ async def get_batch_jobs() -> dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
+        ) from e
+
+
+@router.post(
+    "/quality-gate",
+    summary="Run quality gate evaluation",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
+async def quality_gate_endpoint(
+    metrics: dict[str, float],
+) -> dict[str, Any]:
+    """Evaluate metrics against gating thresholds.
+
+    Returns pass/warn/fail with per-metric details and a CI exit code.
+    """
+    try:
+        from ....core.RAG.rag_service.quality_gating import GatingEvaluator
+
+        evaluator = GatingEvaluator()
+        result = evaluator.evaluate(metrics)
+        return {
+            "timestamp": datetime.now().isoformat(),
+            **result.to_dict(),
+        }
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Quality gating module not available.",
+        )
+    except Exception as e:
+        logger.error(f"Quality gate evaluation failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        ) from e
+
+
+@router.post(
+    "/baseline/save",
+    summary="Save metric baseline",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
+async def save_baseline_endpoint(
+    metrics: dict[str, float],
+    baseline_id: Optional[str] = None,
+    pipeline_config: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Save a metric baseline for regression detection."""
+    try:
+        from ....core.RAG.rag_service.regression import RegressionDetector
+
+        detector = RegressionDetector()
+        baseline = detector.save_baseline(
+            metrics=metrics,
+            pipeline_config=pipeline_config,
+            baseline_id=baseline_id,
+        )
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "baseline_id": baseline.baseline_id,
+            "metrics_count": len(baseline.metrics),
+        }
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Regression module not available.",
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Baseline save failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        ) from e
+
+
+@router.get(
+    "/regression/check",
+    summary="Check for metric regression",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
+async def check_regression_endpoint(
+    baseline_id: str = "latest",
+) -> dict[str, Any]:
+    """Compare current metrics against a stored baseline.
+
+    Note: This endpoint requires metrics to be provided as query parameters.
+    For a full check, POST to /api/v1/rag/regression/check with current_metrics body.
+    """
+    try:
+        from ....core.RAG.rag_service.regression import RegressionDetector
+
+        detector = RegressionDetector()
+        baseline = detector.load_baseline(baseline_id)
+        if baseline is None:
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "baseline_id": baseline_id,
+                "has_regression": False,
+                "summary": f"No baseline '{baseline_id}' found.",
+            }
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "baseline_id": baseline.baseline_id,
+            "created_at": baseline.created_at,
+            "metrics": dict(baseline.metrics),
+        }
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Regression module not available.",
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Regression check failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        ) from e
+
+
+@router.post(
+    "/regression/check",
+    summary="Check for metric regression with current values",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
+async def check_regression_post_endpoint(
+    current_metrics: dict[str, float],
+    baseline_id: str = "latest",
+) -> dict[str, Any]:
+    """Compare provided current metrics against a stored baseline."""
+    try:
+        from ....core.RAG.rag_service.regression import RegressionDetector
+
+        detector = RegressionDetector()
+        report = detector.check_regression(
+            current_metrics=current_metrics,
+            baseline_id=baseline_id,
+        )
+        return {
+            "timestamp": datetime.now().isoformat(),
+            **report.to_dict(),
+        }
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Regression module not available.",
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Regression check failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
         ) from e
 
 

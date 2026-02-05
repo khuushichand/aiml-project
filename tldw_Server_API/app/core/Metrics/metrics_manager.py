@@ -663,6 +663,48 @@ class MetricsRegistry:
             )
         )
 
+        # RAG retrieval quality histograms
+        self.register_metric(
+            MetricDefinition(
+                name="rag_retrieval_precision",
+                type=MetricType.HISTOGRAM,
+                description="Precision@K of RAG retrieval results",
+                buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_retrieval_recall",
+                type=MetricType.HISTOGRAM,
+                description="Recall@K of RAG retrieval results",
+                buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_retrieval_mrr",
+                type=MetricType.HISTOGRAM,
+                description="MRR of RAG retrieval results",
+                buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_retrieval_ndcg",
+                type=MetricType.HISTOGRAM,
+                description="NDCG@K of RAG retrieval results",
+                buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_retrieval_f1",
+                type=MetricType.HISTOGRAM,
+                description="F1@K of RAG retrieval results",
+                buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            )
+        )
+
         # RAG reranker (LLM scoring) guardrails and activity
         self.register_metric(
             MetricDefinition(

@@ -110,7 +110,10 @@ class SimpleSearchRequest(BaseModel):
 
 
 class SearchResult(BaseModel):
-    """Individual search result"""
+    """Individual search result (immutable after creation)."""
+
+    model_config = ConfigDict(frozen=True)
+
     id: str = Field(..., description="Unique identifier of the result")
     title: str = Field(..., description="Title of the content")
     content: str = Field(..., description="Content snippet relevant to the query")
@@ -294,7 +297,10 @@ class SimpleAgentRequest(BaseModel):
 
 
 class Source(BaseModel):
-    """Source information for agent response"""
+    """Source information for agent response (immutable after creation)."""
+
+    model_config = ConfigDict(frozen=True)
+
     title: str = Field(..., description="Title of the source")
     content: str = Field(..., description="Relevant content from the source")
     database: str = Field(..., description="Source database")

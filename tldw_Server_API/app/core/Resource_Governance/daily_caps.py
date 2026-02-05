@@ -24,11 +24,11 @@ try:  # pragma: no cover - DAL optional in early startup/tests
 except Exception:  # pragma: no cover - safe fallback
     ResourceDailyLedger = None  # type: ignore
 
-_daily_ledger: "ResourceDailyLedger" | None = None  # type: ignore[name-defined]
+_daily_ledger: ResourceDailyLedger | None = None  # type: ignore[name-defined]
 _daily_ledger_lock = asyncio.Lock()
 
 
-async def _get_ledger() -> "ResourceDailyLedger" | None:
+async def _get_ledger() -> ResourceDailyLedger | None:
     global _daily_ledger
     if ResourceDailyLedger is None:
         return None

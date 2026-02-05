@@ -102,7 +102,7 @@ def get_corpus_synonyms(corpus: str | None) -> dict[str, list[str]]:
     )
     try:
         if path.exists():
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
                     # normalize to str -> list[str]

@@ -23,7 +23,7 @@ except Exception as exc:  # pragma: no cover
 else:
     _import_error = None
 
-_ASYNC_STUB_CACHE: dict[str, "InMemoryAsyncRedis"] = {}
+_ASYNC_STUB_CACHE: dict[str, InMemoryAsyncRedis] = {}
 
 try:  # pragma: no cover - optional metrics dependency
     from tldw_Server_API.app.core.Metrics.metrics_manager import (
@@ -190,7 +190,7 @@ async def create_async_redis_client(
         if fake_client is None:
             fake_client = InMemoryAsyncRedis(decode_responses=decode_option)
             _ASYNC_STUB_CACHE[cache_key] = fake_client
-        setattr(fake_client, "_tldw_is_stub", True)
+        fake_client._tldw_is_stub = True
         await fake_client.ping()
         _record_connection_metrics(
             mode="async",
@@ -262,7 +262,7 @@ def create_sync_redis_client(
         fake_client = InMemorySyncRedis(
             decode_responses=options.get("decode_responses", True)
         )
-        setattr(fake_client, "_tldw_is_stub", True)
+        fake_client._tldw_is_stub = True
         fake_client.ping()
         _record_connection_metrics(
             mode="sync",

@@ -164,7 +164,7 @@ class IdempotencyManager:
     """Idempotency manager with Redis backing and local lock fallback."""
 
     def __init__(self) -> None:
-        self._local_cache: "OrderedDict[str, tuple[float, dict[str, Any]]]" = OrderedDict()
+        self._local_cache: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
         self._local_locks: dict[str, asyncio.Lock] = {}
         self._local_guard = asyncio.Lock()
         self._redis_client: Any | None = None
@@ -587,7 +587,7 @@ class MCPProtocol:
                 status=status,
             )
             if error:
-                log.error(f"MCP tool execution failed", error_type=error.__class__.__name__, error_message=str(error)[:200])
+                log.error("MCP tool execution failed", error_type=error.__class__.__name__, error_message=str(error)[:200])
             else:
                 log.info("MCP tool executed")
         except Exception:
@@ -790,7 +790,7 @@ class MCPProtocol:
             # Return success response for standard requests
             return MCPResponse(result=result, id=request.id)
 
-        except RateLimitExceeded as rl:
+        except RateLimitExceeded:
             # Record rate limit hit and re-raise for caller-specific mapping
             try:
                 key_type = "user" if context.user_id else ("client" if context.client_id else "anonymous")
@@ -1594,7 +1594,7 @@ class MCPProtocol:
 
             # Unknown fields
             if addl is False:
-                unknown = [k for k in args.keys() if k not in props]
+                unknown = [k for k in args if k not in props]
                 if unknown:
                     raise InvalidParamsException(f"Unknown parameters: {', '.join(unknown)}")
 
@@ -1696,7 +1696,7 @@ class MCPProtocol:
             raise PermissionError(f"Permission denied for resource: {uri}")
 
         # Read resource (pass context when supported)
-        read_fn = getattr(module, "read_resource")
+        read_fn = module.read_resource
         try:
             params = inspect.signature(read_fn).parameters
         except (TypeError, ValueError):

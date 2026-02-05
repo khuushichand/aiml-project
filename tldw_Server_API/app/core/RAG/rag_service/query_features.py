@@ -29,7 +29,7 @@ def _download_with_timeout(resource: str, timeout_s: int = 60) -> bool:
     import queue
     import threading
 
-    q: "queue.Queue[bool]" = queue.Queue(maxsize=1)
+    q: queue.Queue[bool] = queue.Queue(maxsize=1)
 
     def _runner():
         ok = False

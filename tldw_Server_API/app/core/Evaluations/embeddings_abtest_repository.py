@@ -54,13 +54,13 @@ class EmbeddingABTest(Base):
     stats_json: Mapped[str | None] = mapped_column(Text)
     notes: Mapped[str | None] = mapped_column(Text)
 
-    arms: Mapped[list["EmbeddingABTestArm"]] = relationship(
+    arms: Mapped[list[EmbeddingABTestArm]] = relationship(
         back_populates="test", cascade="all, delete-orphan", order_by="EmbeddingABTestArm.arm_index"
     )
-    queries: Mapped[list["EmbeddingABTestQuery"]] = relationship(
+    queries: Mapped[list[EmbeddingABTestQuery]] = relationship(
         back_populates="test", cascade="all, delete-orphan", order_by="EmbeddingABTestQuery.created_at"
     )
-    results: Mapped[list["EmbeddingABTestResult"]] = relationship(
+    results: Mapped[list[EmbeddingABTestResult]] = relationship(
         back_populates="test", cascade="all, delete-orphan"
     )
 
@@ -87,7 +87,7 @@ class EmbeddingABTestArm(Base):
     metadata_json: Mapped[str | None] = mapped_column(Text)
 
     test: Mapped[EmbeddingABTest] = relationship(back_populates="arms")
-    results: Mapped[list["EmbeddingABTestResult"]] = relationship(back_populates="arm", cascade="all, delete-orphan")
+    results: Mapped[list[EmbeddingABTestResult]] = relationship(back_populates="arm", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_abtest_arms_test", "test_id"),
@@ -105,7 +105,7 @@ class EmbeddingABTestQuery(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     test: Mapped[EmbeddingABTest] = relationship(back_populates="queries")
-    results: Mapped[list["EmbeddingABTestResult"]] = relationship(back_populates="query", cascade="all, delete-orphan")
+    results: Mapped[list[EmbeddingABTestResult]] = relationship(back_populates="query", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_abtest_queries_test", "test_id"),
@@ -154,7 +154,7 @@ class EmbeddingABTestRepository:
         self._session_factory = session_factory
 
     @classmethod
-    def from_config(cls, config: RepositoryConfig) -> "EmbeddingABTestRepository":
+    def from_config(cls, config: RepositoryConfig) -> EmbeddingABTestRepository:
         engine = create_engine(config.db_url, echo=config.echo, future=True)
         Base.metadata.create_all(engine)
         factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)

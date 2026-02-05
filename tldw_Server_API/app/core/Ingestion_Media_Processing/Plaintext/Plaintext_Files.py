@@ -553,7 +553,7 @@ def process_document_content( # Renamed from _process_single_document for clarit
                 else:
                     final_analysis_text = "\n\n---\n\n".join(chunk_summaries)
                     if len(chunk_summaries) > 1: logging.info(f"Combined {len(chunk_summaries)} chunk analyses (non-recursive).")
-                    else: logging.info(f"Using single chunk analysis as final analysis.")
+                    else: logging.info("Using single chunk analysis as final analysis.")
 
             result["analysis"] = final_analysis_text
             log_counter("document_chunks_analyzed", value=len(chunk_summaries), labels={"file_path": str(doc_path)})

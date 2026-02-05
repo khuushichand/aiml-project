@@ -21,7 +21,7 @@ class CharacterLimits:
     max_messages_per_chat_soft: int
 
     @classmethod
-    def from_settings(cls, *, overrides: dict[str, Any] | None = None) -> "CharacterLimits":
+    def from_settings(cls, *, overrides: dict[str, Any] | None = None) -> CharacterLimits:
         def _env_int(name: str, configured_value: Any, fallback: int) -> int:
             raw = os.getenv(name)
             if raw is not None:

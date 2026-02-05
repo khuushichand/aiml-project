@@ -1780,9 +1780,7 @@ async def preview_job(
             }
             action, meta = _evaluate_filters(job_filters, candidate)
             # Determine final decision with include-only gating
-            if action == "exclude":
-                decision = "filtered"
-            elif include_gating_active and action != "include":
+            if action == "exclude" or include_gating_active and action != "include":
                 decision = "filtered"
             else:
                 decision = "ingest"

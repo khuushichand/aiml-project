@@ -1017,6 +1017,16 @@ skip_audio_prevalidation = false
 # TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS (comma- or colon-separated); values are merged.
 USER_DB_BASE_DIR = Databases/user_databases
 
+# TTS history settings
+# For privacy, set TTS_HISTORY_HASH_KEY in the environment (recommended) or here.
+tts_history_enabled = True
+tts_history_store_text = True
+tts_history_store_failed = True
+tts_history_hash_key =
+tts_history_retention_days = 90
+tts_history_max_rows_per_user = 10000
+tts_history_purge_interval_hours = 24
+
 local_tts_device = cpu
 default_tts_provider = kokoro
 default_tts_voice = af_bella

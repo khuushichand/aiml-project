@@ -432,7 +432,7 @@ def execute_install_plan(plan_payload: dict[str, Any]) -> None:
         if not validate:
             raise TypeError('No compatible Pydantic validation method found on InstallPlan')
         plan = validate(plan_payload)
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         logger.exception("Received invalid install plan")
         return
 

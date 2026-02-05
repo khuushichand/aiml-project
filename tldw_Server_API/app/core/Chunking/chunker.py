@@ -1002,11 +1002,7 @@ class Chunker:
                 if combined and text_part:
                     last_char = combined[-1]
                     first_char = text_part[0]
-                    if not last_char.isspace() and not first_char.isspace():
-                        need_sep = True
-                    elif sep.startswith('\n') and not combined.endswith(sep):
-                        need_sep = True
-                    elif sep == '' and not last_char.isspace():
+                    if not last_char.isspace() and not first_char.isspace() or sep.startswith('\n') and not combined.endswith(sep) or sep == '' and not last_char.isspace():
                         need_sep = True
 
                     if need_sep:
@@ -1260,9 +1256,7 @@ class Chunker:
                 sep_hint = ' '
                 if kind in {'list_unordered', 'list_ordered', 'table_md', 'code_fence'}:
                     sep_hint = '\n'
-                elif kind in {'header_atx', 'hr'}:
-                    sep_hint = '\n\n'
-                elif method == 'structure_aware':
+                elif kind in {'header_atx', 'hr'} or method == 'structure_aware':
                     sep_hint = '\n\n'
                 agg_text = _merge_texts(parts, default_sep=sep_hint, kind_hint=kind)
                 start_off = min(starts) if starts else 0
@@ -1577,11 +1571,11 @@ class Chunker:
                 if method == ChunkingMethod.TOKENS.value and tokenizer_override:
                     try:
                         if getattr(strategy, "tokenizer_name", None) != tokenizer_override:
-                            setattr(strategy, "tokenizer_name", tokenizer_override)
+                            strategy.tokenizer_name = tokenizer_override
                             if hasattr(strategy, "_tokenizer"):
-                                setattr(strategy, "_tokenizer", None)
+                                strategy._tokenizer = None
                             if hasattr(strategy, "_tokenizer_init_attempted"):
-                                setattr(strategy, "_tokenizer_init_attempted", False)
+                                strategy._tokenizer_init_attempted = False
                     except Exception:
                         logger.debug("Failed to update tokenizer override", exc_info=True)
 
@@ -1715,11 +1709,11 @@ class Chunker:
                 if method == ChunkingMethod.TOKENS.value and tokenizer_override:
                     try:
                         if getattr(strategy, "tokenizer_name", None) != tokenizer_override:
-                            setattr(strategy, "tokenizer_name", tokenizer_override)
+                            strategy.tokenizer_name = tokenizer_override
                             if hasattr(strategy, "_tokenizer"):
-                                setattr(strategy, "_tokenizer", None)
+                                strategy._tokenizer = None
                             if hasattr(strategy, "_tokenizer_init_attempted"):
-                                setattr(strategy, "_tokenizer_init_attempted", False)
+                                strategy._tokenizer_init_attempted = False
                     except Exception:
                         logger.debug("Failed to update tokenizer override", exc_info=True)
 
@@ -1826,11 +1820,11 @@ class Chunker:
             if method == ChunkingMethod.TOKENS.value and tokenizer_override:
                 try:
                     if getattr(strategy, "tokenizer_name", None) != tokenizer_override:
-                        setattr(strategy, "tokenizer_name", tokenizer_override)
+                        strategy.tokenizer_name = tokenizer_override
                         if hasattr(strategy, "_tokenizer"):
-                            setattr(strategy, "_tokenizer", None)
+                            strategy._tokenizer = None
                         if hasattr(strategy, "_tokenizer_init_attempted"):
-                            setattr(strategy, "_tokenizer_init_attempted", False)
+                            strategy._tokenizer_init_attempted = False
                 except Exception:
                     logger.debug("Failed to update tokenizer override", exc_info=True)
 
@@ -1899,7 +1893,7 @@ class Chunker:
             cache = getattr(self._thread_local, "strategies", None)
             if cache is None:
                 cache = {}
-                setattr(self._thread_local, "strategies", cache)
+                self._thread_local.strategies = cache
             if method not in cache:
                 cache[method] = self._create_strategy_instance(method)
             return cache[method]
@@ -1933,11 +1927,11 @@ class Chunker:
             if callable(set_lang):
                 set_lang(language)
                 return
-            setattr(strategy, "language", language)
+            strategy.language = language
         except Exception:
             logger.debug("Failed to update strategy language", exc_info=True)
             try:
-                setattr(strategy, "language", language)
+                strategy.language = language
             except Exception:
                 pass
 
@@ -2003,7 +1997,7 @@ class Chunker:
         if isinstance(method, ChunkingMethod):
             return method.value
         try:
-            value = getattr(method, "value")
+            value = method.value
         except Exception:
             value = None
         if isinstance(value, str):
@@ -2021,7 +2015,7 @@ class Chunker:
         if value is None:
             return None
         try:
-            enum_value = getattr(value, "value")
+            enum_value = value.value
             if isinstance(enum_value, str):
                 value = enum_value
         except Exception:
@@ -2897,7 +2891,7 @@ class Chunker:
         options_dict = dict(options)
         encoding_name = encoding or 'utf-8'
         try:
-            with open(file_path, 'r', encoding=encoding_name) as f:
+            with open(file_path, encoding=encoding_name) as f:
                 while True:
                     # Read next buffer
                     chunk = f.read(buffer_size)

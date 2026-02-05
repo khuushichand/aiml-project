@@ -240,7 +240,7 @@ async def process_documents(
         ext = ext.lower()
 
         if ext in [".txt", ".md"]:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
                 return f.read()
 
         elif ext == ".docx":
@@ -570,7 +570,7 @@ def _extract_zip_and_combine(zip_path: str) -> str:
                 extracted_path = os.path.join(root, f)
                 # Read each file
                 if ext in [".txt", ".md"]:
-                    with open(extracted_path, "r", encoding="utf-8", errors="replace") as f_obj:
+                    with open(extracted_path, encoding="utf-8", errors="replace") as f_obj:
                         combined_text.append(f_obj.read())
                 elif ext == ".docx":
                     combined_text.append(docx2txt.process(extracted_path))

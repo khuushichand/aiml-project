@@ -60,6 +60,18 @@ type ViewMode = "cards" | "inline" | "split"
 type PlaygroundMode = "single" | "compare" | "templates" | "capabilities"
 type RequestMode = "json" | "file"
 
+interface PdfOptions {
+  parsingEngine: string
+  enableOcr: boolean
+  ocrBackend?: string
+  ocrMode: "always" | "fallback"
+  ocrLang: string
+  ocrDpi: number
+  ocrMinPageTextChars: number
+  ocrOutputFormat?: string
+  ocrPromptPreset?: string
+}
+
 interface ChunkingPlaygroundProps {
   className?: string
 }
@@ -84,19 +96,17 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
   const [pdfMetadata, setPdfMetadata] = useState<Record<string, any> | null>(
     null
   )
-  const [pdfParsingEngine, setPdfParsingEngine] = useState("pymupdf4llm")
-  const [enableOcr, setEnableOcr] = useState(false)
-  const [ocrBackend, setOcrBackend] = useState<string | undefined>(undefined)
-  const [ocrMode, setOcrMode] = useState<"always" | "fallback">("fallback")
-  const [ocrLang, setOcrLang] = useState("eng")
-  const [ocrDpi, setOcrDpi] = useState(300)
-  const [ocrMinPageTextChars, setOcrMinPageTextChars] = useState(40)
-  const [ocrOutputFormat, setOcrOutputFormat] = useState<string | undefined>(
-    undefined
-  )
-  const [ocrPromptPreset, setOcrPromptPreset] = useState<string | undefined>(
-    undefined
-  )
+  const [pdfOptions, setPdfOptions] = useState<PdfOptions>({
+    parsingEngine: "pymupdf4llm",
+    enableOcr: false,
+    ocrBackend: undefined,
+    ocrMode: "fallback",
+    ocrLang: "eng",
+    ocrDpi: 300,
+    ocrMinPageTextChars: 40,
+    ocrOutputFormat: undefined,
+    ocrPromptPreset: undefined
+  })
 
   const [requestMode, setRequestMode] = useState<RequestMode>("json")
 
@@ -207,6 +217,32 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
     }))
   }, [ocrBackends])
 
+  const updatePdfOptions = useCallback(
+    (updates: Partial<PdfOptions>) => {
+      setPdfOptions((prev) => ({
+        ...prev,
+        ...updates
+      }))
+    },
+    [setPdfOptions]
+  )
+
+  // Prefer server-provided parsing engines when available; fall back to known defaults.
+  const pdfParsingEngineOptions = React.useMemo(() => {
+    const fallbackEngines = ["pymupdf4llm", "pymupdf", "docling"]
+    const engines = capabilities?.pdf_parsing_engines?.length
+      ? capabilities.pdf_parsing_engines
+      : fallbackEngines
+    const normalized =
+      pdfOptions.parsingEngine && !engines.includes(pdfOptions.parsingEngine)
+        ? [pdfOptions.parsingEngine, ...engines]
+        : engines
+    return normalized.map((engine) => ({
+      value: engine,
+      label: engine
+    }))
+  }, [capabilities, pdfOptions.parsingEngine])
+
   const fallbackSchema = React.useMemo(() => {
     const properties: Record<string, any> = {}
     Object.entries(DEFAULT_CHUNKING_OPTIONS).forEach(([key, value]) => {
@@ -252,7 +288,10 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
       setOptions((prev) => ({
         ...prev,
         [parent]: {
-          ...(((prev as Record<string, any>)[parent] as Record<string, any>) ?? {}),
+          ...((typeof (prev as Record<string, any>)[parent] === "object" &&
+            (prev as Record<string, any>)[parent] !== null)
+            ? (prev as Record<string, any>)[parent]
+            : {}),
           [child]: value
         }
       }))
@@ -305,15 +344,15 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
 
       try {
         const response = await processPdfForChunking(pdfFile, builtOptions, {
-          pdf_parsing_engine: pdfParsingEngine,
-          enable_ocr: enableOcr,
-          ocr_backend: ocrBackend,
-          ocr_lang: ocrLang,
-          ocr_dpi: ocrDpi,
-          ocr_mode: ocrMode,
-          ocr_min_page_text_chars: ocrMinPageTextChars,
-          ocr_output_format: ocrOutputFormat,
-          ocr_prompt_preset: ocrPromptPreset
+          pdf_parsing_engine: pdfOptions.parsingEngine,
+          enable_ocr: pdfOptions.enableOcr,
+          ocr_backend: pdfOptions.ocrBackend,
+          ocr_lang: pdfOptions.ocrLang,
+          ocr_dpi: pdfOptions.ocrDpi,
+          ocr_mode: pdfOptions.ocrMode,
+          ocr_min_page_text_chars: pdfOptions.ocrMinPageTextChars,
+          ocr_output_format: pdfOptions.ocrOutputFormat,
+          ocr_prompt_preset: pdfOptions.ocrPromptPreset
         })
         const result = response.results?.[0]
         const status = String(result?.status || "").toLowerCase()
@@ -381,15 +420,7 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
     inputSource,
     pdfFile,
     pdfUrl,
-    pdfParsingEngine,
-    enableOcr,
-    ocrBackend,
-    ocrLang,
-    ocrDpi,
-    ocrMode,
-    ocrMinPageTextChars,
-    ocrOutputFormat,
-    ocrPromptPreset,
+    pdfOptions,
     inputText,
     inputFile,
     requestMode,
@@ -420,7 +451,12 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
     setLoadingTemplate(true)
     try {
       const template = await getChunkingTemplate(templateName.trim())
-      const config = JSON.parse(template.template_json)
+      let config: Record<string, any>
+      try {
+        config = JSON.parse(template.template_json)
+      } catch {
+        throw new Error("Template contains invalid JSON")
+      }
       const chunking = config.chunking || {}
       const chunkingConfig = chunking.config || {}
 
@@ -707,13 +743,9 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                           "Parsing Engine"
                         )}>
                         <Select
-                          value={pdfParsingEngine}
-                          onChange={(v) => setPdfParsingEngine(v)}
-                          options={[
-                            { value: "pymupdf4llm", label: "pymupdf4llm" },
-                            { value: "pymupdf", label: "pymupdf" },
-                            { value: "docling", label: "docling" }
-                          ]}
+                          value={pdfOptions.parsingEngine}
+                          onChange={(v) => updatePdfOptions({ parsingEngine: v })}
+                          options={pdfParsingEngineOptions}
                         />
                       </Form.Item>
                       <Form.Item
@@ -721,7 +753,10 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                           "settings:chunkingPlayground.pdfEnableOcr",
                           "Enable OCR"
                         )}>
-                        <Switch checked={enableOcr} onChange={setEnableOcr} />
+                        <Switch
+                          checked={pdfOptions.enableOcr}
+                          onChange={(checked) => updatePdfOptions({ enableOcr: checked })}
+                        />
                       </Form.Item>
                       <Form.Item
                         label={t(
@@ -729,13 +764,15 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                           "OCR Mode"
                         )}>
                         <Select
-                          value={ocrMode}
-                          onChange={(v) => setOcrMode(v as "always" | "fallback")}
+                          value={pdfOptions.ocrMode}
+                          onChange={(v) =>
+                            updatePdfOptions({ ocrMode: v as "always" | "fallback" })
+                          }
                           options={[
                             { value: "fallback", label: "Fallback (low-text pages)" },
                             { value: "always", label: "Always" }
                           ]}
-                          disabled={!enableOcr}
+                          disabled={!pdfOptions.enableOcr}
                         />
                       </Form.Item>
                       <Form.Item
@@ -744,11 +781,11 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                           "OCR Backend"
                         )}>
                         <Select
-                          value={ocrBackend}
-                          onChange={(v) => setOcrBackend(v)}
+                          value={pdfOptions.ocrBackend}
+                          onChange={(v) => updatePdfOptions({ ocrBackend: v })}
                           options={ocrBackendOptions}
                           allowClear
-                          disabled={!enableOcr}
+                          disabled={!pdfOptions.enableOcr}
                         />
                       </Form.Item>
                       <Form.Item
@@ -757,10 +794,10 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                           "OCR Language"
                         )}>
                         <Input
-                          value={ocrLang}
-                          onChange={(e) => setOcrLang(e.target.value)}
+                          value={pdfOptions.ocrLang}
+                          onChange={(e) => updatePdfOptions({ ocrLang: e.target.value })}
                           placeholder="eng"
-                          disabled={!enableOcr}
+                          disabled={!pdfOptions.enableOcr}
                         />
                       </Form.Item>
                       <Form.Item
@@ -769,12 +806,14 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                           "OCR DPI"
                         )}>
                         <InputNumber
-                          value={ocrDpi}
+                          value={pdfOptions.ocrDpi}
                           min={72}
                           max={600}
-                          onChange={(v) => setOcrDpi(Number(v ?? 300))}
+                          onChange={(v) =>
+                            updatePdfOptions({ ocrDpi: Number(v ?? 300) })
+                          }
                           className="w-full"
-                          disabled={!enableOcr}
+                          disabled={!pdfOptions.enableOcr}
                         />
                       </Form.Item>
                       <Form.Item
@@ -783,12 +822,16 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                           "Min chars per page (fallback)"
                         )}>
                         <InputNumber
-                          value={ocrMinPageTextChars}
+                          value={pdfOptions.ocrMinPageTextChars}
                           min={0}
                           max={2000}
-                          onChange={(v) => setOcrMinPageTextChars(Number(v ?? 40))}
+                          onChange={(v) =>
+                            updatePdfOptions({
+                              ocrMinPageTextChars: Number(v ?? 40)
+                            })
+                          }
                           className="w-full"
-                          disabled={!enableOcr}
+                          disabled={!pdfOptions.enableOcr}
                         />
                       </Form.Item>
                       <Form.Item
@@ -797,15 +840,15 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                           "OCR Output Format"
                         )}>
                         <Select
-                          value={ocrOutputFormat}
-                          onChange={(v) => setOcrOutputFormat(v)}
+                          value={pdfOptions.ocrOutputFormat}
+                          onChange={(v) => updatePdfOptions({ ocrOutputFormat: v })}
                           allowClear
                           options={[
                             { value: "text", label: "text" },
                             { value: "markdown", label: "markdown" },
                             { value: "json", label: "json" }
                           ]}
-                          disabled={!enableOcr}
+                          disabled={!pdfOptions.enableOcr}
                         />
                       </Form.Item>
                       <Form.Item
@@ -814,10 +857,12 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                           "OCR Prompt Preset"
                         )}>
                         <Input
-                          value={ocrPromptPreset}
-                          onChange={(e) => setOcrPromptPreset(e.target.value)}
+                          value={pdfOptions.ocrPromptPreset}
+                          onChange={(e) =>
+                            updatePdfOptions({ ocrPromptPreset: e.target.value })
+                          }
                           placeholder="general"
-                          disabled={!enableOcr}
+                          disabled={!pdfOptions.enableOcr}
                         />
                       </Form.Item>
                     </Form>
@@ -862,21 +907,22 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
       "custom_chapter_pattern"
     ])
 
-    const resolveSchema = (schema: any): any => {
+    const resolveSchema = (schema: any, depth = 0): any => {
+      if (depth > 10) return schema
       if (!schema) return {}
       if (schema.$ref) {
         const refKey = String(schema.$ref)
           .replace("#/$defs/", "")
           .replace("#/definitions/", "")
-        return resolveSchema(schemaDefs[refKey])
+        return resolveSchema(schemaDefs[refKey], depth + 1)
       }
       if (schema.anyOf || schema.oneOf) {
         const variants = schema.anyOf || schema.oneOf || []
         const nonNull = variants.find((v: any) => v && v.type !== "null")
-        return resolveSchema(nonNull || variants[0])
+        return resolveSchema(nonNull || variants[0], depth + 1)
       }
       if (schema.allOf && schema.allOf.length > 0) {
-        return resolveSchema(schema.allOf[0])
+        return resolveSchema(schema.allOf[0], depth + 1)
       }
       return schema
     }

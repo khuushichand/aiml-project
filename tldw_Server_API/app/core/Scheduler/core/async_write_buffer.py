@@ -382,7 +382,7 @@ class AsyncWriteBuffer:
         """Recover tasks from spill files"""
         for spill_file in self.spill_files:
             try:
-                with open(spill_file, 'r') as f:
+                with open(spill_file) as f:
                     spill_data = json.load(f)
 
                 tasks = []

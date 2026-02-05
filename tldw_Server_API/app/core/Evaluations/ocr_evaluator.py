@@ -182,7 +182,7 @@ class OCREvaluator:
                                 import os as _os
                                 from concurrent.futures import ThreadPoolExecutor, as_completed
                                 try:
-                                    concurrency_env = int((_os.getenv("OCR_PAGE_CONCURRENCY") or "1"))
+                                    concurrency_env = int(_os.getenv("OCR_PAGE_CONCURRENCY") or "1")
                                 except Exception:
                                     concurrency_env = 1
                                 futures = []
@@ -235,7 +235,7 @@ class OCREvaluator:
                                     "page_concurrency": max(1, concurrency_env),
                                 }
                                 try:
-                                    if hasattr(backend, "describe") and callable(getattr(backend, "describe")):
+                                    if hasattr(backend, "describe") and callable(backend.describe):
                                         extra = backend.describe() or {}
                                         if isinstance(extra, dict):
                                             details.update(extra)

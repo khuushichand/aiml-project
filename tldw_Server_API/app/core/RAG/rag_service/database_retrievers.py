@@ -1700,7 +1700,7 @@ class KanbanDBRetriever(BaseRetriever):
             vector_score = vector_scores.get(card_id, 0.0)
             card["relevance_score"] = (self._FTS_WEIGHT * fts_score) + (self._VECTOR_WEIGHT * vector_score)
             combined.append(card)
-        extra_ids = [cid for cid in vector_scores.keys() if cid not in seen]
+        extra_ids = [cid for cid in vector_scores if cid not in seen]
         if extra_ids:
             extra_cards = db.get_cards_by_ids(
                 card_ids=extra_ids,

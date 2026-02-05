@@ -247,7 +247,7 @@ def invalidate_model_alias_caches() -> None:
 def queue_is_active(queue: Any) -> bool:
     """Return True when the request queue is running and able to process work."""
     try:
-        status = getattr(queue, "is_running")
+        status = queue.is_running
     except AttributeError:
         status = None
     if callable(status):
@@ -267,10 +267,10 @@ def queue_is_active(queue: Any) -> bool:
     return True
 
 
-def _attach_queue_future_logger(future: "asyncio.Future[Any]", request_id: str) -> None:
+def _attach_queue_future_logger(future: asyncio.Future[Any], request_id: str) -> None:
     """Consume queue future exceptions to avoid unhandled warnings in streaming mode."""
 
-    def _consume(fut: "asyncio.Future[Any]") -> None:
+    def _consume(fut: asyncio.Future[Any]) -> None:
         try:
             fut.result()
         except asyncio.CancelledError:
@@ -407,7 +407,7 @@ def normalize_request_provider_and_model(
             if not api_provider:
                 provider = inline_provider_lower
                 # In this case, strip the inline provider prefix from the model
-                setattr(request_data, "model", actual_model)
+                request_data.model = actual_model
             else:
                 # api_provider is explicitly set on the request. For OpenRouter and
                 # Hugging Face, many valid model IDs include a namespace
@@ -415,12 +415,12 @@ def normalize_request_provider_and_model(
                 # namespaced model id unless the inline namespace matches "openrouter".
                 if provider in {"openrouter", "huggingface"}:
                     if provider == "openrouter" and inline_provider_lower == "openrouter":
-                        setattr(request_data, "model", actual_model)
+                        request_data.model = actual_model
                     else:
-                        setattr(request_data, "model", model_str)
+                        request_data.model = model_str
                 else:
                     # Non-OpenRouter providers do not use namespaced model ids; strip prefix
-                    setattr(request_data, "model", actual_model)
+                    request_data.model = actual_model
     return provider
 
 
@@ -1188,7 +1188,7 @@ async def moderate_input_messages(
                         if try_type == "text":
                             current = getattr(part, "text", None)
                             if isinstance(current, str):
-                                setattr(part, "text", await _moderate_text_in_place(current))
+                                part.text = await _moderate_text_in_place(current)
     except HTTPException:
         raise
     except Exception as e:
@@ -1850,7 +1850,7 @@ async def execute_streaming_call(
                     else status.HTTP_503_SERVICE_UNAVAILABLE
                 )
                 queue_exc = HTTPException(status_code=status_code, detail=detail)
-                setattr(queue_exc, "_chat_queue_admission", True)
+                queue_exc._chat_queue_admission = True
                 raise queue_exc
 
             async def _channel_stream():
@@ -2308,9 +2308,9 @@ async def execute_streaming_call(
             stream_id = _uuid.uuid4().hex
             chunk_seq = 0
 
-            def _track_audit_task(task: "asyncio.Task[Any]") -> None:
+            def _track_audit_task(task: asyncio.Task[Any]) -> None:
                 pending_audit_tasks.append(task)
-                def _cleanup(completed: "asyncio.Task[Any]") -> None:
+                def _cleanup(completed: asyncio.Task[Any]) -> None:
                     try:
                         pending_audit_tasks.remove(completed)
                     except ValueError:
@@ -2495,7 +2495,7 @@ async def execute_streaming_call(
 
             # Allow streaming handler to flush any held-back tail at stream end
             try:
-                setattr(_out_transform, "flush", _flush_holdback)
+                _out_transform.flush = _flush_holdback
             except Exception:
                 pass
 
@@ -2741,7 +2741,7 @@ async def execute_non_stream_call(
                     else status.HTTP_503_SERVICE_UNAVAILABLE
                 )
                 queue_exc = HTTPException(status_code=status_code, detail=detail)
-                setattr(queue_exc, "_chat_queue_admission", True)
+                queue_exc._chat_queue_admission = True
                 raise queue_exc
             llm_response = await fut
             metrics_recorded = True

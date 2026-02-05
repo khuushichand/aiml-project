@@ -297,5 +297,5 @@ class PayloadService:
                 return payload.__dict__
             else:
                 # Store as pickle reference
-                logger.warning(f"Payload not JSON serializable, will use pickle")
+                logger.warning("Payload not JSON serializable, will use pickle")
                 return {'__pickle_required__': True, '__data__': str(payload)}

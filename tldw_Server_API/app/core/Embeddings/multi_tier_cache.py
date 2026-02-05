@@ -474,7 +474,7 @@ class L2DiskCache:
 
         if index_file.exists():
             try:
-                with open(index_file, 'r') as f:
+                with open(index_file) as f:
                     self.index = json.load(f)
                 logger.info(f"Loaded L2 cache index with {len(self.index)} entries")
             except Exception as e:

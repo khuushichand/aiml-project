@@ -299,7 +299,7 @@ class LimitEnforcer:
         self._enforcer = get_billing_enforcer()
         self._check_result: LimitCheckResult | None = None
 
-    async def __aenter__(self) -> "LimitEnforcer":
+    async def __aenter__(self) -> LimitEnforcer:
         """Check limit on entry."""
         if enforcement_enabled():
             self._check_result = await self._enforcer.check_limit(

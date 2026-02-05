@@ -599,7 +599,7 @@ def track_llm_usage(
 
                     return result
 
-                except Exception as e:
+                except Exception:
                     increment_counter("llm_requests_total", labels={**labels, "status": "error"})
                     raise
 
@@ -655,7 +655,7 @@ def track_llm_usage(
 
                     return result
 
-                except Exception as e:
+                except Exception:
                     increment_counter("llm_requests_total", labels={**labels, "status": "error"})
                     raise
 

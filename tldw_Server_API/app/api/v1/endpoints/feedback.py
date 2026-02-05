@@ -26,7 +26,7 @@ router = APIRouter()
 _IDEMPOTENCY_WINDOW_SECONDS = 300
 _IDEMPOTENCY_CLEANUP_INTERVAL_SECONDS = 60
 _idempotency_lock = asyncio.Lock()
-_idempotency_store: dict[str, "_IdempotencyRecord"] = {}
+_idempotency_store: dict[str, _IdempotencyRecord] = {}
 _idempotency_last_cleanup = 0.0
 
 

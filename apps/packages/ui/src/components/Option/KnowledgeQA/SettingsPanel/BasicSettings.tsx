@@ -3,11 +3,14 @@
  */
 
 import React from "react"
+import { HelpCircle } from "lucide-react"
 import { useKnowledgeQA } from "../KnowledgeQAProvider"
+import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { cn } from "@/lib/utils"
 
 export function BasicSettings() {
   const { settings, updateSetting } = useKnowledgeQA()
+  const { capabilities, loading: capsLoading } = useServerCapabilities()
 
   return (
     <div className="space-y-6">
@@ -73,6 +76,45 @@ export function BasicSettings() {
             </label>
           ))}
         </div>
+      </div>
+
+      {/* Web Search Fallback */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <label id="web-fallback-label" className="text-sm font-medium">Web Search Fallback</label>
+            <HelpCircle
+              className="w-4 h-4 text-text-muted"
+              title="Requires a configured web search provider on the server (e.g., DuckDuckGo/Brave/Bing/Google/Tavily)."
+              aria-label="Web search requires a configured server provider"
+            />
+          </div>
+          <button
+            role="switch"
+            aria-checked={settings.enable_web_fallback}
+            aria-labelledby="web-fallback-label"
+            onClick={() => updateSetting("enable_web_fallback", !settings.enable_web_fallback)}
+            className={cn(
+              "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
+              settings.enable_web_fallback ? "bg-primary" : "bg-muted"
+            )}
+          >
+            <span
+              className={cn(
+                "inline-block h-4 w-4 rounded-full bg-white transition-transform",
+                settings.enable_web_fallback ? "translate-x-6" : "translate-x-1"
+              )}
+            />
+          </button>
+        </div>
+        <p className="text-xs text-text-muted">
+          When local sources are weak, Knowledge QA can pull web results.
+        </p>
+        {settings.enable_web_fallback && !capsLoading && capabilities && !capabilities.hasWebSearch && (
+          <div className="text-xs text-warn">
+            Web search isn’t available on this server, so fallback may not return results.
+          </div>
+        )}
       </div>
 
       {/* Generation Toggle */}

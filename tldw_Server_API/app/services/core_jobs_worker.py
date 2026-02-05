@@ -44,7 +44,7 @@ async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None
     """
     logger.info("Starting Core Jobs worker for Chatbooks domain")
     jm = JobManager()
-    worker_id = f"cb-core-worker"
+    worker_id = "cb-core-worker"
     poll_sleep = float(os.getenv("JOBS_POLL_INTERVAL_SECONDS", "1.0") or "1.0")
     import random
     while True:
@@ -323,7 +323,7 @@ async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None
                             logger.debug(f"Core Jobs Worker: failed to remove import archive {file_ref}: {cleanup_err}")
             else:
                 jm.fail_job(int(job["id"]), error="unknown action", retryable=False, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
-        except Exception as e:
+        except Exception:
             logger.exception("Core Jobs worker loop error")
             try:
                 get_metrics_registry().increment(

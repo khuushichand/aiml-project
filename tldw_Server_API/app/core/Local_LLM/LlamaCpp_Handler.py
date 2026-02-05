@@ -442,7 +442,7 @@ class LlamaCppHandler(BaseLLMHandler):
             command += ["-t", str(int(threads))]
 
         # Validate all provided keys are allowed
-        invalid = [k for k in args.keys() if k not in allowed_formatters and k not in {"port", "host", "threads", "t", "ctx_size", "c", "n_gpu_layers", "ngl", "gpu_layers"}]
+        invalid = [k for k in args if k not in allowed_formatters and k not in {"port", "host", "threads", "t", "ctx_size", "c", "n_gpu_layers", "ngl", "gpu_layers"}]
         if invalid and not getattr(self.config, "allow_unvalidated_args", False):
             raise ServerError(f"Unsupported llama.cpp server args: {sorted(invalid)}")
 

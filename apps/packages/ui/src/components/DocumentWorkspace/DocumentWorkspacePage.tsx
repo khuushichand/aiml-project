@@ -51,6 +51,19 @@ import {
 
 const DocumentPickerModal = React.lazy(() => import("./DocumentPickerModal"))
 
+type ErrorWithStatus = {
+  status: number
+}
+
+const isErrorWithStatus = (err: unknown): err is ErrorWithStatus => {
+  if (!err || typeof err !== "object") {
+    return false
+  }
+  return (
+    "status" in err && typeof (err as { status?: unknown }).status === "number"
+  )
+}
+
 /**
  * Left sidebar tab content for the document workspace layout.
  */
@@ -522,8 +535,8 @@ export const DocumentWorkspacePage: React.FC = () => {
             responseType: "arrayBuffer",
             timeoutMs: DOCUMENT_FILE_TIMEOUT_MS
           })
-        } catch (err: any) {
-          const status = err?.status
+        } catch (err: unknown) {
+          const status = isErrorWithStatus(err) ? err.status : undefined
           if (status === 404) {
             message.error(
               t(

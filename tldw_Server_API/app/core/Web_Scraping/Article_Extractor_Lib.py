@@ -3713,7 +3713,7 @@ def compute_content_hash(content: str) -> str:
 
 def load_hashes(filename: str) -> dict[str, str]:
     if os.path.exists(filename):
-        with open(filename, 'r') as f:
+        with open(filename) as f:
             return json.load(f)
     else:
         return {}
@@ -3813,7 +3813,7 @@ def load_bookmarks(file_path: str) -> dict[str, Union[str, list[str]]]:
     if ext == '.json' or ext == '':
         # Attempt to parse as JSON (Chrome/Edge)
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, encoding='utf-8') as f:
                 json_data = json.load(f)
             return parse_chromium_bookmarks(json_data)
         except json.JSONDecodeError:
@@ -3822,7 +3822,7 @@ def load_bookmarks(file_path: str) -> dict[str, Union[str, list[str]]]:
     elif ext in ['.html', '.htm']:
         # Parse as HTML (Firefox)
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, encoding='utf-8') as f:
                 html_content = f.read()
             return parse_firefox_bookmarks(html_content)
         except Exception as e:
@@ -4008,7 +4008,7 @@ class ContentMetadataHandler:
             metadata = json.loads(metadata_json)
             clean_content = content[metadata_end + len(ContentMetadataHandler.METADATA_END):].strip()
             return metadata, clean_content
-        except (ValueError, json.JSONDecodeError) as e:
+        except (ValueError, json.JSONDecodeError):
             return {}, content
 
     @staticmethod
@@ -4118,7 +4118,7 @@ async def recursive_scrape(
 
     # Load progress if resume file exists
     if os.path.exists(resume_file):
-        with open(resume_file, 'r') as f:
+        with open(resume_file) as f:
             progress_data = json.load(f)
             visited = set(progress_data['visited'])
             to_visit = progress_data['to_visit']

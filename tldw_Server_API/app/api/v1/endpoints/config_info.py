@@ -365,9 +365,7 @@ async def get_quickstart_redirect():
             url = "/docs"
 
         # Normalize
-        if url.startswith("http://") or url.startswith("https://"):
-            target = url
-        elif url.startswith("/"):
+        if url.startswith("http://") or url.startswith("https://") or url.startswith("/"):
             target = url
         else:
             # Treat as same-origin path

@@ -1363,7 +1363,7 @@ async def run_saved(
                     # If an on_failure route is defined and refers to a valid step, let the engine handle it
                     try:
                         failure_next = str(s0.get("on_failure") or "").strip()
-                        id_map = {str((st.get('id') or f'step_{i+1}')): True for i, st in enumerate(steps)}
+                        id_map = {str(st.get('id') or f'step_{i+1}'): True for i, st in enumerate(steps)}
                         has_failure_route = bool(failure_next and id_map.get(failure_next))
                     except Exception:
                         has_failure_route = False
@@ -2262,7 +2262,7 @@ async def replay_webhook_dlq(
         }
         raw = json.dumps(body)
         if secret:
-            sig = hmac.new(secret.encode("utf-8"), f"{ts}.{raw}".encode("utf-8"), hashlib.sha256).hexdigest()
+            sig = hmac.new(secret.encode("utf-8"), f"{ts}.{raw}".encode(), hashlib.sha256).hexdigest()
             headers["X-Workflows-Signature"] = sig
             headers["X-Hub-Signature-256"] = f"sha256={sig}"
         timeout = float(_os.getenv("WORKFLOWS_WEBHOOK_TIMEOUT", "10"))

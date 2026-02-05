@@ -151,7 +151,7 @@ class CircuitBreaker:
             await self._on_failure()
             raise TimeoutError(f"Call through circuit breaker {self.name} timed out after {self.config.timeout}s")
 
-        except self.config.expected_exception as e:
+        except self.config.expected_exception:
             await self._on_failure()
             raise
 

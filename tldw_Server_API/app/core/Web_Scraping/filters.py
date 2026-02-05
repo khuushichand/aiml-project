@@ -34,7 +34,7 @@ class FilterChain:
     def __init__(self, filters: list[URLFilter] | None = None) -> None:
         self.filters = list(filters or [])
 
-    def add(self, f: URLFilter) -> "FilterChain":
+    def add(self, f: URLFilter) -> FilterChain:
         self.filters.append(f)
         return self
 

@@ -323,6 +323,23 @@ export const TableOfContentsTab: React.FC = () => {
   const isLoading = activeDocumentType === "epub" ? epubLoading : pdfLoading
   const error = activeDocumentType === "epub" ? null : pdfError
   const hasOutline = !!outline && outline.length > 0
+  const validNodeIds = React.useMemo(() => {
+    if (!outline) {
+      return new Set<string>()
+    }
+    const ids = new Set<string>()
+    const collectIds = (items: TocItem[], parentId?: string) => {
+      items.forEach((item, idx) => {
+        const itemId = parentId ? `${parentId}-${idx}` : `${idx}`
+        ids.add(itemId)
+        if (item.children && item.children.length > 0) {
+          collectIds(item.children, itemId)
+        }
+      })
+    }
+    collectIds(outline)
+    return ids
+  }, [outline])
 
   React.useEffect(() => {
     if (!hasOutline) {
@@ -334,11 +351,13 @@ export const TableOfContentsTab: React.FC = () => {
     }
 
     const documentChanged = activeDocumentId !== lastDocumentIdRef.current
-    if (documentChanged || focusedItemId === null) {
+    if (focusedItemId !== null && !validNodeIds.has(focusedItemId)) {
+      setFocusedItemId("0")
+    } else if (documentChanged || focusedItemId === null) {
       setFocusedItemId("0")
     }
     lastDocumentIdRef.current = activeDocumentId
-  }, [activeDocumentId, hasOutline, focusedItemId])
+  }, [activeDocumentId, hasOutline, focusedItemId, validNodeIds])
 
   if (!activeDocumentId) {
     return (

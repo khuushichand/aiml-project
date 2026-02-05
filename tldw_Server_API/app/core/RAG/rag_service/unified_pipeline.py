@@ -22,7 +22,7 @@ import time
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from typing import Any, Literal, Optional, cast
+from typing import Any, Callable, Literal, Optional, cast
 
 from loguru import logger
 
@@ -1065,6 +1065,13 @@ async def unified_rag_pipeline(
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
 
+    # ========== RETRIEVAL QUALITY METRICS ==========
+    ground_truth_doc_ids: Optional[list[str]] = None,
+    metrics_k: int = 10,
+
+    # ========== FAITHFULNESS EVALUATION ==========
+    enable_faithfulness_eval: bool = False,
+
     # ========== ADDITIONAL PARAMETERS ==========
     **kwargs: Any
 ) -> UnifiedPipelineResult:
@@ -1207,6 +1214,13 @@ async def unified_rag_pipeline(
                     )
             except TypeError:
                 cache_instance = cache_cls(similarity_threshold=cache_threshold)
+        # Register with the RAGCache facade so health endpoints see real stats
+        if cache_instance is not None:
+            try:
+                from .advanced_cache import register_semantic_cache
+                register_semantic_cache(cache_instance)
+            except (ImportError, TypeError):
+                pass
         return cache_instance
 
     # --- Internal helpers (defined early so downstream phases can use them) ---
@@ -1563,7 +1577,7 @@ async def unified_rag_pipeline(
             if cache:
                 # First try direct get on the main query (support sync or async)
                 try:
-                    get_fn = getattr(cache, 'get')
+                    get_fn = cache.get
                     if asyncio.iscoroutinefunction(get_fn):
                         direct = await get_fn(query)
                     else:
@@ -1587,7 +1601,11 @@ async def unified_rag_pipeline(
                         except (AttributeError, OSError, RuntimeError, TypeError):
                             cached_result = None
                         if cached_result:
-                            cached_query, similarity = cached_result
+                            # find_similar returns (key, query, sim) or (query, sim)
+                            if len(cached_result) == 3:
+                                _, cached_query, similarity = cached_result
+                            else:
+                                cached_query, similarity = cached_result
                             try:
                                 if asyncio.iscoroutinefunction(get_fn):
                                     cached_documents = await get_fn(cached_query)
@@ -1709,10 +1727,7 @@ async def unified_rag_pipeline(
                 if "yesterday" in qlower:
                     start_dt = now - timedelta(days=1)
                     end_dt = now
-                elif "last week" in qlower:
-                    start_dt = now - timedelta(days=7)
-                    end_dt = now
-                elif "past week" in qlower:
+                elif "last week" in qlower or "past week" in qlower:
                     start_dt = now - timedelta(days=7)
                     end_dt = now
                 elif "last month" in qlower:
@@ -3443,9 +3458,9 @@ async def unified_rag_pipeline(
 
                     # If reranker exposes calibration metadata (e.g., TwoTier), record it
                     try:
-                        if hasattr(reranker, 'last_metadata') and isinstance(getattr(reranker, 'last_metadata'), dict):
+                        if hasattr(reranker, 'last_metadata') and isinstance(reranker.last_metadata, dict):
                             result.metadata.setdefault("reranking_calibration", {})
-                            result.metadata["reranking_calibration"].update(getattr(reranker, 'last_metadata'))
+                            result.metadata["reranking_calibration"].update(reranker.last_metadata)
                             # Attach learned-fusion specific decoration when applicable
                             _decorate_calibration_metadata()
                     except (AttributeError, RuntimeError, TypeError, ValueError):
@@ -4103,7 +4118,7 @@ async def unified_rag_pipeline(
                             observe_histogram("rag_phase_duration_seconds", result.timings["answer_generation"], labels={"phase": "synthesis", "difficulty": str(result.metadata.get("query_intent", "na"))})
                         if _otel_span_gen is not None:
                             try:
-                                _ans_len = len((result.generated_answer or ""))
+                                _ans_len = len(result.generated_answer or "")
                                 _otel_span_gen.set_attribute("rag.answer_length", int(_ans_len))
                             except (AttributeError, RuntimeError, TypeError, ValueError):
                                 pass
@@ -5265,6 +5280,107 @@ async def unified_rag_pipeline(
                 except (RuntimeError, TypeError, ValueError) as e:
                     logger.error(f"Metrics recording error: {e}")
 
+        # ---- Retrieval quality metrics (optional) ----
+        if ground_truth_doc_ids and result.documents:
+            try:
+                from .retrieval_metrics import evaluate_retrieval as _eval_retrieval
+                _retrieved_ids = [
+                    str(getattr(d, "id", ""))
+                    for d in result.documents
+                ]
+                _ret_metrics = _eval_retrieval(
+                    _retrieved_ids,
+                    [str(gid) for gid in ground_truth_doc_ids],
+                    k=metrics_k,
+                )
+                result.metadata["retrieval_metrics"] = _ret_metrics.to_dict()
+                # Emit to Prometheus
+                try:
+                    from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
+                    observe_histogram("rag_retrieval_precision", _ret_metrics.precision)
+                    observe_histogram("rag_retrieval_recall", _ret_metrics.recall)
+                    observe_histogram("rag_retrieval_mrr", _ret_metrics.mrr)
+                    observe_histogram("rag_retrieval_ndcg", _ret_metrics.ndcg)
+                    if hasattr(_ret_metrics, "f1"):
+                        observe_histogram("rag_retrieval_f1", _ret_metrics.f1)
+                except (ImportError, AttributeError, TypeError):
+                    pass
+            except Exception as _rm_err:
+                logger.warning(f"Retrieval metrics computation failed: {_rm_err}")
+                result.errors.append(f"Retrieval metrics failed: {_rm_err}")
+
+        # ---- Faithfulness evaluation (optional) ----
+        if enable_faithfulness_eval and result.generated_answer:
+            try:
+                from .faithfulness import FaithfulnessEvaluator as _FaithEval
+                # Build context from retrieved documents
+                _ctx_parts = [
+                    getattr(d, "content", "") for d in (result.documents or [])
+                ]
+                _ctx_text = "\n\n".join(p for p in _ctx_parts if p)
+                if _ctx_text:
+                    # Attempt to find an LLM callable from kwargs or auto-construct one
+                    _llm_obj = kwargs.get("faithfulness_llm")
+                    if _llm_obj is None:
+                        # Auto-construct an LLM adapter from the pipeline's config
+                        try:
+                            from tldw_Server_API.app.core.config import load_and_log_configs as _load_cfg
+                            from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import (
+                                analyze as _sgl_analyze,
+                            )
+
+                            _f_cfg = _load_cfg() or {}
+                            _f_prov = (
+                                _f_cfg.get("RAG_DEFAULT_LLM_PROVIDER")
+                                or _f_cfg.get("default_api")
+                                or "openai"
+                            ).strip()
+                            _f_model = generation_model or _f_cfg.get("RAG_DEFAULT_LLM_MODEL")
+
+                            class _FaithfulnessLLMAdapter:
+                                """Wraps analyze() to satisfy the LLMCallable protocol."""
+
+                                async def generate(self, prompt: str) -> str:
+                                    import asyncio as _aio
+                                    result_text = await _aio.get_running_loop().run_in_executor(
+                                        None,
+                                        lambda: _sgl_analyze(
+                                            api_name=_f_prov,
+                                            input_data="",
+                                            custom_prompt_arg=prompt,
+                                            model_override=_f_model,
+                                        ),
+                                    )
+                                    return str(result_text) if result_text else ""
+
+                            _llm_obj = _FaithfulnessLLMAdapter()
+                        except (ImportError, AttributeError, TypeError) as _auto_err:
+                            logger.debug(
+                                f"Could not auto-construct faithfulness LLM: {_auto_err}"
+                            )
+
+                    if _llm_obj is not None:
+                        _faith_eval = _FaithEval(_llm_obj)
+                        _faith_result = await _faith_eval.evaluate_detailed(
+                            result.generated_answer, _ctx_text
+                        )
+                        result.metadata["faithfulness"] = _faith_result.to_dict()
+                        # Emit faithfulness score to Prometheus
+                        try:
+                            from tldw_Server_API.app.core.Metrics.metrics_manager import set_gauge
+                            _f_score = _faith_result.to_dict().get("faithfulness_score")
+                            if _f_score is not None:
+                                set_gauge("rag_eval_faithfulness_score", float(_f_score), labels={"dataset": "online"})
+                        except (ImportError, AttributeError, TypeError, ValueError):
+                            pass
+                    else:
+                        logger.debug(
+                            "Faithfulness eval requested but no LLM available"
+                        )
+            except Exception as _fe_err:
+                logger.warning(f"Faithfulness evaluation failed: {_fe_err}")
+                result.errors.append(f"Faithfulness eval failed: {_fe_err}")
+
         # Debug output if requested
         if debug_mode:
             try:
@@ -5285,7 +5401,7 @@ async def unified_rag_pipeline(
             md = dict(d.metadata or {})
             try:
                 if getattr(d, 'source', None) is not None:
-                    md.setdefault('source', getattr(d, 'source').value)
+                    md.setdefault('source', d.source.value)
             except (AttributeError, TypeError, ValueError):
                 pass
             doc_dicts.append({
@@ -5339,6 +5455,9 @@ async def unified_rag_pipeline(
 async def unified_batch_pipeline(
     queries: list[str],
     max_concurrent: int = 5,
+    on_progress: Optional[Callable[[int, int], Any]] = None,
+    on_query_done: Optional[Callable[[int, str, Optional[UnifiedPipelineResult], Optional[BaseException]], Any]] = None,
+    query_indices: Optional[list[int]] = None,
     **kwargs
 ) -> list[UnifiedPipelineResult]:
     """
@@ -5347,6 +5466,12 @@ async def unified_batch_pipeline(
     Args:
         queries: List of queries to process
         max_concurrent: Maximum concurrent executions
+        on_progress: Optional callback(completed, total) called after each query completes.
+            Can be used to save checkpoint progress incrementally.
+        on_query_done: Optional callback(index, query, result, error) fired when each query
+            completes. ``index`` refers to the original query index if ``query_indices`` is provided,
+            otherwise it is the local index in ``queries``.
+        query_indices: Optional list of original query indices, parallel to ``queries``.
         **kwargs: All parameters supported by unified_rag_pipeline_core
 
     Returns:
@@ -5390,7 +5515,7 @@ async def unified_batch_pipeline(
         )
         # Get embeddings for representative texts
         cfg = get_embedding_config()
-        vectors = await asyncio.get_event_loop().run_in_executor(
+        vectors = await asyncio.get_running_loop().run_in_executor(
             None,
             create_embeddings_batch,
             rep_texts,
@@ -5445,13 +5570,102 @@ async def unified_batch_pipeline(
     heads = list(clusters.keys())
     head_queries = [rep_texts[h] for h in heads]
 
-    async def process_with_semaphore(query: str) -> UnifiedPipelineResult:
-        async with semaphore:
-            return await unified_rag_pipeline(query=query, **kwargs)
+    # Run head queries via batch_utils for concurrency control and fail-fast
+    head_results: list[Any] = []
+    if on_query_done is not None:
+        if query_indices is not None and len(query_indices) != len(queries):
+            logger.warning(
+                "unified_batch_pipeline: query_indices length mismatch ({} != {}); ignoring mapping",
+                len(query_indices),
+                len(queries),
+            )
+            query_indices = None
 
-    # Run heads only
-    tasks = [process_with_semaphore(q) for q in head_queries]
-    head_results = await asyncio.gather(*tasks, return_exceptions=True)
+        async def _process_head(index: int, query: str) -> UnifiedPipelineResult:
+            async with semaphore:
+                return await unified_rag_pipeline(query=query, **kwargs)
+
+        head_results = [RuntimeError("Missing result")] * len(head_queries)
+        tasks: dict[asyncio.Task[UnifiedPipelineResult], int] = {}
+
+        progress_total = len(queries)
+        progress_count = 0
+        progress_lock = asyncio.Lock()
+
+        async def _notify_progress(delta: int = 1) -> None:
+            nonlocal progress_count
+            if not on_progress:
+                return
+            async with progress_lock:
+                progress_count += delta
+                current = progress_count
+            try:
+                callback_result = on_progress(current, progress_total)
+                if asyncio.iscoroutine(callback_result):
+                    await callback_result
+            except Exception as cb_err:  # noqa: BLE001 - callbacks must not fail pipeline
+                logger.warning(f"Batch on_progress callback failed: {cb_err}")
+
+        def _resolve_index(local_idx: int) -> int:
+            if query_indices is not None and local_idx < len(query_indices):
+                return query_indices[local_idx]
+            return local_idx
+
+        for idx, q in enumerate(head_queries):
+            task = asyncio.create_task(_process_head(idx, q))
+            tasks[task] = idx
+
+        for task in asyncio.as_completed(tasks):
+            head_idx = tasks[task]
+            result: Optional[UnifiedPipelineResult] = None
+            err: Optional[BaseException] = None
+            try:
+                result = await task
+                head_results[head_idx] = result
+            except BaseException as exc:  # noqa: BLE001 - surface as error
+                err = exc
+                head_results[head_idx] = exc
+
+            head_key = heads[head_idx]
+            members = clusters.get(head_key, [])
+            for i_uq in members:
+                orig_indices = normalized_map.get(unique_keys[i_uq], [])
+                for local_idx in orig_indices:
+                    global_idx = _resolve_index(local_idx)
+                    query_text = queries[local_idx] if local_idx < len(queries) else ""
+                    if on_query_done:
+                        try:
+                            callback_result = on_query_done(global_idx, query_text, result, err)
+                            if asyncio.iscoroutine(callback_result):
+                                await callback_result
+                        except Exception as cb_err:  # noqa: BLE001 - callbacks must not fail pipeline
+                            logger.warning(f"Batch on_query_done callback failed: {cb_err}")
+                    await _notify_progress(1)
+    else:
+        try:
+            from .batch_utils import run_batch as _run_batch
+
+            async def _process_head(query: str) -> UnifiedPipelineResult:
+                return await unified_rag_pipeline(query=query, **kwargs)
+
+            _batch_result = await _run_batch(
+                items=head_queries,
+                func=_process_head,
+                max_concurrency=max_concurrent,
+                on_progress=on_progress,
+            )
+            # Reconstruct list in original order with errors slotted in
+            head_results = _batch_result.ordered_results_with_errors(
+                default=RuntimeError("Missing result"),
+            )
+        except ImportError:
+            # Fallback to inline semaphore if batch_utils unavailable
+            async def process_with_semaphore(query: str) -> UnifiedPipelineResult:
+                async with semaphore:
+                    return await unified_rag_pipeline(query=query, **kwargs)
+
+            tasks = [process_with_semaphore(q) for q in head_queries]
+            head_results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # Build final results in original order, reusing unique results
     final_results: list[Optional[UnifiedPipelineResult]] = [None] * len(queries)

@@ -56,7 +56,7 @@ def _capture_kokoro_repo_warning():
 
     def _print(*args, **kwargs):
         try:
-            target = kwargs.get("file", None)
+            target = kwargs.get("file")
             if target not in (None, sys.stdout):
                 return original_print(*args, **kwargs)
             sep = kwargs.get("sep", " ")
@@ -1338,7 +1338,7 @@ class KokoroAdapter(TTSAdapter):
         # JSON file layout (legacy)
         try:
             import json
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, encoding='utf-8') as f:
                 data = json.load(f)
             if isinstance(data, dict) and "voices" in data:
                 entries = data["voices"]

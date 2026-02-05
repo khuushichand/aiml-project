@@ -648,7 +648,7 @@ class OptimizationEngine:
         )
         # Support both legacy "strategy" and new "optimizer_type" fields
         strategy = (
-            (config.get("strategy") or optimization.get("optimizer_type") or config.get("optimizer_type") or "mipro")
+            config.get("strategy") or optimization.get("optimizer_type") or config.get("optimizer_type") or "mipro"
         )
         strategy = str(strategy).lower()
 

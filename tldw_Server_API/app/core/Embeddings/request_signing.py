@@ -278,7 +278,7 @@ class APIKeyManager:
         """Load API keys from file or generate defaults"""
         if self.keys_file:
             try:
-                with open(self.keys_file, 'r') as f:
+                with open(self.keys_file) as f:
                     data = json.load(f)
                     self.api_keys = data.get('api_keys', {})
                     logger.info(f"Loaded {len(self.api_keys)} API keys")

@@ -165,10 +165,10 @@ def load_parakeet_mlx_model(force_reload: bool = False, model_path: Optional[str
                 else:
                     model = parakeet_mlx.from_pretrained(model_id)
             except Exception as e2:
-                logging.error(f"Failed to download/load model: {e2}")
+                logging.exception(f"Failed to download/load model: {e2}")
                 return None
         except Exception as e:
-            logging.error(f"Failed to load model {model_id}: {e}")
+            logging.exception(f"Failed to load model {model_id}: {e}")
             return None
 
         _mlx_model_cache = model
@@ -177,11 +177,11 @@ def load_parakeet_mlx_model(force_reload: bool = False, model_path: Optional[str
         return model
 
     except ImportError as e:
-        logging.error(f"Failed to import parakeet: {e}")
+        logging.exception(f"Failed to import parakeet: {e}")
         logging.info("Try installing manually: pip install git+https://github.com/senstella/parakeet-mlx.git")
         return None
     except Exception as e:
-        logging.error(f"Failed to load Parakeet MLX model: {e}")
+        logging.exception(f"Failed to load Parakeet MLX model: {e}")
         return None
 
 
@@ -285,7 +285,7 @@ def transcribe_with_parakeet_mlx(
             if isinstance(audio_data, np.ndarray):
                 logging.info(f"Transcribing audio of length {len(audio_data)/16000:.2f} seconds")
             else:
-                logging.info(f"Transcribing audio file")
+                logging.info("Transcribing audio file")
 
         transcribe_kwargs = {}
         if chunk_duration is not None:
@@ -334,12 +334,12 @@ def transcribe_with_parakeet_mlx(
         return text
 
     except ImportError as e:
-        logging.error(f"Missing required library: {e}")
+        logging.exception(f"Missing required library: {e}")
         return f"[Error: Missing required library: {e}]"
     except Exception as e:
         import traceback
-        logging.error(f"Error during Parakeet MLX transcription: {e}")
-        logging.error(f"Traceback: {traceback.format_exc()}")
+        logging.exception(f"Error during Parakeet MLX transcription: {e}")
+        logging.exception(f"Traceback: {traceback.format_exc()}")
         return f"[Error: Transcription failed: {str(e)}]"
 
 
@@ -407,7 +407,7 @@ def transcribe_streaming_mlx(
                 yield text
 
     except Exception as e:
-        logging.error(f"Error in streaming transcription: {e}")
+        logging.exception(f"Error in streaming transcription: {e}")
         yield f"[Error: {str(e)}]"
 
 
@@ -434,7 +434,7 @@ def unload_parakeet_mlx_model():
 
             logging.info("Unloaded Parakeet MLX model from memory")
         except Exception as e:
-            logging.error(f"Error unloading model: {e}")
+            logging.exception(f"Error unloading model: {e}")
 
 
 #######################################################################################################################
@@ -551,7 +551,7 @@ def integrate_with_nemo_module():
         return True
 
     except Exception as e:
-        logging.error(f"Failed to integrate with Nemo module: {e}")
+        logging.exception(f"Failed to integrate with Nemo module: {e}")
         return False
 
 

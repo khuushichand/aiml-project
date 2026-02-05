@@ -99,7 +99,7 @@ class LiveInsightSettings:
     temperature: float = 0.2
 
     @classmethod
-    def from_client_payload(cls, payload: dict[str, Any]) -> "LiveInsightSettings":
+    def from_client_payload(cls, payload: dict[str, Any]) -> LiveInsightSettings:
         """Build settings from a client-supplied configuration dictionary."""
         settings = cls()
         if not isinstance(payload, dict):

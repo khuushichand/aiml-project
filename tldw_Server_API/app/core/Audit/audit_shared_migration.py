@@ -418,7 +418,7 @@ def _build_event_record(
     unidentified_tenant_id: str,
 ) -> dict[str, Any]:
     event_type_val = _pick(row, "event_type", "event") or "system.start"
-    record: dict[str, Any] = {col: None for col in columns}
+    record: dict[str, Any] = dict.fromkeys(columns)
 
     record["event_id"] = str(_pick(row, "event_id") or uuid4())
     record["timestamp"] = _coerce_timestamp(_pick(row, "timestamp"))

@@ -97,12 +97,12 @@ def migrate(db_path: str, target_version: Optional[int] = None):
         result = migrator.migrate_to_version(target)
 
         if result["status"] == "success":
-            print(f"\n✅ Migration successful!")
+            print("\n✅ Migration successful!")
             print(f"   Previous version: {result['previous_version']}")
             print(f"   Current version: {result['current_version']}")
 
             if result["migrations_applied"]:
-                print(f"\n   Migrations applied:")
+                print("\n   Migrations applied:")
                 for m in result["migrations_applied"]:
                     print(f"   - v{m['version']}: {m['name']} ({m['direction']}) in {m['execution_time']:.2f}s")
 
@@ -138,12 +138,12 @@ def rollback(db_path: str, target_version: int):
         result = migrator.migrate_to_version(target_version)
 
         if result["status"] == "success":
-            print(f"\n✅ Rollback successful!")
+            print("\n✅ Rollback successful!")
             print(f"   Rolled back from: {result['previous_version']}")
             print(f"   Current version: {result['current_version']}")
 
             if result["migrations_applied"]:
-                print(f"\n   Migrations rolled back:")
+                print("\n   Migrations rolled back:")
                 for m in result["migrations_applied"]:
                     print(f"   - v{m['version']}: {m['name']} (down) in {m['execution_time']:.2f}s")
 

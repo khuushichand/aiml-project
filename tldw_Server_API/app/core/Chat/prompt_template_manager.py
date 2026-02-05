@@ -89,7 +89,7 @@ def load_template(template_name: str) -> Optional[PromptTemplate]:
         logger.warning(f"Prompt template '{template_name}' not found at {resolved_path}")
         return None
     try:
-        with open(resolved_path, 'r', encoding='utf-8') as f:
+        with open(resolved_path, encoding='utf-8') as f:
             data = json.load(f)
             template = PromptTemplate(**data)
             _loaded_templates[template_name] = template

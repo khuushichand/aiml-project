@@ -262,6 +262,7 @@ export const useMcpTools = (): McpToolsStatus => {
     setToolModules,
     storedCatalog,
     storedCatalogId,
+    storedModule,
     storedStrict
   ])
 

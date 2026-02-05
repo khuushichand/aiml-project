@@ -21,7 +21,7 @@ def _gen_nonce() -> str:
 
 def _inject_nonce_into_html(html: bytes, nonce: str) -> bytes:
     # Insert nonce attribute into every <script ...> tag
-    nonce_attr = f' nonce="{nonce}"'.encode("utf-8")
+    nonce_attr = f' nonce="{nonce}"'.encode()
 
     def _repl(match: re.Match[bytes]) -> bytes:
         tag = match.group(0)
@@ -82,7 +82,7 @@ class SetupCSPMiddleware(BaseHTTPMiddleware):
         # Generate a nonce to future-proof policy customization; store on state
         nonce = _gen_nonce()
         try:
-            setattr(request.state, "csp_nonce", nonce)
+            request.state.csp_nonce = nonce
         except Exception:
             pass
 

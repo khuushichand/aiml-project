@@ -170,7 +170,7 @@ class WatchlistsDatabase:
             self.ensure_schema()
 
     @classmethod
-    def for_user(cls, user_id: int | str) -> "WatchlistsDatabase":
+    def for_user(cls, user_id: int | str) -> WatchlistsDatabase:
         return cls(user_id=user_id)
 
     def _resolve_backend(self) -> tuple[DatabaseBackend, str | None]:

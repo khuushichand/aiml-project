@@ -181,7 +181,7 @@ class PrivilegeCatalog(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def validate_cross_references(self) -> "PrivilegeCatalog":
+    def validate_cross_references(self) -> PrivilegeCatalog:
         scopes: list[ScopeEntry] = self.scopes
         feature_flags: list[FeatureFlagEntry] = self.feature_flags
         limit_classes: list[RateLimitClassEntry] = self.rate_limit_classes

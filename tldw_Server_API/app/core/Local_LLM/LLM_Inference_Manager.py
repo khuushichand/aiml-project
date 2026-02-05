@@ -35,7 +35,7 @@ class LLMInferenceManager:
             self.ollama = OllamaHandler(self.config.ollama, self.config.app_config)
             self.logger.info("Ollama handler initialized.")
 
-        self.huggingface: Optional["HuggingFaceHandler"] = None
+        self.huggingface: Optional[HuggingFaceHandler] = None
         if self.config.huggingface and self.config.huggingface.enabled:
             # Ensure models_dir exists (use local variable to avoid mutating config)
             hf_cfg = self.config.huggingface
@@ -216,11 +216,7 @@ class LLMInferenceManager:
     async def stop_server(self, backend: str, **kwargs) -> str:
         handler = self.get_handler(backend)
         self.logger.info(f"Stopping server for backend {backend}")
-        if backend == "ollama":
-            return await handler.stop_server(pid=kwargs.get("pid"), port=kwargs.get("port"))
-        elif backend == "llamafile":
-            return await handler.stop_server(pid=kwargs.get("pid"), port=kwargs.get("port"))
-        elif backend == "llamacpp":
+        if backend == "ollama" or backend == "llamafile" or backend == "llamacpp":
             return await handler.stop_server(pid=kwargs.get("pid"), port=kwargs.get("port"))
         raise InferenceError(f"Server stop not applicable or implemented for backend {backend} via this method.")
 

@@ -77,7 +77,7 @@ class PasswordService:
             "whatever", "freedom", "starwars", "jordan23", "cheese",
             "pepper", "guitar", "yankees", "ranger", "killer",
             "mercedes", "harley", "maverick", "ginger", "corvette",
-            "computer", "internet", "server", "database", "network",
+            "computer", "internet", "database", "network",
         }
 
         logger.debug(

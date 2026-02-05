@@ -80,7 +80,7 @@ class TempDirManager:
 
 
 async def save_uploaded_files(
-    files: list["aiofiles.threadpool.binary.AsyncBufferedIOBase"],  # UploadFile duck type
+    files: list[aiofiles.threadpool.binary.AsyncBufferedIOBase],  # UploadFile duck type
     temp_dir: Path,
     validator: FileValidator,
     expected_media_type_key: str | None = None,

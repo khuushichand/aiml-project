@@ -35,9 +35,9 @@ class ExpansionStrategy(Enum):
     HYBRID = "hybrid"            # Combine multiple strategies
 
 
-@dataclass
+@dataclass(frozen=True)
 class ExpandedQuery:
-    """Represents an expanded query with variations."""
+    """Represents an expanded query with variations (immutable after creation)."""
     original_query: str
     variations: list[str]
     synonyms: dict[str, list[str]]

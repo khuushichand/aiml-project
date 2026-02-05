@@ -49,7 +49,7 @@ class ClaimsRebuildService:
     """Background service to rebuild claims for media items."""
 
     def __init__(self, worker_threads: int = 1):
-        self._queue: "Queue[ClaimsRebuildTask]" = Queue()
+        self._queue: Queue[ClaimsRebuildTask] = Queue()
         self._threads: list[threading.Thread] = []
         self._stop = threading.Event()
         self._worker_threads = max(1, int(worker_threads))

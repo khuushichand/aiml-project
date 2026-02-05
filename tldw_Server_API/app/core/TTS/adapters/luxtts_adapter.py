@@ -509,7 +509,7 @@ class LuxTTSAdapter(TTSAdapter):
         vocos = getattr(engine, "vocos", None) if engine else None
         if vocos is not None and hasattr(vocos, "return_48k"):
             try:
-                return self.DEFAULT_SAMPLE_RATE if getattr(vocos, "return_48k") else self.DEFAULT_PROMPT_SAMPLE_RATE
+                return self.DEFAULT_SAMPLE_RATE if vocos.return_48k else self.DEFAULT_PROMPT_SAMPLE_RATE
             except Exception:
                 pass
         if return_smooth:

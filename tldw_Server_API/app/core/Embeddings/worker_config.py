@@ -102,7 +102,7 @@ class OrchestrationConfig(BaseModel):
         """Load configuration from YAML file"""
         import yaml
 
-        with open(path, 'r') as f:
+        with open(path) as f:
             data = yaml.safe_load(f) or {}
 
         pools = data.get("worker_pools")

@@ -20,7 +20,7 @@ AVAILABLE_LANGS = ["en", "ko", "es", "pt", "fr"]
 
 class UnicodeProcessor:
     def __init__(self, unicode_indexer_path: str):
-        with open(unicode_indexer_path, "r") as f:
+        with open(unicode_indexer_path) as f:
             self.indexer = json.load(f)
 
     def _preprocess_text(self, text: str, lang: str) -> str:
@@ -269,7 +269,7 @@ def load_onnx_all(
 
 def load_cfgs(onnx_dir: str) -> dict:
     cfg_path = os.path.join(onnx_dir, "tts.json")
-    with open(cfg_path, "r") as f:
+    with open(cfg_path) as f:
         cfgs = json.load(f)
     return cfgs
 
@@ -293,7 +293,7 @@ def load_text_to_speech(onnx_dir: str, use_gpu: bool = False) -> TextToSpeech:
 def load_voice_style(voice_style_paths: list[str], verbose: bool = False) -> Style:
     bsz = len(voice_style_paths)
 
-    with open(voice_style_paths[0], "r") as f:
+    with open(voice_style_paths[0]) as f:
         first_style = json.load(f)
     ttl_dims = first_style["style_ttl"]["dims"]
     dp_dims = first_style["style_dp"]["dims"]
@@ -302,7 +302,7 @@ def load_voice_style(voice_style_paths: list[str], verbose: bool = False) -> Sty
     dp_style = np.zeros([bsz, dp_dims[1], dp_dims[2]], dtype=np.float32)
 
     for i, voice_style_path in enumerate(voice_style_paths):
-        with open(voice_style_path, "r") as f:
+        with open(voice_style_path) as f:
             voice_style = json.load(f)
 
         ttl_data = np.array(voice_style["style_ttl"]["data"], dtype=np.float32).flatten()

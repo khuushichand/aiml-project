@@ -39,7 +39,7 @@ def load_pipeline_from_pretrained(path_to_config: str | Path) -> SpeakerDiarizat
         raise FileNotFoundError(f"Config file not found: {path_to_config}")
 
     # Load the YAML configuration
-    with open(path_to_config, 'r') as config_file:
+    with open(path_to_config) as config_file:
         config = yaml.safe_load(config_file)
 
     # Debug: print the entire config

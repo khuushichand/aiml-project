@@ -76,7 +76,7 @@ def _parse_float_env(name: str, default: float, *, min_value: float | None = Non
         value = min(max_value, value)
     return value
 
-_EVENT_QUEUE: "Queue[tuple[str, dict[str, Any] | None, dict[str, Any] | None]]" = Queue()
+_EVENT_QUEUE: Queue[tuple[str, dict[str, Any] | None, dict[str, Any] | None]] = Queue()
 _WORKER_THREAD: threading.Thread | None = None
 _WORKER_LOCK = threading.Lock()
 _WORKER_READY = threading.Event()

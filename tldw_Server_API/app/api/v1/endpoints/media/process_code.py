@@ -74,8 +74,8 @@ async def process_code_endpoint(
         if files:
             # Preserve test-time monkeypatching of `_save_uploaded_files` and
             # `file_validator_instance` via the `media` shim.
-            save_uploaded_files = getattr(media_mod, "_save_uploaded_files")
-            validator = getattr(media_mod, "file_validator_instance")
+            save_uploaded_files = media_mod._save_uploaded_files
+            validator = media_mod.file_validator_instance
 
             saved, upload_errors = await save_uploaded_files(
                 files,
@@ -143,7 +143,7 @@ async def process_code_endpoint(
 
         # Handle URLs
         if urls:
-            download_url_async = getattr(media_mod, "_download_url_async")
+            download_url_async = media_mod._download_url_async
             tasks = [
                 download_url_async(
                     client=None,

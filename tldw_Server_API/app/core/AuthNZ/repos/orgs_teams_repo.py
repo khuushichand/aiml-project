@@ -444,7 +444,7 @@ class AuthnzOrgsTeamsRepo:
                     if await cur_chk2.fetchone():
                         raise DuplicateOrganizationError("name", str(updates["name"]))
 
-                set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+                set_clause = ", ".join(f"{k} = ?" for k in updates)
                 params = list(updates.values()) + [org_id]
                 await conn.execute(
                     f"UPDATE organizations SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",

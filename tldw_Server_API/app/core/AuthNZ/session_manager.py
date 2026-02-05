@@ -498,7 +498,7 @@ class SessionManager:
                     try:
                         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                         break
-                    except (IOError, OSError):
+                    except OSError:
                         if time.time() - start_time > timeout:
                             raise RuntimeError(
                                 f"Failed to acquire lock on {lock_path} within {timeout}s"

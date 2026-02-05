@@ -39,9 +39,7 @@ class PromptQualityScorer:
         usr_len = len(user_text.strip())
         if 60 <= sys_len <= 800:
             score += 2.0
-        elif sys_len < 20:
-            score -= 1.0
-        elif sys_len > 1200:
+        elif sys_len < 20 or sys_len > 1200:
             score -= 1.0
         if 20 <= usr_len <= 2000:
             score += 1.0

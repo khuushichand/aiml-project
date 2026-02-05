@@ -64,7 +64,7 @@ def ensure_request_id(request: Any) -> str:
             header_value = headers.get("X-Request-ID") or headers.get("x-request-id")
             req_id = _clean_request_id(header_value)
             try:
-                setattr(request.state, "request_id", req_id)  # type: ignore[attr-defined]
+                request.state.request_id = req_id  # type: ignore[attr-defined]
             except Exception:
                 pass
         return str(req_id)
@@ -89,7 +89,7 @@ def ensure_traceparent(request: Any) -> str:
         )
         if tp:
             try:
-                setattr(request.state, "traceparent", tp)  # type: ignore[attr-defined]
+                request.state.traceparent = tp  # type: ignore[attr-defined]
             except Exception:
                 pass
         return tp

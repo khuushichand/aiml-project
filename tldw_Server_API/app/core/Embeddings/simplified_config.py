@@ -106,7 +106,7 @@ class EmbeddingsConfig:
     @classmethod
     def from_yaml(cls, path: str) -> 'EmbeddingsConfig':
         """Load configuration from YAML file"""
-        with open(path, 'r') as f:
+        with open(path) as f:
             data = yaml.safe_load(f)
         return cls.from_dict(data)
 

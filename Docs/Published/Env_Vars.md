@@ -138,6 +138,13 @@ Streaming Audio / TTS
 - `AUDIO_WS_QUOTA_CLOSE_1008`: When set, close WebSocket quota/rate-limit violations with code `1008` (default `4003`) for streaming audio routes.
 - `TTS_PHONEME_OVERRIDES_PATH`: Optional YAML/JSON file with phoneme overrides (defaults to `Config_Files/tts_phonemes.yaml|yml|json`).
 - `KOKORO_ENABLE_PHONEME_OVERRIDES`: Toggle Kokoro phoneme override application (`true|false`, default `true`).
+- `TTS_HISTORY_ENABLED`: Enable per-user TTS history (`true|false`, default `true`).
+- `TTS_HISTORY_STORE_TEXT`: Store full text in history (`true|false`, default `true`).
+- `TTS_HISTORY_STORE_FAILED`: Store failed TTS attempts (`true|false`, default `true`).
+- `TTS_HISTORY_HASH_KEY`: Secret key for HMAC hashing of TTS input text (required for hashing).
+- `TTS_HISTORY_RETENTION_DAYS`: Age-based purge window in days (default `90`, set `0` to disable).
+- `TTS_HISTORY_MAX_ROWS_PER_USER`: Max rows retained per user (default `10000`, set `0` to disable).
+- `TTS_HISTORY_PURGE_INTERVAL_HOURS`: Purge cadence in hours (default `24`).
 
 Queues
 - CPU stages use `queue=default`.

@@ -2290,7 +2290,6 @@ def _handle_provider_error(err: str) -> None:
 # ---------------- RePEc / CitEc Endpoints ----------------
 
 from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
-    GenericPaper,
     RepecCitationsResponse,
 )
 

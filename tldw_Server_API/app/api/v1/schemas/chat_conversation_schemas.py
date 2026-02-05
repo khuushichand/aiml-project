@@ -92,7 +92,7 @@ class ConversationTreeNode(BaseModel):
     role: str = Field(..., description="Message role (user/assistant/system)")
     content: str = Field("", description="Message content")
     created_at: datetime = Field(..., description="Message timestamp")
-    children: list["ConversationTreeNode"] = Field(default_factory=list)
+    children: list[ConversationTreeNode] = Field(default_factory=list)
     truncated: bool = Field(False, description="True when descendants were omitted")
 
 

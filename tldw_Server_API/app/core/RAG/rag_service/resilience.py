@@ -101,9 +101,9 @@ class CircuitBreaker:
         self.call_results: deque[bool] = deque(maxlen=self.config.window_size)
 
         # Callbacks
-        self.on_open_callbacks: list[Callable[["CircuitBreaker"], None]] = []
-        self.on_close_callbacks: list[Callable[["CircuitBreaker"], None]] = []
-        self.on_half_open_callbacks: list[Callable[["CircuitBreaker"], None]] = []
+        self.on_open_callbacks: list[Callable[[CircuitBreaker], None]] = []
+        self.on_close_callbacks: list[Callable[[CircuitBreaker], None]] = []
+        self.on_half_open_callbacks: list[Callable[[CircuitBreaker], None]] = []
 
     async def call(self, func: Callable, *args, **kwargs) -> Any:
         """

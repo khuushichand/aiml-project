@@ -178,7 +178,7 @@ def evaluate_metrics(
 
     tp_fp_fns: list[TP_FP_FN] = []
     accuracies: list[float] = []
-    for key in ground_truth.keys():
+    for key in ground_truth:
         true = ground_truth[key].get("articleBody", "")
         pred = prediction[key].get("articleBody", "")
         tp_fp_fns.append(string_shingle_matching(true=true, pred=pred))

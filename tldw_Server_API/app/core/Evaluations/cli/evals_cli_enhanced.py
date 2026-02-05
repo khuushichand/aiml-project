@@ -511,7 +511,7 @@ def run(ctx, benchmark, limit, api, model, output, parallel, dry_run):
     else:
         avg_score = min_score = max_score = 0.0
 
-    click.echo(f"\n\nResults:")
+    click.echo("\n\nResults:")
     click.echo(f"  Total samples: {len(results)}")
     click.echo(f"  Successful: {len(scores)}")
     click.echo(f"  Errors: {errors}")
@@ -590,7 +590,7 @@ def test_api(api_name, test_prompt, model):
         else:
             response_text = str(response)
 
-        click.echo(f"✓ API responded successfully")
+        click.echo("✓ API responded successfully")
         click.echo(f"Response: {response_text[:200]}..." if len(response_text) > 200 else f"Response: {response_text}")
 
     except Exception as e:

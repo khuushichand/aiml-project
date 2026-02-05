@@ -48,6 +48,9 @@ if not SERVER_CLIENT_ID:
 # --- Global Cache for Prompts DB Instances (managed by prompts_interop, but we track paths) ---
 MAX_CACHED_PROMPTS_DB_INSTANCES = settings.get("MAX_CACHED_PROMPTS_DB_INSTANCES", 20)
 _prompts_cache_lock = asyncio.Lock()
+# INVARIANT: All mutations to _user_db_instances and _user_db_locks MUST be
+# performed while holding _prompts_cache_lock. The eviction callbacks
+# cross-reference each other's caches and assume this lock is held.
 
 # --- Helper Functions ---
 
@@ -181,8 +184,8 @@ async def get_prompts_db_for_user(
     try:
         if os.environ.get("TEST_MODE", "").lower() == "true":
             if not hasattr(request.app.state, "prompts_db_salt"):
-                setattr(request.app.state, "prompts_db_salt", _uuid.uuid4().hex)
-            salt = str(getattr(request.app.state, "prompts_db_salt"))
+                request.app.state.prompts_db_salt = _uuid.uuid4().hex
+            salt = str(request.app.state.prompts_db_salt)
     except Exception:
         salt = ""
 
@@ -267,7 +270,7 @@ async def get_prompts_db_for_user(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Could not initialize prompts database for user: {str(e)}"
             ) from e
-        except IOError as e:
+        except OSError as e:
             logger.error(f"Failed to get PromptsDatabase path for user {user_id}: {e}", exc_info=True)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
         except Exception as e:

@@ -41,7 +41,7 @@ class STTInstall(BaseModel):
         return values
 
     @model_validator(mode='after')
-    def _validate(self) -> 'STTInstall':
+    def _validate(self) -> STTInstall:
         if self.engine not in STT_ENGINES:
             raise ValueError(f"Unsupported STT engine '{self.engine}'")
         self.models = list(dict.fromkeys(self.models))
@@ -53,7 +53,7 @@ class TTSInstall(BaseModel):
     variants: list[str] = Field(default_factory=list)
 
     @model_validator(mode='after')
-    def _validate(self) -> 'TTSInstall':
+    def _validate(self) -> TTSInstall:
         if self.engine not in TTS_ENGINES:
             raise ValueError(f"Unsupported TTS engine '{self.engine}'")
         self.variants = list(dict.fromkeys(self.variants))

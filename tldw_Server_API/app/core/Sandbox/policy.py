@@ -58,7 +58,7 @@ class SandboxPolicyConfig:
     supported_spec_versions: list[str] = field(default_factory=lambda: ["1.0"])
 
     @classmethod
-    def from_settings(cls) -> "SandboxPolicyConfig":
+    def from_settings(cls) -> SandboxPolicyConfig:
         try:
             rt_raw = str(getattr(app_settings, "SANDBOX_DEFAULT_RUNTIME", "docker")).strip().lower()
         except Exception:

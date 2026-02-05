@@ -79,9 +79,7 @@ class AuthnzGeneratedFilesRepo:
         if row is None:
             return {}
         try:
-            if hasattr(row, "keys"):
-                record = dict(row)
-            elif isinstance(row, dict):
+            if hasattr(row, "keys") or isinstance(row, dict):
                 record = dict(row)
             else:
                 record = {}
@@ -321,27 +319,27 @@ class AuthnzGeneratedFilesRepo:
 
                 if file_category:
                     param_idx += 1
-                    conditions.append(f"file_category = " + (f"${param_idx}" if is_pg else "?"))
+                    conditions.append("file_category = " + (f"${param_idx}" if is_pg else "?"))
                     params.append(file_category)
 
                 if source_feature:
                     param_idx += 1
-                    conditions.append(f"source_feature = " + (f"${param_idx}" if is_pg else "?"))
+                    conditions.append("source_feature = " + (f"${param_idx}" if is_pg else "?"))
                     params.append(source_feature)
 
                 if folder_tag:
                     param_idx += 1
-                    conditions.append(f"folder_tag = " + (f"${param_idx}" if is_pg else "?"))
+                    conditions.append("folder_tag = " + (f"${param_idx}" if is_pg else "?"))
                     params.append(folder_tag)
 
                 if org_id:
                     param_idx += 1
-                    conditions.append(f"org_id = " + (f"${param_idx}" if is_pg else "?"))
+                    conditions.append("org_id = " + (f"${param_idx}" if is_pg else "?"))
                     params.append(org_id)
 
                 if team_id:
                     param_idx += 1
-                    conditions.append(f"team_id = " + (f"${param_idx}" if is_pg else "?"))
+                    conditions.append("team_id = " + (f"${param_idx}" if is_pg else "?"))
                     params.append(team_id)
 
                 if search:
@@ -350,7 +348,7 @@ class AuthnzGeneratedFilesRepo:
                     if is_pg:
                         conditions.append(f"(filename ILIKE ${param_idx} OR original_filename ILIKE ${param_idx})")
                     else:
-                        conditions.append(f"(filename LIKE ? OR original_filename LIKE ?)")
+                        conditions.append("(filename LIKE ? OR original_filename LIKE ?)")
                         params.append(search_pattern)  # For first LIKE
                     params.append(search_pattern)
 
@@ -413,22 +411,22 @@ class AuthnzGeneratedFilesRepo:
 
         if folder_tag is not None:
             param_idx += 1
-            updates.append(f"folder_tag = " + (f"${param_idx}" if self._is_postgres() else "?"))
+            updates.append("folder_tag = " + (f"${param_idx}" if self._is_postgres() else "?"))
             params.append(folder_tag if folder_tag else None)
 
         if tags is not None:
             param_idx += 1
-            updates.append(f"tags = " + (f"${param_idx}" if self._is_postgres() else "?"))
+            updates.append("tags = " + (f"${param_idx}" if self._is_postgres() else "?"))
             params.append(json.dumps(tags))
 
         if retention_policy is not None:
             param_idx += 1
-            updates.append(f"retention_policy = " + (f"${param_idx}" if self._is_postgres() else "?"))
+            updates.append("retention_policy = " + (f"${param_idx}" if self._is_postgres() else "?"))
             params.append(retention_policy)
 
         if expires_at is not None:
             param_idx += 1
-            updates.append(f"expires_at = " + (f"${param_idx}" if self._is_postgres() else "?"))
+            updates.append("expires_at = " + (f"${param_idx}" if self._is_postgres() else "?"))
             params.append(expires_at.isoformat() if expires_at else None)
 
         if not updates:

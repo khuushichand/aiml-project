@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-
 from typing import Any, Literal
 
 #
@@ -20,21 +19,6 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_db_transaction,
     require_roles,
 )
-from . import admin_api_keys as admin_api_keys_endpoints
-from . import admin_budgets as admin_budgets_endpoints
-from . import admin_byok as admin_byok_endpoints
-from . import admin_llm_providers as admin_llm_providers_endpoints
-from . import admin_network as admin_network_endpoints
-from . import admin_orgs as admin_orgs_endpoints
-from . import admin_personalization as admin_personalization_endpoints
-from . import admin_profiles as admin_profiles_endpoints
-from . import admin_tools as admin_tools_endpoints
-from . import admin_system as admin_system_endpoints
-from . import admin_registration as admin_registration_endpoints
-from . import admin_sessions_mfa as admin_sessions_mfa_endpoints
-from . import admin_settings as admin_settings_endpoints
-from . import admin_usage as admin_usage_endpoints
-from . import admin_user as admin_user_endpoints
 from tldw_Server_API.app.api.v1.schemas.admin_rbac_schemas import (
     EffectivePermissionsResponse,
     OverrideEffect,
@@ -125,10 +109,10 @@ from tldw_Server_API.app.services.admin_roles_permissions_service import (
     grant_tool_permission_to_role as svc_grant_tool_perm,
 )
 from tldw_Server_API.app.services.admin_roles_permissions_service import (
-    list_roles as svc_list_roles,
+    list_role_permissions as svc_list_role_permissions,
 )
 from tldw_Server_API.app.services.admin_roles_permissions_service import (
-    list_role_permissions as svc_list_role_permissions,
+    list_roles as svc_list_roles,
 )
 from tldw_Server_API.app.services.admin_roles_permissions_service import (
     list_tool_permissions as svc_list_tool_permissions,
@@ -166,6 +150,22 @@ from tldw_Server_API.app.services.admin_system_ops_service import (
 from tldw_Server_API.app.services.admin_system_ops_service import (
     upsert_feature_flag as svc_upsert_feature_flag,
 )
+
+from . import admin_api_keys as admin_api_keys_endpoints
+from . import admin_budgets as admin_budgets_endpoints
+from . import admin_byok as admin_byok_endpoints
+from . import admin_llm_providers as admin_llm_providers_endpoints
+from . import admin_network as admin_network_endpoints
+from . import admin_orgs as admin_orgs_endpoints
+from . import admin_personalization as admin_personalization_endpoints
+from . import admin_profiles as admin_profiles_endpoints
+from . import admin_registration as admin_registration_endpoints
+from . import admin_sessions_mfa as admin_sessions_mfa_endpoints
+from . import admin_settings as admin_settings_endpoints
+from . import admin_system as admin_system_endpoints
+from . import admin_tools as admin_tools_endpoints
+from . import admin_usage as admin_usage_endpoints
+from . import admin_user as admin_user_endpoints
 
 PLATFORM_ADMIN_ROLES = {"owner", "super_admin", "admin"}
 
@@ -567,7 +567,11 @@ async def grant_tool_permission_to_role(role_id: int, payload: ToolPermissionGra
     """
     tool = payload.tool_name.strip()
     name = f"tools.execute:{'*' if tool == '*' else tool}"
-    desc = "Wildcard tool execution" if tool == '*' else f"Execute tool {tool}"
+    desc = (
+        "Wildcard tool execution"
+        if tool == '*'
+        else f"Execute tool {tool}"
+    )
     try:
         perm = await svc_grant_tool_perm(db, role_id, name, desc)
         return ToolPermissionResponse(name=perm['name'], description=perm.get('description'), category=perm.get('category'))

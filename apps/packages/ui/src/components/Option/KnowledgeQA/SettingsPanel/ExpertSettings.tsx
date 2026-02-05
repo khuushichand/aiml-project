@@ -381,6 +381,58 @@ function SearchSection({ settings, updateSetting }: SectionSettingsProps) {
         step={0.05}
       />
       <SettingToggle
+        label="Web Search Fallback"
+        description="Use web results when local relevance is low (requires server provider configuration)"
+        checked={settings.enable_web_fallback}
+        onChange={(v) => updateSetting("enable_web_fallback", v)}
+      />
+      {settings.enable_web_fallback && (
+        <div className="space-y-3">
+          <SettingSlider
+            label="Web Fallback Threshold"
+            description="Trigger web search when relevance drops below this"
+            value={settings.web_fallback_threshold}
+            onChange={(v) => updateSetting("web_fallback_threshold", v)}
+            min={0}
+            max={1}
+            step={0.05}
+          />
+          <SettingSlider
+            label="Web Results"
+            description="Number of web results to fetch"
+            value={settings.web_fallback_result_count}
+            onChange={(v) => updateSetting("web_fallback_result_count", v)}
+            min={1}
+            max={20}
+          />
+          <SettingSelect
+            label="Web Search Engine"
+            description="Provider used for web fallback"
+            value={settings.web_search_engine}
+            onChange={(v) => updateSetting("web_search_engine", v)}
+            options={[
+              { value: "duckduckgo", label: "DuckDuckGo" },
+              { value: "brave", label: "Brave" },
+              { value: "bing", label: "Bing" },
+              { value: "google", label: "Google" },
+              { value: "tavily", label: "Tavily" },
+              { value: "serper", label: "Serper" },
+            ]}
+          />
+          <SettingSelect
+            label="Web Merge Strategy"
+            description="How web results combine with local docs"
+            value={settings.web_fallback_merge_strategy}
+            onChange={(v) => updateSetting("web_fallback_merge_strategy", v as typeof settings.web_fallback_merge_strategy)}
+            options={[
+              { value: "prepend", label: "Prepend" },
+              { value: "append", label: "Append" },
+              { value: "interleave", label: "Interleave" },
+            ]}
+          />
+        </div>
+      )}
+      <SettingToggle
         label="Intent Routing"
         description="Analyze query intent to adjust retrieval"
         checked={settings.enable_intent_routing}

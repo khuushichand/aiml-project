@@ -411,7 +411,7 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
                 max_message_sends_per_minute=_env_int_or_test_default("MAX_MESSAGE_SENDS_PER_MINUTE", 1_000_000_000),
                 enabled=True,
             )
-            setattr(_rate_limiter, "_is_test_mode", True)
+            _rate_limiter._is_test_mode = True
         return _rate_limiter
 
     if _rate_limiter is None:

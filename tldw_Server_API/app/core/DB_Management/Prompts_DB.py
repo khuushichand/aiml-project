@@ -1742,11 +1742,7 @@ class PromptsDatabase:
             # - FTS was used but returned zero matches (defensive fallback to avoid false negatives)
             do_naive = False
             if search_query:
-                if fts_error:
-                    do_naive = True
-                elif prefer_naive or (not used_fts and (not search_fields or len(search_fields) == 0)):
-                    do_naive = True
-                elif used_fts and total_matches == 0:
+                if fts_error or prefer_naive or (not used_fts and (not search_fields or len(search_fields) == 0)) or used_fts and total_matches == 0:
                     do_naive = True
             if do_naive:
                 try:

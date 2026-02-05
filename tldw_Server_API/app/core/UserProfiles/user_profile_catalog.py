@@ -92,7 +92,7 @@ class UserProfileCatalog(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _validate_unique_keys(self) -> "UserProfileCatalog":
+    def _validate_unique_keys(self) -> UserProfileCatalog:
         keys = [entry.key for entry in self.entries]
         self._assert_unique(keys, "catalog key")
         return self

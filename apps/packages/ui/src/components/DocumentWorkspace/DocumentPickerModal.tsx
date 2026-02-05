@@ -507,17 +507,22 @@ function extractMediaIdInternal(
   return null
 }
 
-function extractUploadResult(data: any): any {
+function extractUploadResult(data: unknown): Record<string, unknown> | null {
   if (!data || typeof data !== "object") return null
-  if (Array.isArray(data?.results) && data.results.length > 0) {
-    return data.results[0]
+  const record = data as Record<string, unknown>
+  if (Array.isArray(record.results) && record.results.length > 0) {
+    return record.results[0] as Record<string, unknown>
   }
-  if (data?.result) return data.result
-  if (data?.media) return data.media
-  return data
+  if (record.result && typeof record.result === "object") {
+    return record.result as Record<string, unknown>
+  }
+  if (record.media && typeof record.media === "object") {
+    return record.media as Record<string, unknown>
+  }
+  return record
 }
 
-function extractWarnings(result: any): string[] {
+function extractWarnings(result: Record<string, unknown> | null): string[] {
   if (!result) return []
   const warnings = result?.warnings
   if (!Array.isArray(warnings)) return []

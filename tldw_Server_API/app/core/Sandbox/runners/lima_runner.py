@@ -380,7 +380,7 @@ class LimaRunner:
 
             # Execute the command in the VM
             user_cmd = " ".join(f"'{x}'" for x in list(spec.command))
-            shell_cmd = f"cd /workspace && chmod +x entry.sh && ./entry.sh"
+            shell_cmd = "cd /workspace && chmod +x entry.sh && ./entry.sh"
 
             timeout_sec = int(spec.timeout_sec or 300)
 

@@ -256,7 +256,7 @@ class PGVectorAdapter(VectorStoreAdapter):
                         logger.debug("pgvector._query: SET hnsw.ef_search failed", exc_info=e)
                     cur.execute(sql, params or ())
                     rows = cur.fetchall()
-                except Exception as e:
+                except Exception:
                     try:
                         conn.rollback()
                     except Exception as rb_e:  # noqa: BLE001 - rollback best-effort
@@ -434,7 +434,7 @@ class PGVectorAdapter(VectorStoreAdapter):
             isinstance(filt, dict)
             and len(filt) > 0
             and all(not isinstance(v, (dict, list, tuple)) for v in filt.values())
-            and all(not str(k).startswith('$') for k in filt.keys())
+            and all(not str(k).startswith('$') for k in filt)
         ):
             import json as _json
             return ' WHERE metadata @> %s', [_json.dumps(filt)]
@@ -763,7 +763,7 @@ class PGVectorAdapter(VectorStoreAdapter):
             "index_type": idx_type,
             "dimension": stats.get("dimension", self.config.embedding_dim),
             "count": stats.get("count", 0),
-            "ops": "vector_%s_ops" % ((self.config.distance_metric or 'cosine')),
+            "ops": "vector_%s_ops" % (self.config.distance_metric or 'cosine'),
             "ef_search": self._ef_search,
         }
 

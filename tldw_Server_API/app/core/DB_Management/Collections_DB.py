@@ -268,11 +268,11 @@ class CollectionsDatabase:
         self._seed_watchlists_output_templates()
 
     @classmethod
-    def for_user(cls, user_id: int | str) -> "CollectionsDatabase":
+    def for_user(cls, user_id: int | str) -> CollectionsDatabase:
         return cls(user_id=user_id)
 
     @classmethod
-    def from_backend(cls, user_id: int | str, backend: DatabaseBackend) -> "CollectionsDatabase":
+    def from_backend(cls, user_id: int | str, backend: DatabaseBackend) -> CollectionsDatabase:
         """Construct using an existing backend (avoids path resolution and int casting)."""
         return cls(user_id=user_id, backend=backend)
 
@@ -317,7 +317,7 @@ class CollectionsDatabase:
         except Exception as exc:
             logger.debug("collections_db: failed to close backend for user %s: %s", self.user_id, exc)
 
-    def __enter__(self) -> "CollectionsDatabase":
+    def __enter__(self) -> CollectionsDatabase:
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
@@ -2066,9 +2066,7 @@ class CollectionsDatabase:
                 order_by = "ci.title ASC, ci.id ASC"
             elif sort_key == "title_desc":
                 order_by = "ci.title DESC, ci.id DESC"
-            elif sort_key == "relevance" and fts_joined and not tag_filters:
-                order_by = "bm25(content_items_fts) ASC, ci.updated_at DESC, ci.id DESC"
-            elif not sort_key and fts_joined and not tag_filters:
+            elif sort_key == "relevance" and fts_joined and not tag_filters or not sort_key and fts_joined and not tag_filters:
                 order_by = "bm25(content_items_fts) ASC, ci.updated_at DESC, ci.id DESC"
             rows_sql = f"""
                 SELECT
@@ -2562,7 +2560,7 @@ class CollectionsDatabase:
         media_item_id: int | None = None,
         chatbook_path: str | None = None,
         retention_until: str | None = None,
-    ) -> "CollectionsDatabase.OutputArtifactRow":
+    ) -> CollectionsDatabase.OutputArtifactRow:
         now = _utcnow_iso()
         resolved_storage_path = self.resolve_output_storage_path(storage_path)
         q = (
@@ -2590,7 +2588,7 @@ class CollectionsDatabase:
             raise DatabaseError("Failed to create output artifact")
         return self.get_output_artifact(new_id)
 
-    def update_output_media_item_id(self, output_id: int, media_item_id: int | None) -> "CollectionsDatabase.OutputArtifactRow":
+    def update_output_media_item_id(self, output_id: int, media_item_id: int | None) -> CollectionsDatabase.OutputArtifactRow:
         q = "UPDATE outputs SET media_item_id = ? WHERE id = ? AND user_id = ?"
         res = self.backend.execute(q, (media_item_id, output_id, self.user_id))
         if res.rowcount <= 0:
@@ -2603,7 +2601,7 @@ class CollectionsDatabase:
         *,
         metadata_json: str | None = None,
         chatbook_path: str | None = None,
-    ) -> "CollectionsDatabase.OutputArtifactRow":
+    ) -> CollectionsDatabase.OutputArtifactRow:
         fields: list[str] = []
         params: list[Any] = []
         if metadata_json is not None:
@@ -2621,7 +2619,7 @@ class CollectionsDatabase:
             raise KeyError("output_not_found")
         return self.get_output_artifact(output_id)
 
-    def get_output_artifact(self, output_id: int, include_deleted: bool = False) -> "CollectionsDatabase.OutputArtifactRow":
+    def get_output_artifact(self, output_id: int, include_deleted: bool = False) -> CollectionsDatabase.OutputArtifactRow:
         cond = "id = ? AND user_id = ?" + ("" if include_deleted else " AND deleted = 0")
         q = (
             "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
@@ -2664,7 +2662,7 @@ class CollectionsDatabase:
                 logger.warning("audiobook_quota: failed to decrement usage: %s", exc)
         return ok
 
-    def get_output_artifact_by_title(self, title: str, format_: str | None = None, include_deleted: bool = False) -> "CollectionsDatabase.OutputArtifactRow":
+    def get_output_artifact_by_title(self, title: str, format_: str | None = None, include_deleted: bool = False) -> CollectionsDatabase.OutputArtifactRow:
         where = ["user_id = ?", "title = ?"]
         params: list[Any] = [self.user_id, title]
         if format_:
@@ -2692,7 +2690,7 @@ class CollectionsDatabase:
         workspace_tag: str | None = None,
         include_deleted: bool = False,
         only_deleted: bool = False,
-    ) -> tuple[list["CollectionsDatabase.OutputArtifactRow"], int]:
+    ) -> tuple[list[CollectionsDatabase.OutputArtifactRow], int]:
         where = ["user_id = ?"]
         params: list[Any] = [self.user_id]
         if only_deleted:
@@ -2730,7 +2728,7 @@ class CollectionsDatabase:
         offset: int = 0,
         include_deleted: bool = False,
         workspace_tag: str | None = None,
-    ) -> tuple[list["CollectionsDatabase.OutputArtifactRow"], int]:
+    ) -> tuple[list[CollectionsDatabase.OutputArtifactRow], int]:
         if not types:
             return [], 0
         where = ["user_id = ?"]
@@ -2858,7 +2856,7 @@ class CollectionsDatabase:
                 break
         return self.set_audiobook_output_usage(total_bytes)
 
-    def rename_output_artifact(self, output_id: int, new_title: str, new_storage_path: str | None = None) -> "CollectionsDatabase.OutputArtifactRow":
+    def rename_output_artifact(self, output_id: int, new_title: str, new_storage_path: str | None = None) -> CollectionsDatabase.OutputArtifactRow:
         fields = ["title = ?"]
         params: list[Any] = [new_title]
         if new_storage_path is not None:
@@ -3495,7 +3493,7 @@ class CollectionsDatabase:
         export_consumed_at: str | None = None,
         metadata_json: str | None = None,
         retention_until: str | None = None,
-    ) -> "CollectionsDatabase.FileArtifactRow":
+    ) -> CollectionsDatabase.FileArtifactRow:
         """Create a file artifact record and return the stored row."""
         now = _utcnow_iso()
         resolved_storage_path = None
@@ -3532,7 +3530,7 @@ class CollectionsDatabase:
             raise DatabaseError("Failed to create file artifact")
         return self.get_file_artifact(new_id)
 
-    def get_file_artifact(self, file_id: int, include_deleted: bool = False) -> "CollectionsDatabase.FileArtifactRow":
+    def get_file_artifact(self, file_id: int, include_deleted: bool = False) -> CollectionsDatabase.FileArtifactRow:
         """Fetch a file artifact by id."""
         cond = "id = ? AND user_id = ?" + ("" if include_deleted else " AND deleted = 0")
         q = (
@@ -3557,7 +3555,7 @@ class CollectionsDatabase:
         export_job_id: str | None = None,
         export_expires_at: str | None = None,
         export_consumed_at: str | None = None,
-    ) -> "CollectionsDatabase.FileArtifactRow":
+    ) -> CollectionsDatabase.FileArtifactRow:
         """Update export fields for a file artifact."""
         updated_at = _utcnow_iso()
         resolved_storage_path = None

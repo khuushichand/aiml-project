@@ -62,7 +62,7 @@ class PartialTranscriptionThread(threading.Thread):
 
     def __init__(
         self,
-        audio_queue: "queue.Queue[bytes]",
+        audio_queue: queue.Queue[bytes],
         stop_event: threading.Event,
         partial_text_state: dict[str, Any],
         sample_rate: int = 16000,
@@ -118,7 +118,7 @@ class PartialTranscriptionThread(threading.Thread):
 
 
 def record_audio_to_disk(
-    device_id: int, output_file_path: str, stop_event: threading.Event, audio_queue: "queue.Queue[bytes]"
+    device_id: int, output_file_path: str, stop_event: threading.Event, audio_queue: queue.Queue[bytes]
 ) -> None:
     """
     Record audio from a PyAudio device to disk while feeding a queue.
@@ -262,7 +262,7 @@ class LiveAudioStreamer:
         self.speaker_lang = speaker_lang
         self.nemo_variant = nemo_variant
 
-        self.audio_queue: "queue.Queue[np.ndarray]" = queue.Queue()
+        self.audio_queue: queue.Queue[np.ndarray] = queue.Queue()
         self.is_recording = False
         self.stop_event = threading.Event()
 
@@ -411,7 +411,7 @@ def record_audio(duration: float, sample_rate: int = 16000, chunk_size: int = 10
 
     print("Recording...")
     stop_recording = threading.Event()
-    audio_queue: "queue.Queue[bytes]" = queue.Queue()
+    audio_queue: queue.Queue[bytes] = queue.Queue()
 
     def audio_callback():
         for _ in range(0, int(sample_rate / chunk_size * duration)):
@@ -428,7 +428,7 @@ def record_audio(duration: float, sample_rate: int = 16000, chunk_size: int = 10
 
 @timeit
 def stop_recording_infinite(
-    p, stream, audio_queue: "queue.Queue[bytes]", stop_recording_event: threading.Event, audio_thread: threading.Thread
+    p, stream, audio_queue: queue.Queue[bytes], stop_recording_event: threading.Event, audio_thread: threading.Thread
 ) -> bytes:
     """
     Stop an ongoing \"infinite\" audio recording and return concatenated frames.

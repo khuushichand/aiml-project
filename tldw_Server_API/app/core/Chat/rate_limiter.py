@@ -374,7 +374,7 @@ class ConversationRateLimiter:
             # Wait a bit before retrying
             await asyncio.sleep(0.5)
 
-        return False, f"Timeout waiting for rate limit capacity"
+        return False, "Timeout waiting for rate limit capacity"
 
     async def get_usage_stats(self, user_id: str) -> dict[str, Any]:
         """

@@ -68,8 +68,6 @@ _STOPWORDS = {
     "all",
     "via",
     "per",
-    "per",
-    "via",
     "just",
     "more",
     "most",

@@ -464,7 +464,7 @@ class WebScrapingService:
                 "progress_file": str(progress_file)
             }
 
-        except Exception as e:
+        except Exception:
             # Save progress on error for resumability
             await self.scraper.save_progress(progress_key, progress_file)
             raise

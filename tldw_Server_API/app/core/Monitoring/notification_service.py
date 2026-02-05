@@ -213,9 +213,8 @@ class NotificationService:
         # Always append to JSONL file (local-first scaffold)
         file_written = True
         try:
-            with self._lock:
-                with open(self.file_path, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            with self._lock, open(self.file_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         except Exception as e:
             file_written = False
             logger.warning(f"Notification file sink failed: {e}")

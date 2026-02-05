@@ -235,7 +235,7 @@ class MediaDatabase:
     handling sync metadata and FTS updates internally via Python code.
     Requires client_id on initialization. Includes schema versioning.
     """
-    _CURRENT_SCHEMA_VERSION = 19  # Latest sqlite migrations (workspace_tag for data tables)
+    _CURRENT_SCHEMA_VERSION = 20  # Latest sqlite migrations (tts_history)
 
     # <<< Schema Definition (Version 1) >>>
 
@@ -951,6 +951,43 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_media_files_type ON MediaFiles(file_type);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_media_files_uuid ON MediaFiles(uuid);
     CREATE INDEX IF NOT EXISTS idx_media_files_deleted ON MediaFiles(deleted);
+    """
+
+    _TTS_HISTORY_TABLE_SQL = """
+    -- TTS History Table --
+    CREATE TABLE IF NOT EXISTS tts_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        text TEXT,
+        text_hash TEXT NOT NULL,
+        text_length INTEGER,
+        provider TEXT,
+        model TEXT,
+        voice_id TEXT,
+        voice_name TEXT,
+        voice_info TEXT,
+        format TEXT,
+        duration_ms INTEGER,
+        generation_time_ms INTEGER,
+        params_json TEXT,
+        status TEXT,
+        segments_json TEXT,
+        favorite BOOLEAN NOT NULL DEFAULT 0,
+        job_id INTEGER,
+        output_id INTEGER,
+        artifact_ids TEXT,
+        artifact_deleted_at TEXT,
+        error_message TEXT,
+        deleted BOOLEAN NOT NULL DEFAULT 0,
+        deleted_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_tts_history_user_created ON tts_history(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_tts_history_user_favorite ON tts_history(user_id, favorite);
+    CREATE INDEX IF NOT EXISTS idx_tts_history_user_provider ON tts_history(user_id, provider);
+    CREATE INDEX IF NOT EXISTS idx_tts_history_user_model ON tts_history(user_id, model);
+    CREATE INDEX IF NOT EXISTS idx_tts_history_user_voice_id ON tts_history(user_id, voice_id);
+    CREATE INDEX IF NOT EXISTS idx_tts_history_user_text_hash ON tts_history(user_id, text_hash);
     """
 
     _DATA_TABLES_SQL = """
@@ -1758,7 +1795,7 @@ class MediaDatabase:
             "prev_version": None,
             "merge_parent_uuid": None,
         }
-        placeholders = ", ".join([f":{k}" for k in data.keys()])
+        placeholders = ", ".join([f":{k}" for k in data])
         columns = ", ".join(data.keys())
         sql = f"INSERT INTO VisualDocuments ({columns}) VALUES ({placeholders})"
         try:
@@ -1922,7 +1959,7 @@ class MediaDatabase:
             "prev_version": None,
             "merge_parent_uuid": None,
         }
-        placeholders = ", ".join([f":{k}" for k in data.keys()])
+        placeholders = ", ".join([f":{k}" for k in data])
         columns = ", ".join(data.keys())
         sql = f"INSERT INTO MediaFiles ({columns}) VALUES ({placeholders})"
         try:
@@ -2323,6 +2360,7 @@ class MediaDatabase:
                 {self._SCHEMA_UPDATE_VERSION_SQL_V1}
                 {self._CLAIMS_TABLE_SQL}
                 {self._MEDIA_FILES_TABLE_SQL}
+                {self._TTS_HISTORY_TABLE_SQL}
                 {self._DATA_TABLES_SQL}
                 CREATE TABLE IF NOT EXISTS output_templates (
                     id INTEGER PRIMARY KEY,
@@ -2574,6 +2612,8 @@ class MediaDatabase:
         table_statements += self._convert_sqlite_sql_to_postgres_statements(self._CLAIMS_TABLE_SQL)
         # Add MediaFiles table for original file storage
         table_statements += self._convert_sqlite_sql_to_postgres_statements(self._MEDIA_FILES_TABLE_SQL)
+        # Add TTS history table
+        table_statements += self._convert_sqlite_sql_to_postgres_statements(self._TTS_HISTORY_TABLE_SQL)
         # Add Data Tables storage for generated tables
         table_statements += self._convert_sqlite_sql_to_postgres_statements(self._DATA_TABLES_SQL)
 
@@ -2650,6 +2690,8 @@ class MediaDatabase:
                     conn.executescript(self._CLAIMS_TABLE_SQL)
                     # Ensure MediaFiles table exists for original file storage
                     conn.executescript(self._MEDIA_FILES_TABLE_SQL)
+                    # Ensure TTS history table exists
+                    conn.executescript(self._TTS_HISTORY_TABLE_SQL)
                     # Ensure Data Tables schema exists for generated tables
                     self._ensure_sqlite_data_tables(conn)
                     self._ensure_fts_structures(conn)
@@ -3018,6 +3060,7 @@ class MediaDatabase:
                     )
                 except Exception:
                     pass
+                self._ensure_postgres_tts_history(conn)
                 self._ensure_postgres_data_tables(conn)
                 self._ensure_postgres_source_hash_column(conn)
                 self._ensure_postgres_claims_extensions(conn)
@@ -3224,6 +3267,7 @@ class MediaDatabase:
                 )
             except Exception:
                 pass
+            self._ensure_postgres_tts_history(conn)
             self._ensure_postgres_data_tables(conn)
             self._ensure_postgres_source_hash_column(conn)
             self._ensure_postgres_claims_extensions(conn)
@@ -3268,6 +3312,7 @@ class MediaDatabase:
             17: self._postgres_migrate_to_v17,
             18: self._postgres_migrate_to_v18,
             19: self._postgres_migrate_to_v19,
+            20: self._postgres_migrate_to_v20,
         }
 
     def _postgres_migrate_to_v5(self, conn) -> None:
@@ -3530,6 +3575,11 @@ class MediaDatabase:
 
         self._ensure_postgres_fts(conn)
         self._ensure_postgres_rls(conn)
+
+    def _postgres_migrate_to_v20(self, conn) -> None:
+        """Ensure tts_history tables exist (PostgreSQL)."""
+
+        self._ensure_postgres_tts_history(conn)
 
     def _update_schema_version_postgres(self, conn, version: int) -> None:
         """Ensure schema_version table reflects the supplied version."""
@@ -4092,6 +4142,76 @@ class MediaDatabase:
             )
         except BackendDatabaseError as exc:
             logger.warning("Could not ensure collections tables on PostgreSQL: {}", exc)
+
+    def _ensure_postgres_tts_history(self, conn) -> None:
+        """Ensure TTS history tables and indexes exist on PostgreSQL."""
+
+        backend = self.backend
+        try:
+            backend.execute(
+                (
+                    "CREATE TABLE IF NOT EXISTS tts_history ("
+                    "id BIGSERIAL PRIMARY KEY, "
+                    "user_id TEXT NOT NULL, "
+                    "created_at TIMESTAMPTZ NOT NULL, "
+                    "text TEXT, "
+                    "text_hash TEXT NOT NULL, "
+                    "text_length INTEGER, "
+                    "provider TEXT, "
+                    "model TEXT, "
+                    "voice_id TEXT, "
+                    "voice_name TEXT, "
+                    "voice_info TEXT, "
+                    "format TEXT, "
+                    "duration_ms INTEGER, "
+                    "generation_time_ms INTEGER, "
+                    "params_json TEXT, "
+                    "status TEXT, "
+                    "segments_json TEXT, "
+                    "favorite BOOLEAN NOT NULL DEFAULT FALSE, "
+                    "job_id BIGINT, "
+                    "output_id BIGINT, "
+                    "artifact_ids TEXT, "
+                    "artifact_deleted_at TIMESTAMPTZ, "
+                    "error_message TEXT, "
+                    "deleted BOOLEAN NOT NULL DEFAULT FALSE, "
+                    "deleted_at TIMESTAMPTZ"
+                    ")"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tts_history_user_created "
+                "ON tts_history(user_id, created_at DESC)",
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tts_history_user_favorite "
+                "ON tts_history(user_id, favorite)",
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tts_history_user_provider "
+                "ON tts_history(user_id, provider)",
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tts_history_user_model "
+                "ON tts_history(user_id, model)",
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tts_history_user_voice_id "
+                "ON tts_history(user_id, voice_id)",
+                connection=conn,
+            )
+            backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tts_history_user_text_hash "
+                "ON tts_history(user_id, text_hash)",
+                connection=conn,
+            )
+        except BackendDatabaseError as exc:
+            logger.warning("Could not ensure tts_history table on PostgreSQL: {}", exc)
 
     def _ensure_postgres_source_hash_column(self, conn) -> None:
         """Ensure Media.source_hash column and index exist on PostgreSQL."""
@@ -6436,6 +6556,429 @@ class MediaDatabase:
         )
         return self.get_claims_analytics_export(export_id, user_id=str(user_id))
 
+    def create_tts_history_entry(
+        self,
+        *,
+        user_id: str,
+        text_hash: str,
+        created_at: str | None = None,
+        text: str | None = None,
+        text_length: int | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        voice_id: str | None = None,
+        voice_name: str | None = None,
+        voice_info: dict[str, Any] | None = None,
+        format: str | None = None,
+        duration_ms: int | None = None,
+        generation_time_ms: int | None = None,
+        params_json: dict[str, Any] | None = None,
+        status: str | None = None,
+        segments_json: dict[str, Any] | None = None,
+        favorite: bool = False,
+        job_id: int | None = None,
+        output_id: int | None = None,
+        artifact_ids: list[Any] | None = None,
+        artifact_deleted_at: str | None = None,
+        error_message: str | None = None,
+        deleted: bool = False,
+        deleted_at: str | None = None,
+        conn: Any | None = None,
+    ) -> int | None:
+        """Insert a TTS history row and return its id."""
+        now = created_at or self._get_current_utc_timestamp_str()
+        insert_sql = (
+            "INSERT INTO tts_history "
+            "(user_id, created_at, text, text_hash, text_length, provider, model, voice_id, voice_name, "
+            "voice_info, format, duration_ms, generation_time_ms, params_json, status, segments_json, "
+            "favorite, job_id, output_id, artifact_ids, artifact_deleted_at, error_message, deleted, deleted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        if self.backend_type == BackendType.POSTGRESQL:
+            insert_sql += " RETURNING id"
+
+        voice_info_str = json.dumps(voice_info, separators=(",", ":"), ensure_ascii=True) if voice_info else None
+        params_str = json.dumps(params_json, separators=(",", ":"), ensure_ascii=True) if params_json else None
+        segments_str = json.dumps(segments_json, separators=(",", ":"), ensure_ascii=True) if segments_json else None
+        artifacts_str = json.dumps(artifact_ids, separators=(",", ":"), ensure_ascii=True) if artifact_ids else None
+
+        cursor = self.execute_query(
+            insert_sql,
+            (
+                str(user_id),
+                now,
+                text,
+                str(text_hash),
+                int(text_length) if text_length is not None else None,
+                provider,
+                model,
+                voice_id,
+                voice_name,
+                voice_info_str,
+                format,
+                int(duration_ms) if duration_ms is not None else None,
+                int(generation_time_ms) if generation_time_ms is not None else None,
+                params_str,
+                status,
+                segments_str,
+                1 if favorite else 0,
+                int(job_id) if job_id is not None else None,
+                int(output_id) if output_id is not None else None,
+                artifacts_str,
+                artifact_deleted_at,
+                error_message,
+                1 if deleted else 0,
+                deleted_at,
+            ),
+            commit=True,
+            connection=conn,
+        )
+        if self.backend_type == BackendType.POSTGRESQL:
+            row = cursor.fetchone()
+            return int(row["id"]) if row and row.get("id") is not None else None
+        return cursor.lastrowid
+
+    def _build_tts_history_filters(
+        self,
+        *,
+        user_id: str,
+        q: str | None = None,
+        text_hash: str | None = None,
+        favorite: bool | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        voice_id: str | None = None,
+        voice_name: str | None = None,
+        created_from: str | None = None,
+        created_to: str | None = None,
+        cursor_created_at: str | None = None,
+        cursor_id: int | None = None,
+        include_deleted: bool = False,
+    ) -> tuple[list[str], list[Any]]:
+        conditions: list[str] = ["user_id = ?"]
+        params: list[Any] = [str(user_id)]
+
+        if not include_deleted:
+            conditions.append("deleted = 0")
+        if favorite is not None:
+            conditions.append("favorite = ?")
+            params.append(1 if favorite else 0)
+        if provider:
+            conditions.append("provider = ?")
+            params.append(str(provider))
+        if model:
+            conditions.append("model = ?")
+            params.append(str(model))
+        if voice_id:
+            conditions.append("voice_id = ?")
+            params.append(str(voice_id))
+        if voice_name:
+            conditions.append("voice_name = ?")
+            params.append(str(voice_name))
+        if text_hash:
+            conditions.append("text_hash = ?")
+            params.append(str(text_hash))
+        if created_from:
+            conditions.append("created_at >= ?")
+            params.append(str(created_from))
+        if created_to:
+            conditions.append("created_at <= ?")
+            params.append(str(created_to))
+        if q:
+            pattern = f"%{q}%"
+            self._append_case_insensitive_like(conditions, params, "text", pattern)
+        if cursor_created_at and cursor_id is not None:
+            conditions.append("(created_at < ? OR (created_at = ? AND id < ?))")
+            params.extend([str(cursor_created_at), str(cursor_created_at), int(cursor_id)])
+
+        return conditions, params
+
+    def list_tts_history(
+        self,
+        *,
+        user_id: str,
+        q: str | None = None,
+        text_hash: str | None = None,
+        favorite: bool | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        voice_id: str | None = None,
+        voice_name: str | None = None,
+        created_from: str | None = None,
+        created_to: str | None = None,
+        cursor_created_at: str | None = None,
+        cursor_id: int | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        try:
+            limit = int(limit)
+            offset = int(offset)
+        except (TypeError, ValueError):
+            limit, offset = 50, 0
+        # Allow a single-row overfetch for cursor pagination detection.
+        limit = max(1, min(201, limit))
+        offset = max(0, offset)
+
+        conditions, params = self._build_tts_history_filters(
+            user_id=user_id,
+            q=q,
+            text_hash=text_hash,
+            favorite=favorite,
+            provider=provider,
+            model=model,
+            voice_id=voice_id,
+            voice_name=voice_name,
+            created_from=created_from,
+            created_to=created_to,
+            cursor_created_at=cursor_created_at,
+            cursor_id=cursor_id,
+            include_deleted=False,
+        )
+
+        query = (
+            "SELECT id, user_id, created_at, text, provider, model, voice_id, voice_name, "
+            "voice_info, format, duration_ms, status, favorite, job_id, output_id, "
+            "artifact_deleted_at "
+            "FROM tts_history WHERE "
+            + " AND ".join(conditions)
+            + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+        )
+        params.extend([limit, offset])
+        rows = self.execute_query(query, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
+
+    def count_tts_history(
+        self,
+        *,
+        user_id: str,
+        q: str | None = None,
+        text_hash: str | None = None,
+        favorite: bool | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        voice_id: str | None = None,
+        voice_name: str | None = None,
+        created_from: str | None = None,
+        created_to: str | None = None,
+    ) -> int:
+        conditions, params = self._build_tts_history_filters(
+            user_id=user_id,
+            q=q,
+            text_hash=text_hash,
+            favorite=favorite,
+            provider=provider,
+            model=model,
+            voice_id=voice_id,
+            voice_name=voice_name,
+            created_from=created_from,
+            created_to=created_to,
+            include_deleted=False,
+        )
+        query = "SELECT COUNT(*) AS count FROM tts_history WHERE " + " AND ".join(conditions)
+        row = self.execute_query(query, tuple(params)).fetchone()
+        if not row:
+            return 0
+        try:
+            return int(row["count"])
+        except Exception:
+            return int(list(row)[0])
+
+    def get_tts_history_entry(
+        self,
+        *,
+        user_id: str,
+        history_id: int,
+        include_deleted: bool = False,
+    ) -> dict[str, Any] | None:
+        conditions = ["id = ?", "user_id = ?"]
+        params: list[Any] = [int(history_id), str(user_id)]
+        if not include_deleted:
+            conditions.append("deleted = 0")
+        query = (
+            "SELECT id, user_id, created_at, text, text_hash, text_length, provider, model, "
+            "voice_id, voice_name, voice_info, format, duration_ms, generation_time_ms, "
+            "params_json, status, segments_json, favorite, job_id, output_id, artifact_ids, "
+            "artifact_deleted_at, error_message, deleted, deleted_at "
+            "FROM tts_history WHERE "
+            + " AND ".join(conditions)
+            + " LIMIT 1"
+        )
+        row = self.execute_query(query, tuple(params)).fetchone()
+        return dict(row) if row else None
+
+    def update_tts_history_favorite(
+        self,
+        *,
+        user_id: str,
+        history_id: int,
+        favorite: bool,
+    ) -> bool:
+        cursor = self.execute_query(
+            "UPDATE tts_history SET favorite = ? WHERE id = ? AND user_id = ? AND deleted = 0",
+            (1 if favorite else 0, int(history_id), str(user_id)),
+            commit=True,
+        )
+        try:
+            return cursor.rowcount > 0
+        except Exception:
+            return False
+
+    def soft_delete_tts_history_entry(
+        self,
+        *,
+        user_id: str,
+        history_id: int,
+        deleted_at: str | None = None,
+    ) -> bool:
+        ts = deleted_at or self._get_current_utc_timestamp_str()
+        cursor = self.execute_query(
+            "UPDATE tts_history SET deleted = 1, deleted_at = ? WHERE id = ? AND user_id = ? AND deleted = 0",
+            (ts, int(history_id), str(user_id)),
+            commit=True,
+        )
+        try:
+            return cursor.rowcount > 0
+        except Exception:
+            return False
+
+    def mark_tts_history_artifacts_deleted_for_output(
+        self,
+        *,
+        user_id: str,
+        output_id: int,
+        deleted_at: str | None = None,
+    ) -> int:
+        ts = deleted_at or self._get_current_utc_timestamp_str()
+        cursor = self.execute_query(
+            (
+                "UPDATE tts_history "
+                "SET artifact_deleted_at = ?, output_id = NULL, artifact_ids = NULL "
+                "WHERE user_id = ? AND output_id = ? AND deleted = 0"
+            ),
+            (ts, str(user_id), int(output_id)),
+            commit=True,
+        )
+        try:
+            return int(cursor.rowcount or 0)
+        except Exception:
+            return 0
+
+    def mark_tts_history_artifacts_deleted_for_file_id(
+        self,
+        *,
+        user_id: str,
+        file_id: int,
+        deleted_at: str | None = None,
+    ) -> int:
+        ts = deleted_at or self._get_current_utc_timestamp_str()
+        rows = self.execute_query(
+            (
+                "SELECT id, artifact_ids FROM tts_history "
+                "WHERE user_id = ? AND artifact_ids IS NOT NULL AND deleted = 0"
+            ),
+            (str(user_id),),
+        ).fetchall()
+        if not rows:
+            return 0
+
+        matched_ids: list[int] = []
+        for row in rows:
+            raw = row["artifact_ids"]
+            if raw is None:
+                continue
+            try:
+                parsed = json.loads(raw) if isinstance(raw, str) else raw
+            except Exception:
+                parsed = None
+            if isinstance(parsed, list) and file_id in parsed:
+                matched_ids.append(int(row["id"]))
+
+        if not matched_ids:
+            return 0
+
+        placeholders = ",".join(["?"] * len(matched_ids))
+        params: list[Any] = [ts, str(user_id)] + matched_ids
+        cursor = self.execute_query(
+            (
+                "UPDATE tts_history "
+                "SET artifact_deleted_at = ?, output_id = NULL, artifact_ids = NULL "
+                f"WHERE user_id = ? AND id IN ({placeholders}) AND deleted = 0"
+            ),
+            tuple(params),
+            commit=True,
+        )
+        try:
+            return int(cursor.rowcount or 0)
+        except Exception:
+            return len(matched_ids)
+
+    def purge_tts_history_for_user(
+        self,
+        *,
+        user_id: str,
+        retention_days: int,
+        max_rows: int,
+    ) -> int:
+        removed = 0
+        if retention_days and retention_days > 0:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=int(retention_days))
+            cutoff_str = cutoff.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+            cursor = self.execute_query(
+                "DELETE FROM tts_history WHERE user_id = ? AND created_at < ?",
+                (str(user_id), cutoff_str),
+                commit=True,
+            )
+            try:
+                removed += int(cursor.rowcount or 0)
+            except Exception:
+                pass
+
+        if max_rows and max_rows > 0:
+            row = self.execute_query(
+                "SELECT COUNT(*) AS count FROM tts_history WHERE user_id = ?",
+                (str(user_id),),
+            ).fetchone()
+            if row:
+                try:
+                    total = int(row["count"])
+                except Exception:
+                    total = int(list(row)[0])
+                if total > max_rows:
+                    to_remove = total - int(max_rows)
+                    cursor = self.execute_query(
+                        (
+                            "DELETE FROM tts_history WHERE user_id = ? AND id IN ("
+                            "SELECT id FROM tts_history WHERE user_id = ? "
+                            "ORDER BY created_at ASC, id ASC LIMIT ?"
+                            ")"
+                        ),
+                        (str(user_id), str(user_id), int(to_remove)),
+                        commit=True,
+                    )
+                    try:
+                        removed += int(cursor.rowcount or 0)
+                    except Exception:
+                        removed += max(0, to_remove)
+
+        return removed
+
+    def list_tts_history_user_ids(self) -> list[str]:
+        rows = self.execute_query(
+            "SELECT DISTINCT user_id FROM tts_history",
+            None,
+        ).fetchall()
+        user_ids: list[str] = []
+        for row in rows:
+            try:
+                user_ids.append(str(row["user_id"]))
+            except Exception:
+                try:
+                    user_ids.append(str(row[0]))
+                except Exception:
+                    continue
+        return user_ids
+
     def get_claims_analytics_export(
         self,
         export_id: str,
@@ -7934,7 +8477,7 @@ class MediaDatabase:
             if not isinstance(payload, dict):
                 raise InputError("row_json must be an object keyed by column_id")
             normalized: dict[str, Any] = {str(key): value for key, value in payload.items()}
-            invalid = [key for key in normalized.keys() if key not in column_ids]
+            invalid = [key for key in normalized if key not in column_ids]
             if invalid:
                 raise InputError(f"row_json contains unknown column_id(s): {', '.join(invalid)}")
             payload = normalized
@@ -9529,7 +10072,7 @@ class MediaDatabase:
             where_filters = ""
             if filter_exprs:
                 join_op = " AND " if match_all else " OR "
-                where_filters = f" AND (" + join_op.join(filter_exprs) + ")"
+                where_filters = " AND (" + join_op.join(filter_exprs) + ")"
 
             base_from = "FROM DocumentVersions dv JOIN Media m ON dv.media_id = m.id"
             if join_ident:
@@ -13460,8 +14003,8 @@ def _backup_non_sqlite_database(self, backup_file_path: str) -> bool:
     return False
 
 
-setattr(MediaDatabase, "backup_database", backup_database)
-setattr(MediaDatabase, "_backup_non_sqlite_database", _backup_non_sqlite_database)
+MediaDatabase.backup_database = backup_database
+MediaDatabase._backup_non_sqlite_database = _backup_non_sqlite_database
 
 
 def get_distinct_media_types(self, include_deleted=False, include_trash=False) -> list[str]:
@@ -14037,9 +14580,9 @@ def process_chunks(self, media_id: int, chunks: list[dict[str, Any]], batch_size
             raise
 
 
-setattr(MediaDatabase, "add_media_chunks_in_batches", add_media_chunks_in_batches)
-setattr(MediaDatabase, "batch_insert_chunks", batch_insert_chunks)
-setattr(MediaDatabase, "process_chunks", process_chunks)
+MediaDatabase.add_media_chunks_in_batches = add_media_chunks_in_batches
+MediaDatabase.batch_insert_chunks = batch_insert_chunks
+MediaDatabase.process_chunks = process_chunks
 
 # =========================================================================
 # Standalone Functions (REQUIRE db_instance passed explicitly)
@@ -15301,7 +15844,7 @@ def fetch_keywords_for_media_batch(media_ids: list[int], db_instance: MediaDatab
 
 # Runtime compatibility patch: ensure get_media_by_title exists on MediaDatabase
 try:
-    _ = getattr(MediaDatabase, "get_media_by_title")
+    _ = MediaDatabase.get_media_by_title
 except Exception:
     _ = None
 if not _:
@@ -15334,7 +15877,7 @@ if not _:
             logger.error(f"Unexpected error fetching media by title '{title}': {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error fetching media by title: {e}") from e
 
-    setattr(MediaDatabase, "get_media_by_title", _get_media_by_title)
+    MediaDatabase.get_media_by_title = _get_media_by_title
 
 #
 # End of Media_DB_v2.py

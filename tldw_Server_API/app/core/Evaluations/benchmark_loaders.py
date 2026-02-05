@@ -30,7 +30,7 @@ class DatasetLoader:
         if source.startswith(('http://', 'https://')):
             data = fetch_json(method="GET", url=source, timeout=15)
         else:
-            with open(source, 'r', encoding='utf-8') as f:
+            with open(source, encoding='utf-8') as f:
                 data = json.load(f)
 
         # Handle different JSON structures
@@ -64,7 +64,7 @@ class DatasetLoader:
                 except Exception:
                     pass
         else:
-            with open(source, 'r', encoding='utf-8') as f:
+            with open(source, encoding='utf-8') as f:
                 for line in f:
                     if line.strip():
                         data.append(json.loads(line))
@@ -87,7 +87,7 @@ class DatasetLoader:
                 except Exception:
                     pass
         else:
-            with open(source, 'r', encoding='utf-8') as f:
+            with open(source, encoding='utf-8') as f:
                 reader = csv.DictReader(f, delimiter=delimiter)
 
         for row in reader:
@@ -148,7 +148,7 @@ class DatasetLoader:
                     except Exception:
                         pass
             else:
-                with open(source, 'r', encoding='utf-8') as f:
+                with open(source, encoding='utf-8') as f:
                     for line in f:
                         if line.strip():
                             chunk.append(json.loads(line))

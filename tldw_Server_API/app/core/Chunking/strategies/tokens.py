@@ -45,7 +45,7 @@ class TransformersTokenizer:
             import transformers
             self._transformers = transformers
             self.available = True
-            logger.debug(f"transformers library available for tokenization")
+            logger.debug("transformers library available for tokenization")
         except ImportError:
             self.available = False
             logger.debug("transformers not available, will use fallback tokenization")

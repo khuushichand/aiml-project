@@ -263,7 +263,7 @@ def print_evaluation_results(results: dict[str, Any]):
 
     # Additional details
     if "details" in results:
-        console.print(f"\n[bold]Details:[/bold]")
+        console.print("\n[bold]Details:[/bold]")
         print_json(results["details"])
 
 

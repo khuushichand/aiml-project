@@ -179,7 +179,7 @@ class SegNode:
     def split_loss_delta(self) -> float:
         return float(self.split_negative_log_likelihood - self.negative_log_likelihood)
 
-    def split(self) -> tuple["SegNode", "SegNode"]:
+    def split(self) -> tuple[SegNode, SegNode]:
         left_entries, right_entries = self.split_entries
         self.left = SegNode(
             identifier=self.identifier + "L",
@@ -230,7 +230,7 @@ class TreeSegmenter:
         configs: dict[str, Any],
         entries: list[dict[str, Any]],
         embedder: EmbedderCallable | None = None,
-    ) -> "TreeSegmenter":
+    ) -> TreeSegmenter:
         """Async factory: builds blocks and embeds asynchronously (no event loop conflicts)."""
         self = cls(configs=configs, entries=entries, embedder=embedder, auto_embed=False)
         await self.embed_blocks_async()
@@ -478,7 +478,7 @@ class TreeSegmenter:
 
     def get_transition_indices(self) -> list[int]:
         if hasattr(self, "transition_indices"):
-            return list(getattr(self, "transition_indices"))
+            return list(self.transition_indices)
         if not getattr(self, "leaves", None):
             return []
         return [leaf.segment[0] for leaf in self.leaves[1:]]

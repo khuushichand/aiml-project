@@ -243,7 +243,7 @@ class SchedulerConfig:
         # Validate configuration
         self._validate()
 
-        logger.info(f"Scheduler configuration initialized:")
+        logger.info("Scheduler configuration initialized:")
         logger.info(f"  Database: {self._safe_database_url()}")
         logger.info(f"  Base path: {self.base_path}")
         logger.info(f"  Workers: {self.min_workers}-{self.max_workers}")

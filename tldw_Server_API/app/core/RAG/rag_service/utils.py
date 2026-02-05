@@ -74,7 +74,7 @@ def create_document_id(content: str, metadata: dict[str, Any]) -> str:
     # Add stable metadata to hash
     for key in sorted(metadata.keys()):
         if key in ['source_id', 'chunk_index', 'document_id']:
-            hasher.update(f"{key}:{metadata[key]}".encode('utf-8'))
+            hasher.update(f"{key}:{metadata[key]}".encode())
 
     return hasher.hexdigest()
 
@@ -224,7 +224,7 @@ def combine_scores(
 
     # Default weights if not provided
     if weights is None:
-        weights = {name: 1.0 for name in scores_dict}
+        weights = dict.fromkeys(scores_dict, 1.0)
 
     # Normalize if requested
     if normalize:

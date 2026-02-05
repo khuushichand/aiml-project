@@ -292,9 +292,9 @@ class ChatbookService:
 
         # In-process async task registry (best-effort cancellation)
         self._tasks: dict[str, asyncio.Task] = {}
-        self._prompts_db: "PromptsDatabase" | None = None
-        self._media_db: "MediaDatabase" | None = None
-        self._evaluations_db: "EvaluationsDatabase" | None = None
+        self._prompts_db: PromptsDatabase | None = None
+        self._media_db: MediaDatabase | None = None
+        self._evaluations_db: EvaluationsDatabase | None = None
 
         # Secure user-specific directory under the configured user DB base.
         user_id_value = self.user_id_int if self.user_id_int is not None else self.user_id
@@ -417,7 +417,7 @@ class ChatbookService:
         )
         return resolved_path.name
 
-    def _get_prompts_db(self) -> "PromptsDatabase" | None:
+    def _get_prompts_db(self) -> PromptsDatabase | None:
         """Lazily initialize and cache the prompts database."""
         if PromptsDatabase is None:
             self._note_todo("Prompts export/import requires PromptsDatabase module; skipping for current build.")
@@ -436,7 +436,7 @@ class ChatbookService:
             self._prompts_db = None
         return self._prompts_db
 
-    def _get_media_db(self) -> "MediaDatabase" | None:
+    def _get_media_db(self) -> MediaDatabase | None:
         """Lazily initialize and cache the media database."""
         if MediaDatabase is None:
             self._note_todo("Media export/import requires MediaDatabase module; skipping media coverage.")
@@ -455,7 +455,7 @@ class ChatbookService:
             self._media_db = None
         return self._media_db
 
-    def _get_evaluations_db(self) -> "EvaluationsDatabase" | None:
+    def _get_evaluations_db(self) -> EvaluationsDatabase | None:
         """Lazily initialize and cache the evaluations database."""
         if EvaluationsDatabase is None:
             self._note_todo("Evaluations export/import requires EvaluationsDatabase module; skipping evaluations coverage.")
@@ -606,7 +606,7 @@ class ChatbookService:
             payload[key] = self._normalize_datetime(value)
         return payload
 
-    def _fetch_media_record(self, media_db: "MediaDatabase", identifier: str) -> dict[str, Any] | None:
+    def _fetch_media_record(self, media_db: MediaDatabase, identifier: str) -> dict[str, Any] | None:
         """Retrieve a media row by integer id or uuid."""
         record: dict[str, Any] | None = None
         try:
@@ -766,7 +766,7 @@ class ChatbookService:
                     conv_name = conv.get('name')
                     logger.debug(f"  Checking: title='{conv_title}', name='{conv_name}'")
                     if conv_title == name or conv_name == name:
-                        logger.debug(f"  Found exact match via FTS!")
+                        logger.debug("  Found exact match via FTS!")
                         return conv
 
             # If FTS didn't find it, try direct query (FTS might not be updated yet)
@@ -788,7 +788,7 @@ class ChatbookService:
                             return {'id': results[0][0], 'title': results[0][1] if len(results[0]) > 1 else name}
                         return results[0]
                 else:
-                    logger.debug(f"Direct query returned None/empty cursor")
+                    logger.debug("Direct query returned None/empty cursor")
 
             logger.debug(f"No match found for '{name}' via FTS or direct query")
             return None
@@ -808,7 +808,7 @@ class ChatbookService:
                     note_title = note.get('title')
                     logger.debug(f"  Checking note: title='{note_title}'")
                     if note_title == title:
-                        logger.debug(f"  Found exact match via FTS!")
+                        logger.debug("  Found exact match via FTS!")
                         return note
 
             # If FTS didn't find it, try direct query (FTS might not be updated yet)
@@ -830,7 +830,7 @@ class ChatbookService:
                             return {'id': results[0][0], 'title': results[0][1] if len(results[0]) > 1 else title}
                         return results[0]
                 else:
-                    logger.debug(f"Direct query returned None/empty cursor for note")
+                    logger.debug("Direct query returned None/empty cursor for note")
 
             logger.debug(f"No match found for note '{title}' via FTS or direct query")
             return None
@@ -1357,7 +1357,7 @@ class ChatbookService:
             # No direct filename access for security
             download_url = None  # Will be generated from job_id
 
-            return True, f"Chatbook created successfully", str(output_path)
+            return True, "Chatbook created successfully", str(output_path)
 
         except Exception as e:
             logger.error(f"Error creating chatbook: {e}")
@@ -1728,7 +1728,7 @@ class ChatbookService:
             if not manifest_path.exists():
                 return False, "Invalid chatbook - manifest.json not found", None
 
-            with open(manifest_path, 'r', encoding='utf-8') as f:
+            with open(manifest_path, encoding='utf-8') as f:
                 manifest_data = json.load(f)
 
             manifest = ChatbookManifest.from_dict(manifest_data)
@@ -1843,7 +1843,7 @@ class ChatbookService:
                 # All items were skipped (e.g., due to conflicts)
                 return True, f"Import completed: All {import_status.skipped_items} items were skipped", list(import_status.warnings or [])
             else:
-                logger.debug(f"Import failed: No items were successfully imported or skipped")
+                logger.debug("Import failed: No items were successfully imported or skipped")
                 return False, "No items were imported", list(import_status.warnings or [])
 
         except Exception as e:
@@ -1997,7 +1997,7 @@ class ChatbookService:
             if not manifest_path.exists():
                 return None, "Invalid chatbook: manifest.json not found"
 
-            with open(manifest_path, 'r', encoding='utf-8') as f:
+            with open(manifest_path, encoding='utf-8') as f:
                 manifest_data = json.load(f)
 
             manifest = ChatbookManifest.from_dict(manifest_data)
@@ -2020,7 +2020,7 @@ class ChatbookService:
             import hashlib
             import hmac
             exp = int(expires_at.timestamp())
-            msg = f"{job_id}:{exp}".encode("utf-8")
+            msg = f"{job_id}:{exp}".encode()
             sig = hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
             return f"{base}?exp={exp}&token={sig}"
         return base
@@ -3144,7 +3144,7 @@ class ChatbookService:
                     status.warnings.append(f"Conversation file not found: {conv_file.name}")
                     continue
 
-                with open(conv_file, 'r', encoding='utf-8') as f:
+                with open(conv_file, encoding='utf-8') as f:
                     conv_data = json.load(f)
 
                 # Check for existing conversation
@@ -3323,7 +3323,7 @@ class ChatbookService:
                     continue
 
                 # Parse markdown with frontmatter
-                with open(note_file, 'r', encoding='utf-8') as f:
+                with open(note_file, encoding='utf-8') as f:
                     content = f.read()
 
                 # Extract frontmatter
@@ -3398,7 +3398,7 @@ class ChatbookService:
                     status.warnings.append(f"Character file not found: {char_file.name}")
                     continue
 
-                with open(char_file, 'r', encoding='utf-8') as f:
+                with open(char_file, encoding='utf-8') as f:
                     char_data = json.load(f)
 
                 # Check for existing character
@@ -3466,7 +3466,7 @@ class ChatbookService:
                     status.warnings.append(f"World book file not found: {wb_file.name}")
                     continue
 
-                with open(wb_file, 'r', encoding='utf-8') as f:
+                with open(wb_file, encoding='utf-8') as f:
                     wb_data = json.load(f)
 
                 # Handle import with conflict resolution
@@ -3523,7 +3523,7 @@ class ChatbookService:
                     status.warnings.append(f"Dictionary file not found: {dict_file.name}")
                     continue
 
-                with open(dict_file, 'r', encoding='utf-8') as f:
+                with open(dict_file, encoding='utf-8') as f:
                     dict_data = json.load(f)
 
                 # Handle import with conflict resolution

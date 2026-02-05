@@ -162,7 +162,7 @@ class PersonalizationDB:
         if not updates:
             return self.get_or_create_profile(user_id)
         updates["updated_at"] = _utcnow_iso()
-        set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
+        set_clause = ", ".join([f"{k} = ?" for k in updates])
         params = list(updates.values()) + [str(user_id)]
         with self._lock:
             conn = self._connect()

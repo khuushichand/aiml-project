@@ -40,7 +40,7 @@ class ModerationPolicy:
     redact_replacement: str = "[REDACTED]"
     per_user_overrides: bool = True
     # Compiled rules; each rule includes the regex and optional per-pattern action/replacement
-    block_patterns: list["PatternRule"] = field(default_factory=list)
+    block_patterns: list[PatternRule] = field(default_factory=list)
     # Enabled categories filter (None or empty means allow all)
     categories_enabled: set[str] | None = None
 
@@ -368,7 +368,7 @@ class ModerationService:
             if not os.path.exists(path):
                 logger.warning(f"Moderation blocklist file not found: {path}")
                 return patterns
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 for line in f:
                     s = line.strip()
                     if not s or s.startswith("#"):
@@ -481,7 +481,7 @@ class ModerationService:
             if not os.path.exists(p):
                 logger.info(f"Moderation user overrides file not found (optional): {p}")
                 return overrides
-            with open(p, "r", encoding="utf-8") as f:
+            with open(p, encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
                     cleaned: dict[str, dict[str, object]] = {}
@@ -571,7 +571,7 @@ class ModerationService:
         if not path or not os.path.exists(path):
             return
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 ro: dict[str, object] = {}
@@ -1128,9 +1128,8 @@ class ModerationService:
         if not path or not os.path.exists(path):
             return []
         try:
-            with self._lock:
-                with open(path, "r", encoding="utf-8") as f:
-                    return [ln.rstrip("\r\n") for ln in f.readlines()]
+            with self._lock, open(path, encoding="utf-8") as f:
+                return [ln.rstrip("\r\n") for ln in f.readlines()]
         except Exception as e:
             logger.error(f"Failed to read blocklist: {e}")
             return []

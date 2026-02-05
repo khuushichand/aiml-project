@@ -23,7 +23,7 @@ class RotationStats:
     skipped: int = 0
     failed: int = 0
 
-    def add(self, other: "RotationStats") -> None:
+    def add(self, other: RotationStats) -> None:
         self.processed += other.processed
         self.updated += other.updated
         self.skipped += other.skipped

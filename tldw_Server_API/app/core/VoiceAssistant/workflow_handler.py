@@ -214,7 +214,7 @@ class VoiceWorkflowHandler:
                     success=True,
                     action_type=ActionType.WORKFLOW,
                     result_data={"run_id": run_id, "status": "queued"},
-                    response_text=f"I've started the workflow. You can ask about its progress.",
+                    response_text="I've started the workflow. You can ask about its progress.",
                     execution_time_ms=(time.time() - start_time) * 1000,
                 )
 
@@ -230,7 +230,7 @@ class VoiceWorkflowHandler:
             return ActionResult(
                 success=False,
                 action_type=ActionType.WORKFLOW,
-                response_text=f"The workflow encountered an error.",
+                response_text="The workflow encountered an error.",
                 error_message=str(e),
             )
 

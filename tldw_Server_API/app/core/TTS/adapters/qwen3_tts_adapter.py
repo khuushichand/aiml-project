@@ -16,20 +16,20 @@ from typing import Any, Callable
 import numpy as np
 from loguru import logger
 
-from ..streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
 from ..audio_utils import (
     analyze_audio_signal,
     crossfade_audio,
     split_text_into_chunks,
     trim_trailing_silence,
 )
+from ..streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
 from ..tts_exceptions import (
+    TTSAudioQualityError,
     TTSGenerationError,
     TTSInvalidVoiceReferenceError,
     TTSProviderInitializationError,
     TTSStreamingError,
     TTSValidationError,
-    TTSAudioQualityError,
 )
 from ..utils import parse_bool
 from .base import (

@@ -196,8 +196,8 @@ def _service_status(self) -> dict:
     return {"running": running, "last_ticks": last}
 
 # Bind helper for status
-setattr(PersonalizationConsolidationService, "get_status", _service_status)
+PersonalizationConsolidationService.get_status = _service_status
 
 
 # Bind method dynamically to avoid circular imports at top
-setattr(PersonalizationConsolidationService, "_consolidate_user", PersonalizationConsolidationService__consolidate_user)
+PersonalizationConsolidationService._consolidate_user = PersonalizationConsolidationService__consolidate_user

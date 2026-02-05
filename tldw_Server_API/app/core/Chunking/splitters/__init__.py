@@ -7,7 +7,6 @@ and an optional BlingFire-backed splitter when available.
 from __future__ import annotations
 
 
-
 class SentenceSplitter:
     """Interface for sentence splitting into character spans."""
 

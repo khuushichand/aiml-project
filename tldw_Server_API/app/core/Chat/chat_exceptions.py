@@ -234,7 +234,7 @@ class ChatProviderError(ChatModuleException):
             message=message,
             details=details,
             cause=cause,
-            user_message=f"The chat service is temporarily unavailable. Please try again later."
+            user_message="The chat service is temporarily unavailable. Please try again later."
         )
 
 class ChatRateLimitError(ChatModuleException):

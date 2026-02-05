@@ -146,12 +146,12 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     InputError,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.transaction_utils import (
+    db_transaction,
+)
 from tldw_Server_API.app.core.Skills.context_integration import (
     add_skill_tool_to_tools_list,
     build_system_message_with_skills,
-)
-from tldw_Server_API.app.core.DB_Management.transaction_utils import (
-    db_transaction,
 )
 from tldw_Server_API.app.core.Utils.chunked_image_processor import get_image_processor
 
@@ -330,9 +330,9 @@ _RECENT_CALLS_WINDOW_SEC = 0.25
 _RECENT_CALLS_MIN_CONCURRENT = 3
 _recent_calls_by_user: dict[str, deque] = defaultdict(lambda: deque(maxlen=16))
 _active_request_counts: dict[str, int] = defaultdict(int)
-_active_request_locks: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = WeakKeyDictionary()
+_active_request_locks: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = WeakKeyDictionary()
 _active_request_guard = threading.Lock()
-_system_message_locks: "WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]" = WeakKeyDictionary()
+_system_message_locks: WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = WeakKeyDictionary()
 _system_message_guard = threading.Lock()
 
 
@@ -938,7 +938,7 @@ async def _save_message_turn_to_db(
                 )
     except Exception as e_proc:
         error = ChatDatabaseError(
-            message=f"Failed to process message content for saving",
+            message="Failed to process message content for saving",
             operation="message_content_processing",
             details={"conversation_id": conversation_id, "role": role},
             cause=e_proc
@@ -1089,7 +1089,7 @@ async def _save_message_turn_to_db(
                 return result
     except (InputError, ConflictError, CharactersRAGDBError) as e_db:
         error = ChatDatabaseError(
-            message=f"Database error saving message",
+            message="Database error saving message",
             operation="save_message",
             details={
                 "conversation_id": conversation_id,
@@ -1103,7 +1103,7 @@ async def _save_message_turn_to_db(
     except Exception as e_unexpected_db:
         error = ChatModuleException(
             code=ChatErrorCode.INT_UNEXPECTED_ERROR,
-            message=f"Unexpected error saving message to database",
+            message="Unexpected error saving message to database",
             details={"conversation_id": conversation_id},
             cause=e_unexpected_db
         )
@@ -1546,7 +1546,7 @@ async def create_chat_completion(
                                     )
                                     # Attach metadata if possible
                                     try:
-                                        setattr(sys_msg, "metadata", {"tldw_injection": inj_meta, "moderation": inj_mod})
+                                        sys_msg.metadata = {"tldw_injection": inj_meta, "moderation": inj_mod}
                                     except Exception:
                                         pass
                                     request_data.messages.append(sys_msg)
@@ -2136,9 +2136,7 @@ async def create_chat_completion(
                         raw_prefix = raw_model_str.split("/", 1)[0].strip().lower()
                     # If the original model was unprefixed (or missing), prefer the
                     # fallback provider's default model to avoid cross-provider mismatches.
-                    if not raw_model_str or raw_prefix is None:
-                        use_default_model = True
-                    elif raw_prefix != target_provider.lower():
+                    if not raw_model_str or raw_prefix is None or raw_prefix != target_provider.lower():
                         use_default_model = True
                 if use_default_model:
                     default_model = _get_default_model_for_provider_name(target_provider)
@@ -2758,7 +2756,7 @@ async def get_chat_queue_status():
     try:
         queue_status = queue.get_queue_status()
         return {"enabled": True, **queue_status}
-    except Exception as e:
+    except Exception:
         logger.exception("Chat queue status inspection failed")
         return {"enabled": True, "error": "Queue status unavailable"}
 
@@ -2791,7 +2789,7 @@ async def get_chat_queue_activity(
     try:
         activity = queue.get_recent_activity(limit=limit)
         return {"enabled": True, "limit": limit, "activity": activity}
-    except Exception as e:
+    except Exception:
         logger.exception("Chat queue activity inspection failed")
         return {"enabled": True, "error": "Queue activity unavailable"}
 

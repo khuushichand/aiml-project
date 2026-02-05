@@ -67,7 +67,7 @@ class VectorStoreFactory:
 
         if initialize:
             # If async initialization is needed, it should be done separately
-            logger.info(f"Adapter created (initialization pending)")
+            logger.info("Adapter created (initialization pending)")
 
         return adapter
 

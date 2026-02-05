@@ -25,12 +25,20 @@ from typing import Any, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_studio_db, get_prompt_studio_user
+from tldw_Server_API.app.api.v1.schemas.prompt_studio_schemas import (
+    EvaluationCreate,
+    EvaluationList,
+    EvaluationResponse,
+)
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
@@ -39,16 +47,7 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
 )
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
-
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager import EvaluationManager
-from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_studio_db, get_prompt_studio_user
-from tldw_Server_API.app.api.v1.schemas.prompt_studio_schemas import (
-    EvaluationCreate,
-    EvaluationList,
-    EvaluationResponse,
-)
 
 router = APIRouter(prefix="/api/v1/prompt-studio", tags=["prompt-studio"])
 from tldw_Server_API.app.core.Logging.log_context import (
@@ -150,7 +149,7 @@ async def create_evaluation(
         # Support both legacy shape (model_configs: List[dict]) and new shape (config: dict).
         incoming_configs = None
         try:
-            incoming_configs = getattr(evaluation, "model_configs")
+            incoming_configs = evaluation.model_configs
         except Exception:
             incoming_configs = None
 

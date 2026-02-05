@@ -713,9 +713,8 @@ class SecurityAuditor:
                 import gzip
                 import shutil
 
-                with open(archive_path, 'rb') as f_in:
-                    with gzip.open(f"{archive_path}.gz", 'wb') as f_out:
-                        shutil.copyfileobj(f_in, f_out)
+                with open(archive_path, 'rb') as f_in, gzip.open(f"{archive_path}.gz", 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
 
                 # Remove uncompressed archive
                 Path(archive_path).unlink()

@@ -242,7 +242,7 @@ class ConfigManager:
         # Determine format from extension
         extension = path_obj.suffix.lower()
 
-        with open(path, 'r') as f:
+        with open(path) as f:
             if extension == '.json':
                 config = json.load(f)
             elif extension in ['.yaml', '.yml']:

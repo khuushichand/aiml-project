@@ -29,7 +29,7 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
     StreamingTestResponse,
 )
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER, get_api_keys
-from tldw_Server_API.app.core.Audio.error_payloads import _ws_error_payload, _maybe_debug_details
+from tldw_Server_API.app.core.Audio.error_payloads import _maybe_debug_details, _ws_error_payload
 from tldw_Server_API.app.core.Audio.quota_helpers import EXPECTED_DB_EXC, EXPECTED_REDIS_EXC, _get_failopen_cap_minutes
 from tldw_Server_API.app.core.Audio.streaming_service import (
     CHAT_HISTORY_MAX_MESSAGES,

@@ -411,7 +411,7 @@ def chat_api_call(
         if isinstance(response, str):
              logging.debug(f"Debug - Chat API Call - Response (first 500 chars): {response[:500]}...")
         elif hasattr(response, '__iter__') and not isinstance(response, (str, bytes, dict)):
-             logging.debug(f"Debug - Chat API Call - Response: Streaming Generator")
+             logging.debug("Debug - Chat API Call - Response: Streaming Generator")
         else:
              logging.debug(f"Debug - Chat API Call - Response Type: {type(response)}")
         return response
@@ -973,7 +973,7 @@ def _chat_sync_impl(
         try: temperature_float = float(temperature) if temperature is not None else 0.7
         except ValueError: logging.warning(f"Invalid temperature '{temperature}', using 0.7.")
 
-        logging.debug(f"Debug - Chat Function - Final LLM Payload (structure, image data truncated):")
+        logging.debug("Debug - Chat Function - Final LLM Payload (structure, image data truncated):")
         for i, msg_p in enumerate(llm_messages_payload):
             content_log = []
             if isinstance(msg_p.get("content"), list):

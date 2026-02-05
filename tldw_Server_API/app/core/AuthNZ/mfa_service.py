@@ -163,7 +163,7 @@ class MFAService:
         """Return hash candidates for a backup code across current/legacy keys."""
         digests: list[str] = []
         normalized = self._normalize_backup_code(code)
-        message = f"{user_id}:{normalized}".encode("utf-8")
+        message = f"{user_id}:{normalized}".encode()
         for key in derive_hmac_key_candidates(self.settings):
             digest = hmac.new(key, message, hashlib.sha256).hexdigest()
             if digest not in digests:

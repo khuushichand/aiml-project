@@ -110,11 +110,7 @@ async def redeem_invite(
 
     if not result.success:
         # Determine appropriate status code based on the failure reason
-        if "expired" in (result.message or "").lower():
-            status_code = status.HTTP_410_GONE
-        elif "exhausted" in (result.message or "").lower() or "limit" in (result.message or "").lower():
-            status_code = status.HTTP_410_GONE
-        elif "revoked" in (result.message or "").lower():
+        if "expired" in (result.message or "").lower() or "exhausted" in (result.message or "").lower() or "limit" in (result.message or "").lower() or "revoked" in (result.message or "").lower():
             status_code = status.HTTP_410_GONE
         elif "not found" in (result.message or "").lower():
             status_code = status.HTTP_404_NOT_FOUND

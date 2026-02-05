@@ -263,7 +263,7 @@ class DockerRunner:
         read_only_root = True
         try:
             if getattr(spec, "read_only_root", None) is not None:
-                read_only_root = bool(getattr(spec, "read_only_root"))
+                read_only_root = bool(spec.read_only_root)
         except Exception:
             read_only_root = True
         if read_only_root:
@@ -872,7 +872,7 @@ class DockerRunner:
         """
         cgroups: dict[str, str] = {}
         try:
-            with open(f"/proc/{pid}/cgroup", "r") as f:
+            with open(f"/proc/{pid}/cgroup") as f:
                 for line in f:
                     parts = line.strip().split(":")
                     if len(parts) == 3:
@@ -890,7 +890,7 @@ class DockerRunner:
         if path_v1:
             cg_file = os.path.join("/sys/fs/cgroup", "cpuacct", path_v1.lstrip("/"), "cpuacct.usage")
             try:
-                with open(cg_file, "r") as f:
+                with open(cg_file) as f:
                     ns = int(f.read().strip())
                     return int(ns / 1_000_000_000)
             except Exception:
@@ -905,7 +905,7 @@ class DockerRunner:
         if path_v2:
             cg_file2 = os.path.join("/sys/fs/cgroup", path_v2.lstrip("/"), "cpu.stat")
             try:
-                with open(cg_file2, "r") as f:
+                with open(cg_file2) as f:
                     content = f.read()
                     for ln in content.splitlines():
                         if ln.startswith("usage_usec "):
@@ -933,7 +933,7 @@ class DockerRunner:
         Returns None if unavailable.
         """
         try:
-            with open(f"/proc/{pid}/cgroup", "r") as f:
+            with open(f"/proc/{pid}/cgroup") as f:
                 lines = f.read().splitlines()
         except Exception:
             return None
@@ -949,14 +949,14 @@ class DockerRunner:
             for name in ("memory.peak", "memory.current"):
                 fp = os.path.join(base, name)
                 try:
-                    with open(fp, "r") as f:
+                    with open(fp) as f:
                         val = int(f.read().strip())
                         return int(val / (1024 * 1024))
                 except Exception:
                     continue
         # Try v1 memory cgroup
         mem_key = None
-        for key in subs.keys():
+        for key in subs:
             if "memory" in key:
                 mem_key = key
                 break
@@ -965,7 +965,7 @@ class DockerRunner:
             for name in ("memory.max_usage_in_bytes", "memory.usage_in_bytes"):
                 fp = os.path.join(base, name)
                 try:
-                    with open(fp, "r") as f:
+                    with open(fp) as f:
                         val = int(f.read().strip())
                         return int(val / (1024 * 1024))
                 except Exception:
@@ -994,7 +994,7 @@ class DockerRunner:
         """
         cgroups: dict[str, str] = {}
         try:
-            with open(f"/proc/{pid}/cgroup", "r") as f:
+            with open(f"/proc/{pid}/cgroup") as f:
                 for line in f:
                     parts = line.strip().split(":")
                     if len(parts) == 3:
@@ -1038,11 +1038,11 @@ class DockerRunner:
         path, fmt = file_info
         try:
             if fmt == "v1":
-                with open(path, "r") as f:
+                with open(path) as f:
                     ns = int(f.read().strip())
                     return int(ns / 1_000_000_000)
             elif fmt == "v2":
-                with open(path, "r") as f:
+                with open(path) as f:
                     content = f.read()
                     for ln in content.splitlines():
                         if ln.startswith("usage_usec "):
@@ -1110,7 +1110,7 @@ class DockerRunner:
             pid = int(pid_out)
             # Read cgroup membership
             cgroups = {}
-            with open(f"/proc/{pid}/cgroup", "r") as f:
+            with open(f"/proc/{pid}/cgroup") as f:
                 for line in f:
                     parts = line.strip().split(":")
                     if len(parts) == 3:
@@ -1126,7 +1126,7 @@ class DockerRunner:
             if path_v1:
                 cg_file = os.path.join("/sys/fs/cgroup", "cpuacct", path_v1.lstrip("/"), "cpuacct.usage")
                 try:
-                    with open(cg_file, "r") as f:
+                    with open(cg_file) as f:
                         ns = int(f.read().strip())
                         return int(ns / 1_000_000_000)
                 except Exception:
@@ -1142,7 +1142,7 @@ class DockerRunner:
             if path_v2:
                 cg_file2 = os.path.join("/sys/fs/cgroup", path_v2.lstrip("/"), "cpu.stat")
                 try:
-                    with open(cg_file2, "r") as f:
+                    with open(cg_file2) as f:
                         content = f.read()
                         for ln in content.splitlines():
                             if ln.startswith("usage_usec "):

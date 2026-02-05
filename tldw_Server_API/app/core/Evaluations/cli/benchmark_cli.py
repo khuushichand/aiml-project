@@ -142,7 +142,7 @@ def run_benchmark(ctx, benchmark_name, model, api_key, limit, output, resume_fro
     results = []
     if resume_from:
         try:
-            with open(resume_from, 'r') as f:
+            with open(resume_from) as f:
                 previous_results = json.load(f)
                 results = previous_results.get('results', [])
                 completed_ids = {r.get('id', r.get('question_id', i))

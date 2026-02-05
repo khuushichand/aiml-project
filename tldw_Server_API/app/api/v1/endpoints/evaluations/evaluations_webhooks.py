@@ -44,14 +44,14 @@ def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
         from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
         if _is_test_mode():
             svc = get_unified_evaluation_service_for_user(user_id)
-            setattr(svc, "webhook_manager", webhook_manager)
+            svc.webhook_manager = webhook_manager
             return webhook_manager
     except Exception as e:
         logger.debug(f"Test mode detection skipped: {e}")
     service = get_unified_evaluation_service_for_user(user_id)
     manager = getattr(service, "webhook_manager", None)
     if manager is None:
-        setattr(service, "webhook_manager", webhook_manager)
+        service.webhook_manager = webhook_manager
         return webhook_manager
     return manager
 

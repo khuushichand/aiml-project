@@ -413,7 +413,7 @@ class WebhookSecurityValidator:
             if re.search(pattern, path_lower):
                 warnings.append(WebhookValidationError(
                     code="SUSPICIOUS_PATH",
-                    message=f"Potentially suspicious path pattern detected",
+                    message="Potentially suspicious path pattern detected",
                     severity="warning",
                     field="url"
                 ))

@@ -139,9 +139,7 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
                 raise
             try:
                 new_toks = None
-                if provider == 'drive' and hasattr(conn, 'refresh_access_token'):
-                    new_toks = await conn.refresh_access_token(rtok)
-                elif provider == 'notion' and hasattr(conn, 'refresh_access_token'):
+                if provider == 'drive' and hasattr(conn, 'refresh_access_token') or provider == 'notion' and hasattr(conn, 'refresh_access_token'):
                     new_toks = await conn.refresh_access_token(rtok)
                 if not new_toks or not new_toks.get('access_token'):
                     raise e

@@ -731,7 +731,7 @@ def process_audio_files(
 
                         if is_youtube:
                             # Use yt-dlp for YouTube URLs
-                            update_progress(f"Detected YouTube URL, using yt-dlp for extraction...")
+                            update_progress("Detected YouTube URL, using yt-dlp for extraction...")
                             downloaded_path, download_message = download_youtube_audio(
                                 input_item,
                                 use_cookies=use_cookies,

@@ -59,7 +59,7 @@ async def run_notify_adapter(config: dict[str, Any], context: dict[str, Any]) ->
         return {"dispatched": False, "test_mode": True}
 
     try:
-        tenant_id = str((context.get("tenant_id") or "default")) if isinstance(context, dict) else "default"
+        tenant_id = str(context.get("tenant_id") or "default") if isinstance(context, dict) else "default"
         ok = False
         try:
             ok = is_url_allowed_for_tenant(url, tenant_id)
@@ -527,7 +527,7 @@ async def run_webhook_adapter(config: dict[str, Any], context: dict[str, Any]) -
                         context["add_artifact"](
                             type="webhook_response",
                             uri=f"file://{fpath}",
-                            size_bytes=len((fpath.read_bytes() if fpath.exists() else b"")),
+                            size_bytes=len(fpath.read_bytes() if fpath.exists() else b""),
                             mime_type="application/json",
                             metadata={"url": url},
                         )
@@ -551,7 +551,7 @@ async def run_webhook_adapter(config: dict[str, Any], context: dict[str, Any]) -
                                 context["add_artifact"](
                                     type="webhook_response_body",
                                     uri=f"file://{body_path}",
-                                    size_bytes=len((body_path.read_bytes() if body_path.exists() else b"")),
+                                    size_bytes=len(body_path.read_bytes() if body_path.exists() else b""),
                                     mime_type=body_mime,
                                     metadata={"url": url},
                                 )

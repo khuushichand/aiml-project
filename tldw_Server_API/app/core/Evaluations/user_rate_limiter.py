@@ -561,7 +561,7 @@ class UserRateLimiter:
         total_tokens = 0
         total_cost: float = 0.0
 
-        ledger: Optional["ResourceDailyLedger"] = None
+        ledger: Optional[ResourceDailyLedger] = None
         try:
             ledger = await self._get_daily_ledger(user_id)
         except Exception:

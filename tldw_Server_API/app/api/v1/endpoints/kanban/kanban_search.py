@@ -356,7 +356,7 @@ def _perform_hybrid_search(
 
         # Add any vector-only results (cards that matched semantically but not keyword)
         # Collect IDs that need to be fetched (not already in FTS results)
-        vector_only_ids = [cid for cid in vector_scores.keys() if cid not in seen_ids]
+        vector_only_ids = [cid for cid in vector_scores if cid not in seen_ids]
 
         if vector_only_ids:
             # Batch fetch all vector-only cards in a single query

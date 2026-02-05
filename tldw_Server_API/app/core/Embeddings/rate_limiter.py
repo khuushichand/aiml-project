@@ -543,7 +543,6 @@ def check_user_rate_limit(
 
 
 # Async extensions for rate limiting
-import asyncio
 
 
 class AsyncRateLimiter:

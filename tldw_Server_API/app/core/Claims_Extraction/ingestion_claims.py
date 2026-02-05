@@ -330,7 +330,7 @@ def extract_claims_for_chunks(
 
 
 def store_claims(
-    db: "MediaDatabase",
+    db: MediaDatabase,
     *,
     media_id: int,
     chunk_texts_by_index: dict[int, str],

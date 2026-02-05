@@ -347,7 +347,7 @@ async def create_chatbook(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         # Log full traceback to aid debugging intermittent 500s in CI
         get_ps_logger(
             request_id=ensure_request_id(request),
@@ -1065,7 +1065,7 @@ async def download_chatbook(
             # Verify signature
             import hashlib
             import hmac
-            msg = f"{job_id}:{exp_int}".encode("utf-8")
+            msg = f"{job_id}:{exp_int}".encode()
             expected = hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
             if not hmac.compare_digest(expected, token):
                 raise HTTPException(status_code=403, detail="Invalid signature")

@@ -219,7 +219,7 @@ def ensure_prompt_studio_rls(backend: DatabaseBackend) -> bool:
     Returns True if statements were applied (or attempted), False otherwise.
     """
     try:
-        if not hasattr(backend, 'backend_type') or getattr(backend, 'backend_type').name != 'POSTGRESQL':
+        if not hasattr(backend, 'backend_type') or backend.backend_type.name != 'POSTGRESQL':
             return False
     except Exception:
         # Best-effort detection; if not clearly PostgreSQL, do nothing
@@ -244,7 +244,7 @@ def ensure_prompt_studio_rls(backend: DatabaseBackend) -> bool:
 
 def ensure_chacha_rls(backend: DatabaseBackend) -> bool:
     try:
-        if not hasattr(backend, 'backend_type') or getattr(backend, 'backend_type').name != 'POSTGRESQL':
+        if not hasattr(backend, 'backend_type') or backend.backend_type.name != 'POSTGRESQL':
             return False
     except Exception:
         return False

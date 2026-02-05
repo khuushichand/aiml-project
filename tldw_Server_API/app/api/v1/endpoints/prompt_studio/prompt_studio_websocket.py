@@ -209,7 +209,6 @@ class ConnectionManager:
 ########################################################################################################################
 # SSE (Server-Sent Events) Fallback
 
-import asyncio
 
 from fastapi.responses import StreamingResponse
 

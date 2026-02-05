@@ -8,6 +8,27 @@ from importlib import import_module as _import_module
 from types import ModuleType as _ModuleType
 from typing import Any as _Any
 
+import soundfile as sf
+
+from tldw_Server_API.app.core.Audio.tokenizer_service import (
+    _get_qwen3_tokenizer_settings,
+    _load_qwen3_tokenizer,
+)
+from tldw_Server_API.app.core.Audio.tts_service import (
+    _sanitize_speech_request,
+    _tts_fallback_resolver,
+)
+from tldw_Server_API.app.core.Usage.audio_quota import (
+    add_daily_minutes,
+    can_start_job,
+    check_daily_minutes_allow,
+    finish_job,
+    get_job_heartbeat_interval_seconds,
+    get_limits_for_user,
+    heartbeat_jobs,
+    increment_jobs_started,
+)
+
 _AUDIO_MODULE_PATH = "tldw_Server_API.app.api.v1.endpoints.audio.audio"
 _audio_module: _ModuleType | None = None
 

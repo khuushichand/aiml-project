@@ -51,7 +51,7 @@ def load_module_yaml(
         return {}, path
 
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
         if isinstance(data, dict):
             logger.debug(f"Loaded module YAML for {module_name}: {path}")

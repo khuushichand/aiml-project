@@ -386,7 +386,7 @@ class MCPConfig(BaseSettings):
             )
 
 
-@lru_cache()
+@lru_cache
 def get_config() -> MCPConfig:
     """Get cached configuration instance"""
     try:
@@ -399,7 +399,7 @@ def get_config() -> MCPConfig:
 
                 import yaml as _yaml
                 if _os.path.exists(config.tool_category_map_file):
-                    with open(config.tool_category_map_file, 'r') as f:
+                    with open(config.tool_category_map_file) as f:
                         data = _yaml.safe_load(f) or {}
                     if isinstance(data, dict):
                         # Expect top-level mapping { tool_name: category }

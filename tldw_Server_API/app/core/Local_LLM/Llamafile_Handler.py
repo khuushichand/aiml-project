@@ -503,7 +503,7 @@ class LlamafileHandler(BaseLLMHandler):
             command += ["--host", host]
 
         # Validate keys
-        invalid = [k for k in args.keys() if k not in allowed_formatters]
+        invalid = [k for k in args if k not in allowed_formatters]
         if invalid and not getattr(self.config, "allow_unvalidated_args", False):
             raise ServerError(f"Unsupported llamafile server args: {sorted(invalid)}")
 

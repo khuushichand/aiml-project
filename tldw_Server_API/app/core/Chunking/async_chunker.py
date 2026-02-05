@@ -158,7 +158,7 @@ class AsyncChunker:
         file_path = Path(file_path)
 
         # Read file asynchronously
-        async with aiofiles.open(file_path, 'r', encoding=encoding) as f:
+        async with aiofiles.open(file_path, encoding=encoding) as f:
             text = await f.read()
 
         # Chunk the text
@@ -512,7 +512,7 @@ class AsyncBatchProcessor:
         self.max_concurrent = max_concurrent
         self._chunker = AsyncChunker()
         self._queue: asyncio.Queue = asyncio.Queue()
-        self._results: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+        self._results: OrderedDict[str, dict[str, Any]] = OrderedDict()
         if max_results is not None:
             try:
                 max_results = int(max_results)
@@ -741,7 +741,7 @@ async def stream_chunks_from_file(file_path: Union[str, Path],
         Text chunks
     """
     async def file_reader():
-        async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+        async with aiofiles.open(file_path, encoding='utf-8') as f:
             while True:
                 chunk = await f.read(chunk_size)
                 if not chunk:

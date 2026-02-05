@@ -274,7 +274,7 @@ def _introspect_sqlite_schema(
 
 
 def _topological_sort(tables: dict[str, TableMeta]) -> list[str]:
-    indegree: dict[str, int] = {name: 0 for name in tables}
+    indegree: dict[str, int] = dict.fromkeys(tables, 0)
     adjacency: dict[str, set[str]] = {name: set() for name in tables}
 
     for table in tables.values():

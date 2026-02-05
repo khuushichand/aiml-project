@@ -297,7 +297,7 @@ class LlamaCppReranker(BaseReranker):
             or "llama-embedding"
         )
         self.model_path = (
-            (config.model_name or os.getenv("RAG_LLAMA_RERANKER_MODEL") or _cfg.get("RAG_LLAMA_RERANKER_MODEL"))
+            config.model_name or os.getenv("RAG_LLAMA_RERANKER_MODEL") or _cfg.get("RAG_LLAMA_RERANKER_MODEL")
         )
         self.sep = (
             config.llama_embd_separator
@@ -739,9 +739,7 @@ class Qwen3CausalLMReranker(BaseReranker):
     def _format_instruction(self, instruction: Optional[str], query: str, doc: str) -> str:
         if instruction is None:
             instruction = self.default_instruction
-        return "<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {doc}".format(
-            instruction=instruction, query=query, doc=doc
-        )
+        return f"<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {doc}"
 
     def _process_inputs(self, pairs: list[str]):
         tok = self.tokenizer

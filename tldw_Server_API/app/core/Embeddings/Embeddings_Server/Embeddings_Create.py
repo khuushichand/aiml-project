@@ -629,7 +629,7 @@ _rg_emb_server_governor = None
 _rg_emb_server_loader = None
 _rg_emb_server_log_lock = threading.Lock()
 _rg_emb_server_lock_guard = threading.Lock()
-_rg_emb_server_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = weakref.WeakKeyDictionary()
+_rg_emb_server_locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
 _rg_emb_server_init_error: str | None = None
 _rg_emb_server_init_error_logged = False
 _rg_emb_server_fallback_logged = False
@@ -1041,7 +1041,7 @@ def _remove_model(model_id: str) -> bool:
         provider_label = "onnx"
     elif model is not None and hasattr(model, "provider"):
         try:
-            provider_label = str(getattr(model, "provider") or "")
+            provider_label = str(model.provider or "")
         except Exception:
             provider_label = ""
 
@@ -1102,9 +1102,9 @@ def get_directory_size(path: str) -> float:
                 filepath = os.path.join(dirpath, filename)
                 try:
                     total_size += os.path.getsize(filepath)
-                except (OSError, IOError):
+                except OSError:
                     pass
-    except (OSError, IOError):
+    except OSError:
         pass
 
     return total_size / (1024 ** 3)  # Convert bytes to GB
@@ -1158,8 +1158,8 @@ class HuggingFaceEmbedder:
 
         # Initialize as Optional, to be populated by load_model
         # Type-only; actual classes are imported lazily at use time
-        self.tokenizer: "AutoTokenizer" | None = None
-        self.model: "AutoModel" | None = None  # AutoModel is a class that returns a model instance
+        self.tokenizer: AutoTokenizer | None = None
+        self.model: AutoModel | None = None  # AutoModel is a class that returns a model instance
 
         self.unload_timer: threading.Timer | None = None
         self.last_used_time: float = 0.0
@@ -1281,7 +1281,7 @@ class HuggingFaceEmbedder:
             log_counter("huggingface_create_embeddings_attempt", labels={"model_id": self.model_identifier})
             start_time_embed = time.time()
             torch = _import_torch()
-            embeddings_tensor: "torch.Tensor" | None = None
+            embeddings_tensor: torch.Tensor | None = None
 
             def _mean_pool(hidden_state, attention_mask):
                 if attention_mask is None:
@@ -1772,7 +1772,7 @@ def create_embeddings_batch(
             if candidate in models_map:
                 return candidate, models_map[candidate]
         # 4) Unique suffix match (any key that ends with ":<bare>")
-        suffix_matches = [k for k in models_map.keys() if k.endswith(f":{bare}")]
+        suffix_matches = [k for k in models_map if k.endswith(f":{bare}")]
         if len(suffix_matches) == 1:
             k = suffix_matches[0]
             return k, models_map[k]

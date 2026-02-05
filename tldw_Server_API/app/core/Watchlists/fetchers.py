@@ -36,8 +36,8 @@ from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allo
 
 _TEST_MODE_VALUES = {"1", "true", "yes"}
 _SELECTOR_CACHE_MAX = 512
-_XPATH_SELECTOR_CACHE: "OrderedDict[str, Any]" = OrderedDict()
-_CSS_SELECTOR_CACHE: "OrderedDict[str, Any]" = OrderedDict()
+_XPATH_SELECTOR_CACHE: OrderedDict[str, Any] = OrderedDict()
+_CSS_SELECTOR_CACHE: OrderedDict[str, Any] = OrderedDict()
 _SELECTOR_CACHE_LOCK = Lock()
 
 
@@ -59,7 +59,7 @@ def clear_selector_caches() -> None:
         _CSS_SELECTOR_CACHE.clear()
 
 
-def _selector_cache_get(cache: "OrderedDict[str, Any]", key: str) -> Any | None:
+def _selector_cache_get(cache: OrderedDict[str, Any], key: str) -> Any | None:
     with _SELECTOR_CACHE_LOCK:
         value = cache.get(key)
         if value is None:
@@ -68,7 +68,7 @@ def _selector_cache_get(cache: "OrderedDict[str, Any]", key: str) -> Any | None:
         return value
 
 
-def _selector_cache_put(cache: "OrderedDict[str, Any]", key: str, value: Any) -> None:
+def _selector_cache_put(cache: OrderedDict[str, Any], key: str, value: Any) -> None:
     with _SELECTOR_CACHE_LOCK:
         cache[key] = value
         cache.move_to_end(key)
@@ -1641,9 +1641,7 @@ async def fetch_rss_feed(
                 rel = (node.get("rel") or "").lower()
                 if rel == "alternate" and not preferred_link:
                     preferred_link = candidate
-                elif rel not in {"self"} and not fallback_link:
-                    fallback_link = candidate
-                elif not fallback_link:
+                elif rel not in {"self"} and not fallback_link or not fallback_link:
                     fallback_link = candidate
             link = preferred_link or fallback_link or _find_text(it, ["link", atom_link_tag]) or ""
 
@@ -1771,7 +1769,7 @@ async def fetch_rss_feed_history(
             key = (it.get("guid") or it.get("url") or it.get("link") or "").strip()
             if key:
                 agg_seen.add(key)
-        db_seen: set[str] = set((k.strip() for k in (seen_keys or []) if isinstance(k, str)))
+        db_seen: set[str] = set(k.strip() for k in (seen_keys or []) if isinstance(k, str))
         fetched_here = 0
         while remaining > 0 and current_url:
             try:
@@ -1867,7 +1865,7 @@ async def fetch_rss_feed_history(
         wp_urls = _wp_paged_urls(url, pages_left + 1)
         # Track DB-seen and aggregate keys
         prior_keys = {(it.get("guid") or it.get("url") or it.get("link") or "").strip() for it in agg_items}
-        db_seen_wp: set[str] = set((k.strip() for k in (seen_keys or []) if isinstance(k, str)))
+        db_seen_wp: set[str] = set(k.strip() for k in (seen_keys or []) if isinstance(k, str))
         for u in wp_urls:
             if pages_left <= 0:
                 break

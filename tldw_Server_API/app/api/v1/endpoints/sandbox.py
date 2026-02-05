@@ -306,11 +306,11 @@ async def sandbox_health(current_user: User = Depends(get_request_user)) -> dict
                 _ = int(st.count_runs())
                 timings["store_ms"] = float((_time.perf_counter() - t0) * 1000.0)
                 store_info["healthy"] = True
-            except Exception as e:
+            except Exception:
                 logger.exception("Sandbox health: store connectivity check failed")
                 store_info["healthy"] = False
                 store_info["code"] = "internal_error"
-    except Exception as e:
+    except Exception:
         logger.exception("Sandbox health: store mode detection failed")
         store_info["healthy"] = False
         store_info["code"] = "internal_error"
@@ -350,12 +350,12 @@ async def sandbox_health_public() -> dict:
                 _ = int(st.count_runs())
                 timings["store_ms"] = float((_time.perf_counter() - t0) * 1000.0)
                 store_info["healthy"] = True
-            except Exception as e:
+            except Exception:
                 # Do not leak exception details publicly; log with traceback server-side
                 logger.exception("Sandbox public health: store connectivity check failed")
                 store_info["healthy"] = False
                 store_info["code"] = "internal_error"
-    except Exception as e:
+    except Exception:
         # Do not leak exception details publicly; log with traceback server-side
         logger.exception("Sandbox public health: store mode detection failed")
         store_info["healthy"] = False
@@ -561,7 +561,7 @@ async def create_snapshot(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except IOError as e:
+    except OSError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -588,7 +588,7 @@ async def restore_snapshot(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except IOError as e:
+    except OSError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1106,7 +1106,7 @@ async def start_run(
         if signed_flag and secret_val:
             ttl = int(getattr(app_settings, "SANDBOX_WS_SIGNED_URL_TTL_SEC", 60))
             exp = int(time.time()) + max(1, ttl)
-            msg = f"{status.id}:{exp}".encode("utf-8")
+            msg = f"{status.id}:{exp}".encode()
             secret = str(secret_val).encode("utf-8")
             token = hmac.new(secret, msg, hashlib.sha256).hexdigest()
             log_stream_url = f"{base_path}?token={token}&exp={exp}"
@@ -1475,7 +1475,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 finally:
                     return
             try:
-                msg = f"{run_id}:{exp_i}".encode("utf-8")
+                msg = f"{run_id}:{exp_i}".encode()
                 expected = hmac.new(str(secret).encode("utf-8"), msg, hashlib.sha256).hexdigest()
             except Exception:
                 expected = ""

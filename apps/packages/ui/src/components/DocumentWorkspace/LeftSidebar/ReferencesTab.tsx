@@ -230,7 +230,13 @@ const ReferenceCard: React.FC<{ reference: ReferenceEntry; index: number }> = ({
   if (url) {
     const handleCardClick = (event: React.MouseEvent<HTMLDivElement>) => {
       const target = event.target as HTMLElement | null
+      if (event.defaultPrevented) {
+        return
+      }
       if (target?.closest("a")) {
+        return
+      }
+      if (target?.closest("a, button, [role='button'], input, textarea, select")) {
         return
       }
       window.open(url, "_blank", "noopener,noreferrer")
@@ -238,7 +244,13 @@ const ReferenceCard: React.FC<{ reference: ReferenceEntry; index: number }> = ({
 
     const handleCardKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
       const target = event.target as HTMLElement | null
+      if (event.defaultPrevented) {
+        return
+      }
       if (target?.closest("a")) {
+        return
+      }
+      if (target?.closest("a, button, [role='button'], input, textarea, select")) {
         return
       }
       if (event.key === "Enter" || event.key === " ") {

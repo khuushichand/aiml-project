@@ -492,9 +492,7 @@ class HealthChecker:
         # Determine overall status
         if status_counts[HealthStatus.CRITICAL] > 0:
             return HealthStatus.CRITICAL
-        elif status_counts[HealthStatus.UNHEALTHY] > 0:
-            return HealthStatus.UNHEALTHY
-        elif status_counts[HealthStatus.DEGRADED] > len(component_results) / 2:
+        elif status_counts[HealthStatus.UNHEALTHY] > 0 or status_counts[HealthStatus.DEGRADED] > len(component_results) / 2:
             return HealthStatus.UNHEALTHY
         elif status_counts[HealthStatus.DEGRADED] > 0:
             return HealthStatus.DEGRADED

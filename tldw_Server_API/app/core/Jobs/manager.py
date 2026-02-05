@@ -111,7 +111,7 @@ class JobManager:
         *,
         backend: str | None = None,
         db_url: str | None = None,
-        clock: "JobManager.Clock" | None = None,
+        clock: JobManager.Clock | None = None,
         enforce_leases: bool | None = None,
     ):
         """Initialize JobManager.
@@ -477,15 +477,14 @@ class JobManager:
         conn = self._connect()
         try:
             if self.backend == "postgres":
-                with conn:
-                    with self._pg_cursor(conn) as cur:
-                        cur.execute(
-                            "SELECT paused, drain FROM job_queue_controls WHERE domain=%s AND queue=%s", (domain, queue)
-                        )
-                        row = cur.fetchone()
-                        if not row:
-                            return {"paused": False, "drain": False}
-                        return {"paused": bool(row.get("paused")), "drain": bool(row.get("drain"))}
+                with conn, self._pg_cursor(conn) as cur:
+                    cur.execute(
+                        "SELECT paused, drain FROM job_queue_controls WHERE domain=%s AND queue=%s", (domain, queue)
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return {"paused": False, "drain": False}
+                    return {"paused": bool(row.get("paused")), "drain": bool(row.get("drain"))}
             else:
                 row = conn.execute(
                     "SELECT paused, drain FROM job_queue_controls WHERE domain=? AND queue=?", (domain, queue)
@@ -726,12 +725,11 @@ class JobManager:
             try:
                 msg = f"SLA breach: {kind}={value:.3f}s > {threshold:.3f}s"
                 if self.backend == "postgres":
-                    with conn:
-                        with self._pg_cursor(conn) as cur:
-                            cur.execute(
-                                "INSERT INTO job_attachments(job_id,kind,content_text) VALUES(%s,%s,%s)",
-                                (int(job_id), "tag", msg),
-                            )
+                    with conn, self._pg_cursor(conn) as cur:
+                        cur.execute(
+                            "INSERT INTO job_attachments(job_id,kind,content_text) VALUES(%s,%s,%s)",
+                            (int(job_id), "tag", msg),
+                        )
                 else:
                     with conn:
                         conn.execute(
@@ -1115,7 +1113,7 @@ class JobManager:
                                     (domain, owner_user_id),
                                 )
                                 row_cnt = cur.fetchone()
-                                if int((row_cnt.get("c") if isinstance(row_cnt, dict) else 0)) >= max_q:
+                                if int(row_cnt.get("c") if isinstance(row_cnt, dict) else 0) >= max_q:
                                     raise ValueError("Quota exceeded: max queued per user/domain")
                             # Submits per minute
                             spm = self._quota_get("JOBS_QUOTA_SUBMITS_PER_MIN", domain, owner_user_id)
@@ -1125,7 +1123,7 @@ class JobManager:
                                     (domain, owner_user_id, _now_dt),
                                 )
                                 row_spm = cur.fetchone()
-                                if int((row_spm.get("c") if isinstance(row_spm, dict) else 0)) >= spm:
+                                if int(row_spm.get("c") if isinstance(row_spm, dict) else 0) >= spm:
                                     raise ValueError("Quota exceeded: submits per minute")
                         except Exception as _db_exc:
                             # Let ValueError propagate; swallow only DB/adapter errors
@@ -1606,14 +1604,13 @@ class JobManager:
         conn = self._connect()
         try:
             if self.backend == "postgres":
-                with conn:
-                    with self._pg_cursor(conn) as cur:
-                        cur.execute(
-                            "SELECT depends_on_job_uuid FROM job_dependencies WHERE job_uuid = %s",
-                            (str(job_uuid),),
-                        )
-                        rows = cur.fetchall() or []
-                        return [str(row.get("depends_on_job_uuid")) for row in rows if row.get("depends_on_job_uuid")]
+                with conn, self._pg_cursor(conn) as cur:
+                    cur.execute(
+                        "SELECT depends_on_job_uuid FROM job_dependencies WHERE job_uuid = %s",
+                        (str(job_uuid),),
+                    )
+                    rows = cur.fetchall() or []
+                    return [str(row.get("depends_on_job_uuid")) for row in rows if row.get("depends_on_job_uuid")]
             else:
                 with conn:
                     rows = conn.execute(
@@ -1661,16 +1658,15 @@ class JobManager:
         conn = self._connect()
         try:
             if self.backend == "postgres":
-                with conn:
-                    with self._pg_cursor(conn) as cur:
-                        cur.execute(
-                            (
-                                "INSERT INTO job_dependencies (job_uuid, depends_on_job_uuid) "
-                                "VALUES (%s, %s) ON CONFLICT (job_uuid, depends_on_job_uuid) DO NOTHING"
-                            ),
-                            (str(job_uuid), str(depends_on_job_uuid)),
-                        )
-                        return cur.rowcount > 0
+                with conn, self._pg_cursor(conn) as cur:
+                    cur.execute(
+                        (
+                            "INSERT INTO job_dependencies (job_uuid, depends_on_job_uuid) "
+                            "VALUES (%s, %s) ON CONFLICT (job_uuid, depends_on_job_uuid) DO NOTHING"
+                        ),
+                        (str(job_uuid), str(depends_on_job_uuid)),
+                    )
+                    return cur.rowcount > 0
             else:
                 with conn:
                     cur = conn.execute(
@@ -1687,18 +1683,17 @@ class JobManager:
         conn = self._connect()
         try:
             if self.backend == "postgres":
-                with conn:
-                    with self._pg_cursor(conn) as cur:
-                        cur.execute(
-                            (
-                                "SELECT j.id FROM job_dependencies jd "
-                                "JOIN jobs j ON j.uuid = jd.job_uuid "
-                                "WHERE jd.depends_on_job_uuid = %s AND j.status IN ('queued','processing')"
-                            ),
-                            (str(job_uuid),),
-                        )
-                        rows = cur.fetchall() or []
-                        ids = [int(row.get("id")) for row in rows if row.get("id") is not None]
+                with conn, self._pg_cursor(conn) as cur:
+                    cur.execute(
+                        (
+                            "SELECT j.id FROM job_dependencies jd "
+                            "JOIN jobs j ON j.uuid = jd.job_uuid "
+                            "WHERE jd.depends_on_job_uuid = %s AND j.status IN ('queued','processing')"
+                        ),
+                        (str(job_uuid),),
+                    )
+                    rows = cur.fetchall() or []
+                    ids = [int(row.get("id")) for row in rows if row.get("id") is not None]
             else:
                 with conn:
                     rows = conn.execute(
@@ -2219,7 +2214,7 @@ class JobManager:
                                 (domain, owner_user_id),
                             )
                             _row = curq.fetchone()
-                            if int((_row.get("c") if isinstance(_row, dict) else 0)) >= max_inflight:
+                            if int(_row.get("c") if isinstance(_row, dict) else 0) >= max_inflight:
                                 return None
                     else:
                         rowc = conn_q.execute(
@@ -2871,24 +2866,23 @@ class JobManager:
         conn = self._connect()
         try:
             if self.backend == "postgres":
-                with conn:
-                    with self._pg_cursor(conn) as cur:
-                        sets: list[str] = []
-                        params: list[Any] = []
-                        if progress_percent is not None:
-                            sets.append("progress_percent = %s")
-                            params.append(float(progress_percent))
-                        if progress_message is not None:
-                            sets.append("progress_message = %s")
-                            params.append(str(progress_message))
-                        if not sets:
-                            return False
-                        params.append(int(job_id))
-                        cur.execute(
-                            f"UPDATE jobs SET {', '.join(sets)}, updated_at = NOW() WHERE id = %s",
-                            tuple(params),
-                        )
-                        return cur.rowcount > 0
+                with conn, self._pg_cursor(conn) as cur:
+                    sets: list[str] = []
+                    params: list[Any] = []
+                    if progress_percent is not None:
+                        sets.append("progress_percent = %s")
+                        params.append(float(progress_percent))
+                    if progress_message is not None:
+                        sets.append("progress_message = %s")
+                        params.append(str(progress_message))
+                    if not sets:
+                        return False
+                    params.append(int(job_id))
+                    cur.execute(
+                        f"UPDATE jobs SET {', '.join(sets)}, updated_at = NOW() WHERE id = %s",
+                        tuple(params),
+                    )
+                    return cur.rowcount > 0
             else:
                 with conn:
                     sets2: list[str] = []
@@ -2949,13 +2943,12 @@ class JobManager:
         conn = self._connect()
         try:
             if self.backend == "postgres":
-                with conn:
-                    with self._pg_cursor(conn) as cur:
-                        cur.execute(
-                            "UPDATE jobs SET result = %s::jsonb, updated_at = NOW() WHERE id = %s",
-                            (json.dumps(res_obj) if res_obj is not None else None, int(job_id)),
-                        )
-                        return cur.rowcount > 0
+                with conn, self._pg_cursor(conn) as cur:
+                    cur.execute(
+                        "UPDATE jobs SET result = %s::jsonb, updated_at = NOW() WHERE id = %s",
+                        (json.dumps(res_obj) if res_obj is not None else None, int(job_id)),
+                    )
+                    return cur.rowcount > 0
             else:
                 with conn:
                     cur = conn.execute(
@@ -6120,7 +6113,7 @@ class JobManager:
                     wh = " AND ".join(where)
                     cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {wh}", tuple(params))
                     _cnt_row = cur.fetchone()
-                    count = int((_cnt_row.get("c") if isinstance(_cnt_row, dict) else 0))
+                    count = int(_cnt_row.get("c") if isinstance(_cnt_row, dict) else 0)
                     if dry_run:
                         return count
                     if set_now:
@@ -6260,7 +6253,7 @@ class JobManager:
                         tuple(params),
                     )
                     _cnt = cur.fetchone()
-                    count = int((_cnt.get("c") if isinstance(_cnt, dict) else 0))
+                    count = int(_cnt.get("c") if isinstance(_cnt, dict) else 0)
                     if dry_run:
                         return count
                     with conn:
@@ -6492,14 +6485,13 @@ class JobManager:
         conn = self._connect()
         try:
             if self.backend == "postgres":
-                with conn:
-                    with self._pg_cursor(conn) as cur:
-                        cur.execute(
-                            "INSERT INTO job_attachments(job_id,kind,content_text,url) VALUES(%s,%s,%s,%s) RETURNING id",
-                            (int(job_id), kind, content_text, url),
-                        )
-                        row = cur.fetchone()
-                        return int(row["id"]) if row else 0
+                with conn, self._pg_cursor(conn) as cur:
+                    cur.execute(
+                        "INSERT INTO job_attachments(job_id,kind,content_text,url) VALUES(%s,%s,%s,%s) RETURNING id",
+                        (int(job_id), kind, content_text, url),
+                    )
+                    row = cur.fetchone()
+                    return int(row["id"]) if row else 0
             else:
                 with conn:
                     conn.execute(
@@ -6780,10 +6772,10 @@ class JobManager:
                             params_pr.append(job_type)
                         cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_np)}", tuple(params_np))
                         _np = cur.fetchone()
-                        res["non_processing_with_lease"] = int((_np.get("c") if isinstance(_np, dict) else 0))
+                        res["non_processing_with_lease"] = int(_np.get("c") if isinstance(_np, dict) else 0)
                         cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_pr)}", tuple(params_pr))
                         _pr = cur.fetchone()
-                        res["processing_expired"] = int((_pr.get("c") if isinstance(_pr, dict) else 0))
+                        res["processing_expired"] = int(_pr.get("c") if isinstance(_pr, dict) else 0)
                         if fix:
                             # Clear leases for non-processing
                             cur.execute(

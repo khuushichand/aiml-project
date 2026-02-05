@@ -1231,26 +1231,25 @@ class EvaluationRunner:
 
         async def eval_with_timeout_and_semaphore(sample, sample_id):
             """Evaluate a single sample with timeout and semaphore control"""
-            async with self.semaphore:
-                async with run_semaphore:
-                    try:
-                        # Apply timeout to individual evaluation
-                        result = await asyncio.wait_for(
-                            eval_fn(
-                                sample=sample,
-                                eval_spec=eval_spec,
-                                config=eval_config,
-                                sample_id=sample_id
-                            ),
-                            timeout=run_timeout
-                        )
-                        return result
-                    except asyncio.TimeoutError:
-                        logger.error(f"Evaluation timeout for {sample_id}")
-                        return {"sample_id": sample_id, "error": f"Timeout after {run_timeout}s"}
-                    except Exception as e:
-                        logger.error(f"Evaluation failed for {sample_id}: {e}")
-                        return {"sample_id": sample_id, "error": str(e)}
+            async with self.semaphore, run_semaphore:
+                try:
+                    # Apply timeout to individual evaluation
+                    result = await asyncio.wait_for(
+                        eval_fn(
+                            sample=sample,
+                            eval_spec=eval_spec,
+                            config=eval_config,
+                            sample_id=sample_id
+                        ),
+                        timeout=run_timeout
+                    )
+                    return result
+                except asyncio.TimeoutError:
+                    logger.error(f"Evaluation timeout for {sample_id}")
+                    return {"sample_id": sample_id, "error": f"Timeout after {run_timeout}s"}
+                except Exception as e:
+                    logger.error(f"Evaluation failed for {sample_id}: {e}")
+                    return {"sample_id": sample_id, "error": str(e)}
 
         # Create tasks with proper error handling
         tasks = []
@@ -1536,9 +1535,7 @@ class EvaluationRunner:
             else:
                 expected_items = expected_field or []
 
-            if isinstance(expected_items, str):
-                expected_items = [expected_items]
-            elif not isinstance(expected_items, list):
+            if isinstance(expected_items, str) or not isinstance(expected_items, list):
                 expected_items = [expected_items]
 
             # Check each expected item

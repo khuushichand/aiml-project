@@ -209,7 +209,7 @@ class TestMigrations(unittest.TestCase):
         self.assertTrue(os.path.exists(backup_path + ".json"))
 
         # Check backup metadata
-        with open(backup_path + ".json", 'r') as f:
+        with open(backup_path + ".json") as f:
             metadata = json.load(f)
 
         self.assertEqual(metadata["original_path"], self.db_path)

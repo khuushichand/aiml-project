@@ -14,4 +14,11 @@ https://github.com/fr0gger/nova-framework
 https://developers.googleblog.com/a-guide-to-fine-tuning-functiongemma/
 
 
+https://www.mihaileric.com/The-Emperor-Has-No-Clothes/
+https://gist.github.com/wong2/e0f34aac66caf890a332f7b6f9e2ba8f#task-management
+https://gist.github.com/wong2/e0f34aac66caf890a332f7b6f9e2ba8f#todoread
+https://ampcode.com/how-to-build-an-agent
+https://github.com/badlogic/lemmy/tree/main/apps/claude-trace
+
+
 

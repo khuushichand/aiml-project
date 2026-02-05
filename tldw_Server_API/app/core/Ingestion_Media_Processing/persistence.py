@@ -1661,10 +1661,10 @@ async def process_batch_media(
                         existing_id = existing_record["id"]
                         should_process = False
                         reason = (
-                            "Media exists (ID: {id}) with the same filename "
-                            "and source hash for transcription model ('{model}'). "
+                            f"Media exists (ID: {existing_id}) with the same filename "
+                            f"and source hash for transcription model ('{model_for_check}'). "
                             "Overwrite is False."
-                        ).format(id=existing_id, model=model_for_check)
+                        )
                     else:
                         should_process = True
                         reason = (
@@ -1696,9 +1696,9 @@ async def process_batch_media(
                         existing_id = existing_record["id"]
                         should_process = False
                         reason = (
-                            "Media exists (ID: {id}) with the same URL/identifier "
-                            "and transcription model ('{model}'). Overwrite is False."
-                        ).format(id=existing_id, model=model_for_check)
+                            f"Media exists (ID: {existing_id}) with the same URL/identifier "
+                            f"and transcription model ('{model_for_check}'). Overwrite is False."
+                        )
                     else:
                         should_process = True
                         reason = (
@@ -2360,7 +2360,7 @@ async def process_document_like_item(
 
                 final_result["processing_source"] = str(processing_filepath)
             else:
-                raise IOError(
+                raise OSError(
                     f"Download failed or did not return a valid path for {processing_source}",
                 )
         else:

@@ -106,7 +106,7 @@ except Exception:  # pragma: no cover - absence is fine
     _re2 = None
 
 
-def safe_search(compiled_pat: "re.Pattern", text: str, *, timeout_env: str = "CHUNKING_REGEX_TIMEOUT") -> bool:
+def safe_search(compiled_pat: re.Pattern, text: str, *, timeout_env: str = "CHUNKING_REGEX_TIMEOUT") -> bool:
     """Perform a safe regex search with optional timeout and RE2 fallback.
 
     - If python-re is used, we cannot enforce hard timeouts; this function measures elapsed time

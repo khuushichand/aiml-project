@@ -121,7 +121,7 @@ class VerificationReport:
         query: str | None = None,
         answer_text: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> "VerificationReport":
+    ) -> VerificationReport:
         """
         Create a VerificationReport from a list of ClaimVerification objects.
 

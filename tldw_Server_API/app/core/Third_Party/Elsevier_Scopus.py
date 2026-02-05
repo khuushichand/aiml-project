@@ -96,7 +96,7 @@ def search_scopus(
         }
         data = fetch_json(method="GET", url=BASE_URL, headers=_headers(), params=params, timeout=20)
         sr = data.get("search-results") or {}
-        total = int((sr.get("opensearch:totalResults") or 0))
+        total = int(sr.get("opensearch:totalResults") or 0)
         entries = sr.get("entry") or []
         items = [_normalize_entry(e) for e in entries]
         return items, total, None

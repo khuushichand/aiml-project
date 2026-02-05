@@ -620,7 +620,7 @@ class TemplateManager:
         Supports both the stage-based schema and the simpler
         {preprocessing, chunking, postprocessing} schema used in the DB.
         """
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             data = json.load(f)
 
         stages: list[TemplateStage] = []

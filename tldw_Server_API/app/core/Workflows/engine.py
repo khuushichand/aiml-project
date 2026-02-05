@@ -1205,7 +1205,7 @@ class WorkflowEngine:
         # Lookup adapter from registry
         adapter = get_adapter(step_type)
         if adapter is None:
-            raise RuntimeError("Unsupported step type: {}".format(step_type))
+            raise RuntimeError(f"Unsupported step type: {step_type}")
         return await adapter(step_cfg, ctx)
 
     async def _reap_orphans(self) -> None:
@@ -1499,7 +1499,7 @@ class WorkflowEngine:
                 headers["X-Webhook-ID"] = f"wf-{run.run_id}-{ts}"
                 headers["X-Workflows-Signature-Version"] = "v1"
                 if secret:
-                    signed_payload = f"{ts}.{body}".encode("utf-8")
+                    signed_payload = f"{ts}.{body}".encode()
                     sig = hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
                     headers["X-Workflows-Signature"] = sig
                     # Also set a common alternate header for compatibility with tests/tools
@@ -1558,10 +1558,10 @@ class WorkflowEngine:
 class WorkflowScheduler:
     """In-process scheduler with per-tenant and per-workflow concurrency limits."""
 
-    _inst: "WorkflowScheduler" | None = None
+    _inst: WorkflowScheduler | None = None
 
     @classmethod
-    def instance(cls) -> "WorkflowScheduler":
+    def instance(cls) -> WorkflowScheduler:
         if cls._inst is None:
             cls._inst = WorkflowScheduler()
         return cls._inst
@@ -1585,7 +1585,7 @@ class WorkflowScheduler:
         except Exception:
             pass
 
-    def schedule(self, engine: "WorkflowEngine", run_id: str, mode: RunMode) -> None:
+    def schedule(self, engine: WorkflowEngine, run_id: str, mode: RunMode) -> None:
         queue_depth = 0.0
         with self._lock:
             run = engine.db.get_run(run_id)
@@ -1623,7 +1623,7 @@ class WorkflowScheduler:
     def _can_start(self, tenant: str, workflow_id: int | None) -> bool:
         return self._active_tenant.get(tenant, 0) < self.tenant_limit and self._active_workflow.get(workflow_id, 0) < self.workflow_limit
 
-    def _start_locked(self, engine: "WorkflowEngine", run_id: str, mode: RunMode, tenant: str, workflow_id: int | None) -> None:
+    def _start_locked(self, engine: WorkflowEngine, run_id: str, mode: RunMode, tenant: str, workflow_id: int | None) -> None:
         self._active_tenant[tenant] = self._active_tenant.get(tenant, 0) + 1
         if workflow_id is not None:
             self._active_workflow[workflow_id] = self._active_workflow.get(workflow_id, 0) + 1

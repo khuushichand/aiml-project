@@ -29,12 +29,12 @@ except Exception:  # pragma: no cover - safe fallback
 
 _WORKFLOWS_CATEGORY = "workflows_runs"
 
-_workflows_daily_ledger: "ResourceDailyLedger" | None = None  # type: ignore[name-defined]
+_workflows_daily_ledger: ResourceDailyLedger | None = None  # type: ignore[name-defined]
 _workflows_daily_ledger_lock = asyncio.Lock()
 _workflows_backfill_done: set[str] = set()
 
 
-async def get_workflows_daily_ledger() -> "ResourceDailyLedger" | None:
+async def get_workflows_daily_ledger() -> ResourceDailyLedger | None:
     """Lazily initialize the shared ResourceDailyLedger for workflows."""
     global _workflows_daily_ledger
     if ResourceDailyLedger is None:
@@ -62,7 +62,7 @@ def workflows_ledger_category() -> str:
 
 async def backfill_legacy_runs_to_ledger(
     *,
-    ledger: "ResourceDailyLedger",
+    ledger: ResourceDailyLedger,
     db: Any,
     tenant_id: str,
     user_id: str,

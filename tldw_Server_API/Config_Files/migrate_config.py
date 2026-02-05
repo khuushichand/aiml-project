@@ -25,7 +25,7 @@ from loguru import logger
 class ConfigMigrator:
     """Handles migration of configuration from config.txt to .env"""
 
-    def __init__(self, config_dir: Path = None):
+    def __init__(self, config_dir: Optional[Path] = None) -> None:
         """Initialize the migrator with config directory path"""
         if config_dir is None:
             # Default to current directory (Config_Files)
@@ -154,7 +154,7 @@ class ConfigMigrator:
 
         existing = {}
         try:
-            with open(self.env_file, "r", encoding="utf-8") as f:
+            with open(self.env_file, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith("#") and "=" in line:
@@ -177,10 +177,10 @@ class ConfigMigrator:
         template_lines = []
         if self.env_template.exists():
             try:
-                with open(self.env_template, "r", encoding="utf-8") as f:
+                with open(self.env_template, encoding="utf-8") as f:
                     template_lines = f.readlines()
             except (OSError, UnicodeError) as exc:
-                logger.error("Failed to read .env template: {}", exc)
+                logger.warning("Failed to read .env template, using fallback format: {}", exc)
                 template_lines = []
 
         # Merge with existing keys if preserving
@@ -257,35 +257,35 @@ class ConfigMigrator:
 
     def migrate(self, dry_run: bool = False, backup: bool = True) -> bool:
         """Perform the migration"""
-        print("\n" + "="*60)
-        print("Configuration Migration Tool")
-        print("="*60)
+        logger.info("\n" + "="*60)
+        logger.info("Configuration Migration Tool")
+        logger.info("="*60)
 
         if dry_run:
-            print("\n🔍 DRY RUN MODE - No changes will be made\n")
+            logger.info("\n🔍 DRY RUN MODE - No changes will be made\n")
 
         # Step 1: Backup if requested
         if backup and not dry_run:
-            print("\n📦 Creating backups...")
+            logger.info("\n📦 Creating backups...")
             self.backup_files()
 
         # Step 2: Read existing .env
-        print("\n📖 Reading existing .env file...")
+        logger.info("\n📖 Reading existing .env file...")
         existing_env = self.read_existing_env()
         if existing_env:
-            print(f"  Found {len(existing_env)} existing keys in .env")
+            logger.info("  Found {} existing keys in .env", len(existing_env))
         else:
-            print("  No existing .env file found")
+            logger.info("  No existing .env file found")
 
         # Step 3: Extract keys from config.txt
-        print("\n🔍 Extracting keys from config.txt...")
+        logger.info("\n🔍 Extracting keys from config.txt...")
         extracted = self.extract_keys_from_config()
 
         if not extracted:
-            print("\n✅ No API keys found to migrate")
+            logger.info("\n✅ No API keys found to migrate")
             return True
 
-        print(f"\n📊 Found {len(extracted)} keys to migrate")
+        logger.info("\n📊 Found {} keys to migrate", len(extracted))
 
         # Step 4: Check for conflicts
         conflicts = []
@@ -302,15 +302,15 @@ class ConfigMigrator:
 
             if not dry_run:
                 response = input("\nOverwrite existing values? (y/N): ")
-                if response.lower() != 'y':
-                    print("Migration cancelled")
+                if response.lower() != "y":
+                    logger.info("Migration cancelled")
                     return False
 
         # Step 5: Write new .env file
         if not dry_run:
-            print("\n✍ Writing .env file...")
+            logger.info("\n✍ Writing .env file...")
             self.write_env_file(extracted, preserve_existing=True)
-            print(f"✓ Updated .env file with {len(extracted)} keys")
+            logger.info("✓ Updated .env file with {} keys", len(extracted))
         else:
             logger.info(
                 "Would write {} keys to .env: {}",
@@ -319,23 +319,23 @@ class ConfigMigrator:
             )
 
         # Step 6: Summary
-        print("\n" + "="*60)
+        logger.info("\n" + "="*60)
         if dry_run:
-            print("DRY RUN COMPLETE - No changes were made")
-            print("Run without --dry-run to perform actual migration")
+            logger.info("DRY RUN COMPLETE - No changes were made")
+            logger.info("Run without --dry-run to perform actual migration")
         else:
-            print("✅ MIGRATION COMPLETE")
-            print("\nNext steps:")
-            print("1. Review the .env file to ensure all keys are correct")
-            print("2. Test the application to verify it works with new config")
-            print("3. The cleaned config.txt no longer contains API keys")
-            print("\nIMPORTANT: Never commit .env to version control!")
-        print("="*60 + "\n")
+            logger.info("✅ MIGRATION COMPLETE")
+            logger.info("\nNext steps:")
+            logger.info("1. Review the .env file to ensure all keys are correct")
+            logger.info("2. Test the application to verify it works with new config")
+            logger.info("3. The cleaned config.txt no longer contains API keys")
+            logger.info("\nIMPORTANT: Never commit .env to version control!")
+        logger.info("="*60 + "\n")
 
         return True
 
 
-def main():
+def main() -> None:
     """Main entry point"""
     parser = argparse.ArgumentParser(
         description="Migrate API keys from config.txt to .env file"

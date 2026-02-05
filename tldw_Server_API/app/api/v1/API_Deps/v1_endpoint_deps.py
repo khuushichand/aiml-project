@@ -28,7 +28,7 @@ async def verify_token(
             "verify_token dependency is deprecated and now returns HTTP 410. "
             "Migrate callers to get_auth_principal/get_request_user."
         )
-        setattr(verify_token, "_deprecated_warned", True)
+        verify_token._deprecated_warned = True
 
     raise HTTPException(
         status_code=status.HTTP_410_GONE,

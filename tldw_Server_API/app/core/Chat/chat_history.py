@@ -606,7 +606,7 @@ def update_chat_content(
         logging.warning("Selected item missing or not present in mapping: %s", selected_item)
         log_counter(
             "update_chat_content_error",
-            labels={"error": str("No item selected or item not in mapping")},
+            labels={"error": "No item selected or item not in mapping"},
         )
 
     update_duration = time.time() - start_time

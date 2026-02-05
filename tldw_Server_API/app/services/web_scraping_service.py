@@ -170,9 +170,9 @@ async def process_web_scraping_task(
         # Log error with full details
         import logging
         import traceback
-        logging.error(f"Enhanced scraping service failed: {str(e)}")
-        logging.error(f"Full traceback: {traceback.format_exc()}")
-        logging.warning(f"Falling back to legacy implementation")
+        logging.exception(f"Enhanced scraping service failed: {str(e)}")
+        logging.exception(f"Full traceback: {traceback.format_exc()}")
+        logging.warning("Falling back to legacy implementation")
 
         # Fallback to legacy implementation
         try:
@@ -485,7 +485,7 @@ async def ingest_web_content_orchestrate(
         if getattr(request, "use_cookies", False) and getattr(
             request, "cookies", None
         ):
-            raw_cookies = getattr(request, "cookies")
+            raw_cookies = request.cookies
             try:
                 parsed = json.loads(raw_cookies)
             except json.JSONDecodeError:
@@ -642,7 +642,7 @@ async def ingest_web_content_orchestrate(
 
             return articles
         except Exception as exc:  # pragma: no cover - propagate for legacy handler
-            logging.error(f"Enhanced URL Level crawl failed: {exc}")
+            logging.exception(f"Enhanced URL Level crawl failed: {exc}")
             raise
 
     # RECURSIVE SCRAPING: route to enhanced service (friendly ingest)
@@ -714,7 +714,7 @@ async def ingest_web_content_orchestrate(
 
             return articles
         except Exception as exc:  # pragma: no cover - propagate for legacy handler
-            logging.error(f"Enhanced recursive crawl failed: {exc}")
+            logging.exception(f"Enhanced recursive crawl failed: {exc}")
             raise
 
     # Other methods (or unrecognized) still handled in `_legacy_media`.

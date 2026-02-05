@@ -72,6 +72,18 @@ async def _authenticate_ws(
         elif auth_header.lower().startswith("x-api-key "):
             return await _authenticate_ws(websocket, api_key=auth_header[10:].strip())
 
+    # Try Sec-WebSocket-Protocol: bearer,<token> or x-api-key,<key>
+    proto_header = websocket.headers.get("sec-websocket-protocol") or websocket.headers.get("Sec-WebSocket-Protocol")
+    if proto_header:
+        parts = [p.strip() for p in proto_header.split(",") if p.strip()]
+        for idx in range(len(parts) - 1):
+            scheme = parts[idx].lower()
+            value = parts[idx + 1]
+            if scheme == "bearer" and value:
+                return await _authenticate_ws(websocket, token=value)
+            if scheme in {"x-api-key", "api-key"} and value:
+                return await _authenticate_ws(websocket, api_key=value)
+
     return None
 
 
@@ -171,7 +183,7 @@ async def acp_session_stream(
                     "session_id": session_id,
                 })
 
-    except Exception as e:
+    except Exception:
         logger.exception("WebSocket error for ACP session {}", session_id)
     finally:
         # Unregister WebSocket
@@ -222,7 +234,7 @@ async def acp_session_ssh(
     await websocket.accept()
     try:
         import asyncssh  # type: ignore
-    except Exception as e:
+    except Exception:
         await websocket.close(code=1011)
         return
 

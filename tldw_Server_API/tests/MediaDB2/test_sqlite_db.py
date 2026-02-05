@@ -93,6 +93,60 @@ class TestDatabaseInitialization:
         )
         assert cursor.fetchone() is not None
 
+    def test_tts_history_table_created(self, memory_db_factory):
+        """Ensure tts_history table exists in the Media DB schema."""
+        db = memory_db_factory("client_tts_history")
+        cursor = db.execute_query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='tts_history'"
+        )
+        assert cursor.fetchone() is not None
+
+    def test_create_tts_history_entry(self, memory_db_factory):
+        db = memory_db_factory("client_tts_history_insert")
+        entry_id = db.create_tts_history_entry(
+            user_id="1",
+            text_hash="hash123",
+            text="hello world",
+            text_length=11,
+            provider="openai",
+            model="tts-1",
+            voice_name="alloy",
+            format="mp3",
+            status="success",
+        )
+        assert entry_id is not None
+        row = db.execute_query(
+            "SELECT id, user_id, text_hash, text, status, deleted FROM tts_history WHERE id = ?",
+            (entry_id,),
+        ).fetchone()
+        assert row is not None
+        assert row["user_id"] == "1"
+        assert row["text_hash"] == "hash123"
+        assert row["text"] == "hello world"
+        assert row["status"] == "success"
+        assert row["deleted"] == 0
+
+    def test_create_tts_history_entry_without_text(self, memory_db_factory):
+        db = memory_db_factory("client_tts_history_insert_no_text")
+        entry_id = db.create_tts_history_entry(
+            user_id="2",
+            text_hash="hash456",
+            text=None,
+            text_length=0,
+            provider="openai",
+            model="tts-1-hd",
+            voice_name="shimmer",
+            format="mp3",
+            status="success",
+        )
+        row = db.execute_query(
+            "SELECT text, text_hash FROM tts_history WHERE id = ?",
+            (entry_id,),
+        ).fetchone()
+        assert row is not None
+        assert row["text"] is None
+        assert row["text_hash"] == "hash456"
+
 def test_schema_versioning_new_file_db(file_db): # Use the file_db fixture
     """Test that a new file DB gets the correct schema version."""
     # Initialization happened in the fixture

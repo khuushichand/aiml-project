@@ -150,6 +150,11 @@ export type RagSettings = {
   html_allowed_attrs: string[]
   ocr_confidence_threshold: number
   enable_post_verification: boolean
+  enable_web_fallback: boolean
+  web_fallback_threshold: number
+  web_search_engine: string
+  web_fallback_result_count: number
+  web_fallback_merge_strategy: "prepend" | "append" | "interleave"
   adaptive_max_retries: number
   adaptive_unsupported_threshold: number
   adaptive_max_claims: number
@@ -318,6 +323,11 @@ export const DEFAULT_RAG_SETTINGS: RagSettings = {
   html_allowed_attrs: ["href", "title", "target", "rel"],
   ocr_confidence_threshold: 0.6,
   enable_post_verification: false,
+  enable_web_fallback: false,
+  web_fallback_threshold: 0.25,
+  web_search_engine: "duckduckgo",
+  web_fallback_result_count: 5,
+  web_fallback_merge_strategy: "prepend",
   adaptive_max_retries: 1,
   adaptive_unsupported_threshold: 0.4,
   adaptive_max_claims: 20,

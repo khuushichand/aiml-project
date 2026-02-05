@@ -148,7 +148,7 @@ def _update_ini_section(content: str, section: str, updates: dict[str, str]) -> 
         if key in updates:
             last_index[key] = idx
 
-    missing = [key for key in updates.keys() if key not in last_index]
+    missing = [key for key in updates if key not in last_index]
     rendered: list[str] = []
     in_section = False
     for idx, line in enumerate(lines):

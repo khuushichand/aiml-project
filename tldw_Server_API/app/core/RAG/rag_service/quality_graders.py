@@ -547,7 +547,7 @@ class UtilityGrader:
 
         return UtilityResult(
             utility_score=score,
-            explanation=f"Heuristic assessment based on length and relevance",
+            explanation="Heuristic assessment based on length and relevance",
             latency_ms=int((time.time() - start_time) * 1000),
             method="heuristic",
         )

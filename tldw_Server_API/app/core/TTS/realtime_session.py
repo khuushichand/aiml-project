@@ -28,7 +28,7 @@ class RealtimeSessionConfig:
 @dataclass
 class RealtimeSessionHandle:
     """Handle returned by TTSServiceV2.open_realtime_session."""
-    session: "RealtimeTTSSession"
+    session: RealtimeTTSSession
     provider: str | None = None
     warning: str | None = None
 

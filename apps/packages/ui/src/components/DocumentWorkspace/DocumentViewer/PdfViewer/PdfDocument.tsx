@@ -170,7 +170,9 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
     []
   )
 
-  // Fallback measurement based on rendered DOM height (more reliable in extension)
+  // Fallback measurement based on rendered DOM height (more reliable in extension).
+  // Note: `pdfInstance.getPage()` provides initial metrics; ResizeObserver corrects to
+  // the actual rendered size once the page is in the DOM.
   useLayoutEffect(() => {
     if (viewMode !== "single") return
     const pageElement = pageRefs.current.get(currentPage)
@@ -193,7 +195,7 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
     return () => observer.disconnect()
   }, [viewMode, currentPage, zoomLevel, loading, pageMetrics.height])
 
-  // Compute page dimensions for virtual single-page scrolling.
+  // Compute initial page dimensions for virtual single-page scrolling.
   useEffect(() => {
     if (!pdfInstance) return
     let cancelled = false
@@ -266,6 +268,8 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
 
   const handleSingleWheel = useCallback(
     (event: React.WheelEvent<HTMLDivElement>) => {
+      // Fallback path only when virtual scrolling is disabled (e.g., page count
+      // not yet resolved). This keeps wheel paging from overriding normal scroll.
       if (viewMode !== "single" || virtualScrollEnabled) return
       if (totalPageCount <= 1) return
 
@@ -330,7 +334,6 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
     <div
       ref={containerRef}
       className="flex h-full min-h-0 w-full flex-col items-center overflow-x-auto overflow-y-auto py-4 px-2 sm:px-4"
-      style={virtualScrollEnabled ? { overflowY: "auto" } : undefined}
       onScroll={virtualScrollEnabled ? handleVirtualScroll : undefined}
       onWheel={handleSingleWheel}
     >

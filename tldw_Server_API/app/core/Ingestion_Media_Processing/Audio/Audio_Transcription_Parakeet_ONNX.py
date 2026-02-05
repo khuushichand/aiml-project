@@ -63,7 +63,7 @@ class ParakeetONNXTokenizer:
         # Try to load vocabulary from a file path
         if vocab_path.exists():
             try:
-                with open(vocab_path, 'r', encoding='utf-8') as f:
+                with open(vocab_path, encoding='utf-8') as f:
                     # Try JSON first, but tolerate simple line-based formats from tests
                     try:
                         vocab_data = json.load(f)

@@ -382,7 +382,7 @@ class VoiceManager:
         if not path.exists():
             return None
         try:
-            async with aiofiles.open(path, "r") as f:
+            async with aiofiles.open(path) as f:
                 raw = await f.read()
             data = json.loads(raw)
             return VoiceReferenceMetadata(**data)
@@ -450,7 +450,7 @@ class VoiceManager:
             reference_text = None
             if DEFAULT_NEUTTS_VOICE_TEXT_PATH.exists():
                 try:
-                    async with aiofiles.open(DEFAULT_NEUTTS_VOICE_TEXT_PATH, "r") as f:
+                    async with aiofiles.open(DEFAULT_NEUTTS_VOICE_TEXT_PATH) as f:
                         reference_text = (await f.read()).strip() or None
                 except Exception as e:
                     logger.warning(f"Failed to read default voice reference text: {e}")

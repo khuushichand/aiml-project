@@ -599,9 +599,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
             # Check if element should be kept intact
             keep_intact = False
 
-            if element.type == StructureType.TABLE and options.get('preserve_tables', True):
-                keep_intact = True
-            elif element.type == StructureType.CODE_BLOCK and options.get('preserve_code_blocks', True):
+            if element.type == StructureType.TABLE and options.get('preserve_tables', True) or element.type == StructureType.CODE_BLOCK and options.get('preserve_code_blocks', True):
                 keep_intact = True
 
             # Estimate element size (simple count for now)

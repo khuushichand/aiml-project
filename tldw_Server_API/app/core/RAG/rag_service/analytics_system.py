@@ -23,6 +23,8 @@ from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     BackendType,
+)
+from tldw_Server_API.app.core.DB_Management.backends.base import (
     DatabaseError as BackendDatabaseError,
 )
 
@@ -414,17 +416,6 @@ class UserFeedbackStore:
             with self.db.transaction() as conn:
                 for statement in statements:
                     conn.execute(statement)
-                try:
-                    if self.db.backend_type == BackendType.SQLITE:
-                        conn.execute("ALTER TABLE conversation_feedback ADD COLUMN issues TEXT")
-                    else:
-                        conn.execute("ALTER TABLE conversation_feedback ADD COLUMN IF NOT EXISTS issues TEXT")
-                except (BackendDatabaseError, CharactersRAGDBError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
-                    msg = str(exc).lower()
-                    if self.db.backend_type == BackendType.SQLITE and "duplicate column" in msg:
-                        pass
-                    else:
-                        logger.debug(f"conversation_feedback: issues column add skipped: {exc}")
         except (BackendDatabaseError, CharactersRAGDBError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"Failed to initialize feedback schema: {exc}", exc_info=True)
 

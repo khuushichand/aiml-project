@@ -461,7 +461,7 @@ def load_tts_config() -> dict[str, Any]:
         return _get_default_tts_config()
 
     try:
-        with open(tts_config_path, 'r', encoding='utf-8') as f:
+        with open(tts_config_path, encoding='utf-8') as f:
             tts_config = yaml.safe_load(f)
 
         # Validate and process the configuration
@@ -550,7 +550,7 @@ def load_openai_mappings() -> dict:
     mapping_path = api_component_root / "Config_Files" / "openai_tts_mappings.json"
     _log_debug(f"Attempting to load OpenAI TTS mappings from: {str(mapping_path)}")
     try:
-        with open(mapping_path, "r") as f:
+        with open(mapping_path) as f:
             return json.load(f)
     except Exception as e:
         _log_debug(f"Failed to load OpenAI TTS mappings from {mapping_path}: {e}")
@@ -655,6 +655,35 @@ def load_settings():
         except Exception:
             return default
 
+    def _env_or_cfg_bool(env_key: str, cfg_key: str, default: bool) -> bool:
+        env_val = os.getenv(env_key)
+        if env_val is not None:
+            return str(env_val).strip().lower() in {"1", "true", "yes", "on"}
+        cfg_val = get_config_value("TTS-Settings", cfg_key)
+        if cfg_val is None:
+            return default
+        return str(cfg_val).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _env_or_cfg_int(env_key: str, cfg_key: str, default: int) -> int:
+        env_val = os.getenv(env_key)
+        if env_val is not None:
+            return _safe_int(env_val, default)
+        cfg_val = get_config_value("TTS-Settings", cfg_key)
+        if cfg_val is None:
+            return default
+        return _safe_int(cfg_val, default)
+
+    def _env_or_cfg_str(env_key: str, cfg_key: str, default: Optional[str]) -> Optional[str]:
+        env_val = os.getenv(env_key)
+        if env_val is not None:
+            s = str(env_val).strip()
+            return s if s else default
+        cfg_val = get_config_value("TTS-Settings", cfg_key)
+        if cfg_val is None:
+            return default
+        s = str(cfg_val).strip()
+        return s if s else default
+
     # Load from comprehensive config first, allowing env overrides
     redis_host = os.getenv("REDIS_HOST") or _redis_section_get('redis_host', 'localhost') or 'localhost'
     redis_port_raw = os.getenv("REDIS_PORT") or _redis_section_get('redis_port', '6379') or '6379'
@@ -699,6 +728,18 @@ def load_settings():
             pass
     else:
         redis_url = f"redis://{redis_host}:{redis_port}/{redis_db}"
+
+    tts_history_enabled = _env_or_cfg_bool("TTS_HISTORY_ENABLED", "tts_history_enabled", True)
+    tts_history_store_text = _env_or_cfg_bool("TTS_HISTORY_STORE_TEXT", "tts_history_store_text", True)
+    tts_history_store_failed = _env_or_cfg_bool("TTS_HISTORY_STORE_FAILED", "tts_history_store_failed", True)
+    tts_history_hash_key = _env_or_cfg_str("TTS_HISTORY_HASH_KEY", "tts_history_hash_key", None)
+    tts_history_retention_days = _env_or_cfg_int("TTS_HISTORY_RETENTION_DAYS", "tts_history_retention_days", 90)
+    tts_history_max_rows_per_user = _env_or_cfg_int("TTS_HISTORY_MAX_ROWS_PER_USER", "tts_history_max_rows_per_user", 10000)
+    tts_history_purge_interval_hours = _env_or_cfg_int(
+        "TTS_HISTORY_PURGE_INTERVAL_HOURS",
+        "tts_history_purge_interval_hours",
+        24,
+    )
 
     # Base directory for all user-specific data (USER_DB_BASE_DIR default): ACTUAL_PROJECT_ROOT/Databases/user_databases/
     default_user_data_base_dir = ACTUAL_PROJECT_ROOT / "Databases" / "user_databases"
@@ -1124,6 +1165,13 @@ def load_settings():
         "HYDE_DEDUPE_BY_PARENT": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_DEDUPE_BY_PARENT", "false")),
         # Add other configs from comprehensive_config as needed
         "OPENAI_API_KEY": comprehensive_config.get("openai_api", {}).get("api_key", os.getenv("OPENAI_API_KEY")),
+        "TTS_HISTORY_ENABLED": tts_history_enabled,
+        "TTS_HISTORY_STORE_TEXT": tts_history_store_text,
+        "TTS_HISTORY_STORE_FAILED": tts_history_store_failed,
+        "TTS_HISTORY_HASH_KEY": tts_history_hash_key,
+        "TTS_HISTORY_RETENTION_DAYS": tts_history_retention_days,
+        "TTS_HISTORY_MAX_ROWS_PER_USER": tts_history_max_rows_per_user,
+        "TTS_HISTORY_PURGE_INTERVAL_HOURS": tts_history_purge_interval_hours,
         # You can continue to merge other specific keys or whole sections
         "COMPREHENSIVE_CONFIG_RAW": comprehensive_config, # Store the raw one if needed elsewhere
         # Audit export streaming threshold (opt-in via env/config.txt)
@@ -1514,7 +1562,7 @@ def load_settings():
         # RAG default FTS level ('media' or 'chunk')
         "RAG_DEFAULT_FTS_LEVEL": (lambda _env, _cp: (
             (_env.lower() if isinstance(_env, str) else None) if _env is not None else (
-                (_cp.get('RAG', 'default_fts_level', fallback='media').lower() if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else 'media')
+                _cp.get('RAG', 'default_fts_level', fallback='media').lower() if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else 'media'
             )
         ))(os.getenv('RAG_DEFAULT_FTS_LEVEL'), load_comprehensive_config()),
 
@@ -3209,6 +3257,28 @@ def load_and_log_configs():
             s = str(raw).strip()
             return s if s != "" else default
 
+        def _env_or_cfg_bool(env_key: str, section: str, key: str, default: bool) -> bool:
+            env_val = os.getenv(env_key)
+            if env_val is not None:
+                return str(env_val).strip().lower() in {"1", "true", "yes", "on"}
+            return _get_bool(section, key, default)
+
+        def _env_or_cfg_int(env_key: str, section: str, key: str, default: int) -> int:
+            env_val = os.getenv(env_key)
+            if env_val is not None:
+                try:
+                    return int(str(env_val).strip())
+                except Exception:
+                    return default
+            return _get_int(section, key, default)
+
+        def _env_or_cfg_str(env_key: str, section: str, key: str, default: str | None) -> str | None:
+            env_val = os.getenv(env_key)
+            if env_val is not None:
+                s = str(env_val).strip()
+                return s if s != "" else default
+            return _get_str(section, key, default)
+
         # VibeVoice-ASR settings (local inference + optional vLLM HTTP path)
         vibevoice_enabled = _get_bool('STT-Settings', 'vibevoice_enabled', False)
         vibevoice_model_id = _get_str('STT-Settings', 'vibevoice_model_id', 'microsoft/VibeVoice-ASR') or 'microsoft/VibeVoice-ASR'
@@ -3271,6 +3341,18 @@ def load_and_log_configs():
         local_tts_device = config_parser_object.get('TTS-Settings', 'local_tts_device', fallback='cpu')
         default_tts_provider = config_parser_object.get('TTS-Settings', 'default_tts_provider', fallback='openai')
         tts_voice = config_parser_object.get('TTS-Settings', 'default_tts_voice', fallback='shimmer')
+        tts_history_enabled = _env_or_cfg_bool("TTS_HISTORY_ENABLED", "TTS-Settings", "tts_history_enabled", True)
+        tts_history_store_text = _env_or_cfg_bool("TTS_HISTORY_STORE_TEXT", "TTS-Settings", "tts_history_store_text", True)
+        tts_history_store_failed = _env_or_cfg_bool("TTS_HISTORY_STORE_FAILED", "TTS-Settings", "tts_history_store_failed", True)
+        tts_history_hash_key = _env_or_cfg_str("TTS_HISTORY_HASH_KEY", "TTS-Settings", "tts_history_hash_key", None)
+        tts_history_retention_days = _env_or_cfg_int("TTS_HISTORY_RETENTION_DAYS", "TTS-Settings", "tts_history_retention_days", 90)
+        tts_history_max_rows_per_user = _env_or_cfg_int("TTS_HISTORY_MAX_ROWS_PER_USER", "TTS-Settings", "tts_history_max_rows_per_user", 10000)
+        tts_history_purge_interval_hours = _env_or_cfg_int(
+            "TTS_HISTORY_PURGE_INTERVAL_HOURS",
+            "TTS-Settings",
+            "tts_history_purge_interval_hours",
+            24,
+        )
         # Open AI TTS
         default_openai_tts_model = config_parser_object.get('TTS-Settings', 'default_openai_tts_model', fallback='tts-1-hd')
         default_openai_tts_voice = config_parser_object.get('TTS-Settings', 'default_openai_tts_voice', fallback='shimmer')
@@ -3933,6 +4015,13 @@ def load_and_log_configs():
                 'default_tts_provider': default_tts_provider,
                 'tts_voice': tts_voice,
                 'local_tts_device': local_tts_device,
+                'tts_history_enabled': tts_history_enabled,
+                'tts_history_store_text': tts_history_store_text,
+                'tts_history_store_failed': tts_history_store_failed,
+                'tts_history_hash_key': tts_history_hash_key,
+                'tts_history_retention_days': tts_history_retention_days,
+                'tts_history_max_rows_per_user': tts_history_max_rows_per_user,
+                'tts_history_purge_interval_hours': tts_history_purge_interval_hours,
                 # OpenAI
                 'default_openai_tts_voice': default_openai_tts_voice,
                 'default_openai_tts_speed': default_openai_tts_speed,

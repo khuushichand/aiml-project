@@ -149,7 +149,7 @@ class HiggsAdapter(TTSAdapter):
             # Check if boson_multimodal library is available
             try:
                 from boson_multimodal.serve.serve_engine import HiggsAudioServeEngine
-            except ImportError as e:
+            except ImportError:
                 logger.error(f"{self.provider_name}: boson_multimodal library not installed")
                 logger.info("Install Higgs Audio dependencies from: https://github.com/boson-ai/higgs-audio")
                 # Gracefully indicate not configured rather than raising for integration environments

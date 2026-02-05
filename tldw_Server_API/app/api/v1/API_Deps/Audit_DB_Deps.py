@@ -579,9 +579,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[Union[int, str]
                     logger.debug(f"Audit service for user {user_id} created concurrently.")
                     return service_instance
 
-            if storage_mode == "shared":
-                service_instance = await _create_default_audit_service()
-            elif user_id is None:
+            if storage_mode == "shared" or user_id is None:
                 service_instance = await _create_default_audit_service()
             else:
                 service_instance = await _create_audit_service_for_user(user_id)

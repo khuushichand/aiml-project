@@ -1107,7 +1107,7 @@ Score Distribution:
 # Dataset Loading Utilities
 def load_dataset_from_json(file_path: str) -> list[dict[str, Any]]:
     """Load dataset from JSON file."""
-    with open(file_path, 'r') as f:
+    with open(file_path) as f:
         data = json.load(f)
 
     # Handle different JSON structures
@@ -1126,7 +1126,7 @@ def load_dataset_from_json(file_path: str) -> list[dict[str, Any]]:
 def load_dataset_from_jsonl(file_path: str) -> list[dict[str, Any]]:
     """Load dataset from JSONL file."""
     data = []
-    with open(file_path, 'r') as f:
+    with open(file_path) as f:
         for line in f:
             if line.strip():
                 data.append(json.loads(line))

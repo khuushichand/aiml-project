@@ -3,7 +3,7 @@
 #
 # Imports
 import asyncio
-from typing import Any, Optional
+from typing import Any, Optional, get_args
 
 from fastapi import (
     APIRouter,
@@ -55,6 +55,7 @@ from tldw_Server_API.app.api.v1.schemas.chunking_schema import (
     MethodSpecificOptions,
     build_chunking_options_schema,
 )
+from tldw_Server_API.app.api.v1.schemas.media_request_models import PdfEngine
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
@@ -681,12 +682,14 @@ async def get_chunking_capabilities(
     # Merge and de-duplicate
     methods = sorted(set(enum_methods + runtime_methods))
     llm_required = [m for m in ["rolling_summarize", "propositions"] if m in methods]
+    pdf_engines = list(get_args(PdfEngine))
     return {
         "methods": methods,
         "default_options": default_chunk_options_from_lib,
         "llm_required_methods": llm_required,
         "hierarchical_support": True,
         "notes": "Text chunking capabilities. For method='code', the option 'code_mode' controls routing: 'auto' (default), 'ast' (Python), or 'heuristic'. Ingestion-specific chunkers are configured via templates or step config.",
+        "pdf_parsing_engines": pdf_engines,
         "options_schema": build_chunking_options_schema(),
         "method_specific_options": MethodSpecificOptions(
             code=CodeMethodOptions(

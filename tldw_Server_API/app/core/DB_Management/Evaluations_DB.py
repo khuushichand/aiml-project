@@ -697,10 +697,10 @@ class EvaluationsDatabase:
         if not self.backend:
             return False
         result = self.backend.execute(
-            (
+
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
                 "WHERE table_schema='public' AND table_name='evaluations_unified')"
-            )
+
         )
         return bool(result.scalar)
 
@@ -1599,7 +1599,7 @@ class EvaluationsDatabase:
             if error_message:
                 updates["error_message"] = error_message
 
-            set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
+            set_clause = ", ".join([f"{k} = ?" for k in updates])
             values = list(updates.values()) + [run_id]
 
             cursor.execute(f"""
@@ -2199,10 +2199,10 @@ class EvaluationsDatabase:
     def list_expired_ephemeral_collections(self) -> list[str]:
         if self.backend_type == BackendType.POSTGRESQL and self.backend is not None:
             result = self.backend.execute(
-                (
+
                     "SELECT collection_name FROM ephemeral_collections "
                     "WHERE deleted_at IS NULL AND (created_at + (ttl_seconds || ' seconds')::interval) <= NOW()"
-                )
+
             )
             return [r["collection_name"] for r in result.rows]
         with self.get_connection() as conn:

@@ -186,7 +186,7 @@ class EmbeddingMetrics:
                             elapsed
                         )
                         return result
-                    except Exception as e:
+                    except Exception:
                         self.log_error("unknown", f"{operation}_error")
                         raise
                 return async_wrapper
@@ -202,7 +202,7 @@ class EmbeddingMetrics:
                             elapsed
                         )
                         return result
-                    except Exception as e:
+                    except Exception:
                         self.log_error("unknown", f"{operation}_error")
                         raise
                 return sync_wrapper

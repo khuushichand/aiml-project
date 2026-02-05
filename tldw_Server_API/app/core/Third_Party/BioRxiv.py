@@ -302,7 +302,7 @@ def search_biorxiv_pubs(
             msgs = data.get("messages") or []
             if isinstance(msgs, list) and msgs:
                 try:
-                    cnt = int((msgs[0].get("count") or 0))
+                    cnt = int(msgs[0].get("count") or 0)
                 except Exception:
                     cnt = 0
             coll = [_normalize_published_item(it) for it in (data.get("collection") or [])]
@@ -397,7 +397,7 @@ def search_biorxiv_publisher(
             msgs = data.get("messages") or []
             if isinstance(msgs, list) and msgs:
                 try:
-                    cnt = int((msgs[0].get("count") or 0))
+                    cnt = int(msgs[0].get("count") or 0)
                 except Exception:
                     cnt = 0
             coll = [_normalize_published_item(it) for it in (data.get("collection") or [])]
@@ -460,7 +460,7 @@ def search_biorxiv_pub(
             msgs = data.get("messages") or []
             if isinstance(msgs, list) and msgs:
                 try:
-                    cnt = int((msgs[0].get("count") or 0))
+                    cnt = int(msgs[0].get("count") or 0)
                 except Exception:
                     cnt = 0
             coll = [_normalize_published_item(it) for it in (data.get("collection") or [])]
@@ -542,7 +542,7 @@ def search_biorxiv_funder(
             msgs = data.get("messages") or []
             if isinstance(msgs, list) and msgs:
                 try:
-                    cnt = int((msgs[0].get("count") or 0))
+                    cnt = int(msgs[0].get("count") or 0)
                 except Exception:
                     cnt = 0
             coll = [_normalize_funder_item(it) for it in (data.get("collection") or [])]

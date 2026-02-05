@@ -714,7 +714,7 @@ async def update_team(
             )
             updated = dict(row) if row else None
         else:
-            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
             params = list(updates.values()) + [team_id]
             await conn.execute(
                 f"UPDATE teams SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",

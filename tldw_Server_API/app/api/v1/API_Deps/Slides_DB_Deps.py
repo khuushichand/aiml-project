@@ -15,7 +15,7 @@ from tldw_Server_API.app.core.Slides.slides_db import SchemaError, SlidesDatabas
 
 _MAX_CACHED_SLIDES_DB = 20
 _slides_db_lock = threading.Lock()
-_slides_db_instances: "OrderedDict[str, SlidesDatabase]" = OrderedDict()
+_slides_db_instances: OrderedDict[str, SlidesDatabase] = OrderedDict()
 
 
 def _get_slides_db_path_for_user(user_id: int) -> Path:

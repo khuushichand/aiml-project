@@ -103,7 +103,7 @@ def _fc_api_request(sock_path: str, method: str, path: str, payload: dict | None
         f"Content-Type: application/json\r\n"
         f"Content-Length: {len(body)}\r\n"
         f"\r\n"
-    ).encode("utf-8") + body
+    ).encode() + body
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         sock.settimeout(3)
@@ -348,7 +348,7 @@ class FirecrackerRunner:
         while time.time() < deadline:
             if os.path.exists(status_path):
                 try:
-                    with open(status_path, "r", encoding="utf-8") as rf:
+                    with open(status_path, encoding="utf-8") as rf:
                         payload = json.load(rf)
                     exit_code = payload.get("exit_code")
                     reason = payload.get("reason")

@@ -2,16 +2,21 @@
 # Description: Aggregate audio endpoints and WebSocket routes.
 import asyncio as asyncio
 import os
-from pathlib import Path as PathLib
 from typing import Optional
-
-import soundfile as sf
 
 from fastapi import APIRouter, HTTPException
 from loguru import logger
 from starlette import status
 
-from . import audio_health, audio_streaming, audio_tokenizer, audio_transcriptions, audio_tts, audio_voices
+from . import (
+    audio_health,
+    audio_history,
+    audio_streaming,
+    audio_tokenizer,
+    audio_transcriptions,
+    audio_tts,
+    audio_voices,
+)
 
 router = APIRouter(
     tags=["Audio"],
@@ -24,6 +29,7 @@ router = APIRouter(
 
 # Include HTTP routers
 router.include_router(audio_tts.router)
+router.include_router(audio_history.router)
 router.include_router(audio_tokenizer.router)
 router.include_router(audio_transcriptions.router)
 router.include_router(audio_streaming.router)
@@ -62,7 +68,6 @@ get_tts_service = audio_tts.get_tts_service
 
 # Shared helper re-exports used in tests
 from tldw_Server_API.app.core.Audio.tts_service import (
-    _sanitize_speech_request,
     _tts_fallback_resolver,
 )
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
@@ -96,7 +101,14 @@ async def _resolve_tts_byok(
     tts_overrides = None
     byok_tts_resolution = None
     if provider_hint:
-        byok_tts_resolution = await resolve_byok_credentials(
+        resolver = resolve_byok_credentials
+        try:
+            from tldw_Server_API.app.api.v1.endpoints import audio as _audio_pkg
+
+            resolver = getattr(_audio_pkg, "resolve_byok_credentials", resolve_byok_credentials)
+        except Exception:
+            resolver = resolve_byok_credentials
+        byok_tts_resolution = await resolver(
             provider_hint,
             user_id=user_id_int,
             request=request,

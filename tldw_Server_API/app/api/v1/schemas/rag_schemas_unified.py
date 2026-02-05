@@ -1329,6 +1329,28 @@ class UnifiedRAGRequest(BaseModel):
         example="session456"
     )
 
+    # ========== RETRIEVAL QUALITY METRICS ==========
+    ground_truth_doc_ids: Optional[list[str]] = Field(
+        default=None,
+        description="Ground truth relevant document IDs for computing retrieval metrics "
+                    "(precision@K, recall@K, MRR, NDCG@K). When provided, metrics are "
+                    "returned in the response metadata.",
+        example=["doc_1", "doc_3", "doc_7"]
+    )
+    metrics_k: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="K value for @K retrieval metrics (precision@K, recall@K, etc.)"
+    )
+
+    # ========== FAITHFULNESS EVALUATION ==========
+    enable_faithfulness_eval: bool = Field(
+        default=False,
+        description="Enable claim-level faithfulness evaluation of generated answers. "
+                    "Requires a faithfulness_llm to be passed via kwargs."
+    )
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "query": "What is machine learning?",
@@ -1465,7 +1487,21 @@ class UnifiedRAGResponse(BaseModel):
         description="Structured verification report for machine-readable audit (when generate_verification_report=true)",
     )
 
-    model_config = ConfigDict(json_schema_extra={
+    # ========== RETRIEVAL QUALITY METRICS ==========
+    retrieval_metrics: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Retrieval quality metrics (precision@K, recall@K, MRR, NDCG@K, F1@K) "
+                    "when ground_truth_doc_ids are provided",
+    )
+
+    # ========== FAITHFULNESS EVALUATION ==========
+    faithfulness: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Faithfulness evaluation results (claim-level analysis, faithfulness score) "
+                    "when enable_faithfulness_eval is true",
+    )
+
+    model_config = ConfigDict(frozen=True, json_schema_extra={
         "example": {
             "documents": [
                 {
@@ -1684,6 +1720,25 @@ class UnifiedBatchRequest(BaseModel):
     user_id: Optional[str] = Field(default=None)
     session_id: Optional[str] = Field(default=None)
 
+    # ========== RETRIEVAL QUALITY METRICS ==========
+    ground_truth_doc_ids: Optional[list[str]] = Field(
+        default=None,
+        description="Ground truth relevant document IDs for computing retrieval metrics "
+                    "(precision@K, recall@K, MRR, NDCG@K). Applied to each query in the batch.",
+    )
+    metrics_k: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="K value for @K retrieval metrics (precision@K, recall@K, etc.)",
+    )
+
+    # ========== FAITHFULNESS EVALUATION ==========
+    enable_faithfulness_eval: bool = Field(
+        default=False,
+        description="Enable claim-level faithfulness evaluation of generated answers.",
+    )
+
     if model_validator is not None:
         @model_validator(mode="before")
         def _map_legacy_min_relevance_batch(cls, values):  # type: ignore
@@ -1741,7 +1796,7 @@ class UnifiedBatchResponse(BaseModel):
         description="Total batch processing time"
     )
 
-    model_config = ConfigDict(json_schema_extra={
+    model_config = ConfigDict(frozen=True, json_schema_extra={
         "example": {
             "results": [],  # List of UnifiedRAGResponse objects
             "total_queries": 2,

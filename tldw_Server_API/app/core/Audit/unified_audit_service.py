@@ -193,9 +193,9 @@ def _resolve_storage_mode(explicit: Optional[str] = None) -> str:
     if explicit is not None and str(explicit).strip() != "":
         return _normalize_storage_mode(explicit)
     mode = _normalize_storage_mode(
-        _app_settings.get("AUDIT_STORAGE_MODE", None) or os.getenv("AUDIT_STORAGE_MODE")
+        _app_settings.get("AUDIT_STORAGE_MODE") or os.getenv("AUDIT_STORAGE_MODE")
     )
-    rollback_raw = _app_settings.get("AUDIT_STORAGE_ROLLBACK", None) or os.getenv("AUDIT_STORAGE_ROLLBACK")
+    rollback_raw = _app_settings.get("AUDIT_STORAGE_ROLLBACK") or os.getenv("AUDIT_STORAGE_ROLLBACK")
     if _coerce_bool(rollback_raw, False):
         return "per_user"
     return mode
@@ -685,7 +685,7 @@ class RiskScorer:
         # Merge overrides from settings, then supplied overrides
         merged: dict[str, int] = dict(self.DEFAULT_ACTION_RISK_BONUS)
         try:
-            cfg = _app_settings.get("AUDIT_ACTION_RISK_BONUS", None)
+            cfg = _app_settings.get("AUDIT_ACTION_RISK_BONUS")
             if isinstance(cfg, dict):
                 for k, v in cfg.items():
                     try:
@@ -723,7 +723,7 @@ class RiskScorer:
 
         default_ops = set(self.HIGH_RISK_OPERATIONS)
         try:
-            cfg_ops = _app_settings.get("AUDIT_HIGH_RISK_OPERATIONS", None)
+            cfg_ops = _app_settings.get("AUDIT_HIGH_RISK_OPERATIONS")
             ops_from_settings = _parse_ops(cfg_ops)
         except Exception:
             ops_from_settings = set()
@@ -749,7 +749,7 @@ class RiskScorer:
 
         thresholds = dict(self.DEFAULT_SUSPICIOUS_THRESHOLDS)
         try:
-            cfg_thr = _app_settings.get("AUDIT_SUSPICIOUS_THRESHOLDS", None)
+            cfg_thr = _app_settings.get("AUDIT_SUSPICIOUS_THRESHOLDS")
             thresholds = _merge_thresholds(thresholds, cfg_thr if isinstance(cfg_thr, dict) else None)
         except Exception:
             pass
@@ -947,7 +947,7 @@ class UnifiedAuditService:
         self.non_stream_max_rows = DEFAULT_NON_STREAM_MAX_ROWS
         if max_db_mb is None:
             try:
-                raw_max = _app_settings.get("AUDIT_MAX_DB_MB", None)
+                raw_max = _app_settings.get("AUDIT_MAX_DB_MB")
             except Exception:
                 raw_max = None
             try:
@@ -980,7 +980,7 @@ class UnifiedAuditService:
             # Settings: AUDIT_PII_USE_RAG_PATTERNS, AUDIT_PII_PATTERNS (dict)
             use_rag = bool(str(_app_settings.get("AUDIT_PII_USE_RAG_PATTERNS", "false")).strip().lower() in {"1","true","yes","on","y"})
             # Pull overrides from settings if present (no dict-type gate; LazySettings isn't a dict)
-            overrides = _app_settings.get("AUDIT_PII_PATTERNS", None)
+            overrides = _app_settings.get("AUDIT_PII_PATTERNS")
             if overrides is not None and not isinstance(overrides, dict):
                 overrides = None
             self.pii_detector = PIIDetector(overrides=overrides, use_rag_patterns=use_rag)
@@ -992,7 +992,7 @@ class UnifiedAuditService:
         extra_scan = []
         try:
             # Allow comma-separated string or list from settings
-            raw = _app_settings.get("AUDIT_PII_SCAN_FIELDS", None)
+            raw = _app_settings.get("AUDIT_PII_SCAN_FIELDS")
             if isinstance(raw, str):
                 extra_scan = [s.strip() for s in raw.split(",") if s.strip()]
             elif isinstance(raw, list):
@@ -1893,10 +1893,9 @@ class UnifiedAuditService:
         params.append(limit)
 
         try:
-            async with self._read_db() as db:
-                async with db.execute(query, params) as cursor:
-                    rows = await cursor.fetchall()
-                    return [dict(row) for row in rows]
+            async with self._read_db() as db, db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
         except Exception as e:
             logger.error(f"Failed to query audit events (keyset): {e}")
             return []
@@ -2610,9 +2609,7 @@ class UnifiedAuditService:
 
                 if old_events_count or old_stats_count:
                     logger.info(
-                        "Cleaned up {events} audit events and {stats} daily stat rows older than {days} days".format(
-                            events=old_events_count, stats=old_stats_count, days=self.retention_days
-                        )
+                        f"Cleaned up {old_events_count} audit events and {old_stats_count} daily stat rows older than {self.retention_days} days"
                     )
 
                 # Optional: max DB size policy (warn if exceeded)
@@ -2988,10 +2985,9 @@ class UnifiedAuditService:
         params.extend([limit, offset])
 
         try:
-            async with self._read_db() as db:
-                async with db.execute(query, params) as cursor:
-                    rows = await cursor.fetchall()
-                    return [dict(row) for row in rows]
+            async with self._read_db() as db, db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
         except Exception as e:
             logger.error(f"Failed to query audit events: {e}")
             return []
@@ -3031,10 +3027,9 @@ class UnifiedAuditService:
         )
         query = "SELECT COUNT(*) as cnt " + base_query
         try:
-            async with self._read_db() as db:
-                async with db.execute(query, params) as cursor:
-                    row = await cursor.fetchone()
-                    return int(row[0]) if row else 0
+            async with self._read_db() as db, db.execute(query, params) as cursor:
+                row = await cursor.fetchone()
+                return int(row[0]) if row else 0
         except Exception as e:
             logger.error(f"Failed to count audit events: {e}")
             return 0
@@ -3440,11 +3435,7 @@ class UnifiedAuditService:
 
         if result_norm == "error":
             return AuditSeverity.ERROR
-        elif result_norm == "failure":
-            return AuditSeverity.WARNING
-
-        # Warning events
-        elif event_type in [
+        elif result_norm == "failure" or event_type in [
             AuditEventType.AUTH_LOGIN_FAILURE,
             AuditEventType.PERMISSION_DENIED,
             AuditEventType.API_RATE_LIMITED

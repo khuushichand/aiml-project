@@ -410,7 +410,7 @@ class KanbanDB:
             # Ignore errors during cleanup - object is being destroyed anyway.
             logger.debug(f"KanbanDB __del__ cleanup failed: {e}")
 
-    def __enter__(self) -> "KanbanDB":
+    def __enter__(self) -> KanbanDB:
         """Enable context-manager use for automatic cleanup."""
         return self
 

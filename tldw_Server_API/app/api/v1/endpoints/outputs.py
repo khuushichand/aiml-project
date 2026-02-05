@@ -605,6 +605,7 @@ async def delete_output(
     delete_file: bool = False,
     current_user: User = Depends(get_request_user),
     cdb = Depends(get_collections_db_for_user),
+    media_db = Depends(get_media_db_for_user),
 ):
     # If hard delete and delete_file requested, remove file first
     user_id = resolve_user_id_for_request(
@@ -640,6 +641,13 @@ async def delete_output(
     ok = cdb.delete_output_artifact(output_id, hard=hard)
     if not ok:
         raise HTTPException(status_code=404, detail="output_not_found")
+    try:
+        media_db.mark_tts_history_artifacts_deleted_for_output(
+            user_id=str(user_id),
+            output_id=int(output_id),
+        )
+    except Exception as exc:
+        logger.debug(f"outputs.delete: failed to update tts_history for output {output_id}: {exc}")
     return {"success": True, "file_deleted": fs_deleted}
 
 
@@ -686,7 +694,7 @@ async def update_output(
                 p.rename(new_full)
             new_path = new_name
             new_title = payload.title
-        except Exception as e:
+        except Exception:
             # If FS rename fails, keep old path and only update title in DB
             new_path = None
             new_title = payload.title

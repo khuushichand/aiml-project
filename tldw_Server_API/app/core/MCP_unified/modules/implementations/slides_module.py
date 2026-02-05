@@ -1020,7 +1020,7 @@ class SlidesModule(BaseModule):
             )
             return {"version": self._version_to_dict(row)}
         except KeyError:
-            raise ValueError(f"Version not found")
+            raise ValueError("Version not found")
         finally:
             db.close_connection()
 
@@ -1059,7 +1059,7 @@ class SlidesModule(BaseModule):
                 "success": True,
             }
         except KeyError:
-            raise ValueError(f"Presentation or version not found")
+            raise ValueError("Presentation or version not found")
         except ConflictError as exc:
             raise ValueError(str(exc)) from exc
         finally:

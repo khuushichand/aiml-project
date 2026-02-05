@@ -120,7 +120,7 @@ def parse_user_dict_markdown_file(file_path: str) -> dict[str, str]:
     termination_pattern = re.compile(r"^\s*---@@@---\s*$")
 
     try:
-        with open(file_path, "r", encoding="utf-8") as file:
+        with open(file_path, encoding="utf-8") as file:
             for line_number, original_line in enumerate(file, 1):
                 stripped_line = original_line.strip()
 

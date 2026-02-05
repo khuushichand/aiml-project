@@ -193,6 +193,7 @@ class ChunkingCapabilitiesResponse(BaseModel):
     llm_required_methods: list[str]
     hierarchical_support: bool
     notes: Optional[str] = None
+    pdf_parsing_engines: Optional[list[str]] = None
     method_specific_options: Optional[MethodSpecificOptions] = None
     options_schema: Optional[dict[str, Any]] = None
 

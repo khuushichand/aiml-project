@@ -106,9 +106,7 @@ class FTSQueryTranslator:
                 skip_next = False
                 continue
 
-            if word in ('|', '&', '<->', '!'):
-                result_parts.append(word)
-            elif i < len(words) - 1 and words[i + 1] in ('|', '<->'):
+            if word in ('|', '&', '<->', '!') or i < len(words) - 1 and words[i + 1] in ('|', '<->'):
                 result_parts.append(word)
             elif i < len(words) - 1 and words[i + 1] not in ('|', '&', '<->', '!'):
                 result_parts.append(word + ' &')

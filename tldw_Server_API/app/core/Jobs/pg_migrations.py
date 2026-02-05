@@ -169,12 +169,11 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
     from .pg_util import negotiate_pg_dsn
     _dsn = negotiate_pg_dsn(db_url)
     try:
-        with psycopg.connect(_dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(JOBS_POSTGRES_DDL)
-                # Additional objects: queue controls, attachments, SLA policies
-                cur.execute(
-                    """
+        with psycopg.connect(_dsn) as conn, conn.cursor() as cur:
+            cur.execute(JOBS_POSTGRES_DDL)
+            # Additional objects: queue controls, attachments, SLA policies
+            cur.execute(
+                """
                     CREATE TABLE IF NOT EXISTS job_queue_controls (
                       domain TEXT NOT NULL,
                       queue TEXT NOT NULL,
@@ -184,9 +183,9 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
                       PRIMARY KEY (domain, queue)
                     );
                     """
-                )
-                cur.execute(
-                    """
+            )
+            cur.execute(
+                """
                     CREATE TABLE IF NOT EXISTS job_attachments (
                       id SERIAL PRIMARY KEY,
                       job_id INTEGER NOT NULL,
@@ -196,10 +195,10 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
                       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     );
                     """
-                )
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_job_attachments_job ON job_attachments(job_id)")
-                cur.execute(
-                    """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_job_attachments_job ON job_attachments(job_id)")
+            cur.execute(
+                """
                     CREATE TABLE IF NOT EXISTS job_sla_policies (
                       domain TEXT NOT NULL,
                       queue TEXT NOT NULL,
@@ -211,32 +210,31 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
                       PRIMARY KEY (domain, queue, job_type)
                     );
                     """
-                )
-                conn.commit()
+            )
+            conn.commit()
         # Forward-migrate older installs: add missing columns that newer code expects
         try:
-            with psycopg.connect(_dsn, autocommit=True) as cfix:
-                with cfix.cursor() as f:
-                    f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS completion_token TEXT")
-                    f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS failure_streak_code TEXT")
-                    f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS failure_streak_count INTEGER DEFAULT 0")
-                    f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS quarantined_at TIMESTAMPTZ")
-                    f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS progress_percent REAL")
-                    f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS progress_message TEXT")
-                    f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS request_id TEXT")
-                    f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS trace_id TEXT")
-                    f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS failure_timeline JSONB")
-                    f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_code TEXT")
-                    f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_class TEXT")
-                    f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_stack JSONB")
-                    f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS batch_group TEXT")
-                    # Forward-migrate archive table compressed columns (if table exists)
-                    try:
-                        f.execute("ALTER TABLE jobs_archive ADD COLUMN IF NOT EXISTS payload_compressed BYTEA")
-                        f.execute("ALTER TABLE jobs_archive ADD COLUMN IF NOT EXISTS result_compressed BYTEA")
-                        f.execute("ALTER TABLE jobs_archive ADD COLUMN IF NOT EXISTS batch_group TEXT")
-                    except Exception:
-                        pass
+            with psycopg.connect(_dsn, autocommit=True) as cfix, cfix.cursor() as f:
+                f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS completion_token TEXT")
+                f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS failure_streak_code TEXT")
+                f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS failure_streak_count INTEGER DEFAULT 0")
+                f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS quarantined_at TIMESTAMPTZ")
+                f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS progress_percent REAL")
+                f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS progress_message TEXT")
+                f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS request_id TEXT")
+                f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS trace_id TEXT")
+                f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS failure_timeline JSONB")
+                f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_code TEXT")
+                f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_class TEXT")
+                f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_stack JSONB")
+                f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS batch_group TEXT")
+                # Forward-migrate archive table compressed columns (if table exists)
+                try:
+                    f.execute("ALTER TABLE jobs_archive ADD COLUMN IF NOT EXISTS payload_compressed BYTEA")
+                    f.execute("ALTER TABLE jobs_archive ADD COLUMN IF NOT EXISTS result_compressed BYTEA")
+                    f.execute("ALTER TABLE jobs_archive ADD COLUMN IF NOT EXISTS batch_group TEXT")
+                except Exception:
+                    pass
         except Exception:
             # Best-effort; if the DB already has these or lacks permissions, continue
             pass
@@ -282,40 +280,39 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
 
             import psycopg  # noqa: F401
             if str(_os.getenv("JOBS_PG_RLS_ENABLE", "")).lower() in {"1","true","yes","y","on"}:
-                with psycopg.connect(_dsn, autocommit=True) as _c_rls:
-                    with _c_rls.cursor() as _p:
-                        try:
-                            _p.execute("ALTER TABLE jobs ENABLE ROW LEVEL SECURITY")
-                        except Exception:
-                            pass
-                        try:
-                            _p.execute("ALTER TABLE job_events ENABLE ROW LEVEL SECURITY")
-                        except Exception:
-                            pass
-                        try:
-                            _p.execute("ALTER TABLE job_counters ENABLE ROW LEVEL SECURITY")
-                        except Exception:
-                            pass
-                        try:
-                            _p.execute("ALTER TABLE job_queue_controls ENABLE ROW LEVEL SECURITY")
-                        except Exception:
-                            pass
-                        try:
-                            _p.execute("ALTER TABLE job_attachments ENABLE ROW LEVEL SECURITY")
-                        except Exception:
-                            pass
-                        try:
-                            _p.execute("ALTER TABLE job_sla_policies ENABLE ROW LEVEL SECURITY")
-                        except Exception:
-                            pass
-                        try:
-                            _p.execute("ALTER TABLE job_dependencies ENABLE ROW LEVEL SECURITY")
-                        except Exception:
-                            pass
-                        try:
-                            _p.execute("ALTER TABLE jobs_archive ENABLE ROW LEVEL SECURITY")
-                        except Exception:
-                            pass
+                with psycopg.connect(_dsn, autocommit=True) as _c_rls, _c_rls.cursor() as _p:
+                    try:
+                        _p.execute("ALTER TABLE jobs ENABLE ROW LEVEL SECURITY")
+                    except Exception:
+                        pass
+                    try:
+                        _p.execute("ALTER TABLE job_events ENABLE ROW LEVEL SECURITY")
+                    except Exception:
+                        pass
+                    try:
+                        _p.execute("ALTER TABLE job_counters ENABLE ROW LEVEL SECURITY")
+                    except Exception:
+                        pass
+                    try:
+                        _p.execute("ALTER TABLE job_queue_controls ENABLE ROW LEVEL SECURITY")
+                    except Exception:
+                        pass
+                    try:
+                        _p.execute("ALTER TABLE job_attachments ENABLE ROW LEVEL SECURITY")
+                    except Exception:
+                        pass
+                    try:
+                        _p.execute("ALTER TABLE job_sla_policies ENABLE ROW LEVEL SECURITY")
+                    except Exception:
+                        pass
+                    try:
+                        _p.execute("ALTER TABLE job_dependencies ENABLE ROW LEVEL SECURITY")
+                    except Exception:
+                        pass
+                    try:
+                        _p.execute("ALTER TABLE jobs_archive ENABLE ROW LEVEL SECURITY")
+                    except Exception:
+                        pass
         except Exception:
             # Ignore in environments without permissions or when tables don't exist yet
             pass
@@ -326,11 +323,10 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
             try:
                 base = db_url.rsplit("/", 1)[0] + "/postgres"
                 db_name = db_url.rsplit("/", 1)[1].split("?")[0]
-                with psycopg.connect(base, autocommit=True) as conn2:
-                    with conn2.cursor() as cur2:
-                        cur2.execute("SELECT 1 FROM pg_database WHERE datname=%s", (db_name,))
-                        if cur2.fetchone() is None:
-                            cur2.execute(f"CREATE DATABASE {db_name}")
+                with psycopg.connect(base, autocommit=True) as conn2, conn2.cursor() as cur2:
+                    cur2.execute("SELECT 1 FROM pg_database WHERE datname=%s", (db_name,))
+                    if cur2.fetchone() is None:
+                        cur2.execute(f"CREATE DATABASE {db_name}")
                 # Retry DDL
                 with psycopg.connect(_dsn) as conn3:
                     with conn3.cursor() as cur3:
@@ -363,10 +359,9 @@ def ensure_job_events_pg(db_url: str) -> None:
     _dsn = negotiate_pg_dsn(db_url)
     debug = str(os.getenv("JOBS_PG_RLS_DEBUG", "")).lower() in {"1", "true", "yes", "on"}
     try:
-        with psycopg.connect(_dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
+        with psycopg.connect(_dsn, autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
                     CREATE TABLE IF NOT EXISTS job_events (
                       id BIGSERIAL PRIMARY KEY,
                       job_id INTEGER,
@@ -381,12 +376,12 @@ def ensure_job_events_pg(db_url: str) -> None:
                       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     );
                     """
-                )
-                try:
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_job_events_id ON job_events(id)")
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id)")
-                except Exception:
-                    pass
+            )
+            try:
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_job_events_id ON job_events(id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id)")
+            except Exception:
+                pass
     except Exception:
         return
 
@@ -408,61 +403,60 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
     _dsn = negotiate_pg_dsn(db_url)
     debug = str(os.getenv("JOBS_PG_RLS_DEBUG", "")).lower() in {"1", "true", "yes", "on"}
     try:
-        with psycopg.connect(_dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                role = str(os.getenv("JOBS_PG_RLS_ROLE", "")).strip()
-                if role and _re.match(r"^[A-Za-z0-9_]+$", role):
+        with psycopg.connect(_dsn, autocommit=True) as conn, conn.cursor() as cur:
+            role = str(os.getenv("JOBS_PG_RLS_ROLE", "")).strip()
+            if role and _re.match(r"^[A-Za-z0-9_]+$", role):
+                try:
+                    cur.execute("SELECT current_schema()")
+                    schema_row = cur.fetchone()
+                    schema_name = (schema_row[0] if schema_row else None) or "public"
+                    cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
+                    if not cur.fetchone():
+                        cur.execute(f"CREATE ROLE {role} NOLOGIN")
                     try:
-                        cur.execute("SELECT current_schema()")
-                        schema_row = cur.fetchone()
-                        schema_name = (schema_row[0] if schema_row else None) or "public"
-                        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
-                        if not cur.fetchone():
-                            cur.execute(f"CREATE ROLE {role} NOLOGIN")
-                        try:
-                            cur.execute("SELECT current_user")
-                            user_row = cur.fetchone()
-                            current_user = (user_row[0] if user_row else None) or None
-                            if current_user and _re.match(r"^[A-Za-z0-9_]+$", str(current_user)):
-                                cur.execute(f"GRANT {role} TO {current_user}")
-                        except Exception:
-                            pass
-                        cur.execute(f"GRANT USAGE ON SCHEMA {schema_name} TO {role}")
-                        cur.execute(
-                            f"GRANT SELECT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {schema_name} TO {role}"
-                        )
+                        cur.execute("SELECT current_user")
+                        user_row = cur.fetchone()
+                        current_user = (user_row[0] if user_row else None) or None
+                        if current_user and _re.match(r"^[A-Za-z0-9_]+$", str(current_user)):
+                            cur.execute(f"GRANT {role} TO {current_user}")
                     except Exception:
                         pass
-                def _enable_rls(table: str) -> None:
-                    try:
-                        cur.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
-                    except Exception:
-                        pass
-                    try:
-                        cur.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
-                    except Exception:
-                        pass
+                    cur.execute(f"GRANT USAGE ON SCHEMA {schema_name} TO {role}")
+                    cur.execute(
+                        f"GRANT SELECT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {schema_name} TO {role}"
+                    )
+                except Exception:
+                    pass
+            def _enable_rls(table: str) -> None:
+                try:
+                    cur.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+                except Exception:
+                    pass
+                try:
+                    cur.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
+                except Exception:
+                    pass
 
-                # Enable and enforce RLS on all Jobs tables
-                for _table in (
-                    "jobs",
-                    "job_events",
-                    "job_counters",
-                    "job_queue_controls",
-                    "job_sla_policies",
-                    "job_attachments",
-                    "job_dependencies",
-                ):
-                    _enable_rls(_table)
-                admin_expr = "COALESCE(NULLIF(current_setting('app.is_admin', true), ''), '') = 'true'"
-                domain_expr = "NULLIF(current_setting('app.domain_allowlist', true), '')"
-                owner_expr = "NULLIF(current_setting('app.owner_user_id', true), '')"
-                domain_filter = f"({domain_expr} IS NULL OR domain = ANY(string_to_array({domain_expr}, ',')))"
-                owner_filter = f"({owner_expr} IS NULL OR owner_user_id = {owner_expr})"
+            # Enable and enforce RLS on all Jobs tables
+            for _table in (
+                "jobs",
+                "job_events",
+                "job_counters",
+                "job_queue_controls",
+                "job_sla_policies",
+                "job_attachments",
+                "job_dependencies",
+            ):
+                _enable_rls(_table)
+            admin_expr = "COALESCE(NULLIF(current_setting('app.is_admin', true), ''), '') = 'true'"
+            domain_expr = "NULLIF(current_setting('app.domain_allowlist', true), '')"
+            owner_expr = "NULLIF(current_setting('app.owner_user_id', true), '')"
+            domain_filter = f"({domain_expr} IS NULL OR domain = ANY(string_to_array({domain_expr}, ',')))"
+            owner_filter = f"({owner_expr} IS NULL OR owner_user_id = {owner_expr})"
 
-                cur.execute("DROP POLICY IF EXISTS jobs_domain_select ON jobs")
-                cur.execute(
-                    f"""
+            cur.execute("DROP POLICY IF EXISTS jobs_domain_select ON jobs")
+            cur.execute(
+                f"""
                     CREATE POLICY jobs_domain_select ON jobs FOR SELECT
                     USING (
                       {admin_expr} OR (
@@ -471,10 +465,10 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                       )
                     )
                     """
-                )
-                cur.execute("DROP POLICY IF EXISTS jobs_domain_modify ON jobs")
-                cur.execute(
-                    f"""
+            )
+            cur.execute("DROP POLICY IF EXISTS jobs_domain_modify ON jobs")
+            cur.execute(
+                f"""
                     CREATE POLICY jobs_domain_modify ON jobs FOR ALL
                     USING (
                       {admin_expr} OR (
@@ -483,12 +477,12 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                       )
                     )
                     """
-                )
-                # job_events policies (domain + owner, with admin bypass)
-                try:
-                    cur.execute("DROP POLICY IF EXISTS job_events_select ON job_events")
-                    cur.execute(
-                        f"""
+            )
+            # job_events policies (domain + owner, with admin bypass)
+            try:
+                cur.execute("DROP POLICY IF EXISTS job_events_select ON job_events")
+                cur.execute(
+                    f"""
                         CREATE POLICY job_events_select ON job_events FOR SELECT
                         USING (
                           {admin_expr} OR (
@@ -497,10 +491,10 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
-                    )
-                    cur.execute("DROP POLICY IF EXISTS job_events_modify ON job_events")
-                    cur.execute(
-                        f"""
+                )
+                cur.execute("DROP POLICY IF EXISTS job_events_modify ON job_events")
+                cur.execute(
+                    f"""
                         CREATE POLICY job_events_modify ON job_events FOR ALL
                         USING (
                           {admin_expr} OR (
@@ -509,14 +503,14 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
-                    )
-                except Exception:
-                    pass
-                # job_counters policies (domain only, with admin bypass)
-                try:
-                    cur.execute("DROP POLICY IF EXISTS job_counters_select ON job_counters")
-                    cur.execute(
-                        f"""
+                )
+            except Exception:
+                pass
+            # job_counters policies (domain only, with admin bypass)
+            try:
+                cur.execute("DROP POLICY IF EXISTS job_counters_select ON job_counters")
+                cur.execute(
+                    f"""
                         CREATE POLICY job_counters_select ON job_counters FOR SELECT
                         USING (
                           {admin_expr} OR (
@@ -524,10 +518,10 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
-                    )
-                    cur.execute("DROP POLICY IF EXISTS job_counters_modify ON job_counters")
-                    cur.execute(
-                        f"""
+                )
+                cur.execute("DROP POLICY IF EXISTS job_counters_modify ON job_counters")
+                cur.execute(
+                    f"""
                         CREATE POLICY job_counters_modify ON job_counters FOR ALL
                         USING (
                           {admin_expr} OR (
@@ -535,14 +529,14 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
-                    )
-                except Exception:
-                    pass
-                # job_queue_controls policies (domain only, with admin bypass)
-                try:
-                    cur.execute("DROP POLICY IF EXISTS job_queue_controls_select ON job_queue_controls")
-                    cur.execute(
-                        f"""
+                )
+            except Exception:
+                pass
+            # job_queue_controls policies (domain only, with admin bypass)
+            try:
+                cur.execute("DROP POLICY IF EXISTS job_queue_controls_select ON job_queue_controls")
+                cur.execute(
+                    f"""
                         CREATE POLICY job_queue_controls_select ON job_queue_controls FOR SELECT
                         USING (
                           {admin_expr} OR (
@@ -550,10 +544,10 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
-                    )
-                    cur.execute("DROP POLICY IF EXISTS job_queue_controls_modify ON job_queue_controls")
-                    cur.execute(
-                        f"""
+                )
+                cur.execute("DROP POLICY IF EXISTS job_queue_controls_modify ON job_queue_controls")
+                cur.execute(
+                    f"""
                         CREATE POLICY job_queue_controls_modify ON job_queue_controls FOR ALL
                         USING (
                           {admin_expr} OR (
@@ -561,14 +555,14 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
-                    )
-                except Exception:
-                    pass
-                # job_attachments policies (join to jobs for domain/owner)
-                try:
-                    cur.execute("DROP POLICY IF EXISTS job_attachments_select ON job_attachments")
-                    cur.execute(
-                        f"""
+                )
+            except Exception:
+                pass
+            # job_attachments policies (join to jobs for domain/owner)
+            try:
+                cur.execute("DROP POLICY IF EXISTS job_attachments_select ON job_attachments")
+                cur.execute(
+                    f"""
                         CREATE POLICY job_attachments_select ON job_attachments FOR SELECT
                         USING (
                           {admin_expr} OR EXISTS (
@@ -579,10 +573,10 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
-                    )
-                    cur.execute("DROP POLICY IF EXISTS job_attachments_modify ON job_attachments")
-                    cur.execute(
-                        f"""
+                )
+                cur.execute("DROP POLICY IF EXISTS job_attachments_modify ON job_attachments")
+                cur.execute(
+                    f"""
                         CREATE POLICY job_attachments_modify ON job_attachments FOR ALL
                         USING (
                           {admin_expr} OR EXISTS (
@@ -593,14 +587,14 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
-                    )
-                except Exception:
-                    pass
-                # job_dependencies policies (join to jobs for domain/owner)
-                try:
-                    cur.execute("DROP POLICY IF EXISTS job_dependencies_select ON job_dependencies")
-                    cur.execute(
-                        f"""
+                )
+            except Exception:
+                pass
+            # job_dependencies policies (join to jobs for domain/owner)
+            try:
+                cur.execute("DROP POLICY IF EXISTS job_dependencies_select ON job_dependencies")
+                cur.execute(
+                    f"""
                         CREATE POLICY job_dependencies_select ON job_dependencies FOR SELECT
                         USING (
                           {admin_expr} OR EXISTS (
@@ -611,10 +605,10 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
-                    )
-                    cur.execute("DROP POLICY IF EXISTS job_dependencies_modify ON job_dependencies")
-                    cur.execute(
-                        f"""
+                )
+                cur.execute("DROP POLICY IF EXISTS job_dependencies_modify ON job_dependencies")
+                cur.execute(
+                    f"""
                         CREATE POLICY job_dependencies_modify ON job_dependencies FOR ALL
                         USING (
                           {admin_expr} OR EXISTS (
@@ -625,14 +619,14 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
-                    )
-                except Exception:
-                    pass
-                # job_sla_policies policies (domain only)
-                try:
-                    cur.execute("DROP POLICY IF EXISTS job_sla_policies_select ON job_sla_policies")
-                    cur.execute(
-                        f"""
+                )
+            except Exception:
+                pass
+            # job_sla_policies policies (domain only)
+            try:
+                cur.execute("DROP POLICY IF EXISTS job_sla_policies_select ON job_sla_policies")
+                cur.execute(
+                    f"""
                         CREATE POLICY job_sla_policies_select ON job_sla_policies FOR SELECT
                         USING (
                           {admin_expr} OR (
@@ -640,10 +634,10 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
-                    )
-                    cur.execute("DROP POLICY IF EXISTS job_sla_policies_modify ON job_sla_policies")
-                    cur.execute(
-                        f"""
+                )
+                cur.execute("DROP POLICY IF EXISTS job_sla_policies_modify ON job_sla_policies")
+                cur.execute(
+                    f"""
                         CREATE POLICY job_sla_policies_modify ON job_sla_policies FOR ALL
                         USING (
                           {admin_expr} OR (
@@ -651,14 +645,14 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
-                    )
-                except Exception:
-                    pass
-                # jobs_archive policies (domain + owner, with admin bypass)
-                try:
-                    cur.execute("DROP POLICY IF EXISTS jobs_archive_select ON jobs_archive")
-                    cur.execute(
-                        f"""
+                )
+            except Exception:
+                pass
+            # jobs_archive policies (domain + owner, with admin bypass)
+            try:
+                cur.execute("DROP POLICY IF EXISTS jobs_archive_select ON jobs_archive")
+                cur.execute(
+                    f"""
                         CREATE POLICY jobs_archive_select ON jobs_archive FOR SELECT
                         USING (
                           {admin_expr} OR (
@@ -667,10 +661,10 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
-                    )
-                    cur.execute("DROP POLICY IF EXISTS jobs_archive_modify ON jobs_archive")
-                    cur.execute(
-                        f"""
+                )
+                cur.execute("DROP POLICY IF EXISTS jobs_archive_modify ON jobs_archive")
+                cur.execute(
+                    f"""
                         CREATE POLICY jobs_archive_modify ON jobs_archive FOR ALL
                         USING (
                           {admin_expr} OR (
@@ -679,13 +673,13 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
-                    )
-                except Exception:
-                    pass
-                if debug:
-                    try:
-                        cur.execute(
-                            """
+                )
+            except Exception:
+                pass
+            if debug:
+                try:
+                    cur.execute(
+                        """
                             SELECT tablename, polname
                             FROM pg_policies
                             WHERE schemaname = current_schema()
@@ -695,11 +689,11 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                               )
                             ORDER BY tablename, polname
                             """
-                        )
-                        rows = cur.fetchall()
-                        print(f"[jobs-rls-debug] policies={rows}")
-                    except Exception:
-                        pass
+                    )
+                    rows = cur.fetchall()
+                    print(f"[jobs-rls-debug] policies={rows}")
+                except Exception:
+                    pass
     except Exception:
         if debug:
             try:

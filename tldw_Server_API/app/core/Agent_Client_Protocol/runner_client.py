@@ -66,7 +66,7 @@ class ACPRunnerClient:
         self._ws_registry_lock = asyncio.Lock()
 
     @classmethod
-    def from_config(cls) -> "ACPRunnerClient":
+    def from_config(cls) -> ACPRunnerClient:
         return cls(load_acp_runner_config())
 
     @property

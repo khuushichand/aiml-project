@@ -77,7 +77,7 @@ class SnapshotManager:
         try:
             snapshot_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            raise IOError(f"Failed to create snapshot directory: {e}")
+            raise OSError(f"Failed to create snapshot directory: {e}")
 
         # Create the tarball
         try:
@@ -92,7 +92,7 @@ class SnapshotManager:
                 snapshot_path.unlink(missing_ok=True)
             except Exception:
                 pass
-            raise IOError(f"Failed to create snapshot archive: {e}")
+            raise OSError(f"Failed to create snapshot archive: {e}")
 
         # Get snapshot size
         try:
@@ -166,7 +166,7 @@ class SnapshotManager:
             else:
                 os.makedirs(workspace_path, exist_ok=True)
         except Exception as e:
-            raise IOError(f"Failed to clear workspace: {e}")
+            raise OSError(f"Failed to clear workspace: {e}")
 
         # Extract snapshot
         try:
@@ -184,7 +184,7 @@ class SnapshotManager:
         except ValueError:
             raise
         except Exception as e:
-            raise IOError(f"Failed to extract snapshot: {e}")
+            raise OSError(f"Failed to extract snapshot: {e}")
 
         return True
 
@@ -228,7 +228,7 @@ class SnapshotManager:
 
             shutil.copytree(source_workspace, new_workspace, dirs_exist_ok=True)
         except Exception as e:
-            raise IOError(f"Failed to clone workspace: {e}")
+            raise OSError(f"Failed to clone workspace: {e}")
 
         logger.info(f"Cloned session {source_session_id} to {new_session_id}")
         return True
@@ -252,7 +252,7 @@ class SnapshotManager:
 
         for meta_file in snapshot_dir.glob("*.meta.json"):
             try:
-                with open(meta_file, "r") as f:
+                with open(meta_file) as f:
                     metadata = json.load(f)
                     # Verify the actual archive exists
                     snapshot_id = metadata.get("snapshot_id")
@@ -354,7 +354,7 @@ class SnapshotManager:
 
         try:
             import json
-            with open(metadata_path, "r") as f:
+            with open(metadata_path) as f:
                 metadata = json.load(f)
                 # Update size
                 try:

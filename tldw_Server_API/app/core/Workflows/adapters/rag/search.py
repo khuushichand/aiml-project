@@ -320,7 +320,7 @@ async def run_rss_fetch_adapter(config: dict[str, Any], context: dict[str, Any])
             try:
                 if not (u.startswith("http://") or u.startswith("https://")):
                     continue
-                tenant_id = str((context.get("tenant_id") or "default")) if isinstance(context, dict) else "default"
+                tenant_id = str(context.get("tenant_id") or "default") if isinstance(context, dict) else "default"
                 allowed = False
                 try:
                     allowed = is_url_allowed_for_tenant(u, tenant_id)

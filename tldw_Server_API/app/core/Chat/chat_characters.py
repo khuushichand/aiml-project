@@ -53,9 +53,7 @@ def _extract_canonical_fields(character_data: dict[str, Any]) -> dict[str, Any]:
 
     if "image_base64" in character_data:
         image_base64 = character_data["image_base64"]
-        if isinstance(image_base64, str) and image_base64:
-            canonical["image_base64"] = image_base64
-        elif image_base64 in ("", None):
+        if isinstance(image_base64, str) and image_base64 or image_base64 in ("", None):
             canonical["image_base64"] = image_base64
     else:
         image_value = character_data.get("image")

@@ -44,6 +44,6 @@ async def test_semantic_cache_save_load_and_find_similar(tmp_path):
     assert entry_loaded.created_at == pytest.approx(created_at)
     assert entry_loaded.last_accessed == pytest.approx(last_accessed)
 
-    cached_query, similarity = await cache_loaded.find_similar("beta")
+    _key, cached_query, similarity = await cache_loaded.find_similar("beta")
     assert cached_query == "alpha"
     assert similarity >= 0.8

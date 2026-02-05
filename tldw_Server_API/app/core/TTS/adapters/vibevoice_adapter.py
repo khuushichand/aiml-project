@@ -3,8 +3,8 @@
 #
 # Imports
 import asyncio
-import importlib.util
 import gc
+import importlib.util
 import os
 import re
 from collections.abc import AsyncGenerator

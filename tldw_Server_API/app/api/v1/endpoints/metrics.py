@@ -145,7 +145,7 @@ async def health_check_with_metrics() -> dict[str, Any]:
         logger.error(f"Metrics Health check failed: {e}")
         return {
             "status": "unhealthy",
-            "message": f"Metrics Health check failed: ERROR - SEE LOGS",
+            "message": "Metrics Health check failed: ERROR - SEE LOGS",
             "active_requests": -1,
             "active_streams": -1,
             "active_transactions": -1

@@ -89,7 +89,7 @@ async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None
       - audio_store: finalize/store results (placeholder)
     """
     jm = JobManager()
-    worker_id = f"audio-worker"
+    worker_id = "audio-worker"
     poll_sleep = float(os.getenv("JOBS_POLL_INTERVAL_SECONDS", "1.0") or "1.0")
 
     logger.info("Starting Audio Jobs worker (MVP)")

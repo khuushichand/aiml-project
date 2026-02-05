@@ -83,6 +83,7 @@ export interface ChunkingCapabilities {
   hierarchical_support: boolean
   notes?: string
   options_schema?: Record<string, any>
+  pdf_parsing_engines?: string[]
   method_specific_options?: {
     code?: {
       code_mode: string[]

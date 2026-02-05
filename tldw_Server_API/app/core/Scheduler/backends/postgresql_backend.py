@@ -288,34 +288,33 @@ class PostgreSQLBackend(QueueBackend):
         if not tasks:
             return []
 
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                task_ids = []
+        async with self.pool.acquire() as conn, conn.transaction():
+            task_ids = []
 
-                # Prepare data for bulk insert
-                values = []
-                for task in tasks:
-                    # Handle large payloads
-                    payload_ref = None
-                    payload_data = task.payload
+            # Prepare data for bulk insert
+            values = []
+            for task in tasks:
+                # Handle large payloads
+                payload_ref = None
+                payload_data = task.payload
 
-                    if payload_data and len(json.dumps(payload_data)) > self.config.payload_threshold_bytes:
-                        payload_ref = await self._store_external_payload(conn, task.id, payload_data)
-                        payload_data = None
+                if payload_data and len(json.dumps(payload_data)) > self.config.payload_threshold_bytes:
+                    payload_ref = await self._store_external_payload(conn, task.id, payload_data)
+                    payload_data = None
 
-                    values.append((
-                        task.id, task.handler,
-                        json.dumps(payload_data) if payload_data else None,
-                        payload_ref, task.status.value, task.priority,
-                        task.queue_name or self.config.default_queue_name,
-                        task.scheduled_at, task.depends_on, task.idempotency_key,
-                        task.max_retries, task.retry_delay, task.timeout,
-                        json.dumps(task.metadata) if task.metadata else None
-                    ))
-                    task_ids.append(task.id)
+                values.append((
+                    task.id, task.handler,
+                    json.dumps(payload_data) if payload_data else None,
+                    payload_ref, task.status.value, task.priority,
+                    task.queue_name or self.config.default_queue_name,
+                    task.scheduled_at, task.depends_on, task.idempotency_key,
+                    task.max_retries, task.retry_delay, task.timeout,
+                    json.dumps(task.metadata) if task.metadata else None
+                ))
+                task_ids.append(task.id)
 
-                # Bulk insert with ON CONFLICT
-                await conn.executemany("""
+            # Bulk insert with ON CONFLICT
+            await conn.executemany("""
                     INSERT INTO tasks (
                         id, handler, payload, payload_ref, status, priority,
                         queue_name, scheduled_at, depends_on, idempotency_key,
@@ -324,12 +323,12 @@ class PostgreSQLBackend(QueueBackend):
                     ON CONFLICT (idempotency_key) DO NOTHING
                 """, values)
 
-                # Notify all affected queues
-                queues = set(t.queue_name or self.config.default_queue_name for t in tasks)
-                for queue in queues:
-                    await self._notify_queue(conn, queue)
+            # Notify all affected queues
+            queues = set(t.queue_name or self.config.default_queue_name for t in tasks)
+            for queue in queues:
+                await self._notify_queue(conn, queue)
 
-                return task_ids
+            return task_ids
 
     async def dequeue_atomic(self, queue_name: str, worker_id: str) -> Optional[Task]:
         """
@@ -757,9 +756,8 @@ class PostgreSQLBackend(QueueBackend):
     @asynccontextmanager
     async def transaction(self):
         """Transaction context manager (yields a live connection)."""
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                yield conn
+        async with self.pool.acquire() as conn, conn.transaction():
+            yield conn
 
     async def _store_external_payload(self, conn: Connection, task_id: str, payload: dict) -> str:
         """

@@ -236,7 +236,7 @@ async def run_media_ingest_adapter(config: dict[str, Any], context: dict[str, An
                     continue
             # Global egress policy: private IPs and allowlist
             try:
-                tenant_id = str((context.get("tenant_id") or "default")) if isinstance(context, dict) else "default"
+                tenant_id = str(context.get("tenant_id") or "default") if isinstance(context, dict) else "default"
                 allowed = False
                 try:
                     allowed = is_url_allowed_for_tenant(uri, tenant_id)

@@ -37,7 +37,7 @@ class SourceRef(BaseModel):
     }
 
     @model_validator(mode="after")
-    def _validate_payload(self) -> "SourceRef":
+    def _validate_payload(self) -> SourceRef:
         if not self.upload_id and not self.media_id and not (self.raw_text or "").strip():
             raise ValueError("source requires upload_id, media_id, or raw_text")
         return self
@@ -259,7 +259,7 @@ class AudiobookJobRequest(BaseModel):
     }
 
     @model_validator(mode="after")
-    def _validate_shape(self) -> "AudiobookJobRequest":
+    def _validate_shape(self) -> AudiobookJobRequest:
         def _requires_subtitles(provider: str | None, model: str | None) -> bool:
             if provider:
                 return str(provider).strip().lower() == "kokoro"
@@ -626,7 +626,7 @@ class SubtitleExportRequest(BaseModel):
     max_lines: int | None = Field(None, ge=1, description="Maximum lines per cue")
 
     @model_validator(mode="after")
-    def _validate_alignment_source(self) -> "SubtitleExportRequest":
+    def _validate_alignment_source(self) -> SubtitleExportRequest:
         if self.alignment is None and self.alignment_output_id is None:
             raise ValueError("alignment or alignment_output_id is required")
         return self

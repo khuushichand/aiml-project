@@ -66,7 +66,7 @@ def load_builtin_templates() -> list[dict[str, Any]]:
         if template_dir.exists():
             for template_file in template_dir.glob("*.json"):
                 try:
-                    with open(template_file, 'r', encoding='utf-8') as f:
+                    with open(template_file, encoding='utf-8') as f:
                         template_data = json.load(f)
                     _append_template(template_data, f"fs:{template_file.name}")
                 except json.JSONDecodeError as e:

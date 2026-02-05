@@ -201,14 +201,14 @@ class SafeWriteBuffer:
                     try:
                         await self.backend.bulk_enqueue(tasks_to_save)
                         logger.info(f"Final flush completed: {len(tasks_to_save)} tasks")
-                    except Exception as e:
+                    except Exception:
                         # Re-add on failure
                         self.buffer = tasks_to_save
                         raise
 
                 break  # Success
 
-            except Exception as e:
+            except Exception:
                 if attempt == max_retries - 1:
                     # Last resort: Write to emergency backup file
                     await self._emergency_backup()
@@ -279,7 +279,7 @@ class SafeWriteBuffer:
             return 0
 
         try:
-            with open(backup_path, 'r') as f:
+            with open(backup_path) as f:
                 backup_data = json.load(f)
 
             tasks = []

@@ -269,7 +269,7 @@ class NotionConnector(BaseConnector):
                             lines.append("| " + " | ".join(r) + " |")
             # Image (external URL if available, include caption)
             elif t == "image":
-                cap = _rich_text_to_md((bt.get("caption") or []))
+                cap = _rich_text_to_md(bt.get("caption") or [])
                 src = None
                 if bt.get("type") == "external":
                     src = (bt.get("external") or {}).get("url")

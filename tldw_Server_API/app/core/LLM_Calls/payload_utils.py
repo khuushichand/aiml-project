@@ -202,7 +202,7 @@ def merge_extra_headers(headers: dict[str, str], request: Mapping[str, Any]) -> 
     if not isinstance(extra, Mapping) or not extra:
         return headers
     merged = dict(headers or {})
-    existing_lower = {str(k).lower() for k in merged.keys()}
+    existing_lower = {str(k).lower() for k in merged}
     for key, value in extra.items():
         if not isinstance(key, str):
             continue

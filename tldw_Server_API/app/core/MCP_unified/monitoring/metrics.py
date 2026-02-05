@@ -683,7 +683,7 @@ def track_request_time(method: str):
                 duration = time.time() - start_time
                 collector.record_request(method, duration, "success")
                 return result
-            except Exception as e:
+            except Exception:
                 duration = time.time() - start_time
                 collector.record_request(method, duration, "failure")
                 raise
@@ -704,7 +704,7 @@ def track_module_operation(module: str, operation: str):
                 duration = time.time() - start_time
                 collector.record_module_operation(module, operation, duration, True)
                 return result
-            except Exception as e:
+            except Exception:
                 duration = time.time() - start_time
                 collector.record_module_operation(module, operation, duration, False)
                 raise

@@ -23,6 +23,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.exceptions import StoragePathValidationError
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.services.outputs_service import normalize_output_storage_path
@@ -74,6 +75,7 @@ def _enumerate_user_ids() -> list[int]:
 async def _purge_for_user(user_id: int, delete_files: bool, grace_days: int) -> tuple[int, int]:
     """Return (removed, files_deleted)."""
     cdb = CollectionsDatabase.for_user(user_id)
+    media_db = None
     # Build candidate set similar to /outputs/purge endpoint
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -136,6 +138,25 @@ async def _purge_for_user(user_id: int, delete_files: bool, grace_days: int) -> 
                     )
                 except Exception:
                     logger.debug("metrics increment failed for file_delete_failed")
+    if ids:
+        try:
+            media_db = MediaDatabase(db_path=str(DatabasePaths.get_media_db_path(user_id)), client_id="outputs_purge")
+            for rid in ids:
+                try:
+                    media_db.mark_tts_history_artifacts_deleted_for_output(
+                        user_id=str(user_id),
+                        output_id=int(rid),
+                    )
+                except Exception as exc:
+                    logger.debug(f"outputs_purge: failed to update tts_history for output {rid}: {exc}")
+        except Exception as exc:
+            logger.debug(f"outputs_purge: failed to open Media DB for history update: {exc}")
+        finally:
+            if media_db is not None:
+                try:
+                    media_db.close_connection()
+                except Exception:
+                    pass
     removed = 0
     if ids:
         placeholders = ",".join(["?"] * len(ids))

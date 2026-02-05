@@ -108,7 +108,7 @@ class ScraperRouter:
     def load_rules_from_yaml(path: str) -> dict[str, Any]:
         if not os.path.exists(path):
             return {}
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         # Basic normalization
         if not isinstance(data, dict):
@@ -194,13 +194,7 @@ class ScraperRouter:
                             if isinstance(item, str):
                                 order.append(item)
                     cleaned[k] = order
-                elif k in {"schema_rules", "schema"}:
-                    cleaned[k] = v if isinstance(v, dict) else {}
-                elif k in {"llm_settings", "llm"}:
-                    cleaned[k] = v if isinstance(v, dict) else {}
-                elif k in {"regex_settings", "regex"}:
-                    cleaned[k] = v if isinstance(v, dict) else {}
-                elif k in {"cluster_settings", "cluster"}:
+                elif k in {"schema_rules", "schema"} or k in {"llm_settings", "llm"} or k in {"regex_settings", "regex"} or k in {"cluster_settings", "cluster"}:
                     cleaned[k] = v if isinstance(v, dict) else {}
                 else:
                     cleaned[k] = v

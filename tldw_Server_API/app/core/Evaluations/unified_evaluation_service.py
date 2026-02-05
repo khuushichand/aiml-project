@@ -1070,14 +1070,14 @@ class UnifiedEvaluationService:
                 results.append({"id": it.get("id"), "question": q, "gold": gold, "pred": pred})
 
         # Metrics
-        cm: dict[str, dict[str, int]] = {g: {p: 0 for p in allowed} for g in allowed}
+        cm: dict[str, dict[str, int]] = {g: dict.fromkeys(allowed, 0) for g in allowed}
         total = 0
         correct = 0
         for r in results:
             g = r.get("gold") or "NEI"
             p = r.get("pred") or "NEI"
             if g not in cm:
-                cm[g] = {lab: 0 for lab in allowed}
+                cm[g] = dict.fromkeys(allowed, 0)
             if p not in cm[g]:
                 for lab in cm:
                     cm[lab][p] = cm[lab].get(p, 0)

@@ -338,7 +338,7 @@ class DeadLetterQueue:
             file_path = self.storage_path / "failed_jobs.json"
 
             if file_path.exists():
-                with open(file_path, 'r') as f:
+                with open(file_path) as f:
                     data = json.load(f)
 
                 self.failed_jobs = [

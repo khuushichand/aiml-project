@@ -116,10 +116,10 @@ class _AsyncClearable:
 
 
 class RAGCache:
-    """Minimal RAG cache facade for health endpoints.
+    """RAG cache facade for health endpoints.
 
-    Provides a stable API consumed by rag_health without pulling heavy deps.
-    Not a full multi-level cache; acts as a lightweight placeholder.
+    Delegates to a real SemanticCache when one has been registered via
+    ``register_semantic_cache()``. Falls back to stub zeros otherwise.
     """
 
     def __init__(self, enable_multi_level: bool = False) -> None:
@@ -130,8 +130,14 @@ class RAGCache:
         self.warmer = None  # Placeholder; can be wired to a real warmer later
 
     def get_stats(self) -> dict[str, Any]:
-        """Return lightweight cache stats compatible with rag_health expectations."""
-        # Since this is a stub, report zeros and consistent structure
+        """Return cache stats, delegating to the real SemanticCache if available."""
+        real = _shared_semantic_cache
+        if real is not None:
+            try:
+                return real.get_stats()
+            except (AttributeError, TypeError, RuntimeError):
+                pass
+        # Fallback stub
         overall = {
             "hit_rate": 0.0,
             "size": len(getattr(self._l1, "_store", {}))
@@ -145,3 +151,19 @@ class RAGCache:
         if self.enable_multi_level:
             return {"overall": overall, "l1": l1, "l2": l2}
         return overall
+
+
+# Module-level reference to the shared SemanticCache instance.
+# Set by ``register_semantic_cache()`` when the pipeline creates its cache.
+_shared_semantic_cache: Any = None
+
+
+def register_semantic_cache(cache: Any) -> None:
+    """Register the shared SemanticCache so health endpoints can read its stats."""
+    global _shared_semantic_cache
+    _shared_semantic_cache = cache
+
+
+def get_registered_semantic_cache() -> Any:
+    """Return the registered SemanticCache, or None."""
+    return _shared_semantic_cache

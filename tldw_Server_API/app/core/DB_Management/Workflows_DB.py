@@ -278,7 +278,7 @@ class WorkflowsBackendCursorAdapter:
 class WorkflowsBackendCursor:
     """Cursor wrapper that routes SQL through a DatabaseBackend."""
 
-    def __init__(self, db: 'WorkflowsDatabase'):
+    def __init__(self, db: WorkflowsDatabase):
         self._db = db
         self._adapter: WorkflowsBackendCursorAdapter | None = None
         self.rowcount: int = -1
@@ -370,7 +370,7 @@ class WorkflowsBackendCursor:
 class WorkflowsBackendConnection:
     """Connection shim exposing sqlite-style helpers for backend usage."""
 
-    def __init__(self, db: 'WorkflowsDatabase') -> None:
+    def __init__(self, db: WorkflowsDatabase) -> None:
         self._db = db
         self.row_factory = None  # compatibility shim
 
@@ -1721,7 +1721,7 @@ class WorkflowsDatabase:
                 "SELECT COALESCE(MAX(event_seq), 0) as max_seq FROM workflow_events WHERE run_id = ?",
                 (run_id,),
             ).fetchone()
-            next_seq = int((row["max_seq"] if isinstance(row, dict) else row[0])) + 1
+            next_seq = int(row["max_seq"] if isinstance(row, dict) else row[0]) + 1
 
         params_insert = (
             tenant_id,
@@ -1994,9 +1994,7 @@ class WorkflowsDatabase:
         for row in rows:
             raw = None
             try:
-                if isinstance(row, WorkflowRowAdapter):
-                    raw = row.get("outputs_json")
-                elif isinstance(row, dict):
+                if isinstance(row, WorkflowRowAdapter) or isinstance(row, dict):
                     raw = row.get("outputs_json")
                 else:
                     raw = row[0] if row else None

@@ -92,7 +92,7 @@ def validate_regex_pattern_enhanced(pattern: str, max_length: int = 500, timeout
     for dangerous in DANGEROUS_PATTERNS:
         if re.search(dangerous, pattern):
             raise InvalidInputError(
-                f"Regex pattern contains potentially dangerous construct"
+                "Regex pattern contains potentially dangerous construct"
             )
 
     # Check for nested quantifiers

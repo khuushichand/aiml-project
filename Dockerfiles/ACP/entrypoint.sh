@@ -17,6 +17,7 @@ chmod 600 "/home/${USER_NAME}/.ssh/authorized_keys" || true
 chown -R "${USER_NAME}:${USER_NAME}" "/home/${USER_NAME}/.ssh"
 
 mkdir -p /run/sshd
+ssh-keygen -A
 cat <<SSHD > /etc/ssh/sshd_config
 Port 22
 ListenAddress 0.0.0.0
@@ -74,6 +75,7 @@ print("terminal:")
 print("  enabled: true")
 PY
 
+chmod 600 "/home/${USER_NAME}/.tldw-agent/config.yaml"
 chown -R "${USER_NAME}:${USER_NAME}" "/home/${USER_NAME}/.tldw-agent"
 
 export HOME="/home/${USER_NAME}"

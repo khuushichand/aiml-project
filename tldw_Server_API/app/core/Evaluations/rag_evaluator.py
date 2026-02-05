@@ -111,7 +111,7 @@ class RAGEvaluator:
             existing = models.get(self.embedding_model)
             try:
                 if existing is not None:
-                    setattr(existing, "api_key", self.api_key)
+                    existing.api_key = self.api_key
                 else:
                     models[self.embedding_model] = OpenAIModelCfg(
                         provider=self.embedding_provider,
@@ -845,7 +845,7 @@ class RAGEvaluator:
 
         # Default to equal weights
         if weights is None:
-            weights = {key: 1.0 for key in metrics.keys()}
+            weights = dict.fromkeys(metrics.keys(), 1.0)
 
         total_weight = 0
         weighted_sum = 0

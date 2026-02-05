@@ -102,7 +102,7 @@ def _get_embeddings_fn():
         )
         globals()["create_embeddings_batch"] = _impl
         return _impl
-    except Exception as e:
+    except Exception:
         def _err(*_args, **_kwargs):
             raise RuntimeError(
                 "Embeddings service not available; patch _get_embeddings_fn() or create_embeddings_batch"
@@ -891,7 +891,7 @@ async def duplicate_vector_store(
                     emb_list.append(vec)
                     doc_list.append(it.get('content') or '')
                     meta_list_existing.append(it.get('metadata') or {})
-            except Exception as e:
+            except Exception:
                 # Fallback to Chroma collection path on error
                 dup_fn = None
                 continue

@@ -156,7 +156,7 @@ def get_or_create_counter(name, description, labelnames):
             # If labels don't match, unregister the old one
             REGISTRY.unregister(collector)
         return Counter(name, description, labelnames)
-    except Exception as e:
+    except Exception:
         # Try to create new counter, handling any registration issues
         try:
             return Counter(name, description, labelnames)
@@ -2614,8 +2614,8 @@ async def create_embedding_endpoint(
         try:
             if hasattr(request, 'state') and response is not None:
                 if getattr(request.state, 'rate_limit_limit', None) is not None:
-                    response.headers["X-RateLimit-Limit"] = str(getattr(request.state, 'rate_limit_limit'))
-                    response.headers["X-RateLimit-Remaining"] = str(getattr(request.state, 'rate_limit_remaining'))
+                    response.headers["X-RateLimit-Limit"] = str(request.state.rate_limit_limit)
+                    response.headers["X-RateLimit-Remaining"] = str(request.state.rate_limit_remaining)
         except Exception:
             pass
 
@@ -2744,8 +2744,8 @@ async def create_embeddings_batch_endpoint(
     try:
         if hasattr(request, 'state') and response is not None:
             if getattr(request.state, 'rate_limit_limit', None) is not None:
-                response.headers["X-RateLimit-Limit"] = str(getattr(request.state, 'rate_limit_limit'))
-                response.headers["X-RateLimit-Remaining"] = str(getattr(request.state, 'rate_limit_remaining'))
+                response.headers["X-RateLimit-Limit"] = str(request.state.rate_limit_limit)
+                response.headers["X-RateLimit-Remaining"] = str(request.state.rate_limit_remaining)
     except Exception:
         pass
 
@@ -3048,7 +3048,7 @@ async def clear_cache(
     await embedding_cache.clear()
 
     logger.info(
-        f"Cache cleared by admin",
+        "Cache cleared by admin",
         extra={
             "admin_id": current_user.id,
             "entries_cleared": cache_stats['size']
@@ -3308,7 +3308,7 @@ async def reset_circuit_breaker(
     breaker.reset()
 
     logger.info(
-        f"Circuit breaker reset by admin",
+        "Circuit breaker reset by admin",
         extra={
             "admin_id": current_user.id,
             "provider": provider
@@ -4312,7 +4312,7 @@ async def _sse_orchestrator_stream(client: aioredis.Redis):
             yield ":\n\n"
             # Jittered interval around 5s
             await _asyncio.sleep(_random.uniform(4.5, 5.5))
-        except Exception as e:
+        except Exception:
             # Keep the stream alive; emit a sanitized error and log details server-side
             try:
                 logger.exception("Orchestrator stream error")
@@ -4373,7 +4373,7 @@ async def orchestrator_events(_current_user: User = Depends(get_request_user)):
                     try:
                         payload = await _build_orchestrator_snapshot(client)
                         await stream.send_event("summary", payload)
-                    except Exception as e:
+                    except Exception:
                         # Emit a non-fatal sanitized error frame and continue; log details server-side
                         logger.exception("Provider error during orchestrator snapshot")
                         await stream.error("provider_error", "Temporary service error", data=None, close=False)

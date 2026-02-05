@@ -5057,15 +5057,21 @@ test.describe("Real server end-to-end workflows", () => {
       ).toHaveCount(0, { timeout: 20000 })
     } finally {
       await Promise.race([
-        driver.close(),
+        driver.close().catch(() => {}),
         new Promise((resolve) => setTimeout(resolve, 10000))
       ])
       await Promise.race([
-        deleteWorldBookByName(normalizedServerUrl, apiKey, worldBookName),
+        deleteWorldBookByName(normalizedServerUrl, apiKey, worldBookName).catch(
+          () => {}
+        ),
         new Promise((resolve) => setTimeout(resolve, 10000))
       ])
       await Promise.race([
-        deleteCharacterByName(normalizedServerUrl, apiKey, characterName),
+        deleteCharacterByName(
+          normalizedServerUrl,
+          apiKey,
+          characterName
+        ).catch(() => {}),
         new Promise((resolve) => setTimeout(resolve, 10000))
       ])
     }

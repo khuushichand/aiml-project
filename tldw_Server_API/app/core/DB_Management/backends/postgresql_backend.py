@@ -375,7 +375,7 @@ class PostgreSQLBackend(DatabaseBackend):
                         connection.execute(sql_stmt, params)
                     except Exception as cfg_exc:
                         logger.debug(f"Unable to apply scope settings via execute: {cfg_exc}")
-        except Exception as exc:
+        except Exception:
             # If we failed (e.g., transaction aborted), rollback and try once more
             try:
                 connection.rollback()
@@ -703,7 +703,7 @@ class PostgreSQLBackend(DatabaseBackend):
         if self._pool is None:
             pool = PostgreSQLConnectionPool(self.config)
             # Propagate scope configuration helper so the pool can refresh session state.
-            setattr(pool, "_apply_scope_settings", self._apply_scope_settings)
+            pool._apply_scope_settings = self._apply_scope_settings
             self._pool = pool
         return self._pool
 
@@ -1065,7 +1065,7 @@ class PostgreSQLBackend(DatabaseBackend):
         query_parts = [
             f"SELECT *, ts_rank({self.escape_identifier(fts_column)}, query) AS rank",
             f"FROM {self.escape_identifier(source_table)},",
-            f"to_tsquery('english', %s) query",
+            "to_tsquery('english', %s) query",
             f"WHERE {self.escape_identifier(fts_column)} @@ query"
         ]
 

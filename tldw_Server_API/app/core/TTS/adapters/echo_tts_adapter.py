@@ -144,7 +144,7 @@ class EchoTTSAdapter(TTSAdapter):
         self._echo_modules_loaded = False
         self._model_lock = asyncio.Lock()
         self._cache_lock = asyncio.Lock()
-        self._speaker_cache: "OrderedDict[str, tuple[float, Any, Any]]" = OrderedDict()
+        self._speaker_cache: OrderedDict[str, tuple[float, Any, Any]] = OrderedDict()
 
         self._echo_inference = None
         self._echo_blockwise = None

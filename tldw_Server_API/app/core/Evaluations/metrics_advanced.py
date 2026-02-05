@@ -375,7 +375,7 @@ class AdvancedEvaluationMetrics:
 
         try:
             yield
-        except Exception as e:
+        except Exception:
             error_occurred = True
             self._error_count += 1
             raise

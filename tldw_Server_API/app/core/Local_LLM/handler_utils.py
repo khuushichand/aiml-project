@@ -243,7 +243,7 @@ def check_denylist(
 
     bad = [
         k
-        for k in args.keys()
+        for k in args
         if _normalize_key(k) in deny_normalized or _compact_key(k) in deny_compact
     ]
     if bad:
@@ -254,7 +254,7 @@ def check_denylist(
 
 
 def safe_log(
-    log: "Logger",
+    log: Logger,
     level: str,
     msg: str,
     *args,

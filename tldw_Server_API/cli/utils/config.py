@@ -38,7 +38,7 @@ def load_cli_config(config_path: Optional[str] = None, db_path_override: Optiona
     eval_config_path = _find_evaluations_config(config_path)
     if eval_config_path and eval_config_path.exists():
         try:
-            with open(eval_config_path, 'r') as f:
+            with open(eval_config_path) as f:
                 eval_config = yaml.safe_load(f)
                 if eval_config:
                     config.update(eval_config)

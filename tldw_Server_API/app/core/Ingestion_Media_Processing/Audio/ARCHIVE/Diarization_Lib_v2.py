@@ -84,7 +84,7 @@ def load_pipeline_from_config(config_path: Union[str, Path]) -> SpeakerDiarizati
         raise FileNotFoundError(f"Diarization config file not found: {resolved_path}")
 
     try:
-        with open(resolved_path, 'r') as config_file:
+        with open(resolved_path) as config_file:
             config = yaml.safe_load(config_file)
         logging.debug(f"Loaded diarization config: {config}")
 

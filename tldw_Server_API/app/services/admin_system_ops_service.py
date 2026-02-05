@@ -43,7 +43,7 @@ def _store_file_lock(timeout: float = _LOCK_TIMEOUT_SECONDS):
                 try:
                     fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
-                except (IOError, OSError):
+                except OSError:
                     if time.time() - start_time > timeout:
                         raise RuntimeError(f"Failed to acquire system ops lock within {timeout}s")
                     time.sleep(0.05)
@@ -84,12 +84,11 @@ def _store_file_lock(timeout: float = _LOCK_TIMEOUT_SECONDS):
 
 @contextmanager
 def _locked_store(write: bool = False):
-    with _STORE_LOCK:
-        with _store_file_lock():
-            store = _load_store()
-            yield store
-            if write:
-                _save_store(store)
+    with _STORE_LOCK, _store_file_lock():
+        store = _load_store()
+        yield store
+        if write:
+            _save_store(store)
 
 
 def _now_iso() -> str:

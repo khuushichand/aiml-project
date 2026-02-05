@@ -52,7 +52,7 @@ class DataTableGenerateRequest(BaseModel):
 
     if model_validator is not None:
         @model_validator(mode="after")
-        def _validate_payload(self) -> "DataTableGenerateRequest":
+        def _validate_payload(self) -> DataTableGenerateRequest:
             if not self.sources:
                 raise ValueError("sources are required")
             return self
@@ -83,7 +83,7 @@ class DataTableUpdateRequest(BaseModel):
 
     if model_validator is not None:
         @model_validator(mode="after")
-        def _validate_payload(self) -> "DataTableUpdateRequest":
+        def _validate_payload(self) -> DataTableUpdateRequest:
             if self.name is None and self.description is None:
                 raise ValueError("at least one field is required")
             if self.name is not None and not self.name.strip():

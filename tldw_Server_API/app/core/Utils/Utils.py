@@ -852,19 +852,19 @@ class FileProcessor:
 
         # Try detected encoding first
         try:
-            with open(file_path, 'r', encoding=detected_encoding) as f:
+            with open(file_path, encoding=detected_encoding) as f:
                 return f.read()
         except UnicodeDecodeError:
             # If detected encoding fails, try others
             for encoding in FileProcessor.ENCODINGS_TO_TRY:
                 try:
-                    with open(file_path, 'r', encoding=encoding) as f:
+                    with open(file_path, encoding=encoding) as f:
                         return f.read()
                 except UnicodeDecodeError:
                     continue
 
             # If all encodings fail, use utf-8 with error handling
-            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+            with open(file_path, encoding='utf-8', errors='replace') as f:
                 return f.read()
 
     @staticmethod

@@ -37,7 +37,7 @@ def get_chrome_cookies(domain_name):
         local_state_path = os.path.expanduser('~/.config/google-chrome/Local State')
 
     # Read the encryption key
-    with open(local_state_path, 'r', encoding='utf-8') as f:
+    with open(local_state_path, encoding='utf-8') as f:
         local_state = json.load(f)
     encrypted_key = base64.b64decode(local_state['os_crypt']['encrypted_key'])
     encrypted_key = encrypted_key[5:]  # Remove 'DPAPI' prefix
@@ -82,7 +82,7 @@ def get_chrome_cookies(domain_name):
             if sys.platform == 'win32':
                 try:
                     decrypted_value = win32crypt.CryptUnprotectData(encrypted_value, None, None, None, 0)[1]
-                except Exception as e:
+                except Exception:
                     # Fallback to edge cookie decryption if CryptUnprotectData fails
                     decrypted_value = decrypt_edge_cookie(encrypted_value, key)
             else:
@@ -191,7 +191,7 @@ def get_edge_cookies(domain_name):
             raise FileNotFoundError(f"Local State file not found at {local_state_path}")
 
         # Read and decode the encryption key
-        with open(local_state_path, 'r', encoding='utf-8') as f:
+        with open(local_state_path, encoding='utf-8') as f:
             local_state = json.load(f)
 
         encrypted_key = base64.b64decode(local_state['os_crypt']['encrypted_key'])
@@ -234,7 +234,7 @@ def get_edge_cookies(domain_name):
                     try:
                         # Try to decrypt using CryptUnprotectData
                         decrypted_value = win32crypt.CryptUnprotectData(encrypted_value, None, None, None, 0)[1]
-                    except Exception as e:
+                    except Exception:
                         # If failed, use custom decryption
                         decrypted_value = decrypt_edge_cookie(encrypted_value, key)
                 else:
@@ -334,7 +334,7 @@ def parse_safari_cookie(data, domain_name):
         cookie_domain = data[url_offset:data.find(b'\x00', url_offset)].decode('utf-8')
         if domain_name in cookie_domain:
             return {'name': cookie_name, 'value': cookie_value}
-    except Exception as e:
+    except Exception:
         pass
     return None
 

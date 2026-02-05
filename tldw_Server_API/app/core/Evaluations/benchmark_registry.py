@@ -60,7 +60,7 @@ class BenchmarkConfig:
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'BenchmarkConfig':
         """Load from YAML file."""
-        with open(yaml_path, 'r') as f:
+        with open(yaml_path) as f:
             data = yaml.safe_load(f)
         return cls.from_dict(data)
 
@@ -440,7 +440,7 @@ class BenchmarkRegistry:
             if path.suffix == '.yaml' or path.suffix == '.yml':
                 config = BenchmarkConfig.from_yaml(str(path))
             else:
-                with open(path, 'r') as f:
+                with open(path) as f:
                     data = json.load(f)
                 config = BenchmarkConfig.from_dict(data)
 

@@ -342,7 +342,7 @@ class ProgramEvaluator:
             if not isinstance(node, allowed_nodes):
                 return False
         try:
-            env = {k: names.get(k) for k in names.keys()}
+            env = {k: names.get(k) for k in names}
             return bool(eval(compile(tree, "<constraint>", "eval"), {"__builtins__": {}}, env))
         except Exception:
             return False

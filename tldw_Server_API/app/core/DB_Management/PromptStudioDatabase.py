@@ -1038,11 +1038,10 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
-                    project = self._row_to_dict(row)
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
+                project = self._row_to_dict(row)
             self._log_sync_event(
                 "prompt_studio_project",
                 project_uuid,
@@ -1192,11 +1191,10 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
-                    prompt = self._row_to_dict(row)
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
+                prompt = self._row_to_dict(row)
             self._log_sync_event(
                 "prompt_studio_prompt",
                 prompt_uuid,
@@ -1265,12 +1263,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         )
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, update_sql, params)
-                    row = cursor.fetchone()
-                    if not row:
-                        raise InputError(f"Project {project_id} not found or already deleted")
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, update_sql, params)
+                row = cursor.fetchone()
+                if not row:
+                    raise InputError(f"Project {project_id} not found or already deleted")
             project = self._row_to_dict(row)
             if project:
                 self._log_sync_event(
@@ -1285,27 +1282,26 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
     def delete_project(self, project_id: int, hard_delete: bool = False) -> bool:
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    if hard_delete:
-                        cursor = self._cursor_exec(
-                            conn,
-                            "DELETE FROM prompt_studio_projects WHERE id = ? RETURNING uuid",
-                            (project_id,),
-                        )
-                    else:
-                        cursor = self._cursor_exec(
-                            conn,
-                            """
+            with self._write_lock, self.transaction() as conn:
+                if hard_delete:
+                    cursor = self._cursor_exec(
+                        conn,
+                        "DELETE FROM prompt_studio_projects WHERE id = ? RETURNING uuid",
+                        (project_id,),
+                    )
+                else:
+                    cursor = self._cursor_exec(
+                        conn,
+                        """
                             UPDATE prompt_studio_projects
                             SET deleted = TRUE, deleted_at = CURRENT_TIMESTAMP
                             WHERE id = ? AND deleted = FALSE
                             RETURNING uuid
                             """,
-                            (project_id,),
-                        )
-                    row = cursor.fetchone()
-                    success = row is not None
+                        (project_id,),
+                    )
+                row = cursor.fetchone()
+                success = row is not None
             if success and row:
                 self._log_sync_event(
                     "prompt_studio_project",
@@ -1354,11 +1350,10 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
-                    signature = self._row_to_dict(row)
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
+                signature = self._row_to_dict(row)
 
             self._log_sync_event(
                 "prompt_studio_signature",
@@ -1501,13 +1496,12 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         )
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, update_sql, params)
-                    row = cursor.fetchone()
-                    if not row:
-                        raise InputError(f"Signature {signature_id} not found or already deleted")
-                    signature = self._row_to_dict(row)
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, update_sql, params)
+                row = cursor.fetchone()
+                if not row:
+                    raise InputError(f"Signature {signature_id} not found or already deleted")
+                signature = self._row_to_dict(row)
             self._log_sync_event(
                 "prompt_studio_signature",
                 signature.get("uuid", ""),
@@ -1525,27 +1519,26 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
     def delete_signature(self, signature_id: int, hard_delete: bool = False) -> bool:
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    if hard_delete:
-                        cursor = self._cursor_exec(
-                            conn,
-                            "DELETE FROM prompt_studio_signatures WHERE id = ? RETURNING uuid",
-                            (signature_id,),
-                        )
-                    else:
-                        cursor = self._cursor_exec(
-                            conn,
-                            """
+            with self._write_lock, self.transaction() as conn:
+                if hard_delete:
+                    cursor = self._cursor_exec(
+                        conn,
+                        "DELETE FROM prompt_studio_signatures WHERE id = ? RETURNING uuid",
+                        (signature_id,),
+                    )
+                else:
+                    cursor = self._cursor_exec(
+                        conn,
+                        """
                             UPDATE prompt_studio_signatures
                             SET deleted = TRUE, deleted_at = CURRENT_TIMESTAMP
                             WHERE id = ? AND deleted = FALSE
                             RETURNING uuid
                             """,
-                            (signature_id,),
-                        )
-                    row = cursor.fetchone()
-                    success = row is not None
+                        (signature_id,),
+                    )
+                row = cursor.fetchone()
+                success = row is not None
             if success and row:
                 self._log_sync_event(
                     "prompt_studio_signature",
@@ -1607,10 +1600,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else {}
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed to create prompt studio test run: {exc}") from exc
@@ -1671,10 +1663,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else {}
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed to create prompt studio evaluation: {exc}") from exc
@@ -1708,12 +1699,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         )
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, update_sql, params)
-                    row = cursor.fetchone()
-                    if not row:
-                        raise InputError(f"Evaluation {evaluation_id} not found")
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, update_sql, params)
+                row = cursor.fetchone()
+                if not row:
+                    raise InputError(f"Evaluation {evaluation_id} not found")
             return self._row_to_dict(cursor, row) if row else {}
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed to update evaluation {evaluation_id}: {exc}") from exc
@@ -1842,10 +1832,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
             optimization = self._row_to_dict(cursor, row) if row else {}
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed to create optimization: {exc}") from exc
@@ -1990,12 +1979,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         )
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, update_sql, params)
-                    row = cursor.fetchone()
-                    if not row:
-                        raise InputError(f"Optimization {optimization_id} not found")
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, update_sql, params)
+                row = cursor.fetchone()
+                if not row:
+                    raise InputError(f"Optimization {optimization_id} not found")
             optimization = self._row_to_dict(cursor, row) if row else {}
         except BackendDatabaseError as exc:
             raise DatabaseError(f"Failed to update optimization {optimization_id}: {exc}") from exc
@@ -2361,9 +2349,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    _ = self._cursor_exec(conn, insert_sql, params)
+            with self._write_lock, self.transaction() as conn:
+                _ = self._cursor_exec(conn, insert_sql, params)
         except BackendDatabaseError as exc:
             raise DatabaseError(
                 f"Failed to create placeholder prompt {prompt_id}: {exc}"
@@ -2386,33 +2373,32 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         job_uuid = str(uuid.uuid4())
         payload_json = json.dumps(payload) if payload is not None else json.dumps({})
 
-        with self._write_lock:
-            with self.transaction() as conn:
-                cursor = self._cursor_exec(
-                    conn,
-                    """
+        with self._write_lock, self.transaction() as conn:
+            cursor = self._cursor_exec(
+                conn,
+                """
                     INSERT INTO prompt_studio_job_queue (
                         uuid, job_type, entity_id, project_id, priority, status,
                         payload, max_retries, client_id
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     RETURNING *
                     """,
-                    (
-                        job_uuid,
-                        job_type,
-                        entity_id,
-                        project_id,
-                        priority,
-                        status,
-                        payload_json,
-                        max_retries,
-                        client_id or self.client_id,
-                    ),
-                )
-                row = cursor.fetchone()
-                if not row:
-                    raise DatabaseError("Failed to create prompt studio job queue record")
-                job = self._row_to_dict(cursor, row)
+                (
+                    job_uuid,
+                    job_type,
+                    entity_id,
+                    project_id,
+                    priority,
+                    status,
+                    payload_json,
+                    max_retries,
+                    client_id or self.client_id,
+                ),
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise DatabaseError("Failed to create prompt studio job queue record")
+            job = self._row_to_dict(cursor, row)
         return job or {}
 
     def get_job(self, job_id: int) -> Optional[dict[str, Any]]:
@@ -2756,11 +2742,10 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         return job
 
     def retry_job_record(self, job_id: int) -> bool:
-        with self._write_lock:
-            with self.transaction() as conn:
-                cursor = self._cursor_exec(
-                    conn,
-                    """
+        with self._write_lock, self.transaction() as conn:
+            cursor = self._cursor_exec(
+                conn,
+                """
                     UPDATE prompt_studio_job_queue
                     SET status = 'queued',
                         retry_count = retry_count + 1,
@@ -2772,16 +2757,16 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     WHERE id = ?
                     RETURNING retry_count, max_retries
                     """,
-                    (job_id,),
-                )
-                row = cursor.fetchone()
-                success = row is not None
-                if success:
-                    try:
-                        self._execute("SELECT pg_advisory_unlock(?)", (job_id,))
-                    except BackendDatabaseError:
-                        pass
-                return success
+                (job_id,),
+            )
+            row = cursor.fetchone()
+            success = row is not None
+            if success:
+                try:
+                    self._execute("SELECT pg_advisory_unlock(?)", (job_id,))
+                except BackendDatabaseError:
+                    pass
+            return success
 
     def cleanup_jobs(self, older_than_days: int = 30) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
@@ -2879,49 +2864,48 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         if not change_description:
             raise InputError("change_description is required")
 
-        with self._write_lock:
-            with self.transaction() as conn:
-                cursor = self._cursor_exec(
-                    conn,
-                    """
+        with self._write_lock, self.transaction() as conn:
+            cursor = self._cursor_exec(
+                conn,
+                """
                     SELECT *
                     FROM prompt_studio_prompts
                     WHERE id = ? AND deleted = FALSE
                     LIMIT 1
                     """,
-                    (prompt_id,),
-                )
-                current_row = cursor.fetchone()
-                if not current_row:
-                    raise InputError(f"Prompt {prompt_id} not found or already deleted")
-                current_prompt = self._row_to_dict(cursor, current_row) or {}
+                (prompt_id,),
+            )
+            current_row = cursor.fetchone()
+            if not current_row:
+                raise InputError(f"Prompt {prompt_id} not found or already deleted")
+            current_prompt = self._row_to_dict(cursor, current_row) or {}
 
-                new_uuid = str(uuid.uuid4())
-                new_version = int(current_prompt.get("version_number", 0)) + 1
+            new_uuid = str(uuid.uuid4())
+            new_version = int(current_prompt.get("version_number", 0)) + 1
 
-                next_name = name if name is not None else current_prompt.get("name")
-                next_system = (
-                    system_prompt
-                    if system_prompt is not None
-                    else current_prompt.get("system_prompt")
-                )
-                next_user = (
-                    user_prompt
-                    if user_prompt is not None
-                    else current_prompt.get("user_prompt")
-                )
-                next_examples = (
-                    few_shot_examples
-                    if few_shot_examples is not None
-                    else current_prompt.get("few_shot_examples")
-                )
-                next_modules = (
-                    modules_config
-                    if modules_config is not None
-                    else current_prompt.get("modules_config")
-                )
+            next_name = name if name is not None else current_prompt.get("name")
+            next_system = (
+                system_prompt
+                if system_prompt is not None
+                else current_prompt.get("system_prompt")
+            )
+            next_user = (
+                user_prompt
+                if user_prompt is not None
+                else current_prompt.get("user_prompt")
+            )
+            next_examples = (
+                few_shot_examples
+                if few_shot_examples is not None
+                else current_prompt.get("few_shot_examples")
+            )
+            next_modules = (
+                modules_config
+                if modules_config is not None
+                else current_prompt.get("modules_config")
+            )
 
-                insert_sql = """
+            insert_sql = """
                     INSERT INTO prompt_studio_prompts (
                         uuid,
                         project_id,
@@ -2939,24 +2923,24 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     RETURNING *
                 """
 
-                payload = (
-                    new_uuid,
-                    current_prompt.get("project_id"),
-                    current_prompt.get("signature_id"),
-                    new_version,
-                    next_name,
-                    next_system,
-                    next_user,
-                    json.dumps(next_examples) if next_examples is not None else None,
-                    json.dumps(next_modules) if next_modules is not None else None,
-                    prompt_id,
-                    change_description,
-                    client_id or current_prompt.get("client_id") or self.client_id,
-                )
+            payload = (
+                new_uuid,
+                current_prompt.get("project_id"),
+                current_prompt.get("signature_id"),
+                new_version,
+                next_name,
+                next_system,
+                next_user,
+                json.dumps(next_examples) if next_examples is not None else None,
+                json.dumps(next_modules) if next_modules is not None else None,
+                prompt_id,
+                change_description,
+                client_id or current_prompt.get("client_id") or self.client_id,
+            )
 
-                cursor.execute(insert_sql, payload)
-                new_row = cursor.fetchone()
-                prompt = self._row_to_dict(cursor, new_row)
+            cursor.execute(insert_sql, payload)
+            new_row = cursor.fetchone()
+            prompt = self._row_to_dict(cursor, new_row)
 
         self._log_sync_event(
             "prompt_studio_prompt",
@@ -2980,58 +2964,57 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         if target_version < 1:
             raise InputError("target_version must be >= 1")
 
-        with self._write_lock:
-            with self.transaction() as conn:
-                cursor = self._cursor_exec(
-                    conn,
-                    """
+        with self._write_lock, self.transaction() as conn:
+            cursor = self._cursor_exec(
+                conn,
+                """
                     SELECT *
                     FROM prompt_studio_prompts
                     WHERE id = ? AND deleted = FALSE
                     LIMIT 1
                     """,
-                    (prompt_id,),
-                )
-                current_row = cursor.fetchone()
-                if not current_row:
-                    raise InputError(f"Prompt {prompt_id} not found or already deleted")
-                current_prompt = self._row_to_dict(cursor, current_row) or {}
+                (prompt_id,),
+            )
+            current_row = cursor.fetchone()
+            if not current_row:
+                raise InputError(f"Prompt {prompt_id} not found or already deleted")
+            current_prompt = self._row_to_dict(cursor, current_row) or {}
 
-                cursor = self._cursor_exec(
-                    conn,
-                    """
+            cursor = self._cursor_exec(
+                conn,
+                """
                     SELECT *
                     FROM prompt_studio_prompts
                     WHERE project_id = ? AND name = ? AND version_number = ? AND deleted = FALSE
                     LIMIT 1
                     """,
-                    (
-                        current_prompt.get("project_id"),
-                        current_prompt.get("name"),
-                        target_version,
-                    ),
+                (
+                    current_prompt.get("project_id"),
+                    current_prompt.get("name"),
+                    target_version,
+                ),
+            )
+            target_row = cursor.fetchone()
+            if not target_row:
+                raise InputError(
+                    f"Version {target_version} not found for prompt {current_prompt.get('name')}"
                 )
-                target_row = cursor.fetchone()
-                if not target_row:
-                    raise InputError(
-                        f"Version {target_version} not found for prompt {current_prompt.get('name')}"
-                    )
-                target_prompt = self._row_to_dict(cursor, target_row) or {}
+            target_prompt = self._row_to_dict(cursor, target_row) or {}
 
-                cursor = self._cursor_exec(
-                    conn,
-                    """
+            cursor = self._cursor_exec(
+                conn,
+                """
                     SELECT COALESCE(MAX(version_number), 0)
                     FROM prompt_studio_prompts
                     WHERE project_id = ? AND name = ?
                     """,
-                    (current_prompt.get("project_id"), current_prompt.get("name")),
-                )
-                max_version_row = cursor.fetchone()
-                next_version = int(max_version_row[0]) + 1 if max_version_row else 1
+                (current_prompt.get("project_id"), current_prompt.get("name")),
+            )
+            max_version_row = cursor.fetchone()
+            next_version = int(max_version_row[0]) + 1 if max_version_row else 1
 
-                new_uuid = str(uuid.uuid4())
-                insert_sql = """
+            new_uuid = str(uuid.uuid4())
+            insert_sql = """
                     INSERT INTO prompt_studio_prompts (
                         uuid,
                         project_id,
@@ -3049,28 +3032,28 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     RETURNING *
                 """
 
-                payload = (
-                    new_uuid,
-                    target_prompt.get("project_id"),
-                    target_prompt.get("signature_id"),
-                    next_version,
-                    target_prompt.get("name"),
-                    target_prompt.get("system_prompt"),
-                    target_prompt.get("user_prompt"),
-                    json.dumps(target_prompt.get("few_shot_examples"))
-                    if target_prompt.get("few_shot_examples") is not None
-                    else None,
-                    json.dumps(target_prompt.get("modules_config"))
-                    if target_prompt.get("modules_config") is not None
-                    else None,
-                    prompt_id,
-                    f"Reverted to version {target_version}",
-                    client_id or current_prompt.get("client_id") or self.client_id,
-                )
+            payload = (
+                new_uuid,
+                target_prompt.get("project_id"),
+                target_prompt.get("signature_id"),
+                next_version,
+                target_prompt.get("name"),
+                target_prompt.get("system_prompt"),
+                target_prompt.get("user_prompt"),
+                json.dumps(target_prompt.get("few_shot_examples"))
+                if target_prompt.get("few_shot_examples") is not None
+                else None,
+                json.dumps(target_prompt.get("modules_config"))
+                if target_prompt.get("modules_config") is not None
+                else None,
+                prompt_id,
+                f"Reverted to version {target_version}",
+                client_id or current_prompt.get("client_id") or self.client_id,
+            )
 
-                cursor.execute(insert_sql, payload)
-                new_row = cursor.fetchone()
-                prompt = self._row_to_dict(cursor, new_row)
+            cursor.execute(insert_sql, payload)
+            new_row = cursor.fetchone()
+            prompt = self._row_to_dict(cursor, new_row)
 
         self._log_sync_event(
             "prompt_studio_prompt",
@@ -3195,11 +3178,10 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
-                    test_case = self._format_test_case(row)
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
+                test_case = self._format_test_case(row)
             return test_case or {}
         except BackendDatabaseError as exc:
             message = str(exc).lower()
@@ -3700,7 +3682,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             migration_path = migrations_dir / migration_file
             if migration_path.exists():
                 logger.info(f"Applying migration: {migration_file}")
-                with open(migration_path, 'r') as f:
+                with open(migration_path) as f:
                     migration_sql = f.read()
 
                 # Execute migration statements
@@ -6693,10 +6675,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else {}
         except Exception as exc:
             raise DatabaseError(f"Failed to create prompt studio optimization: {exc}") from exc

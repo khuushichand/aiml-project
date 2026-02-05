@@ -283,7 +283,7 @@ class ConnectionPool:
                     pass
 
                 self._close_connection(conn)
-                logger.debug(f"Closed idle connection")
+                logger.debug("Closed idle connection")
 
             except (sqlite3.Error, RuntimeError, TypeError, ValueError) as e:
                 logger.error(f"Error closing idle connection: {e}")

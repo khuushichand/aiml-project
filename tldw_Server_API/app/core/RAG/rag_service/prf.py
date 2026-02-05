@@ -157,7 +157,7 @@ async def apply_prf(
         # Rank candidate expansion terms by blended score, excluding tokens that
         # already appear in the original query.
         ranked_terms = sorted(
-            (t for t in term_counts.keys() if t not in base_terms),
+            (t for t in term_counts if t not in base_terms),
             key=lambda t: (-term_scores.get(t, 0.0), t),
         )
         selected = ranked_terms[: cfg.max_terms]

@@ -43,7 +43,7 @@ def register_webhook(ctx, url, events, user):
 
         result = webhook_manager.register_webhook(user, url, event_list)
 
-        print_success(f"Webhook registered successfully")
+        print_success("Webhook registered successfully")
         print_info(f"Webhook ID: {result.get('webhook_id')}")
         print_info(f"Events: {', '.join([e.value for e in event_list])}")
 
@@ -109,7 +109,7 @@ def test_webhook(ctx, url, user):
         result = webhook_manager.test_webhook(user, url)
 
         if result['success']:
-            print_success(f"Webhook test successful")
+            print_success("Webhook test successful")
             print_info(f"Status Code: {result['status_code']}")
             print_info(f"Response Time: {result['response_time_ms']}ms")
         else:

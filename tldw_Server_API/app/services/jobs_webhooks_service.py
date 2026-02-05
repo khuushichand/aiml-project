@@ -95,7 +95,7 @@ async def run_jobs_webhooks_worker(stop_event: asyncio.Event | None = None) -> N
             if _is_test and not os.getenv("JOBS_WEBHOOKS_CURSOR_PATH"):
                 allow_resume = False
             if cursor_path and os.path.exists(cursor_path) and allow_resume:
-                with open(cursor_path, "r", encoding="utf-8") as f:
+                with open(cursor_path, encoding="utf-8") as f:
                     persisted_after = int((f.read() or "0").strip() or 0)
         except Exception as e:
             logger.debug(f"Jobs webhooks: failed to read cursor file: {e}")

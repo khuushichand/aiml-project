@@ -33,6 +33,31 @@ export const FiguresTab: React.FC = () => {
   const documentUrl = activeDocument?.url
   const pageCount = totalPages || numPages
 
+  const safeCurrentPage =
+    typeof currentPage === "number" && currentPage > 0 ? currentPage : 1
+
+  const thumbnailRange = React.useMemo(() => {
+    if (pageCount <= 0) return null
+    if (pageCount <= MAX_THUMBNAILS) {
+      return { start: 1, end: pageCount, truncated: false }
+    }
+
+    const halfWindow = Math.floor(MAX_THUMBNAILS / 2)
+    let start = Math.max(1, safeCurrentPage - halfWindow)
+    let end = start + MAX_THUMBNAILS - 1
+
+    if (end > pageCount) {
+      end = pageCount
+      start = Math.max(1, end - MAX_THUMBNAILS + 1)
+    }
+
+    return { start, end, truncated: true }
+  }, [pageCount, safeCurrentPage])
+
+  const handleThumbnailClick = (page: number) => {
+    setCurrentPage(page)
+  }
+
   // No document selected
   if (!activeDocumentId) {
     return (
@@ -75,31 +100,6 @@ export const FiguresTab: React.FC = () => {
       </div>
     )
   }
-
-  const handleThumbnailClick = (page: number) => {
-    setCurrentPage(page)
-  }
-
-  const safeCurrentPage =
-    typeof currentPage === "number" && currentPage > 0 ? currentPage : 1
-
-  const thumbnailRange = React.useMemo(() => {
-    if (pageCount <= 0) return null
-    if (pageCount <= MAX_THUMBNAILS) {
-      return { start: 1, end: pageCount, truncated: false }
-    }
-
-    const halfWindow = Math.floor(MAX_THUMBNAILS / 2)
-    let start = Math.max(1, safeCurrentPage - halfWindow)
-    let end = start + MAX_THUMBNAILS - 1
-
-    if (end > pageCount) {
-      end = pageCount
-      start = Math.max(1, end - MAX_THUMBNAILS + 1)
-    }
-
-    return { start, end, truncated: true }
-  }, [pageCount, safeCurrentPage])
 
   return (
     <div className="h-full overflow-auto p-3">

@@ -324,9 +324,7 @@ class DatabasePool:
             filesystem_path = filesystem_path.lstrip("/")
 
         if parsed.query:
-            if filesystem_path.startswith("/"):
-                uri = f"file:{filesystem_path}?{parsed.query}"
-            elif filesystem_path:
+            if filesystem_path.startswith("/") or filesystem_path:
                 uri = f"file:{filesystem_path}?{parsed.query}"
             else:
                 uri = f"file:?{parsed.query}"
@@ -415,9 +413,8 @@ class DatabasePool:
         if self.pool:
             # PostgreSQL transaction
             try:
-                async with self.pool.acquire() as conn:
-                    async with conn.transaction():
-                        yield conn
+                async with self.pool.acquire() as conn, conn.transaction():
+                    yield conn
                 logger.debug("PostgreSQL transaction committed successfully")
             except asyncpg.exceptions.TooManyConnectionsError:
                 raise ConnectionPoolExhaustedError()
@@ -467,10 +464,10 @@ class DatabasePool:
                 if "database is locked" in str(e):
                     raise DatabaseLockError()
                 raise TransactionError("SQLite transaction", str(e))
-            except HTTPException as e:
+            except HTTPException:
                 # Re-raise HTTP exceptions unchanged
                 raise
-            except (DuplicateUserError, WeakPasswordError, InvalidRegistrationCodeError, RegistrationError, DuplicateOrganizationError, DuplicateTeamError, DuplicateRoleError, DuplicatePermissionError) as e:
+            except (DuplicateUserError, WeakPasswordError, InvalidRegistrationCodeError, RegistrationError, DuplicateOrganizationError, DuplicateTeamError, DuplicateRoleError, DuplicatePermissionError):
                 # Re-raise registration exceptions unchanged
                 raise
             except Exception as e:

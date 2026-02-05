@@ -564,3 +564,67 @@ class SpeechChatResponse(BaseModel):
         default=None,
         description="Optional action/workflow execution result derived from the transcript.",
     )
+
+
+class TTSHistoryListItem(BaseModel):
+    """List item for TTS history."""
+
+    id: int
+    created_at: str
+    has_text: bool
+    text_preview: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    voice_id: Optional[str] = None
+    voice_name: Optional[str] = None
+    voice_info: Optional[dict[str, Any]] = None
+    duration_ms: Optional[int] = None
+    format: Optional[str] = None
+    status: Optional[str] = None
+    favorite: bool = False
+    job_id: Optional[int] = None
+    output_id: Optional[int] = None
+    artifact_deleted_at: Optional[str] = None
+
+
+class TTSHistoryListResponse(BaseModel):
+    """Response schema for listing TTS history."""
+
+    items: list[TTSHistoryListItem]
+    total: Optional[int] = None
+    limit: int
+    offset: int
+    next_cursor: Optional[str] = None
+
+
+class TTSHistoryDetailResponse(BaseModel):
+    """Detail schema for a single TTS history entry."""
+
+    id: int
+    created_at: str
+    has_text: bool
+    text: Optional[str] = None
+    text_length: Optional[int] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    voice_id: Optional[str] = None
+    voice_name: Optional[str] = None
+    voice_info: Optional[dict[str, Any]] = None
+    format: Optional[str] = None
+    duration_ms: Optional[int] = None
+    generation_time_ms: Optional[int] = None
+    params_json: Optional[dict[str, Any]] = None
+    status: Optional[str] = None
+    segments_json: Optional[dict[str, Any]] = None
+    favorite: bool = False
+    job_id: Optional[int] = None
+    output_id: Optional[int] = None
+    artifact_ids: Optional[list[Any]] = None
+    artifact_deleted_at: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class TTSHistoryFavoriteUpdate(BaseModel):
+    """Update favorite status for a history entry."""
+
+    favorite: bool = Field(..., description="Whether the entry is favorited.")

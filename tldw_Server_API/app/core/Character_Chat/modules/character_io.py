@@ -372,7 +372,7 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                             img_obj.close()
                         except Exception:
                             pass
-        except IOError as e:
+        except OSError as e:
             # Catches PIL.UnidentifiedImageError and other file I/O issues
             logger.error(
                 f"Cannot open or read image file (or not a valid image): {file_name_for_log}. Error: {e}",
@@ -702,7 +702,7 @@ def import_and_save_character_from_file(
                 else:
                     content_str = file_content
             elif file_path:
-                with open(file_path, 'r', encoding='utf-8') as f:
+                with open(file_path, encoding='utf-8') as f:
                     content_str = f.read()
             else:
                 return False, "No file content or path provided", None
@@ -766,7 +766,7 @@ def load_chat_history_from_file_and_save_to_db(
         if file_content is not None:
             content = file_content
         elif file_path:
-            with open(file_path, "r", encoding="utf-8") as file_obj:
+            with open(file_path, encoding="utf-8") as file_obj:
                 content = file_obj.read()
         else:
             logger.error("No chat history source provided (file_path or file_content required).")

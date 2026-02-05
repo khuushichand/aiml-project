@@ -376,10 +376,10 @@ def validate_dictionary(data: dict[str, Any], schema_version: int = 1, strict: b
 def _load_file(path: str) -> dict[str, Any]:
     p = str(path)
     if p.endswith(".json"):
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             return json.load(f)
     if (p.endswith(".yaml") or p.endswith(".yml")) and yaml is not None:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             return yaml.safe_load(f)
     if p.endswith(".md"):
         kv = parse_user_dict_markdown_file(p)
@@ -393,7 +393,7 @@ def _load_file(path: str) -> dict[str, Any]:
         } for k, v in kv.items()]
         return {"name": os.path.basename(p), "entries": entries}
     # Fallback: try JSON
-    with open(p, "r", encoding="utf-8") as f:
+    with open(p, encoding="utf-8") as f:
         return json.load(f)
 
 

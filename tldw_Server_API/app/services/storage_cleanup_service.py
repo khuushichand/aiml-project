@@ -15,10 +15,12 @@ from pathlib import Path
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
+    FILE_CATEGORY_TTS_AUDIO,
     FILE_CATEGORY_VOICE_CLONE,
     AuthnzGeneratedFilesRepo,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.services.storage_quota_service import get_storage_service
 
 # Default configuration
@@ -48,6 +50,23 @@ def _safe_resolve_user_path(
     except ValueError:
         return None
     return None
+
+
+def _mark_tts_history_artifact_deleted(user_id: int | None, file_id: int | None) -> None:
+    if not user_id or not file_id:
+        return
+    try:
+        db_path = DatabasePaths.get_media_db_path(user_id)
+        db = MediaDatabase(db_path=str(db_path), client_id="storage_cleanup")
+        try:
+            db.mark_tts_history_artifacts_deleted_for_file_id(
+                user_id=str(user_id),
+                file_id=int(file_id),
+            )
+        finally:
+            db.close_connection()
+    except Exception as exc:
+        logger.debug(f"storage_cleanup: failed to update tts_history for file {file_id}: {exc}")
 
 
 async def cleanup_expired_files(
@@ -83,6 +102,9 @@ async def cleanup_expired_files(
                     deleted = await storage_service.unregister_generated_file(file_id, hard_delete=True)
                     if deleted:
                         total_deleted += 1
+
+                if deleted and file_category == FILE_CATEGORY_TTS_AUDIO:
+                    _mark_tts_history_artifact_deleted(user_id, file_id)
 
                 # Delete physical file if it exists (with path validation)
                 resolved_path = _safe_resolve_user_path(user_id, storage_path, file_category=file_category)
@@ -139,6 +161,9 @@ async def purge_old_trashed_files(
                 # Hard delete the database record
                 await files_repo.hard_delete_file(file_id)
                 total_purged += 1
+
+                if file_category == FILE_CATEGORY_TTS_AUDIO:
+                    _mark_tts_history_artifact_deleted(user_id, file_id)
 
             except Exception as exc:
                 logger.warning(f"Failed to purge trashed file {file_id}: {exc}")

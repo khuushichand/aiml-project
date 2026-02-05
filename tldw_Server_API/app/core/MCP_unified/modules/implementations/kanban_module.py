@@ -520,10 +520,7 @@ class KanbanModule(BaseModule):
                 raise ValueError("must provide name or color")
         elif tool_name == "kanban.labels.delete":
             _ensure_positive_int(arguments.get("label_id"), "label_id")
-        elif tool_name == "kanban.labels.assign":
-            _ensure_positive_int(arguments.get("card_id"), "card_id")
-            _ensure_positive_int(arguments.get("label_id"), "label_id")
-        elif tool_name == "kanban.labels.remove":
+        elif tool_name == "kanban.labels.assign" or tool_name == "kanban.labels.remove":
             _ensure_positive_int(arguments.get("card_id"), "card_id")
             _ensure_positive_int(arguments.get("label_id"), "label_id")
         elif tool_name == "kanban.labels.list_for_card":
@@ -587,9 +584,7 @@ class KanbanModule(BaseModule):
             name = arguments.get("name")
             if name is None or not isinstance(name, str) or not name.strip():
                 raise ValueError("name must be a non-empty string")
-        elif tool_name == "kanban.checklists.delete":
-            _ensure_positive_int(arguments.get("checklist_id"), "checklist_id")
-        elif tool_name == "kanban.checklists.items.list":
+        elif tool_name == "kanban.checklists.delete" or tool_name == "kanban.checklists.items.list":
             _ensure_positive_int(arguments.get("checklist_id"), "checklist_id")
         elif tool_name == "kanban.checklists.items.create":
             _ensure_positive_int(arguments.get("checklist_id"), "checklist_id")

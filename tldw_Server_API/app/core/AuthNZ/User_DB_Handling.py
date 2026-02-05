@@ -440,7 +440,7 @@ async def verify_single_user_api_key(
     try:
         user_id_val = getattr(user, "id_int", None)
         if user_id_val is None:
-            user_id_val = int(getattr(user, "id"))
+            user_id_val = int(user.id)
     except Exception:
         user_id_val = None
 
@@ -1326,7 +1326,7 @@ async def get_request_user(
                     "TEST flags detected while tldw_production=true; "
                     "test-only auth bypasses are disabled."
                 )
-                setattr(get_request_user, "_warned_testflags_prod", True)
+                get_request_user._warned_testflags_prod = True
     except Exception as warn_exc:
         logger.debug(
             f"get_request_user: production test-flag warning emission failed; continuing without warning: {warn_exc}"

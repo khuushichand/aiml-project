@@ -72,7 +72,7 @@ class MediaModule(BaseModule):
             self._semantic_retrievers: dict[tuple[Optional[str], Optional[str]], Any] = {}
             self._ingestion_jobs: dict[str, dict[str, Any]] = {}
             self._ingestion_jobs_lock = asyncio.Lock()
-            self._user_db_cache: "OrderedDict[str, tuple[MediaDatabase, float]]" = OrderedDict()
+            self._user_db_cache: OrderedDict[str, tuple[MediaDatabase, float]] = OrderedDict()
             self._user_db_cache_lock = threading.Lock()
             # Per-user DB cache bounds (TTL + LRU)
             self._user_db_cache_ttl_seconds = int(self.config.settings.get("user_db_cache_ttl_seconds", 900))
@@ -1350,7 +1350,7 @@ class MediaModule(BaseModule):
             query_vector=query_vector,
         )
 
-        combined: "OrderedDict[Any, dict[str, Any]]" = OrderedDict()
+        combined: OrderedDict[Any, dict[str, Any]] = OrderedDict()
         for row in keyword_rows_all:
             key = row.get("id")
             if key is None:

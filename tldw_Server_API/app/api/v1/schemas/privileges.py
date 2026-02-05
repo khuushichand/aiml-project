@@ -19,7 +19,7 @@ class PrivilegeSummaryResponse(BaseModel):
     generated_at: datetime
     group_by: str
     buckets: list[PrivilegeBucket]
-    trends: list["PrivilegeTrend"] = Field(default_factory=list)
+    trends: list[PrivilegeTrend] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -57,7 +57,7 @@ class PrivilegeDetailResponse(BaseModel):
     page_size: int
     total_items: int
     items: list[PrivilegeDetailItem]
-    recommended_actions: list["PrivilegeRecommendedAction"] | None = None
+    recommended_actions: list[PrivilegeRecommendedAction] | None = None
 
 
 PrivilegeOrgResponse = Union[PrivilegeSummaryResponse, PrivilegeDetailResponse]

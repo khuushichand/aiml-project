@@ -259,7 +259,7 @@ def _split_headings_and_paragraphs(text: str) -> tuple[list[tuple[str, int, int]
     return sections, paragraphs
 
 
-def _hash_embed(text: str, dim: int = 2048) -> 'np.ndarray':
+def _hash_embed(text: str, dim: int = 2048) -> np.ndarray:
     import numpy as _np
     v = _np.zeros(dim, dtype=_np.float32)
     if not text:

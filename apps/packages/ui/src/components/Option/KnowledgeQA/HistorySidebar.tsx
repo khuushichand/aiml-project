@@ -17,6 +17,8 @@ import { useKnowledgeQA } from "./KnowledgeQAProvider"
 import { cn } from "@/lib/utils"
 import type { SearchHistoryItem } from "./types"
 
+const KNOWLEDGE_QA_KEYWORD = "__knowledge_QA__"
+
 type HistorySidebarProps = {
   className?: string
 }
@@ -113,9 +115,18 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
     }
   }, [searchHistory])
 
+  const filteredHistory = useMemo(() => {
+    return searchHistory.filter((item) => {
+      const keywords = Array.isArray(item.keywords) ? item.keywords : []
+      return keywords.some(
+        (kw) => String(kw).toLowerCase() === KNOWLEDGE_QA_KEYWORD.toLowerCase()
+      )
+    })
+  }, [searchHistory])
+
   const groupedHistory = useMemo(
-    () => groupByDate(searchHistory),
-    [searchHistory]
+    () => groupByDate(filteredHistory),
+    [filteredHistory]
   )
 
   // Collapsed state
@@ -183,7 +194,7 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
       <div className="flex-1 overflow-y-auto">
         {isInitialLoad ? (
           <HistorySkeleton />
-        ) : searchHistory.length === 0 ? (
+        ) : filteredHistory.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm text-text-muted">
             <Search className="w-8 h-8 mx-auto mb-2 opacity-50" />
             <p>No search history yet</p>

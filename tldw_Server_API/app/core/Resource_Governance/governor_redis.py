@@ -343,10 +343,10 @@ class RedisResourceGovernor(ResourceGovernor):
         try:
             if category:
                 cat_cfg = policy.get(category) or {}
-                fm = str((cat_cfg.get("fail_mode") or "")).strip().lower()
+                fm = str(cat_cfg.get("fail_mode") or "").strip().lower()
                 if fm in ("fail_closed", "fail_open", "fallback_memory"):
                     return fm
-            fm_pol = str((policy.get("fail_mode") or "")).strip().lower()
+            fm_pol = str(policy.get("fail_mode") or "").strip().lower()
             if fm_pol in ("fail_closed", "fail_open", "fallback_memory"):
                 return fm_pol
         except Exception:
@@ -355,7 +355,7 @@ class RedisResourceGovernor(ResourceGovernor):
 
     def _fallback_allowed(self, policy: dict[str, Any], categories: dict[str, Any]) -> bool:
         try:
-            for category in categories.keys():
+            for category in categories:
                 if self._effective_fail_mode(policy, category) == "fallback_memory":
                     return True
         except Exception:
@@ -402,7 +402,7 @@ class RedisResourceGovernor(ResourceGovernor):
     async def _add_members(self, *, key: str, members: list[str], now: float) -> None:
         client = await self._client_get()
         try:
-            await client.zadd(key, {m: now for m in members})
+            await client.zadd(key, dict.fromkeys(members, now))
         except Exception:
             pass
 
@@ -673,9 +673,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         ok, ra = False, window
                     self._last_used_tokens_lua = False
             except Exception:
-                if fail_mode == "fail_open":
-                    ok, ra = True, 0
-                elif fail_mode == "fallback_memory":
+                if fail_mode == "fail_open" or fail_mode == "fallback_memory":
                     ok, ra = True, 0
                 else:
                     ok, ra = False, window
@@ -1921,7 +1919,7 @@ class RedisResourceGovernor(ResourceGovernor):
                     except Exception:
                         members_list = []
                     if not members_list:
-                        members_list = ["{}:{}:{}".format(handle_id, sc, ev)]
+                        members_list = [f"{handle_id}:{sc}:{ev}"]
                     # Remove leases for this handle in stub map and real Redis
                     try:
                         bucket = self._stub_leases.get(key)
@@ -2165,7 +2163,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         except Exception:
                             members_list = []
                         if not members_list:
-                            members_list = ["{}:{}:{}".format(handle_id, sc, ev)]
+                            members_list = [f"{handle_id}:{sc}:{ev}"]
                         # Update real Redis ZSET (best-effort)
                         try:
                             await client.zadd(key, {mem: now + max(1, int(ttl_s)) for mem in members_list})
@@ -2334,7 +2332,7 @@ class RedisResourceGovernor(ResourceGovernor):
             if policy_id in self._test_windows_policy_cleared:
                 return
             client = await self._client_get()
-            for category in categories.keys():
+            for category in categories:
                 if category not in ("requests", "tokens"):
                     continue
                 pattern = f"{self._keys.ns}:win:{policy_id}:{category}:*"

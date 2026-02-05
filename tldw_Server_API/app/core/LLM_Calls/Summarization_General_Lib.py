@@ -281,7 +281,7 @@ def extract_text_from_input(input_data: Any) -> str:
         if os.path.isfile(input_data):
             logging.debug(f"Input is a file path: {input_data}")
             try:
-                with open(input_data, 'r', encoding='utf-8') as f:
+                with open(input_data, encoding='utf-8') as f:
                     content = f.read()
                 # Attempt to parse as JSON, otherwise return raw content
                 try:
@@ -603,7 +603,7 @@ def extract_metadata_and_content(input_data):
 
     if isinstance(input_data, str):
         if os.path.exists(input_data):
-            with open(input_data, 'r', encoding='utf-8') as file:
+            with open(input_data, encoding='utf-8') as file:
                 data = json.load(file)
         else:
             try:
