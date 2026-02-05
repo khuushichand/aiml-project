@@ -32,6 +32,7 @@ import {
   type SidebarShortcutAction
 } from "./ChatSidebar/shortcut-actions"
 import { QuickChatHelperButton } from "@/components/Common/QuickChatHelper"
+import { NotesDockButton } from "@/components/Common/NotesDock"
 import { ModeToggle } from "@/components/Sidepanel/Chat/ModeToggle"
 
 interface ChatSidebarProps {
@@ -229,6 +230,12 @@ export function ChatSidebar({
         ))}
 
         <div className="flex-1" />
+
+        <NotesDockButton
+          appearance="ghost"
+          tooltipPlacement="right"
+          ariaLabel={t("option:notesDock.tooltipSidebar", "Open Notes Dock")}
+        />
 
         <QuickChatHelperButton
           variant="inline"
@@ -428,16 +435,23 @@ export function ChatSidebar({
             <div className="flex-1">
               <ModeToggle />
             </div>
-            <QuickChatHelperButton
-              variant="inline"
-              showToggle={false}
-              appearance="ghost"
-              className="shrink-0"
-              ariaLabel={t(
-                "option:quickChatHelper.tooltipSidebar",
-                "Open Quick Chat Helper (sidebar)"
-              )}
-            />
+            <div className="flex flex-col gap-1">
+              <NotesDockButton
+                appearance="ghost"
+                className="shrink-0"
+                ariaLabel={t("option:notesDock.tooltipSidebar", "Open Notes Dock")}
+              />
+              <QuickChatHelperButton
+                variant="inline"
+                showToggle={false}
+                appearance="ghost"
+                className="shrink-0"
+                ariaLabel={t(
+                  "option:quickChatHelper.tooltipSidebar",
+                  "Open Quick Chat Helper (sidebar)"
+                )}
+              />
+            </div>
           </div>
         </div>
       </div>
