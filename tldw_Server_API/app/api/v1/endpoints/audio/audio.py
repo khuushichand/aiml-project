@@ -17,6 +17,8 @@ from . import (
     audio_tts,
     audio_voices,
 )
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
+from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import check_rate_limit
 
 router = APIRouter(
     tags=["Audio"],
@@ -65,6 +67,8 @@ preview_voice = audio_voices.preview_voice
 
 # Dependency helpers (for FastAPI overrides in tests)
 get_tts_service = audio_tts.get_tts_service
+get_usage_event_logger = get_usage_event_logger
+check_rate_limit = check_rate_limit
 
 # Shared helper re-exports used in tests
 from tldw_Server_API.app.core.Audio.tts_service import (

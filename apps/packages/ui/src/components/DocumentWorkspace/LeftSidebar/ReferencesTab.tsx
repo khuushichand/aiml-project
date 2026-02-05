@@ -1,6 +1,6 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
-import { Empty, Skeleton, Tag, Tooltip, Input, message } from "antd"
+import { Empty, Skeleton, Tag, Tooltip, Input, message, Button } from "antd"
 import {
   BookOpen,
   ExternalLink,
@@ -20,6 +20,8 @@ import {
   type ReferenceEntry,
 } from "@/hooks/document-workspace"
 import { useConnectionStore } from "@/store/connection"
+import { tldwClient } from "@/services/tldw"
+import { useQueryClient } from "@tanstack/react-query"
 
 const hashReferenceText = (value: string): string => {
   let hash = 2166136261
@@ -48,10 +50,12 @@ const getReferenceKey = (reference: ReferenceEntry, index: number): string => {
 /**
  * Single reference card display.
  */
-const ReferenceCard: React.FC<{ reference: ReferenceEntry; index: number }> = ({
-  reference,
-  index,
-}) => {
+const ReferenceCard: React.FC<{
+  reference: ReferenceEntry
+  index: number
+  onEnrich?: () => void
+  isEnriching?: boolean
+}> = ({ reference, index, onEnrich, isEnriching }) => {
   const { t } = useTranslation(["option", "common"])
   const [messageApi, contextHolder] = message.useMessage()
   const url = getReferenceUrl(reference)
@@ -60,6 +64,10 @@ const ReferenceCard: React.FC<{ reference: ReferenceEntry; index: number }> = ({
   const displayTitle = reference.title || reference.raw_text.slice(0, 150)
   const isRawText = !reference.title
   const showCitations = reference.citation_count !== undefined && reference.citation_count > 0
+  const isEnriched =
+    reference.citation_count !== undefined ||
+    Boolean(reference.open_access_pdf) ||
+    Boolean(reference.semantic_scholar_id)
   const copyText = reference.raw_text || displayTitle
 
   const handleCopy = async (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -86,6 +94,20 @@ const ReferenceCard: React.FC<{ reference: ReferenceEntry; index: number }> = ({
           [{index + 1}]
         </span>
         <div className="min-w-0 flex-1">
+          {onEnrich && !isEnriched && (
+            <div className="mb-1 flex items-center justify-end">
+              <Tooltip title="Enrich reference">
+                <Button
+                  size="small"
+                  type="text"
+                  onClick={onEnrich}
+                  loading={isEnriching}
+                >
+                  Enrich
+                </Button>
+              </Tooltip>
+            </div>
+          )}
           {/* Title */}
           <div
             className={`font-medium leading-snug ${
@@ -405,12 +427,23 @@ export const ReferencesTab: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const activeDocumentId = useDocumentWorkspaceStore((s) => s.activeDocumentId)
   const [searchQuery, setSearchQuery] = React.useState("")
+  const [enrich, setEnrich] = React.useState(false)
   const isConnected = useConnectionStore((s) => s.state.isConnected)
   const mode = useConnectionStore((s) => s.state.mode)
   const isServerAvailable = isConnected && mode !== "demo"
+  const queryClient = useQueryClient()
+  const [enrichingRefs, setEnrichingRefs] = React.useState<Record<string, boolean>>({})
+
+  React.useEffect(() => {
+    setEnrich(false)
+    setEnrichingRefs({})
+  }, [activeDocumentId])
 
   // Fetch references with enrichment enabled
-  const { data, isLoading, error } = useDocumentReferences(activeDocumentId, true)
+  const { data, isLoading, error, isFetching } = useDocumentReferences(
+    activeDocumentId,
+    enrich
+  )
 
   // No document selected
   if (!activeDocumentId) {
@@ -442,22 +475,52 @@ export const ReferencesTab: React.FC = () => {
   const s2Count = data.references.filter((ref) => ref.semantic_scholar_id).length
 
   const query = searchQuery.trim().toLowerCase()
-  const filteredReferences = data.references.filter((ref) => {
-    if (!query) return true
-    const haystack = [
-      ref.title,
-      ref.authors,
-      ref.venue,
-      ref.doi,
-      ref.arxiv_id,
-      ref.semantic_scholar_id,
-      ref.raw_text,
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase()
-    return haystack.includes(query)
-  })
+  const filteredReferences = data.references
+    .map((ref, index) => ({ ref, index }))
+    .filter(({ ref }) => {
+      if (!query) return true
+      const haystack = [
+        ref.title,
+        ref.authors,
+        ref.venue,
+        ref.doi,
+        ref.arxiv_id,
+        ref.semantic_scholar_id,
+        ref.raw_text,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+      return haystack.includes(query)
+    })
+
+  const handleEnrichReference = async (index: number, key: string) => {
+    if (!activeDocumentId) return
+    setEnrichingRefs((prev) => ({ ...prev, [key]: true }))
+    try {
+      const response = await tldwClient.getDocumentReferences(activeDocumentId, {
+        enrich: true,
+        referenceIndex: index,
+      })
+      queryClient.setQueryData(
+        ["document-references", activeDocumentId, false],
+        response
+      )
+      queryClient.setQueryData(
+        ["document-references", activeDocumentId, true],
+        response
+      )
+    } catch (err) {
+      message.error(
+        t(
+          "option:documentWorkspace.enrichReferenceFailed",
+          "Failed to enrich reference"
+        )
+      )
+    } finally {
+      setEnrichingRefs((prev) => ({ ...prev, [key]: false }))
+    }
+  }
 
   return (
     <div className="h-full overflow-y-auto">
@@ -472,11 +535,35 @@ export const ReferencesTab: React.FC = () => {
               {totalCount}
             </Tag>
           </div>
-          {data.enrichment_source && (
-            <span className="text-xs text-text-muted">
-              {t("option:documentWorkspace.enriched", "enriched")}
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            {data.enrichment_source && (
+              <span className="text-xs text-text-muted">
+                {t("option:documentWorkspace.enriched", "enriched")}
+              </span>
+            )}
+            {!enrich && (
+              <Tooltip
+                title={t(
+                  "option:documentWorkspace.enrichReferencesHint",
+                  "Fetch citation counts and links (limited)"
+                )}
+              >
+                <Button
+                  size="small"
+                  type="default"
+                  onClick={() => setEnrich(true)}
+                  disabled={isFetching}
+                >
+                  {t("option:documentWorkspace.enrichReferences", "Enrich")}
+                </Button>
+              </Tooltip>
+            )}
+            {enrich && isFetching && (
+              <span className="text-xs text-text-muted">
+                {t("option:documentWorkspace.enriching", "Enriching...")}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Search */}
@@ -518,11 +605,15 @@ export const ReferencesTab: React.FC = () => {
           <NoFilteredReferencesState />
         ) : (
           <div className="space-y-2">
-            {filteredReferences.map((ref, idx) => (
+            {filteredReferences.map(({ ref, index }) => (
               <ReferenceCard
-                key={getReferenceKey(ref, idx)}
+                key={getReferenceKey(ref, index)}
                 reference={ref}
-                index={idx}
+                index={index}
+                isEnriching={Boolean(enrichingRefs[getReferenceKey(ref, index)])}
+                onEnrich={() =>
+                  handleEnrichReference(index, getReferenceKey(ref, index))
+                }
               />
             ))}
           </div>

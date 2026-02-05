@@ -18,6 +18,9 @@ from tldw_Server_API.app.core.Audio.tts_service import (
     _sanitize_speech_request,
     _tts_fallback_resolver,
 )
+from tldw_Server_API.app.core.Storage.generated_file_helpers import (
+    save_and_register_tts_audio,
+)
 from tldw_Server_API.app.core.Usage.audio_quota import (
     add_daily_minutes,
     can_start_job,

@@ -10,6 +10,18 @@ and this project adheres to Some kind of Versioning
 ### Added
 
 ### Changed
+- Implemented TTS history end-to-end:
+	- Write path (non-streaming, streaming, jobs) with status, metadata, artifacts, and error handling.
+	- Read path: list/detail/favorite/delete endpoints with filters, cursor pagination, total count.
+	- Retention: scheduled purge by days and max rows; artifact reference cleanup.
+	- Observability: read/write counters and latency histograms (no text logging).
+	- Added schema + migrations for tts_history and supporting indexes.
+- Added tests:
+	- Unit: schema and API list/favorite/delete, q/text_exact behavior.
+	- Integration: streaming failure writes history, artifact purge updates history, cursor pagination sanity.
+	- Fixed test infrastructure shims for audio/tokenizer/transcription helpers.
+- DBs modified
+	- Media DB v2: per-user SQLite DB at Media_DB_v2.db (and Postgres equivalent when configured).
 
 ### Removed
 

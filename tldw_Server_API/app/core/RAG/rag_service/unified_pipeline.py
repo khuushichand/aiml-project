@@ -5508,63 +5508,74 @@ async def unified_batch_pipeline(
 
     # Near-duplicate clustering via cosine similarity of embeddings (best-effort)
     clusters: dict[int, list[int]] = {}
-    try:
-        from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-            create_embeddings_batch,
-            get_embedding_config,
-        )
-        # Get embeddings for representative texts
-        cfg = get_embedding_config()
-        vectors = await asyncio.get_running_loop().run_in_executor(
-            None,
-            create_embeddings_batch,
-            rep_texts,
-            cfg,
-            None,
-        )
-        # Normalize vectors to unit length for cosine
-        def _norm(v):
-            try:
-                import math
-                if hasattr(v, 'tolist'):
-                    v = v.tolist()
-                s = math.sqrt(sum((float(x) or 0.0) ** 2 for x in v))
-                if s > 0:
-                    return [float(x) / s for x in v]
-            except (TypeError, ValueError):
-                pass
-            return v
-        vecs = [_norm(v) for v in (vectors or [])]
-        # Cosine similarity
-        def _cos(a, b):
-            try:
-                return float(sum((ai * bi) for ai, bi in zip(a, b)))
-            except (TypeError, ValueError):
-                return 0.0
-        # Threshold from env or default 0.9
-        import os as _os
-        try:
-            thr = float(_os.getenv('RAG_BATCH_NEAR_DUP_THRESHOLD', '0.9'))
-        except (TypeError, ValueError):
-            thr = 0.9
-        used = set()
-        for i, vi in enumerate(vecs):
-            if i in used:
-                continue
-            clusters[i] = [i]
-            used.add(i)
-            for j in range(i + 1, len(vecs)):
-                if j in used:
-                    continue
-                vj = vecs[j]
-                if not isinstance(vi, list) or not isinstance(vj, list):
-                    continue
-                if _cos(vi, vj) >= thr:
-                    clusters[i].append(j)
-                    used.add(j)
-    except (ImportError, RuntimeError, TypeError, ValueError):
-        # Fallback: each unique becomes its own cluster
+    import os as _os
+    _disable_cluster = str(_os.getenv("RAG_BATCH_DISABLE_CLUSTERING", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    _test_mode = str(_os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+    if _disable_cluster or _test_mode:
         clusters = {i: [i] for i in range(len(unique_keys))}
+    else:
+        try:
+            from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+                create_embeddings_batch,
+                get_embedding_config,
+            )
+            # Get embeddings for representative texts
+            cfg = get_embedding_config()
+            vectors = await asyncio.get_running_loop().run_in_executor(
+                None,
+                create_embeddings_batch,
+                rep_texts,
+                cfg,
+                None,
+            )
+            # Normalize vectors to unit length for cosine
+            def _norm(v):
+                try:
+                    import math
+                    if hasattr(v, 'tolist'):
+                        v = v.tolist()
+                    s = math.sqrt(sum((float(x) or 0.0) ** 2 for x in v))
+                    if s > 0:
+                        return [float(x) / s for x in v]
+                except (TypeError, ValueError):
+                    pass
+                return v
+            vecs = [_norm(v) for v in (vectors or [])]
+            # Cosine similarity
+            def _cos(a, b):
+                try:
+                    return float(sum((ai * bi) for ai, bi in zip(a, b)))
+                except (TypeError, ValueError):
+                    return 0.0
+            # Threshold from env or default 0.9
+            try:
+                thr = float(_os.getenv('RAG_BATCH_NEAR_DUP_THRESHOLD', '0.9'))
+            except (TypeError, ValueError):
+                thr = 0.9
+            used = set()
+            for i, vi in enumerate(vecs):
+                if i in used:
+                    continue
+                clusters[i] = [i]
+                used.add(i)
+                for j in range(i + 1, len(vecs)):
+                    if j in used:
+                        continue
+                    vj = vecs[j]
+                    if not isinstance(vi, list) or not isinstance(vj, list):
+                        continue
+                    if _cos(vi, vj) >= thr:
+                        clusters[i].append(j)
+                        used.add(j)
+        except Exception as exc:  # noqa: BLE001 - best-effort clustering; never fail batch
+            logger.warning(f"Batch query clustering disabled due to error: {exc}")
+            # Fallback: each unique becomes its own cluster
+            clusters = {i: [i] for i in range(len(unique_keys))}
 
     # Map cluster head index -> representative query text
     heads = list(clusters.keys())
@@ -5615,32 +5626,37 @@ async def unified_batch_pipeline(
             task = asyncio.create_task(_process_head(idx, q))
             tasks[task] = idx
 
-        for task in asyncio.as_completed(tasks):
-            head_idx = tasks[task]
-            result: Optional[UnifiedPipelineResult] = None
-            err: Optional[BaseException] = None
-            try:
-                result = await task
-                head_results[head_idx] = result
-            except BaseException as exc:  # noqa: BLE001 - surface as error
-                err = exc
-                head_results[head_idx] = exc
+        pending = set(tasks.keys())
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                head_idx = tasks.get(task)
+                if head_idx is None:
+                    continue
+                result: Optional[UnifiedPipelineResult] = None
+                err: Optional[BaseException] = None
+                try:
+                    result = await task
+                    head_results[head_idx] = result
+                except BaseException as exc:  # noqa: BLE001 - surface as error
+                    err = exc
+                    head_results[head_idx] = exc
 
-            head_key = heads[head_idx]
-            members = clusters.get(head_key, [])
-            for i_uq in members:
-                orig_indices = normalized_map.get(unique_keys[i_uq], [])
-                for local_idx in orig_indices:
-                    global_idx = _resolve_index(local_idx)
-                    query_text = queries[local_idx] if local_idx < len(queries) else ""
-                    if on_query_done:
-                        try:
-                            callback_result = on_query_done(global_idx, query_text, result, err)
-                            if asyncio.iscoroutine(callback_result):
-                                await callback_result
-                        except Exception as cb_err:  # noqa: BLE001 - callbacks must not fail pipeline
-                            logger.warning(f"Batch on_query_done callback failed: {cb_err}")
-                    await _notify_progress(1)
+                head_key = heads[head_idx]
+                members = clusters.get(head_key, [])
+                for i_uq in members:
+                    orig_indices = normalized_map.get(unique_keys[i_uq], [])
+                    for local_idx in orig_indices:
+                        global_idx = _resolve_index(local_idx)
+                        query_text = queries[local_idx] if local_idx < len(queries) else ""
+                        if on_query_done:
+                            try:
+                                callback_result = on_query_done(global_idx, query_text, result, err)
+                                if asyncio.iscoroutine(callback_result):
+                                    await callback_result
+                            except Exception as cb_err:  # noqa: BLE001 - callbacks must not fail pipeline
+                                logger.warning(f"Batch on_query_done callback failed: {cb_err}")
+                        await _notify_progress(1)
     else:
         try:
             from .batch_utils import run_batch as _run_batch

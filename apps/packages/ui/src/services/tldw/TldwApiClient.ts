@@ -1325,6 +1325,7 @@ export class TldwApiClient {
     mediaId: string | number,
     options?: {
       enrich?: boolean
+      referenceIndex?: number
       signal?: AbortSignal
     }
   ): Promise<{
@@ -1347,6 +1348,10 @@ export class TldwApiClient {
   }> {
     const id = encodeURIComponent(String(mediaId))
     const enrich = options?.enrich !== false
+    const referenceIndex =
+      typeof options?.referenceIndex === "number"
+        ? `&reference_index=${options.referenceIndex}`
+        : ""
     return await bgRequest<{
       media_id: number
       has_references: boolean
@@ -1365,7 +1370,7 @@ export class TldwApiClient {
       }>
       enrichment_source?: string
     }>({
-      path: `/api/v1/media/${id}/references?enrich=${enrich}`,
+      path: `/api/v1/media/${id}/references?enrich=${enrich}${referenceIndex}`,
       method: "GET",
       abortSignal: options?.signal,
       timeoutMs: 45000

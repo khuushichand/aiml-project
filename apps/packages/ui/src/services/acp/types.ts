@@ -8,7 +8,7 @@
 // Agent Types
 // -----------------------------------------------------------------------------
 
-export type ACPAgentType = "claude_code" | "codex" | "opencode" | "custom"
+export type ACPAgentType = string
 
 export interface ACPAgentInfo {
   type: ACPAgentType

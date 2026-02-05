@@ -11,5 +11,6 @@ https://github.com/vrn21/bouvet
 https://fly.io/ 
 https://github.com/test-time-training/discover
 https://github.com/instavm/coderunner
-
-
+https://github.com/lukehinds/nono
+https://github.com/trycua/cua
+https://github.com/trailofbits/claude-code-devcontainer?utm_source=substack&utm_medium=email

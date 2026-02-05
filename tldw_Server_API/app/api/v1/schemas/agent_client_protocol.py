@@ -10,12 +10,8 @@ from pydantic import BaseModel, Field
 # -----------------------------------------------------------------------------
 
 
-class ACPAgentType(str, Enum):
-    """Supported agent types for ACP sessions."""
-    CLAUDE_CODE = "claude_code"
-    CODEX = "codex"
-    OPENCODE = "opencode"
-    CUSTOM = "custom"
+# Agent type identifiers are user-configurable strings.
+ACPAgentType = str
 
 
 class ACPAgentInfo(BaseModel):
@@ -35,7 +31,7 @@ class ACPAgentInfo(BaseModel):
 class ACPAgentListResponse(BaseModel):
     """Response for listing available agents."""
     agents: list[ACPAgentInfo] = Field(default_factory=list)
-    default_agent: ACPAgentType = Field(default=ACPAgentType.CLAUDE_CODE)
+    default_agent: ACPAgentType = Field(default="custom")
 
 
 # -----------------------------------------------------------------------------
@@ -185,8 +181,8 @@ class ACPSessionNewRequest(BaseModel):
         default=None,
         description="Optional session name. Auto-generated from cwd if not provided.",
     )
-    agent_type: ACPAgentType = Field(
-        default=ACPAgentType.CLAUDE_CODE, description="Type of agent to use"
+    agent_type: ACPAgentType | None = Field(
+        default=None, description="Type of agent to use"
     )
     tags: list[str] | None = Field(
         default=None, description="Optional tags for organizing sessions"

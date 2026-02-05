@@ -52,22 +52,39 @@ from uuid import uuid4
 import aiosqlite
 from loguru import logger
 
+_AUDIT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    OSError,
+    ImportError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    json.JSONDecodeError,
+    csv.Error,
+    aiosqlite.Error,
+    asyncio.CancelledError,
+)
+
 #
 # Local Imports
 try:
     # Prefer dict-like project settings if available
     from tldw_Server_API.app.core.config import settings as _app_settings  # type: ignore
-except Exception:
+except _AUDIT_NONCRITICAL_EXCEPTIONS:
     _app_settings = {}
 
 # Consistent risk threshold constants (tunable via env var)
 try:
     HIGH_RISK_SCORE = int(os.getenv("AUDIT_HIGH_RISK_SCORE", "70"))
-except Exception:
+except _AUDIT_NONCRITICAL_EXCEPTIONS:
     HIGH_RISK_SCORE = 70
 try:
     DEFAULT_NON_STREAM_MAX_ROWS = int(os.getenv("AUDIT_EXPORT_MAX_ROWS", "10000"))
-except Exception:
+except _AUDIT_NONCRITICAL_EXCEPTIONS:
     DEFAULT_NON_STREAM_MAX_ROWS = 10000
 
 
@@ -80,13 +97,13 @@ _AUDIT_SHARED_SCHEMA_VERSION = 1
 try:
     import fcntl  # type: ignore
     _HAS_FCNTL = True
-except Exception:
+except _AUDIT_NONCRITICAL_EXCEPTIONS:
     _HAS_FCNTL = False
 
 try:
     import msvcrt  # type: ignore
     _HAS_MSVCRT = True
-except Exception:
+except _AUDIT_NONCRITICAL_EXCEPTIONS:
     _HAS_MSVCRT = False
 
 _FALLBACK_LOCKS: dict[str, threading.Lock] = {}
@@ -130,18 +147,18 @@ async def _fallback_queue_lock(path: Path) -> AsyncGenerator[None, None]:
         finally:
             try:
                 await asyncio.to_thread(fcntl.flock, handle.fileno(), fcntl.LOCK_UN)
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 await asyncio.to_thread(handle.close)
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
     elif _HAS_MSVCRT:
         def _open_and_lock() -> Any:
             fh = lock_path.open("a+b")
             try:
                 fh.seek(0)
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
             msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
             return fh
@@ -152,15 +169,15 @@ async def _fallback_queue_lock(path: Path) -> AsyncGenerator[None, None]:
         finally:
             try:
                 await asyncio.to_thread(handle.seek, 0)
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 await asyncio.to_thread(msvcrt.locking, handle.fileno(), msvcrt.LK_UNLCK, 1)
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 await asyncio.to_thread(handle.close)
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
     else:
         lock = _get_fallback_thread_lock(lock_path)
@@ -170,7 +187,7 @@ async def _fallback_queue_lock(path: Path) -> AsyncGenerator[None, None]:
         finally:
             try:
                 lock.release()
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
 
 
@@ -206,7 +223,7 @@ def _resolve_shared_db_path() -> Path:
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
         return DatabasePaths.get_shared_audit_db_path()
-    except Exception:
+    except _AUDIT_NONCRITICAL_EXCEPTIONS:
         db_dir = Path("./Databases")
         db_dir.mkdir(parents=True, exist_ok=True)
         return db_dir / "audit_shared.db"
@@ -251,7 +268,7 @@ def _normalize_json_value(value: Any) -> Any:
     if is_dataclass(value):
         try:
             return _normalize_json_value(asdict(value))
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             pass
 
     if isinstance(value, dict):
@@ -266,18 +283,18 @@ def _normalize_json_value(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         try:
             return _normalize_json_value(value.model_dump())
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             pass
 
     if hasattr(value, "dict"):
         try:
             return _normalize_json_value(value.dict())
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             pass
 
     try:
         return json.loads(value)
-    except Exception:
+    except _AUDIT_NONCRITICAL_EXCEPTIONS:
         pass
 
     return str(value)
@@ -296,10 +313,10 @@ def _normalize_datetime_filter(value: Optional[datetime]) -> Optional[str]:
         return None
     try:
         return _normalize_timestamp(value).isoformat()
-    except Exception:
+    except _AUDIT_NONCRITICAL_EXCEPTIONS:
         try:
             return value.isoformat()
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             return None
 
 
@@ -309,7 +326,7 @@ def _normalize_result(value: Any, default: str = "success") -> str:
         return default
     try:
         s = str(value).strip().lower()
-    except Exception:
+    except _AUDIT_NONCRITICAL_EXCEPTIONS:
         return default
     return s or default
 
@@ -536,7 +553,7 @@ class PIIDetector:
             try:
                 flags = re.IGNORECASE if name in {"api_key"} else 0
                 pat_map[name] = [re.compile(raw, flags)]
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Optional: merge from RAG detector patterns
@@ -561,11 +578,12 @@ class PIIDetector:
                         comp_list = [p for p in pats if isinstance(p, re.Pattern)]
                         if comp_list:
                             pat_map.setdefault(k, []).extend(comp_list)
-                    except Exception:
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         pass
                 logger.debug("Audit PII: merged patterns from RAG detector")
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 # Optional dependency; ignore if unavailable
+                pass
                 pass
 
         # Optional: overrides from settings
@@ -578,7 +596,7 @@ class PIIDetector:
                         compiled = [re.compile(str(raw))]
                     if compiled:
                         pat_map[name] = compiled
-                except Exception as e:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"Audit PII: failed to compile override for {name}: {e}")
 
         self._patterns: dict[str, list[re.Pattern]] = pat_map
@@ -640,11 +658,12 @@ class PIIDetector:
                     return [self.redact_obj(v, placeholder_format) for v in data]
             # Strings handled via value redaction; primitives returned as-is
             return self._redact_value(data, placeholder_format)
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             # Fallback safety: convert to string and redact
+            pass
             try:
                 return self._redact_value(str(data), placeholder_format)
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 return data
 
 
@@ -693,9 +712,9 @@ class RiskScorer:
                         val = int(v)
                         if key:
                             merged[key] = max(0, min(100, val))
-                    except Exception:
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         continue
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             pass
         if isinstance(action_bonus_overrides, dict):
             for k, v in action_bonus_overrides.items():
@@ -704,7 +723,7 @@ class RiskScorer:
                     val = int(v)
                     if key:
                         merged[key] = max(0, min(100, val))
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     continue
         self.action_risk_bonus: dict[str, int] = merged
 
@@ -725,7 +744,7 @@ class RiskScorer:
         try:
             cfg_ops = _app_settings.get("AUDIT_HIGH_RISK_OPERATIONS")
             ops_from_settings = _parse_ops(cfg_ops)
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             ops_from_settings = set()
         ops_from_arg = _parse_ops(high_risk_ops_override)
         self.high_risk_operations: set[str] = set(map(str.lower, default_ops)) | ops_from_settings | ops_from_arg
@@ -743,7 +762,7 @@ class RiskScorer:
                     else:
                         try:
                             merged_thr[key] = int(v)  # type: ignore[assignment]
-                        except Exception:
+                        except _AUDIT_NONCRITICAL_EXCEPTIONS:
                             continue
             return merged_thr
 
@@ -751,7 +770,7 @@ class RiskScorer:
         try:
             cfg_thr = _app_settings.get("AUDIT_SUSPICIOUS_THRESHOLDS")
             thresholds = _merge_thresholds(thresholds, cfg_thr if isinstance(cfg_thr, dict) else None)
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             pass
         thresholds = _merge_thresholds(thresholds, suspicious_thresholds_override)
         self.suspicious_thresholds: dict[str, Union[int, bool]] = thresholds
@@ -772,7 +791,7 @@ class RiskScorer:
                 if s == "":
                     return default
                 return int(s)
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 return default
 
         # Event type risk
@@ -834,14 +853,14 @@ class RiskScorer:
                 parsed = json.loads(raw_metadata)
                 if isinstance(parsed, dict):
                     metadata = parsed
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass  # Keep empty dict
 
         failed_thr = 3
         try:
             v = self.suspicious_thresholds.get("failed_auth", 3)  # type: ignore[assignment]
             failed_thr = int(v) if not isinstance(v, bool) else 3
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             failed_thr = 3
         if _safe_int(metadata.get("consecutive_failures"), 0) > failed_thr:
             score += 20
@@ -851,7 +870,7 @@ class RiskScorer:
         try:
             v2 = self.suspicious_thresholds.get("data_export", 1000)  # type: ignore[assignment]
             export_thr = int(v2) if not isinstance(v2, bool) else 1000
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             export_thr = 1000
         if _safe_int(event.result_count, 0) > export_thr:
             score += 15
@@ -933,7 +952,7 @@ class UnifiedAuditService:
         self.db_path = Path(db_path)
         try:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(
                 "Failed to ensure audit DB directory {}: {}",
                 self.db_path.parent,
@@ -948,7 +967,7 @@ class UnifiedAuditService:
         if max_db_mb is None:
             try:
                 raw_max = _app_settings.get("AUDIT_MAX_DB_MB")
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 raw_max = None
             try:
                 if raw_max is None:
@@ -956,7 +975,7 @@ class UnifiedAuditService:
                 else:
                     s = str(raw_max).strip()
                     max_db_mb = int(s) if s else None
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 max_db_mb = None
         self.max_db_mb = max_db_mb
         self._owner_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -971,7 +990,7 @@ class UnifiedAuditService:
                 (os.getenv(k, "").strip().lower() in {"1", "true", "yes", "on"})
                 for k in ("TEST_MODE", "TLDW_TEST_MODE")
             ) or (os.getenv("PYTEST_CURRENT_TEST") is not None)
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             self._test_mode = False
 
         # Components
@@ -997,7 +1016,7 @@ class UnifiedAuditService:
                 extra_scan = [s.strip() for s in raw.split(",") if s.strip()]
             elif isinstance(raw, list):
                 extra_scan = [str(s).strip() for s in raw if str(s).strip()]
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             pass
         self._pii_scan_fields: list[str] = list(dict.fromkeys(default_scan + extra_scan))
         self.risk_scorer = RiskScorer() if enable_risk_scoring else None
@@ -1089,9 +1108,9 @@ class UnifiedAuditService:
                 # Enable incremental vacuum to reclaim space over time
                 try:
                     await db.execute("PRAGMA auto_vacuum=INCREMENTAL;")
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     pass
-            except Exception as e:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to apply SQLite PRAGMAs on audit DB: {e}")
             db.row_factory = aiosqlite.Row
             await self._ensure_audit_events_schema(db)
@@ -1284,7 +1303,7 @@ class UnifiedAuditService:
         for col in missing:
             try:
                 await db.execute(f"ALTER TABLE audit_events ADD COLUMN {col} {expected_types[col]}")
-            except Exception as e:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to add audit_events column {col}: {e}")
 
     async def _ensure_audit_daily_stats_schema(self, db: aiosqlite.Connection) -> None:
@@ -1309,7 +1328,7 @@ class UnifiedAuditService:
             # Migration: add duration_count column if missing (for existing databases)
             try:
                 await db.execute("ALTER TABLE audit_daily_stats ADD COLUMN duration_count INTEGER DEFAULT 0")
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
             return
 
@@ -1380,14 +1399,14 @@ class UnifiedAuditService:
 
             try:
                 await db.execute("DROP TABLE audit_daily_stats_legacy")
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
             return
 
         if "duration_count" not in existing:
             try:
                 await db.execute("ALTER TABLE audit_daily_stats ADD COLUMN duration_count INTEGER DEFAULT 0")
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
 
     async def _ensure_schema_version(self, db: aiosqlite.Connection) -> None:
@@ -1398,7 +1417,7 @@ class UnifiedAuditService:
             async with db.execute("PRAGMA user_version") as cur:
                 row = await cur.fetchone()
             current = int(row[0]) if row else 0
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             current = 0
         if current < _AUDIT_SHARED_SCHEMA_VERSION:
             await db.execute(f"PRAGMA user_version = {_AUDIT_SHARED_SCHEMA_VERSION}")
@@ -1417,7 +1436,7 @@ class UnifiedAuditService:
             for sql in legacy_objects:
                 try:
                     await db.execute(sql)
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     pass
 
         await db.execute("ALTER TABLE audit_events RENAME TO audit_events_legacy")
@@ -1544,7 +1563,7 @@ class UnifiedAuditService:
                     s = s[:-1] + "+00:00"
                 dt_val = datetime.fromisoformat(s)
                 return _normalize_timestamp(dt_val).isoformat()
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 return str(value)
 
         def _json_text(value: Any, *, default: str) -> str:
@@ -1554,7 +1573,7 @@ class UnifiedAuditService:
                 return value
             try:
                 return json.dumps(value, ensure_ascii=False)
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 return str(value)
 
         async def _copy_rows() -> None:
@@ -1612,13 +1631,13 @@ class UnifiedAuditService:
             await _copy_rows()
             await db.execute("DROP TABLE audit_events_legacy")
             await _drop_legacy_audit_objects()
-        except Exception as exc:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"Failed to migrate legacy audit_events schema: {exc}")
             # Attempt to roll back to the legacy table if possible.
             try:
                 await db.execute("DROP TABLE IF EXISTS audit_events")
                 await db.execute("ALTER TABLE audit_events_legacy RENAME TO audit_events")
-            except Exception as rollback_exc:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS as rollback_exc:
                 logger.error(f"Failed to restore legacy audit_events table: {rollback_exc}")
             raise
 
@@ -1626,14 +1645,14 @@ class UnifiedAuditService:
         if category is not None:
             try:
                 category_val = category.value if isinstance(category, AuditEventCategory) else str(category)
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 category_val = ""
             if category_val.lower() == AuditEventCategory.SYSTEM.value:
                 return True
         if event_type is not None:
             try:
                 event_val = event_type.value if isinstance(event_type, AuditEventType) else str(event_type)
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 event_val = ""
             if event_val.lower().startswith("system"):
                 return True
@@ -1644,7 +1663,7 @@ class UnifiedAuditService:
             return ""
         try:
             return str(value).strip()
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             return ""
 
     def _normalize_tenant_id(self, value: Any) -> str:
@@ -1708,7 +1727,7 @@ class UnifiedAuditService:
             if context_user_id is not None:
                 try:
                     ctx_val = str(context_user_id).strip().lower()
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     ctx_val = ""
                 if ctx_val and ctx_val != self.system_tenant_id:
                     logger.warning(
@@ -1896,7 +1915,7 @@ class UnifiedAuditService:
             async with self._read_db() as db, db.execute(query, params) as cursor:
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
-        except Exception as e:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to query audit events (keyset): {e}")
             return []
 
@@ -1915,18 +1934,19 @@ class UnifiedAuditService:
                         await conn.execute("PRAGMA temp_store=MEMORY;")
                         await conn.execute("PRAGMA foreign_keys=ON;")
                         await conn.execute("PRAGMA busy_timeout=5000;")
-                    except Exception as e:
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Failed to apply PRAGMAs on pooled audit DB connection: {e}")
                     # Return rows as mappings consistently across this service
                     conn.row_factory = aiosqlite.Row
                     await conn.commit()
                     # Only assign to pool after successful setup
                     self._db_pool = conn
-                except Exception as e:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
                     # Close connection on failure to avoid resource leak
+                    pass
                     try:
                         await conn.close()
-                    except Exception:
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         pass
                     logger.warning(f"Failed to initialize pooled audit DB connection: {e}")
                     raise
@@ -1940,17 +1960,17 @@ class UnifiedAuditService:
             conn.row_factory = aiosqlite.Row
             try:
                 await conn.execute("PRAGMA query_only=ON;")
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 await conn.execute("PRAGMA busy_timeout=5000;")
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
             yield conn
         finally:
             try:
                 await conn.close()
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
 
     async def start_background_tasks(self):
@@ -1972,9 +1992,9 @@ class UnifiedAuditService:
                 if not owner_closed:
                     try:
                         owner_closed = not self._owner_loop.is_running()
-                    except Exception:
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         owner_closed = False
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             owner_closed = False
         # Enforce same-loop shutdown only when the owner loop is still alive.
         if self._owner_loop and (not owner_closed) and current_loop is not self._owner_loop:
@@ -1982,7 +2002,7 @@ class UnifiedAuditService:
         def _task_loop(task: asyncio.Task) -> Optional[asyncio.AbstractEventLoop]:
             try:
                 return task.get_loop()
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 return None
 
         async def _cancel_and_await(task: Optional[asyncio.Task]) -> None:
@@ -1990,7 +2010,7 @@ class UnifiedAuditService:
                 return
             try:
                 task.cancel()
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
 
             task_loop = _task_loop(task)
@@ -2014,7 +2034,7 @@ class UnifiedAuditService:
             async with self._flush_futures_lock:
                 futures_snapshot = list(self._flush_futures)
                 self._flush_futures.clear()
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             futures_snapshot = list(self._flush_futures)
             self._flush_futures.clear()
 
@@ -2027,7 +2047,7 @@ class UnifiedAuditService:
                 else:
                     try:
                         fut.cancel()
-                    except Exception:
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         pass
             if same_loop_futures:
                 await asyncio.gather(*same_loop_futures, return_exceptions=True)
@@ -2038,7 +2058,7 @@ class UnifiedAuditService:
         if owner_closed and self._db_pool:
             try:
                 await self._db_pool.close()
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
             finally:
                 self._db_pool = None
@@ -2046,8 +2066,9 @@ class UnifiedAuditService:
         # Final flush of any remaining buffered events
         try:
             await self.flush()
-        except Exception as _e:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS as _e:
             # During teardown it's acceptable to skip the final flush if the event loop
+            pass
             # or DB is no longer available.
             logger.debug(f"Audit final flush skipped due to shutdown condition: {_e}")
 
@@ -2064,7 +2085,7 @@ class UnifiedAuditService:
     def _touch(self) -> None:
         try:
             self._last_used_ts = time.monotonic()
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             pass
 
     async def _flush_loop(self):
@@ -2075,7 +2096,7 @@ class UnifiedAuditService:
                 await self.flush()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in audit flush loop: {e}")
 
     async def _cleanup_loop(self):
@@ -2086,7 +2107,7 @@ class UnifiedAuditService:
                 await self.cleanup_old_logs()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in audit cleanup loop: {e}")
 
     async def _replay_fallback_loop(self):
@@ -2096,7 +2117,7 @@ class UnifiedAuditService:
             await self.replay_fallback_queue()
         except asyncio.CancelledError:
             return
-        except Exception as e:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error during initial audit fallback replay: {e}")
         while True:
             try:
@@ -2104,7 +2125,7 @@ class UnifiedAuditService:
                 await self.replay_fallback_queue()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in audit fallback replay loop: {e}")
 
     async def log_event(
@@ -2149,7 +2170,7 @@ class UnifiedAuditService:
         # Normalize API key hash to avoid storing raw secrets
         try:
             context.api_key_hash = _hash_api_key(context.api_key_hash)
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             context.api_key_hash = None
 
         # Create event
@@ -2187,7 +2208,7 @@ class UnifiedAuditService:
                 try:
                     normalized_for_detection = _normalize_json_value(metadata)
                     metadata_str = json.dumps(normalized_for_detection, ensure_ascii=False)
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     metadata_str = str(metadata)
                 found_pii = self.pii_detector.detect(metadata_str)
                 if found_pii:
@@ -2225,8 +2246,9 @@ class UnifiedAuditService:
                         new_val = _redact_if_needed(cur)
                         if new_val is not None and new_val != cur:
                             setattr(event, field_name, new_val)
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     # Ignore unknown fields
+                    pass
                     pass
 
         # Risk scoring
@@ -2366,7 +2388,7 @@ class UnifiedAuditService:
                                 await db.execute("PRAGMA foreign_keys=ON;")
                                 await db.execute("PRAGMA busy_timeout=5000;")
                                 db.row_factory = aiosqlite.Row
-                            except Exception:
+                            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                                 pass
                             new_events = await self._filter_new_events(db, events)
                             if not new_events:
@@ -2406,10 +2428,10 @@ class UnifiedAuditService:
                         await asyncio.sleep(backoff_base * (attempt + 1))
                         continue
                     raise
-                except Exception as e:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
                     last_error = e
                     raise
-        except Exception as e:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to flush audit events: {e}")
             self.stats["flush_failures"] += 1
 
@@ -2429,7 +2451,7 @@ class UnifiedAuditService:
                         logger.warning(
                             f"Audit flush failure: {dropped} events persisted to fallback queue at {fb_path}"
                         )
-                    except Exception as _fe:
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS as _fe:
                         logger.error(f"Failed to write dropped audit events to fallback queue: {_fe}")
                 else:
                     logger.warning("Audit flush failure: events re-buffered (no drop)")
@@ -2459,7 +2481,7 @@ class UnifiedAuditService:
             ts = event.timestamp
             try:
                 ts = _normalize_timestamp(ts)
-            except Exception:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 pass
             if isinstance(ts, datetime):
                 date = ts.date()
@@ -2577,7 +2599,7 @@ class UnifiedAuditService:
                     ) as cur:
                         row = await cur.fetchone()
                         old_events_count = int(row[0]) if row else 0
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     pass
 
                 try:
@@ -2587,7 +2609,7 @@ class UnifiedAuditService:
                     ) as cur:
                         row = await cur.fetchone()
                         old_stats_count = int(row[0]) if row else 0
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     pass
 
                 # Perform deletions
@@ -2604,7 +2626,7 @@ class UnifiedAuditService:
                 # Reclaim space from deleted pages using incremental vacuum
                 try:
                     await db.execute("PRAGMA incremental_vacuum")
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     pass
 
                 if old_events_count or old_stats_count:
@@ -2618,10 +2640,10 @@ class UnifiedAuditService:
                         size_mb = (self.db_path.stat().st_size / (1024 * 1024))
                         if size_mb > float(self.max_db_mb):
                             logger.warning(f"Audit DB size {size_mb:.1f}MB exceeds configured limit {self.max_db_mb}MB")
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     pass
 
-        except Exception as e:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to cleanup old audit logs: {e}")
 
     async def replay_fallback_queue(self, max_batch: int = 5000) -> int:
@@ -2649,7 +2671,7 @@ class UnifiedAuditService:
                     if dt_val.tzinfo is None:
                         dt_val = dt_val.replace(tzinfo=timezone.utc)
                     return dt_val
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     return None
 
             def _safe_int(val: Any, default: Optional[int] = None) -> Optional[int]:
@@ -2660,7 +2682,7 @@ class UnifiedAuditService:
                     if s == "":
                         return default
                     return int(s)
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     return default
 
             def _safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
@@ -2671,7 +2693,7 @@ class UnifiedAuditService:
                     if s == "":
                         return default
                     return float(s)
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     return default
 
             def _as_category(val: Any) -> AuditEventCategory:
@@ -2679,10 +2701,10 @@ class UnifiedAuditService:
                     if isinstance(val, AuditEventCategory):
                         return val
                     return AuditEventCategory(val)
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     try:
                         return AuditEventCategory[str(val)]
-                    except Exception:
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         return AuditEventCategory.SYSTEM
 
             def _as_event_type(val: Any) -> AuditEventType:
@@ -2690,10 +2712,10 @@ class UnifiedAuditService:
                     if isinstance(val, AuditEventType):
                         return val
                     return AuditEventType(val)
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     try:
                         return AuditEventType[str(val)]
-                    except Exception:
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         return AuditEventType.SYSTEM_START
 
             def _as_severity(val: Any) -> AuditSeverity:
@@ -2701,10 +2723,10 @@ class UnifiedAuditService:
                     if isinstance(val, AuditSeverity):
                         return val
                     return AuditSeverity(val)
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     try:
                         return AuditSeverity[str(val)]
-                    except Exception:
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         return AuditSeverity.INFO
 
             def _record_to_event(record: dict[str, Any]) -> Optional[AuditEvent]:
@@ -2722,7 +2744,7 @@ class UnifiedAuditService:
                         compliance_flags = json.loads(flags_raw)
                         if not isinstance(compliance_flags, list):
                             compliance_flags = []
-                    except Exception:
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         compliance_flags = []
                 elif isinstance(flags_raw, list):
                     compliance_flags = flags_raw
@@ -2736,7 +2758,7 @@ class UnifiedAuditService:
                         metadata = json.loads(meta_raw)
                         if not isinstance(metadata, dict):
                             metadata = {}
-                    except Exception:
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         metadata = {}
                 elif isinstance(meta_raw, dict):
                     metadata = meta_raw
@@ -2855,7 +2877,7 @@ class UnifiedAuditService:
                                 continue
                             try:
                                 data = json.loads(line)
-                            except Exception:
+                            except _AUDIT_NONCRITICAL_EXCEPTIONS:
                                 continue
                             if not isinstance(data, dict):
                                 continue
@@ -2871,7 +2893,7 @@ class UnifiedAuditService:
                                     count = await _flush_chunk(
                                         db, list(records_chunk), list(stats_events), use_db_lock
                                     )
-                                except Exception as exc:
+                                except _AUDIT_NONCRITICAL_EXCEPTIONS as exc:
                                     had_error = True
                                     dst.writelines(lines_chunk)
                                     for rest in src:
@@ -2890,13 +2912,13 @@ class UnifiedAuditService:
                                     db, list(records_chunk), list(stats_events), use_db_lock
                                 )
                                 inserted += count
-                            except Exception as exc:
+                            except _AUDIT_NONCRITICAL_EXCEPTIONS as exc:
                                 had_error = True
                                 dst.writelines(lines_chunk)
                                 wrote_temp = True
                                 logger.error(f"Failed to replay audit fallback queue: {exc}")
 
-                except Exception as e:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
                     had_error = True
                     logger.error(f"Failed to read audit fallback queue: {e}")
 
@@ -2913,7 +2935,7 @@ class UnifiedAuditService:
             except asyncio.CancelledError:
                 had_error = True
                 raise
-            except Exception as e:
+            except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
                 had_error = True
                 logger.error(f"Failed to replay audit fallback queue: {e}")
 
@@ -2921,24 +2943,24 @@ class UnifiedAuditService:
                 try:
                     if fb_path.exists():
                         fb_path.unlink()
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     if temp_path.exists():
                         temp_path.unlink()
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     pass
             else:
                 if wrote_temp and temp_path.exists():
                     try:
                         temp_path.replace(fb_path)
-                    except Exception:
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         pass
                 else:
                     try:
                         if temp_path.exists():
                             temp_path.unlink()
-                    except Exception:
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         pass
 
             if inserted and not had_error:
@@ -2988,7 +3010,7 @@ class UnifiedAuditService:
             async with self._read_db() as db, db.execute(query, params) as cursor:
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
-        except Exception as e:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to query audit events: {e}")
             return []
 
@@ -3030,7 +3052,7 @@ class UnifiedAuditService:
             async with self._read_db() as db, db.execute(query, params) as cursor:
                 row = await cursor.fetchone()
                 return int(row[0]) if row else 0
-        except Exception as e:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to count audit events: {e}")
             return 0
 
@@ -3098,7 +3120,7 @@ class UnifiedAuditService:
             if isinstance(value, str):
                 try:
                     return json.loads(value)
-                except Exception:
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     return value
             return value
 
@@ -3592,12 +3614,12 @@ class UnifiedAuditService:
         try:
             if isinstance(out.get("metadata"), str):
                 out["metadata"] = json.loads(out["metadata"])  # type: ignore[arg-type]
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             if isinstance(out.get("compliance_flags"), str):
                 out["compliance_flags"] = json.loads(out["compliance_flags"])  # type: ignore[arg-type]
-        except Exception:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS:
             pass
         return out
 
@@ -3631,8 +3653,9 @@ async def audit_operation(
 
     try:
         yield event_id
-    except Exception as exc:
+    except _AUDIT_NONCRITICAL_EXCEPTIONS as exc:
         # Log failure without masking the original exception.
+        pass
         duration_ms = (time.perf_counter() - start_time) * 1000
         try:
             await service.log_event(
@@ -3643,7 +3666,7 @@ async def audit_operation(
                 duration_ms=duration_ms,
                 **kwargs,
             )
-        except Exception as log_exc:
+        except _AUDIT_NONCRITICAL_EXCEPTIONS as log_exc:
             logger.error(
                 "Audit failure logging failed for {}: {}",
                 event_type.value if isinstance(event_type, AuditEventType) else event_type,
@@ -3706,8 +3729,9 @@ async def shutdown_audit_service():
         from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
             shutdown_all_audit_services,
         )
-    except Exception:
+    except _AUDIT_NONCRITICAL_EXCEPTIONS:
         # If import not available in this context, just return
+        pass
         return
     # Run actual shutdown to ensure clean state in tests
     await shutdown_all_audit_services()

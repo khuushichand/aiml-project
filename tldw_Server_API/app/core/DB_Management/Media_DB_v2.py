@@ -65,7 +65,7 @@ try:
     # Note: alias for loguru logger; not the stdlib 'logging' module.
     # Kept for backward compatibility with existing references to 'logging'.
     logging = logger  # alias used throughout this module
-except Exception:  # pragma: no cover - defensive fallback
+except ImportError:  # pragma: no cover - defensive fallback
     import logging as _stdlib_logging
     logger = _stdlib_logging.getLogger("Media_DB_v2")
     logging = logger
@@ -78,7 +78,7 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_his
 try:
     # Optional integration for Collections (highlights re-anchoring)
     from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase as _CollectionsDB
-except Exception:
+except ImportError:
     _CollectionsDB = None  # Safe fallback when module unavailable
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.DB_Management.backends.base import (
@@ -132,6 +132,26 @@ class ConflictError(DatabaseError):
         return f"{base} ({', '.join(details)})" if details else base
 
 
+_MEDIA_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    BackendDatabaseError,
+    ConflictError,
+    DatabaseError,
+    InputError,
+    MigrationError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    json.JSONDecodeError,
+    sqlite3.Error,
+    yaml.YAMLError,
+)
+
+
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -156,7 +176,7 @@ class _RowAdapter:
                 return self._data.get(col)
             try:
                 return list(self._data.values())[key]
-            except Exception as e:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
                 raise KeyError(key) from e
         # String key access
         return self._data[key]
@@ -1192,8 +1212,9 @@ class MediaDatabase:
             self.close_connection()
             # Re-raise as a DatabaseError to signal catastrophic failure
             raise DatabaseError(f"Database initialization failed: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             # Catch any other unexpected errors during initialization
+            pass
             logging.critical(f"FATAL: Unexpected error during DB Initialization for {self.db_path_str}: {e}", exc_info=True)
             # Attempt cleanup
             self.close_connection()
@@ -1212,7 +1233,7 @@ class MediaDatabase:
         """Determine effective org/team IDs for the current execution context."""
         try:
             scope = get_scope()
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             scope = None
 
         org_id = self.default_org_id
@@ -1244,7 +1265,7 @@ class MediaDatabase:
         if parser is None:
             try:
                 parser = load_comprehensive_config()
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 parser = None
 
         backend_mode_env = (os.getenv("CONTENT_DB_MODE") or os.getenv("TLDW_CONTENT_DB_BACKEND") or "").strip().lower()
@@ -1254,7 +1275,7 @@ class MediaDatabase:
             try:
                 content_settings = load_content_db_settings(parser)
                 forced_postgres = content_settings.backend_type == BackendType.POSTGRESQL
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # In test contexts, honor explicit db_path to keep fixtures on SQLite.
@@ -1263,7 +1284,7 @@ class MediaDatabase:
                 os.getenv("PYTEST_CURRENT_TEST") is not None
                 or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
             )
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             test_mode = False
         if forced_postgres and test_mode and self.db_path_str and self.db_path_str != ":memory:":
             forced_postgres = False
@@ -1494,7 +1515,7 @@ class MediaDatabase:
             self._set_persistent_conn(conn)
         try:
             self.backend.apply_scope(conn)
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             pass
         return conn
 
@@ -1545,7 +1566,7 @@ class MediaDatabase:
             conn.execute("PRAGMA busy_timeout = 10000")
             conn.execute("PRAGMA cache_size = -2000")
             conn.execute("PRAGMA temp_store = MEMORY")
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             pass
 
     # --- Query Execution (Unchanged, catches IntegrityError from validation triggers) ---
@@ -1599,7 +1620,7 @@ class MediaDatabase:
                         if commit or not is_select:
                             try:
                                 eph.commit()
-                            except Exception:
+                            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                                 pass
                         result = QueryResult(rows=rows, rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
                         return BackendCursorAdapter(result)
@@ -1607,11 +1628,11 @@ class MediaDatabase:
                         if cur is not None:
                             try:
                                 cur.close()
-                            except Exception:
+                            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                                 pass
                         try:
                             eph.close()
-                        except Exception:
+                        except _MEDIA_NONCRITICAL_EXCEPTIONS:
                             pass
                 else:
                     # Use transaction/persistent connection (required for :memory: databases)
@@ -1647,7 +1668,7 @@ class MediaDatabase:
                 if commit:
                     try:
                         eff_conn.commit()
-                    except Exception as exc:
+                    except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
                         raise DatabaseError(f"Backend commit failed: {exc}") from exc
             return BackendCursorAdapter(result)
         except BackendDatabaseError as exc:
@@ -1703,7 +1724,7 @@ class MediaDatabase:
                         # executemany implies DML; commit when using ephemeral connection
                         try:
                             eph.commit()
-                        except Exception:
+                        except _MEDIA_NONCRITICAL_EXCEPTIONS:
                             pass
                         result = QueryResult(rows=[], rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
                         return BackendCursorAdapter(result)
@@ -1711,11 +1732,11 @@ class MediaDatabase:
                         if cur is not None:
                             try:
                                 cur.close()
-                            except Exception:
+                            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                                 pass
                         try:
                             eph.close()
-                        except Exception:
+                        except _MEDIA_NONCRITICAL_EXCEPTIONS:
                             pass
                 else:
                     conn_use = eff_conn or self.get_connection()
@@ -1743,7 +1764,7 @@ class MediaDatabase:
                 if commit:
                     try:
                         eff_conn.commit()
-                    except Exception as exc:
+                    except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
                         raise DatabaseError(f"Backend batch commit failed: {exc}") from exc
             return BackendCursorAdapter(result)
         except BackendDatabaseError as exc:
@@ -1815,9 +1836,9 @@ class MediaDatabase:
                         }
                     ),
                 )
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 pass
-        except Exception as exc:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
             raise DatabaseError(f"Failed to insert VisualDocument: {exc}") from exc
         return new_uuid
 
@@ -1847,7 +1868,7 @@ class MediaDatabase:
         )
         try:
             return self._fetchall_with_connection(conn, sql, params)
-        except Exception as exc:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
             raise DatabaseError(f"Failed to list VisualDocuments for media_id={media_id}: {exc}") from exc
 
     def soft_delete_visual_documents_for_media(
@@ -1878,7 +1899,7 @@ class MediaDatabase:
                         1,
                         json.dumps({"media_id": media_id, "mode": "hard"}),
                     )
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     pass
             else:
                 rows = self._fetchall_with_connection(
@@ -1904,9 +1925,9 @@ class MediaDatabase:
                             new_version,
                             json.dumps({"media_id": media_id}),
                         )
-                    except Exception:
+                    except _MEDIA_NONCRITICAL_EXCEPTIONS:
                         pass
-        except Exception as exc:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
             raise DatabaseError(f"Failed to delete VisualDocuments for media_id={media_id}: {exc}") from exc
 
     # -------------------------
@@ -1979,9 +2000,9 @@ class MediaDatabase:
                         }
                     ),
                 )
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 pass
-        except Exception as exc:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
             raise DatabaseError(f"Failed to insert MediaFile: {exc}") from exc
         return new_uuid
 
@@ -2013,7 +2034,7 @@ class MediaDatabase:
         try:
             rows = self._fetchall_with_connection(conn, sql, params)
             return rows[0] if rows else None
-        except Exception as exc:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
             raise DatabaseError(f"Failed to get MediaFile for media_id={media_id}: {exc}") from exc
 
     def get_media_files(
@@ -2041,7 +2062,7 @@ class MediaDatabase:
         sql = f"SELECT * FROM MediaFiles WHERE {where_sql} ORDER BY file_type, id"
         try:
             return self._fetchall_with_connection(conn, sql, params)
-        except Exception as exc:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
             raise DatabaseError(f"Failed to list MediaFiles for media_id={media_id}: {exc}") from exc
 
     def has_original_file(self, media_id: int) -> bool:
@@ -2097,9 +2118,9 @@ class MediaDatabase:
                     new_version,
                     json.dumps({"file_id": file_id}),
                 )
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 pass
-        except Exception as exc:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
             raise DatabaseError(f"Failed to soft-delete MediaFile id={file_id}: {exc}") from exc
 
     def soft_delete_media_files_for_media(
@@ -2132,7 +2153,7 @@ class MediaDatabase:
                         1,
                         json.dumps({"media_id": media_id, "hard_delete": True}),
                     )
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     pass
             else:
                 # Soft delete each record with version bump
@@ -2160,9 +2181,9 @@ class MediaDatabase:
                             new_version,
                             json.dumps({"media_id": media_id}),
                         )
-                    except Exception:
+                    except _MEDIA_NONCRITICAL_EXCEPTIONS:
                         pass
-        except Exception as exc:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
             raise DatabaseError(f"Failed to delete MediaFiles for media_id={media_id}: {exc}") from exc
 
     # -------------------------
@@ -2184,7 +2205,7 @@ class MediaDatabase:
                     "WHERE type = 'table' AND name = 'unvectorized_chunks_fts'"
                 )
                 existed = cur.fetchone() is not None
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 existed = False
             ddl = (
                 "CREATE VIRTUAL TABLE IF NOT EXISTS unvectorized_chunks_fts "
@@ -2201,9 +2222,9 @@ class MediaDatabase:
                         "INSERT INTO unvectorized_chunks_fts(unvectorized_chunks_fts) VALUES('rebuild')",
                         commit=True,
                     )
-                except Exception as e:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
                     logging.debug(f"ensure_chunk_fts rebuild skipped or failed: {e}")
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logging.debug(f"ensure_chunk_fts skipped or failed: {e}")
 
     def maybe_rebuild_chunk_fts_if_empty(self) -> None:
@@ -2220,8 +2241,9 @@ class MediaDatabase:
                 cur = self.execute_query("SELECT count(*) AS c FROM unvectorized_chunks_fts")
                 row = cur.fetchone()
                 count_val = (row[0] if row and not isinstance(row, dict) else (row.get('c') if row else 0)) or 0
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 # Table missing - try to create and continue
+                pass
                 self.ensure_chunk_fts()
                 cur = self.execute_query("SELECT count(*) AS c FROM unvectorized_chunks_fts")
                 row = cur.fetchone()
@@ -2233,7 +2255,7 @@ class MediaDatabase:
                     "INSERT INTO unvectorized_chunks_fts(unvectorized_chunks_fts) VALUES('rebuild')",
                     commit=True,
                 )
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logging.debug(f"maybe_rebuild_chunk_fts_if_empty skipped or failed: {e}")
 
     # --- Transaction Context (Unchanged) ---
@@ -2263,7 +2285,7 @@ class MediaDatabase:
                 conn = self._persistent_conn or self.backend.connect()
                 try:
                     conn.row_factory = sqlite3.Row
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     conn.execute("PRAGMA foreign_keys = ON")
@@ -2283,7 +2305,7 @@ class MediaDatabase:
                 if outermost:
                     conn.commit()
                     logging.debug("Committed SQLite transaction.")
-            except Exception as e:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
                 logging.error("SQLite transaction failed, rolling back: {}", e)
                 if outermost:
                     try:
@@ -2298,7 +2320,7 @@ class MediaDatabase:
                     if self._persistent_conn is None:
                         try:
                             conn.close()
-                        except Exception:
+                        except _MEDIA_NONCRITICAL_EXCEPTIONS:
                             pass
             return
 
@@ -2323,7 +2345,7 @@ class MediaDatabase:
             if manages_backend_conn:
                 try:
                     self.backend.get_pool().return_connection(conn)
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     pass
 
     # --- Schema Initialization and Migration ---
@@ -2524,7 +2546,7 @@ class MediaDatabase:
         except sqlite3.Error as e:
             logging.error(f"[Schema V1] Application failed during schema script: {e}", exc_info=True)
             raise DatabaseError(f"DB schema V1 setup failed: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"[Schema V1] Unexpected error during schema V1 application: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error applying schema V1: {e}") from e
 
@@ -2964,7 +2986,7 @@ class MediaDatabase:
         except (DatabaseError, SchemaError, sqlite3.Error) as e:
             logger.error(f"Schema initialization/migration failed: {e}", exc_info=True)
             raise DatabaseError(f"Schema initialization failed: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error during schema initialization: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error applying schema: {e}") from e
 
@@ -3058,7 +3080,7 @@ class MediaDatabase:
                         ),
                         connection=conn,
                     )
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     pass
                 self._ensure_postgres_tts_history(conn)
                 self._ensure_postgres_data_tables(conn)
@@ -3172,7 +3194,7 @@ class MediaDatabase:
                         ),
                         connection=conn,
                     )
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     pass
                 self._ensure_postgres_data_tables(conn)
                 self._ensure_postgres_source_hash_column(conn)
@@ -3265,7 +3287,7 @@ class MediaDatabase:
                     ),
                     connection=conn,
                 )
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 pass
             self._ensure_postgres_tts_history(conn)
             self._ensure_postgres_data_tables(conn)
@@ -3473,7 +3495,7 @@ class MediaDatabase:
                 ),
                 connection=conn,
             )
-        except Exception as exc:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
             logging.debug(f"Could not add visibility check constraint: {exc}")
 
         # Add owner_user_id column
@@ -3497,7 +3519,7 @@ class MediaDatabase:
                 ),
                 connection=conn,
             )
-        except Exception as exc:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
             logging.debug(f"Could not backfill owner_user_id: {exc}")
 
         # Add indexes
@@ -3531,7 +3553,9 @@ class MediaDatabase:
                         "Could not apply MediaFiles migration statement on PostgreSQL: {}",
                         exc,
                     )
-        except Exception as exc:  # pragma: no cover - defensive
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
+            # pragma: no cover - defensive
+            pass
             logger.warning("MediaFiles Postgres migration v11 failed: {}", exc)
 
     def _postgres_migrate_to_v12(self, conn) -> None:
@@ -4942,7 +4966,7 @@ class MediaDatabase:
         # Visibility filtering (SQLite or Postgres shared backend)
         try:
             scope = get_scope()
-        except Exception as scope_err:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as scope_err:
             logging.debug(f"Failed to resolve scope for claims visibility filter: {scope_err}")
             scope = None
         if scope and not scope.is_admin:
@@ -5000,7 +5024,7 @@ class MediaDatabase:
 
         try:
             scope = get_scope()
-        except Exception as scope_err:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as scope_err:
             logging.debug(f"Failed to resolve scope for claim lookup: {scope_err}")
             scope = None
         if scope and not scope.is_admin:
@@ -5311,10 +5335,10 @@ class MediaDatabase:
         if existing is not None:
             try:
                 existing_id = int(existing["id"])
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 try:
                     existing_id = int(existing[0])
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     existing_id = None
 
         if existing_id is None:
@@ -5472,7 +5496,7 @@ class MediaDatabase:
 
         try:
             scope = get_scope()
-        except Exception as scope_err:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as scope_err:
             logging.debug(f"Failed to resolve scope for review queue visibility filter: {scope_err}")
             scope = None
         if scope and not scope.is_admin:
@@ -5793,7 +5817,7 @@ class MediaDatabase:
                         "GREATEST((SELECT MAX(id) FROM claims_monitoring_alerts), 1))",
                         commit=True,
                     )
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     pass
             return self.get_claims_monitoring_alert(int(alert_id))
 
@@ -6034,7 +6058,7 @@ class MediaDatabase:
                         email_enabled = bool(parsed)
                     else:
                         email_enabled = bool(str(email_recipients).strip())
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     email_enabled = bool(str(email_recipients).strip())
             channels = {
                 "slack": bool(slack_url),
@@ -6213,7 +6237,7 @@ class MediaDatabase:
         cursor = self.execute_query(sql, tuple(params), commit=True)
         try:
             return int(getattr(cursor, "rowcount", 0) or 0)
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             return 0
 
     def get_claims_by_uuid(self, uuids: list[str]) -> list[dict[str, Any]]:
@@ -6252,7 +6276,7 @@ class MediaDatabase:
         for row in rows:
             try:
                 counts[int(row[0])] = int(row[1])
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 continue
         return counts
 
@@ -6365,7 +6389,7 @@ class MediaDatabase:
         cursor = self.execute_query(sql, tuple(params), commit=True)
         try:
             return int(getattr(cursor, "rowcount", 0) or 0)
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             return 0
 
     def get_latest_claims_monitoring_event_delivery(
@@ -6389,10 +6413,10 @@ class MediaDatabase:
             return None
         try:
             return row.get("delivered_at")
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             try:
                 return row[0]
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 return None
 
     def list_claims_monitoring_user_ids(self) -> list[str]:
@@ -6407,10 +6431,10 @@ class MediaDatabase:
         for row in rows:
             try:
                 user_ids.append(str(row["user_id"]))
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 try:
                     user_ids.append(str(row[0]))
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     continue
         return [uid for uid in user_ids if uid]
 
@@ -6431,10 +6455,10 @@ class MediaDatabase:
         for row in rows:
             try:
                 user_id = row["user_id"]
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 try:
                     user_id = row[0]
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     user_id = None
             if user_id is None:
                 continue
@@ -6470,10 +6494,10 @@ class MediaDatabase:
         if existing is not None:
             try:
                 existing_id = int(existing["id"])
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 try:
                     existing_id = int(existing[0])
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     existing_id = None
         if existing_id is None:
             self.execute_query(
@@ -6781,7 +6805,7 @@ class MediaDatabase:
             return 0
         try:
             return int(row["count"])
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             return int(list(row)[0])
 
     def get_tts_history_entry(
@@ -6821,7 +6845,7 @@ class MediaDatabase:
         )
         try:
             return cursor.rowcount > 0
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             return False
 
     def soft_delete_tts_history_entry(
@@ -6839,7 +6863,7 @@ class MediaDatabase:
         )
         try:
             return cursor.rowcount > 0
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             return False
 
     def mark_tts_history_artifacts_deleted_for_output(
@@ -6861,7 +6885,7 @@ class MediaDatabase:
         )
         try:
             return int(cursor.rowcount or 0)
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             return 0
 
     def mark_tts_history_artifacts_deleted_for_file_id(
@@ -6889,7 +6913,7 @@ class MediaDatabase:
                 continue
             try:
                 parsed = json.loads(raw) if isinstance(raw, str) else raw
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 parsed = None
             if isinstance(parsed, list) and file_id in parsed:
                 matched_ids.append(int(row["id"]))
@@ -6910,7 +6934,7 @@ class MediaDatabase:
         )
         try:
             return int(cursor.rowcount or 0)
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             return len(matched_ids)
 
     def purge_tts_history_for_user(
@@ -6931,7 +6955,7 @@ class MediaDatabase:
             )
             try:
                 removed += int(cursor.rowcount or 0)
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 pass
 
         if max_rows and max_rows > 0:
@@ -6942,7 +6966,7 @@ class MediaDatabase:
             if row:
                 try:
                     total = int(row["count"])
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     total = int(list(row)[0])
                 if total > max_rows:
                     to_remove = total - int(max_rows)
@@ -6958,7 +6982,7 @@ class MediaDatabase:
                     )
                     try:
                         removed += int(cursor.rowcount or 0)
-                    except Exception:
+                    except _MEDIA_NONCRITICAL_EXCEPTIONS:
                         removed += max(0, to_remove)
 
         return removed
@@ -6972,10 +6996,10 @@ class MediaDatabase:
         for row in rows:
             try:
                 user_ids.append(str(row["user_id"]))
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 try:
                     user_ids.append(str(row[0]))
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     continue
         return user_ids
 
@@ -7060,10 +7084,10 @@ class MediaDatabase:
             return 0
         try:
             return int(row["count"] or 0)
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             try:
                 return int(row[0] or 0)
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 return 0
 
     def cleanup_claims_analytics_exports(
@@ -7088,7 +7112,7 @@ class MediaDatabase:
         )
         try:
             deleted = int(cursor.rowcount or 0)
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             deleted = 0
         return max(deleted, 0)
 
@@ -7239,7 +7263,7 @@ class MediaDatabase:
         )
         try:
             deleted = int(cur.rowcount or 0)
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             deleted = 0
         return max(deleted, 0)
 
@@ -7262,7 +7286,7 @@ class MediaDatabase:
 
         try:
             scope = get_scope()
-        except Exception as scope_err:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as scope_err:
             logging.debug(f"Failed to resolve scope for cluster membership visibility filter: {scope_err}")
             scope = None
         if scope and not scope.is_admin:
@@ -7771,7 +7795,7 @@ class MediaDatabase:
         scope = None
         try:
             scope = get_scope()
-        except Exception as scope_err:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as scope_err:
             logging.debug(f"Failed to resolve scope for claims search: {scope_err}")
             scope = None
         try:
@@ -7928,7 +7952,7 @@ class MediaDatabase:
                         row_dict = dict(row)
                         row_dict.setdefault('relevance_score', 0.0)
                         results.append(row_dict)
-        except Exception as exc:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
             logging.error("Failed to search claims: {}", exc, exc_info=True)
             return []
         return results
@@ -7942,7 +7966,7 @@ class MediaDatabase:
             return str(owner_user_id)
         try:
             scope = get_scope()
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             logger.debug("Failed to resolve scope for data tables owner")
             return None
         if scope and not scope.is_admin and scope.user_id is not None:
@@ -9094,8 +9118,9 @@ class MediaDatabase:
         """
         try:
             self._initialize_schema()
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             # Re-raise as DatabaseError for consistent error semantics
+            pass
             raise DatabaseError(f"Database initialization failed: {e}") from e
         return self
 
@@ -9192,7 +9217,7 @@ class MediaDatabase:
                     from datetime import datetime
                     if isinstance(v, datetime):
                         payload[k] = v.isoformat()
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     pass
 
         payload_json = json.dumps(payload, separators=(',', ':')) if payload else None  # Compact JSON
@@ -9218,7 +9243,7 @@ class MediaDatabase:
             logging.debug(
                 f"Logged sync event: {entity} {entity_uuid} {operation} v{version} at {current_time}"
             )
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logging.error(
                 f"Failed to insert sync log event for {entity} {entity_uuid}: {e}", exc_info=True
             )
@@ -9251,7 +9276,7 @@ class MediaDatabase:
                 )
                 corpus = os.getenv("DEFAULT_FTS_CORPUS", "").strip() or None
                 syn_map = get_corpus_synonyms(corpus)
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 syn_map = {}
             expanded_terms: list[str] = []
             if syn_map:
@@ -9266,7 +9291,7 @@ class MediaDatabase:
                     max_terms = int(os.getenv("FTS_SYNONYM_EXPANSION_LIMIT", "200") or 200)
                     if len(expanded_terms) > max_terms:
                         expanded_terms = expanded_terms[:max_terms]
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     expanded_terms = []
             exp_str = (" " + " ".join(expanded_terms)) if expanded_terms else ""
             try:
@@ -9290,7 +9315,7 @@ class MediaDatabase:
                         ensure_fn = getattr(self.backend, 'ensure_synonyms_support', None)
                         if callable(ensure_fn):
                             ensure_fn(connection=conn)
-                    except Exception as _syn_err:
+                    except _MEDIA_NONCRITICAL_EXCEPTIONS as _syn_err:
                         logging.debug(f"Synonyms support ensure failed (non-fatal): {_syn_err}")
                 if enable_syn:
                     sql = (
@@ -9543,7 +9568,7 @@ class MediaDatabase:
             try:
                 import os as _os
                 max_chars = int((_os.getenv("FTS_QUERY_MAX_CHARS") or "1000").strip() or 1000)
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 max_chars = 1000
             if isinstance(search_query, str) and len(search_query) > max_chars:
                 logging.warning(
@@ -9595,7 +9620,7 @@ class MediaDatabase:
         if self.backend_type == BackendType.SQLITE:
             try:
                 scope = get_scope()
-            except Exception as scope_err:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as scope_err:
                 logging.debug(f"Failed to resolve scope for SQLite visibility filter; falling back to no scope: {scope_err}")
                 scope = None
 
@@ -10001,7 +10026,7 @@ class MediaDatabase:
                 raise DatabaseError(f"FTS table 'media_fts' not found in {self.db_path_str}.") from e
             logging.error(f"Database error during media search in '{self.db_path_str}': {e}", exc_info=True)
             raise DatabaseError(f"Failed to search media in {self.db_path_str}: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Unexpected error during media search in '{self.db_path_str}': {e}", exc_info=True)
             raise DatabaseError(f"An unexpected error occurred during media search: {e}") from e
 
@@ -10121,7 +10146,7 @@ class MediaDatabase:
             cur = self.execute_query(results_sql, res_params)
             rows = [dict(r) for r in cur.fetchall()]
             return rows, total
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Metadata search failed: {e}", exc_info=True)
             raise DatabaseError(f"Failed metadata search: {e}")
     def add_keyword(self, keyword: str, conn: Any | None = None) -> tuple[int | None, str | None]:
@@ -10303,7 +10328,7 @@ class MediaDatabase:
                 raise e
             else:
                 raise DatabaseError(f"Failed to add/update keyword: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error in add_keyword for '{keyword}': {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error adding/updating keyword: {e}") from e
 
@@ -10444,7 +10469,7 @@ class MediaDatabase:
 
             return results_by_keyword
 
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error fetching media for keywords from DB {self.db_path_str}: {e}", exc_info=True)
             raise DatabaseError(f"An unexpected error occurred while fetching media for keywords: {e}") from e
 
@@ -10491,7 +10516,7 @@ class MediaDatabase:
             return results
         except DatabaseError:
             raise
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching sync log entries from DB '{self.db_path_str}': {e}")
             raise DatabaseError("Failed to fetch sync log entries") from e
 
@@ -10529,7 +10554,7 @@ class MediaDatabase:
                 return deleted_count
         except DatabaseError:
             raise
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error deleting sync log entries from DB '{self.db_path_str}': {e}")
             raise DatabaseError(f"Unexpected error deleting sync log entries: {e}") from e
 
@@ -10565,7 +10590,7 @@ class MediaDatabase:
                 return deleted_count
         except DatabaseError:
             raise
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error deleting sync log entries before {change_id_threshold} from DB '{self.db_path_str}': {e}")
             raise DatabaseError(f"Unexpected error deleting sync log entries before threshold: {e}") from e
 
@@ -10688,7 +10713,7 @@ class MediaDatabase:
                     invalidate_intra_doc_vectors,  # lazy import
                 )
                 invalidate_intra_doc_vectors(str(media_id))
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 pass
             return True
         except (ConflictError, DatabaseError, sqlite3.Error) as e:
@@ -10697,7 +10722,7 @@ class MediaDatabase:
                 raise e
             else:
                 raise DatabaseError(f"Failed to soft delete media: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error soft deleting media ID {media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error during soft delete: {e}") from e
 
@@ -10785,7 +10810,7 @@ class MediaDatabase:
         except (InputError, ConflictError, DatabaseError) as e:
             logger.error(f"Error sharing media ID {media_id}: {e}", exc_info=True)
             raise
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error sharing media ID {media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Failed to share media: {e}") from e
 
@@ -10928,7 +10953,7 @@ class MediaDatabase:
                     scope_type="user",
                     scope_id=uid,
                 )
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             pass
 
         # ------------------------------------------------------------------
@@ -11186,7 +11211,7 @@ class MediaDatabase:
                         try:
                             if _CollectionsDB is not None and client_id is not None:
                                 _CollectionsDB.from_backend(user_id=str(client_id), backend=self.backend).mark_highlights_stale_if_content_changed(media_id, content_hash)
-                        except Exception as _anch_err:
+                        except _MEDIA_NONCRITICAL_EXCEPTIONS as _anch_err:
                             logging.debug(f"Highlight re-anchoring hook failed (non-fatal): {_anch_err}")
                         # Invalidate agentic intra-doc vectors on content update
                         try:
@@ -11194,7 +11219,7 @@ class MediaDatabase:
                                 invalidate_intra_doc_vectors,  # lazy import
                             )
                             invalidate_intra_doc_vectors(str(media_id))
-                        except Exception:
+                        except _MEDIA_NONCRITICAL_EXCEPTIONS:
                             pass
                         return media_id, media_uuid, f"Media '{title}' updated to new version."
 
@@ -11233,7 +11258,7 @@ class MediaDatabase:
                                 )
                             else:
                                 logging.debug(f"No rows updated when touching media {media_id}; possible version change.")
-                        except Exception as _touch_err:
+                        except _MEDIA_NONCRITICAL_EXCEPTIONS as _touch_err:
                             logging.debug(f"Non-fatal: failed to touch media {media_id}: {_touch_err}")
 
                         # Return existing record references to allow callers to treat as a non-fatal result
@@ -11329,7 +11354,7 @@ class MediaDatabase:
                             rag_enable_structure_index,  # lazy import to avoid heavy deps
                         )
                         enable_si = rag_enable_structure_index()
-                    except Exception:
+                    except _MEDIA_NONCRITICAL_EXCEPTIONS:
                         enable_si = True
                     if enable_si and chunks:
                         try:
@@ -11379,7 +11404,7 @@ class MediaDatabase:
                                         (media_id,),
                                     )
                                     section_ids_by_range = [dict(row) for row in cur.fetchall()]
-                                except Exception:
+                                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                                     section_ids_by_range = []
 
                             # Insert paragraph entries linked to their containing section
@@ -11405,7 +11430,7 @@ class MediaDatabase:
                                             if int(row.get('start_char')) <= int(s) < int(row.get('end_char')):
                                                 parent_id = int(row.get('id'))
                                                 break
-                                    except Exception:
+                                    except _MEDIA_NONCRITICAL_EXCEPTIONS:
                                         parent_id = None
                                     # Fallback DB lookup
                                     if parent_id is None:
@@ -11416,7 +11441,7 @@ class MediaDatabase:
                                             )
                                             row2 = cur2.fetchone()
                                             parent_id = int(row2['id']) if row2 else None
-                                        except Exception:
+                                        except _MEDIA_NONCRITICAL_EXCEPTIONS:
                                             parent_id = None
                                     path = None
                                     md = ch.get('metadata') or {}
@@ -11445,9 +11470,9 @@ class MediaDatabase:
                                         ),
                                     )
                                     order += 1
-                            except Exception as _para_err:
+                            except _MEDIA_NONCRITICAL_EXCEPTIONS as _para_err:
                                 logging.warning(f"Paragraph index population failed (non-fatal): {_para_err}")
-                        except Exception as _si_err:
+                        except _MEDIA_NONCRITICAL_EXCEPTIONS as _si_err:
                             logging.warning(f"Structure index population failed (non-fatal): {_si_err}")
                     if chunk_options:
                         logging.info("chunk_options ignored (placeholder): {}", chunk_options)
@@ -11472,7 +11497,7 @@ class MediaDatabase:
         try:
             # Remove previous index (derived data)
             conn.execute("DELETE FROM DocumentStructureIndex WHERE media_id = ?", (media_id,))
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logging.warning(f"Failed to clear old structure index for media_id={media_id}: {e}")
         if not records:
             return 0
@@ -11506,7 +11531,7 @@ class MediaDatabase:
                     ),
                 )
                 inserted += 1
-            except Exception as e:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
                 logging.warning(f"Skipping invalid structure record for media_id={media_id}: {e}")
         return inserted
 
@@ -11933,7 +11958,7 @@ class MediaDatabase:
                     )
                     count += 1
                     logger.info(f"Seeded built-in template: {template['name']}")
-                except Exception as e:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to seed template {template['name']}: {e}")
             elif existing['deleted']:
                 # Restore deleted built-in template
@@ -11982,7 +12007,7 @@ class MediaDatabase:
             with self.transaction() as conn:
                 cur = conn.execute(query, (media_id, char_offset, char_offset))
                 row = cur.fetchone()
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             return None
         if not row:
             return None
@@ -12007,9 +12032,9 @@ class MediaDatabase:
                 if not row:
                     return None
                 return (int(row["start_char"]), int(row["end_char"]), str(row["title"]))
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             return None
-        except Exception as exc:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
             logging.error(f"Unexpected error in transaction: {type(exc).__name__} - {exc}")
             raise DatabaseError(f"Unexpected error processing media: {exc}") from exc
 
@@ -12145,7 +12170,7 @@ class MediaDatabase:
                     import json as _json
                     try:
                         smd = _json.loads(insert_data['safe_metadata']) if isinstance(insert_data['safe_metadata'], str) else insert_data['safe_metadata']
-                    except Exception:
+                    except _MEDIA_NONCRITICAL_EXCEPTIONS:
                         smd = None
                     if isinstance(smd, dict):
                         doi = smd.get('doi') or smd.get('DOI')
@@ -12174,7 +12199,7 @@ class MediaDatabase:
                         except DatabaseError:
                             # Table may not exist; ignore
                             pass
-            except Exception as _ident_ex:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as _ident_ex:
                 logging.warning(f"Could not populate identifiers for version_id={version_id}: {_ident_ex}")
 
             self._log_sync_event(conn, 'DocumentVersions', new_uuid, 'create', new_version, insert_data)
@@ -12188,7 +12213,7 @@ class MediaDatabase:
                 raise e
             else:
                 raise DatabaseError(f"Failed create document version: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error creating document version media {media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error creating document version: {e}") from e
 
@@ -12301,7 +12326,7 @@ class MediaDatabase:
                 raise e
             else:
                 raise DatabaseError(f"Keyword update failed: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected keywords error media {media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected keyword update error: {e}") from e
 
@@ -12381,15 +12406,15 @@ class MediaDatabase:
                             continue
                         try:
                             media_mappings.append(dict(record))
-                        except Exception:
+                        except _MEDIA_NONCRITICAL_EXCEPTIONS:
                             try:
                                 media_id_val = record[0]
-                            except Exception:
+                            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                                 media_id_val = None
                             media_uuid_val = None
                             try:
                                 media_uuid_val = record[1]
-                            except Exception:
+                            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                                 pass
                             media_mappings.append(
                                 {
@@ -12424,7 +12449,7 @@ class MediaDatabase:
                 raise e
             else:
                 raise DatabaseError(f"Failed soft delete keyword: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected soft delete keyword error '{keyword}': {e}", exc_info=True)
             raise DatabaseError(f"Unexpected soft delete keyword error: {e}") from e
 
@@ -12507,7 +12532,7 @@ class MediaDatabase:
                 raise e
             else:
                 raise DatabaseError(f"Failed soft delete doc version: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected soft delete DocVersion error UUID {version_uuid}: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected version soft delete error: {e}") from e
 
@@ -12572,7 +12597,7 @@ class MediaDatabase:
                 raise e
             else:
                 raise DatabaseError(f"Failed mark as trash: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error marking media {media_id} trash: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected mark trash error: {e}") from e
 
@@ -12637,7 +12662,7 @@ class MediaDatabase:
                 raise e
             else:
                 raise DatabaseError(f"Failed restore trash: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error restoring media {media_id} trash: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected restore trash error: {e}") from e
 
@@ -12748,7 +12773,7 @@ class MediaDatabase:
             try:
                 if _CollectionsDB is not None and client_id is not None:
                     _CollectionsDB.from_backend(user_id=str(client_id), backend=self.backend).mark_highlights_stale_if_content_changed(media_id, new_content_hash)
-            except Exception as _anch_err:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as _anch_err:
                 logging.debug(f"Highlight re-anchoring hook (rollback) failed: {_anch_err}")
             # Invalidate agentic intra-doc vectors after content rollback
             try:
@@ -12756,7 +12781,7 @@ class MediaDatabase:
                     invalidate_intra_doc_vectors,  # lazy import
                 )
                 invalidate_intra_doc_vectors(str(media_id))
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 pass
             return {'success': f'Rolled back to version {target_version_number}. State saved as new version {new_doc_version_number}.',
                     'new_document_version_number': new_doc_version_number,
@@ -12768,7 +12793,7 @@ class MediaDatabase:
                 raise e
             else:
                 raise DatabaseError(f"DB error during rollback: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected rollback error media {media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected rollback error: {e}") from e
 
@@ -12882,8 +12907,9 @@ class MediaDatabase:
             # Use self.db_path_str
             logging.error(f"SQLite error retrieving versions for media_id {media_id} from {self.db_path_str}: {e}", exc_info=True)
             raise DatabaseError(f"Failed to retrieve document versions: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             # Use self.db_path_str
+            pass
             logging.error(f"Unexpected error retrieving versions for media_id {media_id} from {self.db_path_str}: {e}", exc_info=True)
             raise DatabaseError(f"An unexpected error occurred: {e}") from e
 
@@ -12996,7 +13022,7 @@ class MediaDatabase:
                 raise e
             else:
                 raise DatabaseError(f"Failed process chunks: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected chunk processing error media {media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected chunk error: {e}") from e
 
@@ -13047,7 +13073,7 @@ class MediaDatabase:
             if isinstance(e, DatabaseError):
                 raise
             raise DatabaseError(f"Failed to clear unvectorized chunks: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error clearing unvectorized chunks for media {media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error clearing unvectorized chunks: {e}") from e
 
@@ -13116,7 +13142,7 @@ class MediaDatabase:
             if isinstance(e, DatabaseError):
                 raise
             raise DatabaseError(f"Failed updating reprocess state: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error updating reprocess state for media {media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error updating reprocess state: {e}") from e
 
@@ -13188,7 +13214,7 @@ class MediaDatabase:
             if isinstance(e, DatabaseError):
                 raise
             raise DatabaseError(f"Failed marking embeddings error: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error marking embeddings error for media {media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error marking embeddings error: {e}") from e
 
@@ -13281,7 +13307,7 @@ class MediaDatabase:
         except sqlite3.Error as e:
             logging.error(f"SQLite error during DB pagination: {e}", exc_info=True)
             raise DatabaseError(f"Failed DB pagination query: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Unexpected error during DB pagination: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error during DB pagination: {e}") from e
 
@@ -13336,7 +13362,7 @@ class MediaDatabase:
         except sqlite3.Error as e:
             logging.error(f"SQLite error during trash pagination: {e}", exc_info=True)
             raise DatabaseError(f"Failed trash pagination query: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Unexpected error during trash pagination: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error during trash pagination: {e}") from e
 
@@ -13381,7 +13407,7 @@ class MediaDatabase:
         except sqlite3.Error as e:
             logger.error(f"Error fetching media by ID {media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Failed to fetch media by ID: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error fetching media by ID {media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error fetching media by ID: {e}") from e
 
@@ -13515,7 +13541,7 @@ def get_full_media_details(db_instance: MediaDatabase, media_id: int, *, include
     # Keywords
     try:
         keywords = fetch_keywords_for_media(media_id=media_id, db_instance=db_instance)
-    except Exception:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS:
         keywords = []
 
     return {
@@ -13555,7 +13581,7 @@ def get_full_media_details_rich(
         try:
             import json as _json
             safe_metadata = _json.loads(safe_metadata_raw)
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             safe_metadata = None
     elif isinstance(safe_metadata_raw, dict):
         safe_metadata = safe_metadata_raw
@@ -13563,7 +13589,7 @@ def get_full_media_details_rich(
     # Keywords
     try:
         keywords = fetch_keywords_for_media(media_id=media_id, db_instance=db_instance)
-    except Exception:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS:
         keywords = []
 
     # Content and metadata parsing
@@ -13581,9 +13607,9 @@ def get_full_media_details_rich(
                     if isinstance(parsed, dict):
                         content_meta = parsed
                         content_text = remaining_text
-                except Exception:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS:
                     pass
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             pass
     word_count = len(content_text.split()) if content_text else 0
 
@@ -13602,7 +13628,7 @@ def get_full_media_details_rich(
                     try:
                         import json as _json
                         safe_md = _json.loads(safe_md)
-                    except Exception:
+                    except _MEDIA_NONCRITICAL_EXCEPTIONS:
                         safe_md = None
                 # Ensure created_at is a datetime for response model
                 created_at_val = rv.get("created_at")
@@ -13610,8 +13636,9 @@ def get_full_media_details_rich(
                     try:
                         from datetime import datetime as _dt
                         created_at_val = _dt.fromisoformat(created_at_val.replace('Z', '+00:00'))
-                    except Exception:
+                    except _MEDIA_NONCRITICAL_EXCEPTIONS:
                         # Leave as-is; Pydantic may still coerce common formats
+                        pass
                         pass
                 versions_list.append({
                     "uuid": rv.get("uuid"),
@@ -13623,7 +13650,7 @@ def get_full_media_details_rich(
                     "safe_metadata": safe_md,
                     "content": rv.get("content") if include_version_content else None,
                 })
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             versions_list = []
 
     # Build response dict matching MediaDetailResponse structure
@@ -13638,7 +13665,7 @@ def get_full_media_details_rich(
                 raw_timestamps = [str(x) for x in parsed_ts]
             else:
                 raw_timestamps = []
-        except Exception:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS:
             raw_timestamps = []
     elif isinstance(raw_timestamps, list):
         raw_timestamps = [str(x) for x in raw_timestamps]
@@ -13752,7 +13779,7 @@ def get_media_by_url(self, url: str, include_deleted=False, include_trash=False)
     except sqlite3.Error as e:
         logger.error(f"Error fetching media by URL '{url}': {e}", exc_info=True)
         raise DatabaseError(f"Failed to fetch media by URL: {e}") from e
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error fetching media by URL '{url}': {e}", exc_info=True)
         raise DatabaseError(f"Unexpected error fetching media by URL: {e}") from e
 
@@ -13796,7 +13823,7 @@ def get_media_by_hash(self, content_hash: str, include_deleted=False, include_tr
     except sqlite3.Error as e:
         logger.error(f"Error fetching media by hash '{content_hash[:10]}...': {e}", exc_info=True)
         raise DatabaseError(f"Failed to fetch media by hash: {e}") from e
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error fetching media by hash '{content_hash[:10]}...': {e}", exc_info=True)
         raise DatabaseError(f"Unexpected error fetching media by hash: {e}") from e
 
@@ -13841,7 +13868,7 @@ def get_media_by_title(self, title: str, include_deleted=False, include_trash=Fa
     except sqlite3.Error as e:
         logger.error(f"Error fetching media by title '{title}': {e}", exc_info=True)
         raise DatabaseError(f"Failed to fetch media by title: {e}") from e
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error fetching media by title '{title}': {e}", exc_info=True)
         raise DatabaseError(f"Unexpected error fetching media by title: {e}") from e
 
@@ -13920,7 +13947,7 @@ def get_paginated_files(self, page: int = 1, results_per_page: int = 50) -> tupl
         logging.error(f"SQLite error during pagination query in {self.db_path_str}: {e}", exc_info=True)
         raise DatabaseError(f"Failed pagination query: {e}") from e
     # Catch unexpected errors
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Unexpected error in get_paginated_files for DB {self.db_path_str}: {e}", exc_info=True)
         # Wrap unexpected errors in DatabaseError
         raise DatabaseError(f"Unexpected error during pagination: {e}") from e
@@ -13967,7 +13994,7 @@ def backup_database(self, backup_file_path: str) -> bool | None:
     except ValueError as ve:
         logger.error(f"ValueError during database backup: {ve}", exc_info=True)
         return False
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error during database backup: {e}", exc_info=True)
         return False
     finally:
@@ -14041,7 +14068,7 @@ def get_distinct_media_types(self, include_deleted=False, include_trash=False) -
     except sqlite3.Error as e:
         logger.error(f"Error fetching distinct media types from DB {self.db_path_str}: {e}", exc_info=True)
         raise DatabaseError(f"Failed to fetch distinct media types: {e}") from e
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error fetching distinct media types from DB {self.db_path_str}: {e}",
                      exc_info=True)
         raise DatabaseError(f"An unexpected error occurred while fetching distinct media types: {e}") from e
@@ -14143,7 +14170,7 @@ def add_media_chunk(self, media_id: int, chunk_text: str, start_index: int, end_
     except (InputError, DatabaseError) as e:
         logger.error(f"Error adding chunk for media {media_id}: {e}", exc_info=True)
         raise e
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error adding chunk for media {media_id}: {e}", exc_info=True)
         raise DatabaseError(f"An unexpected error occurred while adding media chunk: {e}") from e
 
@@ -14242,7 +14269,9 @@ def add_media_chunks_in_batches(self, media_id: int, chunks_to_add: list[dict[st
                 log_counter("add_media_chunks_in_batches_batch_error",
                             labels={"media_id": media_id, "error_type": "DatabaseError"})
                 raise  # Re-raise
-            except Exception as e:  # Catch any other unexpected errors from self.batch_insert_chunks
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
+                # Catch any other unexpected errors from self.batch_insert_chunks
+                pass
                 logging.error(f"Media ID {media_id}: Unexpected error during an internal batch insertion: {e}",
                               exc_info=True)
                 log_counter("add_media_chunks_in_batches_batch_error",
@@ -14256,7 +14285,9 @@ def add_media_chunks_in_batches(self, media_id: int, chunks_to_add: list[dict[st
         log_counter("add_media_chunks_in_batches_success_overall", labels={"media_id": media_id})
         return successfully_processed_count
 
-    except Exception as e:  # Catches errors from the outer loop logic or re-raised errors from the inner try-except block
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
+        # Catches errors from the outer loop logic or re-raised errors from the inner try-except block
+        pass
         duration = time.time() - start_time
         # Log duration even if the overall process failed
         log_histogram("add_media_chunks_in_batches_duration", duration, labels={"media_id": media_id})
@@ -14397,7 +14428,7 @@ def batch_insert_chunks(self, media_id: int, chunks: list[dict]) -> int:
     except (InputError, DatabaseError, KeyError) as e:
         logger.error(f"Error batch inserting chunks for media {media_id}: {e}", exc_info=True)
         raise e
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error batch inserting chunks for media {media_id}: {e}", exc_info=True)
         raise DatabaseError(f"An unexpected error occurred during batch chunk insertion: {e}") from e
 
@@ -14551,7 +14582,9 @@ def process_chunks(self, media_id: int, chunks: list[dict[str, Any]], batch_size
                 # Re-raise to stop processing further batches, as this indicates a critical issue.
                 raise DatabaseError(
                     f"Integrity error during chunk batch insertion for media_id {media_id}: {e}") from e
-            except Exception as e:  # Catch other errors from DB operation or sync logging
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
+                # Catch other errors from DB operation or sync logging
+                pass
                 logging.error(f"Error processing chunk batch for media_id {media_id}: {e}", exc_info=True)
                 log_counter("process_chunks_batch_error",
                             labels={"media_id": media_id, "error_type": type(e).__name__})
@@ -14564,7 +14597,9 @@ def process_chunks(self, media_id: int, chunks: list[dict[str, Any]], batch_size
         log_counter("process_chunks_success", labels={"media_id": media_id})
         # No explicit return value, matching the original function's behavior.
 
-    except Exception as e:  # Catches errors from loop setup or re-raised errors from batch processing
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
+        # Catches errors from loop setup or re-raised errors from batch processing
+        pass
         duration = time.time() - start_time
         # Log duration even if the overall process failed or exited early
         log_histogram("process_chunks_duration", duration, labels={"media_id": media_id})
@@ -14648,7 +14683,7 @@ def get_document_version(db_instance: MediaDatabase, media_id: int, version_numb
     except (DatabaseError, sqlite3.Error) as e:
         logger.error(f"Error retrieving {log_msg} DB '{db_instance.db_path_str}': {e}", exc_info=True)
         raise DatabaseError(f"DB error retrieving version: {e}") from e
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error retrieving {log_msg} DB '{db_instance.db_path_str}': {e}", exc_info=True)
         raise DatabaseError(f"Unexpected error retrieving version: {e}") from e
 
@@ -14664,7 +14699,7 @@ def create_incremental_backup(db_path, backup_dir):
             create_incremental_backup as _inc,
         )
         return _inc(db_path, backup_dir, "media")
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"create_incremental_backup failed: {e}")
         return f"Failed to create incremental backup: {e}"
 
@@ -14677,7 +14712,7 @@ def create_automated_backup(db_path, backup_dir):
     try:
         from tldw_Server_API.app.core.DB_Management.DB_Backups import create_backup as _full
         return _full(db_path, backup_dir, "media")
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"create_automated_backup failed: {e}")
         return f"Failed to create backup: {e}"
 
@@ -14701,10 +14736,10 @@ def rotate_backups(backup_dir, max_backups=10):
             try:
                 f.unlink()
                 removed += 1
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 pass
         return f"Removed {removed} old backups."
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"rotate_backups failed: {e}")
         return f"Failed to rotate backups: {e}"
 
@@ -14740,7 +14775,7 @@ def check_database_integrity(db_path): # Standalone check is fine
         if conn:
             try:
                 conn.close()
-            except Exception as e:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Failed to close sqlite connection after integrity check: error={e}")
 
 
@@ -14869,7 +14904,7 @@ def empty_trash(db_instance: MediaDatabase, days_threshold: int) -> tuple[int, i
                     logger.warning(f"Conflict processing item ID {media_id} during trash emptying: {e}")
                 except DatabaseError as e:
                     logger.error(f"DB error processing item ID {media_id} during trash emptying: {e}")
-                except Exception as e:
+                except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Unexpected error processing item ID {media_id} during trash emptying: {e}", exc_info=True)
         cursor_remain = db_instance.execute_query(
             "SELECT COUNT(*) AS trash_remaining FROM Media WHERE is_trash = 1 AND deleted = 0"
@@ -14881,7 +14916,7 @@ def empty_trash(db_instance: MediaDatabase, days_threshold: int) -> tuple[int, i
     except (DatabaseError, sqlite3.Error) as e:
         logger.error(f"Error emptying trash DB '{db_instance.db_path_str}': {e}", exc_info=True)
         return 0, -1
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error emptying trash DB '{db_instance.db_path_str}': {e}", exc_info=True)
         return 0, -1
 
@@ -15049,7 +15084,7 @@ def import_obsidian_note_to_db(db_instance: MediaDatabase, note_data: dict[str, 
         author = fm.get('author')
         try:
             fm_str = yaml.dump(fm, default_flow_style=False)
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error dumping frontmatter: {e}")
     return db_instance.add_media_with_keywords(url=url_id, title=note_data['title'], media_type='obsidian_note', content=note_data['content'], keywords=kw, author=author, prompt="Obsidian Frontmatter" if fm_str else None, analysis_content=fm_str, ingestion_date=note_data.get('file_created_date'), overwrite=note_data.get('overwrite', False))
 
@@ -15365,7 +15400,7 @@ def soft_delete_transcript(db_instance: MediaDatabase, transcript_uuid: str) -> 
             raise e
         else:
             raise DatabaseError(f"Failed soft delete transcript: {e}") from e
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected soft delete Transcript error UUID {transcript_uuid}: {e}", exc_info=True)
         raise DatabaseError(f"Unexpected transcript soft delete error: {e}") from e
 
@@ -15474,7 +15509,7 @@ def upsert_transcript(
         if isinstance(e, (InputError, ConflictError, DatabaseError)):
             raise e
         raise DatabaseError(f"Failed upsert transcript: {e}") from e
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         raise DatabaseError(f"Unexpected upsert transcript error: {e}") from e
 
 # clear_specific_analysis/prompt call instance methods implicitly via update logic
@@ -15543,7 +15578,7 @@ def clear_specific_analysis(db_instance: MediaDatabase, version_uuid: str) -> bo
             raise e
         else:
             raise DatabaseError(f"Failed clear analysis: {e}") from e
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error clearing analysis UUID {version_uuid}: {e}", exc_info=True)
         raise DatabaseError(f"Unexpected clear analysis error: {e}") from e
 
@@ -15613,7 +15648,7 @@ def clear_specific_prompt(db_instance: MediaDatabase, version_uuid: str) -> bool
             raise e
         else:
             raise DatabaseError(f"Failed clear prompt: {e}") from e
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error clearing prompt UUID {version_uuid}: {e}", exc_info=True)
         raise DatabaseError(f"Unexpected clear prompt error: {e}") from e
 
@@ -15722,7 +15757,7 @@ def permanently_delete_item(db_instance: MediaDatabase, media_id: int) -> bool:
             # Manually clear/update FTS vectors as a belt-and-suspenders
             try:
                 db_instance._delete_fts_media(conn, media_id)
-            except Exception as _fts_exc:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS as _fts_exc:
                 logger.debug(f"FTS cleanup during permanent delete skipped/failed: {_fts_exc}")
 
         if int(deleted_count) > 0:
@@ -15733,7 +15768,7 @@ def permanently_delete_item(db_instance: MediaDatabase, media_id: int) -> bool:
                     invalidate_intra_doc_vectors,  # lazy import
                 )
                 invalidate_intra_doc_vectors(str(media_id))
-            except Exception:
+            except _MEDIA_NONCRITICAL_EXCEPTIONS:
                 pass
             return True
         logger.error(f"Permanent delete failed unexpectedly Media {media_id}.")
@@ -15741,7 +15776,7 @@ def permanently_delete_item(db_instance: MediaDatabase, media_id: int) -> bool:
     except sqlite3.Error as e:
         logger.error(f"Error permanently deleting Media {media_id}: {e}", exc_info=True)
         raise DatabaseError(f"Failed permanently delete item: {e}") from e
-    except Exception as e:
+    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         (logger.error(f"Unexpected error permanently deleting Media {media_id}: {e}", exc_info=True))
         raise DatabaseError(f"Unexpected permanent delete error: {e}") from e
 
@@ -15845,7 +15880,7 @@ def fetch_keywords_for_media_batch(media_ids: list[int], db_instance: MediaDatab
 # Runtime compatibility patch: ensure get_media_by_title exists on MediaDatabase
 try:
     _ = MediaDatabase.get_media_by_title
-except Exception:
+except _MEDIA_NONCRITICAL_EXCEPTIONS:
     _ = None
 if not _:
     def _get_media_by_title(self, title: str, include_deleted: bool = False, include_trash: bool = False) -> dict | None:
@@ -15873,7 +15908,7 @@ if not _:
         except sqlite3.Error as e:
             logger.error(f"Error fetching media by title '{title}': {e}", exc_info=True)
             raise DatabaseError(f"Failed to fetch media by title: {e}") from e
-        except Exception as e:
+        except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error fetching media by title '{title}': {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error fetching media by title: {e}") from e
 

@@ -38,12 +38,12 @@ export interface DocumentReferencesResponse {
  * external API data (citation counts, open access PDFs).
  *
  * @param mediaId - The media ID to fetch references for (null to disable query)
- * @param enrich - Whether to enrich with external API data (default: true)
+ * @param enrich - Whether to enrich with external API data (default: false)
  * @returns Query result with references, loading state, and error
  */
 export function useDocumentReferences(
   mediaId: number | null,
-  enrich: boolean = true
+  enrich: boolean = false
 ) {
   const isConnected = useConnectionStore((s) => s.state.isConnected)
   const mode = useConnectionStore((s) => s.state.mode)

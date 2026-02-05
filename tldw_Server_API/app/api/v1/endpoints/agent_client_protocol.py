@@ -10,7 +10,6 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPAgentInfo,
     ACPAgentListResponse,
-    ACPAgentType,
     ACPSessionCancelRequest,
     ACPSessionCloseRequest,
     ACPSessionNewRequest,
@@ -386,17 +385,16 @@ async def _handle_client_message(
         })
 
 
-def _get_available_agents() -> list[ACPAgentInfo]:
-    """Get list of available agents and their configuration status."""
+def _get_static_agents() -> tuple[list[ACPAgentInfo], str]:
+    """Fallback list of built-in agents when runner registry is unavailable."""
     import os
 
-    agents = []
+    agents: list[ACPAgentInfo] = []
 
-    # Claude Code (requires ANTHROPIC_API_KEY)
     anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
     agents.append(
         ACPAgentInfo(
-            type=ACPAgentType.CLAUDE_CODE,
+            type="claude_code",
             name="Claude Code",
             description="Anthropic's Claude Code agent for software development tasks",
             is_configured=bool(anthropic_key),
@@ -404,11 +402,10 @@ def _get_available_agents() -> list[ACPAgentInfo]:
         )
     )
 
-    # Codex (requires OPENAI_API_KEY)
     openai_key = os.getenv("OPENAI_API_KEY", "")
     agents.append(
         ACPAgentInfo(
-            type=ACPAgentType.CODEX,
+            type="codex",
             name="OpenAI Codex",
             description="OpenAI's Codex agent for code generation and analysis",
             is_configured=bool(openai_key),
@@ -416,10 +413,9 @@ def _get_available_agents() -> list[ACPAgentInfo]:
         )
     )
 
-    # OpenCode (open-source, runs locally - always available)
     agents.append(
         ACPAgentInfo(
-            type=ACPAgentType.OPENCODE,
+            type="opencode",
             name="OpenCode",
             description="Open-source coding agent (github.com/sst/opencode)",
             is_configured=True,
@@ -427,10 +423,9 @@ def _get_available_agents() -> list[ACPAgentInfo]:
         )
     )
 
-    # Custom (always available)
     agents.append(
         ACPAgentInfo(
-            type=ACPAgentType.CUSTOM,
+            type="custom",
             name="Custom Agent",
             description="Configure a custom agent with your own settings",
             is_configured=True,
@@ -438,7 +433,49 @@ def _get_available_agents() -> list[ACPAgentInfo]:
         )
     )
 
-    return agents
+    return agents, "claude_code"
+
+
+async def _get_available_agents() -> tuple[list[ACPAgentInfo], str]:
+    """Get list of available agents and their configuration status."""
+    try:
+        client = await get_runner_client()
+        raw = await client.list_agents()
+    except Exception:
+        return _get_static_agents()
+
+    agents_raw = raw.get("agents", []) if isinstance(raw, dict) else []
+    default_agent = raw.get("defaultAgentType") if isinstance(raw, dict) else None
+
+    agents: list[ACPAgentInfo] = []
+    for item in agents_raw:
+        if not isinstance(item, dict):
+            continue
+        agent_type = item.get("type")
+        name = item.get("name")
+        if not agent_type or not name:
+            continue
+        is_configured = item.get("isConfigured")
+        if is_configured is None:
+            is_configured = item.get("is_configured", False)
+        requires_api_key = item.get("requiresApiKey")
+        if requires_api_key is None:
+            requires_api_key = item.get("requires_api_key")
+        agents.append(
+            ACPAgentInfo(
+                type=str(agent_type),
+                name=str(name),
+                description=str(item.get("description") or ""),
+                is_configured=bool(is_configured),
+                requires_api_key=str(requires_api_key) if requires_api_key else None,
+            )
+        )
+
+    if not agents:
+        return _get_static_agents()
+
+    default_value = str(default_agent) if default_agent else agents[0].type
+    return agents, default_value
 
 
 @router.get("/agents", response_model=ACPAgentListResponse)
@@ -450,10 +487,10 @@ async def acp_list_agents(
 
     Returns information about which agents are available and properly configured.
     """
-    agents = _get_available_agents()
+    agents, default_agent = await _get_available_agents()
     return ACPAgentListResponse(
         agents=agents,
-        default_agent=ACPAgentType.CLAUDE_CODE,
+        default_agent=default_agent,
     )
 
 
@@ -497,14 +534,14 @@ async def acp_session_new(
             session_id = await client.create_session(
                 payload.cwd,
                 mcp_servers_dicts,
-                agent_type=payload.agent_type.value,
+                agent_type=payload.agent_type,
                 user_id=user.id,
             )
         except TypeError:
             session_id = await client.create_session(
                 payload.cwd,
                 mcp_servers_dicts,
-                agent_type=payload.agent_type.value,
+                agent_type=payload.agent_type,
             )
     except ACPResponseError as exc:
         logger.error("ACP session/new failed for user {}: {}", user.id, exc)
@@ -520,10 +557,18 @@ async def acp_session_new(
     except Exception:
         sandbox_meta = None
 
+    resolved_agent_type = payload.agent_type
+    if resolved_agent_type is None:
+        try:
+            _, default_agent = await _get_available_agents()
+            resolved_agent_type = default_agent
+        except Exception:
+            resolved_agent_type = "custom"
+
     return ACPSessionNewResponse(
         session_id=session_id,
         name=session_name,
-        agent_type=payload.agent_type,
+        agent_type=resolved_agent_type,
         agent_capabilities=client.agent_capabilities,
         sandbox_session_id=(sandbox_meta or {}).get("sandbox_session_id") if sandbox_meta else None,
         sandbox_run_id=(sandbox_meta or {}).get("sandbox_run_id") if sandbox_meta else None,

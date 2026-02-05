@@ -1,9 +1,11 @@
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, get_auth_principal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 
 pytestmark = pytest.mark.integration
@@ -22,6 +24,21 @@ def client_with_overrides(monkeypatch, auth_headers):
     async def _noop():
         return None
 
+    async def _fake_principal(request: Request) -> AuthPrincipal:  # noqa: ARG001
+        return AuthPrincipal(
+            kind="service",
+            user_id=None,
+            api_key_id=None,
+            subject="service:rag-batch-resume-test",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.logs", "media.read"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+
     # Disable RBAC enforcement to avoid DB access
     import tldw_Server_API.app.api.v1.API_Deps.auth_deps as auth_deps
     async def _no_rbac(*args, **kwargs):  # noqa: ARG001
@@ -29,6 +46,7 @@ def client_with_overrides(monkeypatch, auth_headers):
     monkeypatch.setattr(auth_deps, "enforce_rbac_rate_limit", _no_rbac)
 
     fastapi_app.dependency_overrides[get_request_user] = override_user
+    fastapi_app.dependency_overrides[get_auth_principal] = _fake_principal
     fastapi_app.dependency_overrides[check_rate_limit] = _noop
     # Avoid DB initialization by overriding DB deps to return None
     try:

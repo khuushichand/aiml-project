@@ -28,6 +28,7 @@ Usage:
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,6 +50,7 @@ from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
     SOURCE_FEATURE_VOICE_STUDIO,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 from tldw_Server_API.app.services.storage_quota_service import get_storage_service
 
 # MIME type mappings
@@ -83,11 +85,19 @@ def _compute_checksum(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _normalize_extension(file_format: str) -> str:
+    """Normalize a file extension to a safe, alphanumeric lowercase token."""
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "", str(file_format)).lower()
+    return cleaned or "bin"
+
+
 def _generate_filename(prefix: str, file_format: str) -> str:
-    """Generate a unique filename."""
+    """Generate a unique, sanitized filename."""
     file_uuid = uuid.uuid4().hex[:12]
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    return f"{prefix}_{timestamp}_{file_uuid}.{file_format}"
+    safe_prefix = sanitize_filename(prefix, max_total_length=80).replace(" ", "_")
+    safe_ext = _normalize_extension(file_format)
+    return f"{safe_prefix}_{timestamp}_{file_uuid}.{safe_ext}"
 
 
 def _get_date_folder() -> str:

@@ -13,9 +13,17 @@ https://github.com/glittercowboy/get-shit-done
 https://github.com/fr0gger/nova-framework
 https://developers.googleblog.com/a-guide-to-fine-tuning-functiongemma/
 
-
+https://mariozechner.at/posts/2025-11-30-pi-coding-agent/
+https://github.com/mitsuhiko/agent-stuff/blob/main/pi-extensions/todos.ts
+https://github.com/nicobailon/pi-mcp-adapter
+https://github.com/steipete/mcporter
+https://github.com/badlogic/pi-mono/tree/main/packages/agent
+https://github.com/badlogic/pi-skills
+https://github.com/nicobailon/pi-subagents
 https://www.mihaileric.com/The-Emperor-Has-No-Clothes/
 https://gist.github.com/wong2/e0f34aac66caf890a332f7b6f9e2ba8f#task-management
+https://github.com/backbay-labs/clawdstrike?utm_source=substack&utm_medium=email
+
 https://gist.github.com/wong2/e0f34aac66caf890a332f7b6f9e2ba8f#todoread
 https://ampcode.com/how-to-build-an-agent
 https://github.com/badlogic/lemmy/tree/main/apps/claude-trace

@@ -123,6 +123,10 @@ class ACPRunnerClient:
             raise ACPResponseError("Missing sessionId in response")
         return session_id
 
+    async def list_agents(self) -> dict[str, Any]:
+        response = await self._client.call("agent/list", {})
+        return response.result or {}
+
     async def prompt(self, session_id: str, prompt: list[dict[str, Any]]) -> dict[str, Any]:
         response = await self._client.call(
             "session/prompt",

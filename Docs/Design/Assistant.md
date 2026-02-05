@@ -6,6 +6,9 @@ https://huggingface.co/blog/wolfram/home-assistant
 https://huggingface.co/tencent/Hunyuan3D-1
 https://github.com/deepbeepmeep/Hunyuan3D-2GP
 https://github.com/deepbeepmeep/mmgp
+https://panzer-jack.github.io/easy-live2d/en/guide/getting-started.html
+https://github.com/Panzer-Jack/easy-live2d?tab=readme-ov-file
+
 https://github.com/fagenorn/handcrafted-persona-engine
 https://github.com/abdibrokhim/paper-ai-voice-assistant
 https://arxiv.org/abs/2504.02197

@@ -18,13 +18,26 @@ from .tenant import hash_entity
 try:
     # Metrics are optional during early startup
     from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
-except Exception:  # pragma: no cover - metrics optional
+except _RG_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - metrics optional
     get_metrics_registry = None  # type: ignore
 
 from tldw_Server_API.app.core.config import rg_redis_fail_mode
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_async_redis_client
 
 TimeSource = Callable[[], float]
+
+_RG_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 class _FallbackToMemory(Exception):
@@ -52,7 +65,7 @@ class _RedisKeys:
         # Use stable HMAC-based hash to avoid per-process randomization
         try:
             ent_hash = hash_entity(entity)
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             ent_hash = "anon"
         return f"{self.ns}:backoff:{policy_id}:{category}:{ent_hash}"
 
@@ -116,13 +129,13 @@ class RedisResourceGovernor(ResourceGovernor):
         try:
             from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry as _get
             self._reg_ref = _get()
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             self._reg_ref = None
 
         # Stub delegate (memory governor) for in-memory client path
         try:
             self._stub_delegate = MemoryResourceGovernor(policy_loader=policy_loader, time_source=time_source, backend_label="redis-stub")
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             self._stub_delegate = None
 
         # Gate noisy debug logs behind RG_DEBUG=1 for this module
@@ -130,7 +143,7 @@ class RedisResourceGovernor(ResourceGovernor):
             _rg_debug = str(os.getenv("RG_DEBUG") or "").strip().lower() in ("1", "true", "yes")
             if not _rg_debug:
                 logger.disable(__name__)
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             pass
 
     def _reg(self):
@@ -146,7 +159,7 @@ class RedisResourceGovernor(ResourceGovernor):
             from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry as _get
             self._reg_ref = _get()
             return self._reg_ref
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             return None
 
     def _accept_window_enabled(self) -> bool:
@@ -160,7 +173,7 @@ class RedisResourceGovernor(ResourceGovernor):
             # Explicit opt-out via env only
             if str(os.getenv("RG_TEST_DISABLE_ACCEPT_WINDOW") or "").strip().lower() in ("1", "true", "yes"):
                 return False
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             pass
         return True
 
@@ -171,7 +184,7 @@ class RedisResourceGovernor(ResourceGovernor):
             if val is None:
                 return False
             return str(val).strip().lower() in ("1", "true", "yes")
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             return False
 
     def _use_stub_rate(self) -> bool:
@@ -179,7 +192,7 @@ class RedisResourceGovernor(ResourceGovernor):
         requests/tokens behavior determinism in tests (stub-only mode)."""
         try:
             return bool(self._force_stub_rate() and self._stub_delegate is not None)
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             return False
 
     async def _maybe_test_purge_leases(self, *, policy_id: str, now: float) -> None:
@@ -199,7 +212,7 @@ class RedisResourceGovernor(ResourceGovernor):
             pattern = f"{self._keys.ns}:lease:{policy_id}:*"
             try:
                 _cursor, keys = await client.scan(0, match=pattern, count=1000)
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 keys = []
             # If FakeTime is near zero, aggressively drop all lease keys for this policy
             # to ensure a clean slate across tests (avoids carryover non-expired leases).
@@ -208,19 +221,19 @@ class RedisResourceGovernor(ResourceGovernor):
                     for k in keys or []:
                         try:
                             await client.delete(k)
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             pass
                     # Mirror into stub map
                     try:
                         to_drop_all = [k for k in list(self._stub_leases.keys()) if k.startswith(f"{self._keys.ns}:lease:{policy_id}:")]
                         for k in to_drop_all:
                             self._stub_leases.pop(k, None)
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         pass
                     # Mark as cleared once for this policy to avoid wiping active leases repeatedly
                     self._test_leases_policy_cleared.add(policy_id)
                     return
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 pass
             # Mirror deletions: drop any stub lease buckets for this policy that no longer exist in client
             try:
@@ -228,14 +241,14 @@ class RedisResourceGovernor(ResourceGovernor):
                 to_drop = [k for k in list(self._stub_leases.keys()) if k.startswith(f"{self._keys.ns}:lease:{policy_id}:") and k not in keys_set]
                 for k in to_drop:
                     self._stub_leases.pop(k, None)
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 pass
             # Remove only expired members from each lease key, do not drop entire keys
             for k in keys or []:
                 try:
                     # Purge expired in real Redis first
                     await client.zremrangebyscore(k, float("-inf"), float(now))
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     # best-effort only
                     pass
                 # Mirror the purge into stub map for the same key
@@ -248,9 +261,9 @@ class RedisResourceGovernor(ResourceGovernor):
                         if not bucket:
                             # Clean empty bucket to reduce memory churn in tests
                             self._stub_leases.pop(str(k), None)
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     pass
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             # never fail caller
             return
 
@@ -265,13 +278,13 @@ class RedisResourceGovernor(ResourceGovernor):
             for mem in expired:
                 try:
                     m.pop(mem, None)
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     pass
             if not m:
                 self._stub_leases.pop(key, None)
                 return 0
             return len(m)
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             return 0
 
     async def _bootstrap_accept_window_from_zset(self, *, policy_id: str, entity: str, limit: int, now: float) -> None:
@@ -309,7 +322,7 @@ class RedisResourceGovernor(ResourceGovernor):
                     if oscore is not None:
                         # Bound start to not be in the future
                         start = min(now, float(oscore))
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 start = now
             self._requests_accept_window[(self._keys.ns, policy_id, entity)] = (float(start), int(limit), int(cnt))
             try:
@@ -317,9 +330,9 @@ class RedisResourceGovernor(ResourceGovernor):
                     "RG accept-window bootstrap: policy_id={pid} entity={ent} start={st} cnt={cnt} limit={lim}",
                     pid=policy_id, ent=entity, st=start, cnt=cnt, lim=limit,
                 )
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 pass
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             # non-fatal
             return
 
@@ -335,7 +348,7 @@ class RedisResourceGovernor(ResourceGovernor):
         try:
             pol = self._policy_loader.get_policy(policy_id)
             return pol or {}
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             return {}
 
     def _effective_fail_mode(self, policy: dict[str, Any], category: str | None = None) -> str:
@@ -349,7 +362,7 @@ class RedisResourceGovernor(ResourceGovernor):
             fm_pol = str(policy.get("fail_mode") or "").strip().lower()
             if fm_pol in ("fail_closed", "fail_open", "fallback_memory"):
                 return fm_pol
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             pass
         return self._fail_mode
 
@@ -358,7 +371,7 @@ class RedisResourceGovernor(ResourceGovernor):
             for category in categories:
                 if self._effective_fail_mode(policy, category) == "fallback_memory":
                     return True
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             return False
         return False
 
@@ -394,7 +407,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         await client.delete(key)
                         self._test_cleared_keys.add(key)
                         return 0
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 # best-effort only for this test cleanup branch
                 pass
         return cnt
@@ -403,7 +416,7 @@ class RedisResourceGovernor(ResourceGovernor):
         client = await self._client_get()
         try:
             await client.zadd(key, dict.fromkeys(members, now))
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             pass
 
     async def _zrem_members(self, *, key: str, members: list[str]) -> None:
@@ -412,7 +425,7 @@ class RedisResourceGovernor(ResourceGovernor):
             try:
                 # best-effort removal
                 await client.zrem(key, m)
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 pass
 
     async def _allow_requests_sliding_check_only(self, *, key: str, limit: int, window: int, units: int, now: float, fail_mode: str) -> tuple[bool, int, int]:
@@ -432,7 +445,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         # Only smooth when the step is strictly less than the window (limit > 1)
                         if oscore is not None and (step < window) and (now >= float(oscore) + float(window - step)):
                             return True, 0, count
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 pass
             # compute retry_after based on oldest item expiry within window
             # best-effort: approximate to full window if primitives not available
@@ -463,13 +476,13 @@ class RedisResourceGovernor(ResourceGovernor):
                                 ra = max(0, int((oscore + window) - now)) or window
                         else:
                             ra = window
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         ra = window
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 # Fallback to conservative window
                 ra = window
             return False, int(ra), count
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             if fail_mode == "fallback_memory":
                 raise _FallbackToMemory
             if fail_mode == "fail_open":
@@ -512,7 +525,7 @@ class RedisResourceGovernor(ResourceGovernor):
             sha = await client.script_load(script)
             self._tokens_lua_sha = sha
             return sha
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             return None
 
     async def _ensure_multi_reserve_lua(self) -> str | None:
@@ -585,7 +598,7 @@ class RedisResourceGovernor(ResourceGovernor):
             sha = await client.script_load(script)
             self._multi_lua_sha = sha
             return sha
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             return None
 
     async def _is_real_redis(self) -> bool:
@@ -604,9 +617,9 @@ class RedisResourceGovernor(ResourceGovernor):
                 probe_key = f"{self._keys.ns}:__rg_probe__"
                 await client.zcard(probe_key)
                 return True
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 return False
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             return False
 
     async def _is_stub_client(self) -> bool:
@@ -644,7 +657,7 @@ class RedisResourceGovernor(ResourceGovernor):
             try:
                 arr.pop()
                 removed += 1
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 break
         if not arr:
             self._stub_windows.pop(key, None)
@@ -672,7 +685,7 @@ class RedisResourceGovernor(ResourceGovernor):
                     else:
                         ok, ra = False, window
                     self._last_used_tokens_lua = False
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 if fail_mode == "fail_open" or fail_mode == "fallback_memory":
                     ok, ra = True, 0
                 else:
@@ -707,9 +720,9 @@ class RedisResourceGovernor(ResourceGovernor):
                         cls=getattr(client, "__class__", type(client)).__name__,
                         is_stub=is_stub,
                     )
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     pass
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 is_stub = True
                 client = None
 
@@ -761,7 +774,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                                     now=now,
                                                     step=step,
                                                 )
-                                            except Exception:
+                                            except _RG_NONCRITICAL_EXCEPTIONS:
                                                 pass
 
                                             if step < window and now >= float(start_aw) + float(window - step):
@@ -771,7 +784,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                                 retry_after = 0
                                                 smoothing_applied = True
                                                 smoothing_any = True
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             pass
                     # Requests deny floor based on prior denial
                     key_e = (self._keys.ns, policy_id, req.entity)
@@ -809,7 +822,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                     ok=ok,
                                     ra=ra,
                                 )
-                            except Exception:
+                            except _RG_NONCRITICAL_EXCEPTIONS:
                                 pass
                             allowed = allowed and ok
                             retry_after = max(retry_after, ra)
@@ -820,14 +833,14 @@ class RedisResourceGovernor(ResourceGovernor):
                         try:
                             if now >= float(self._requests_deny_until.get(key_e, 0.0) or 0.0):
                                 del self._requests_deny_until[key_e]
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             pass
                     try:
                         logger.debug(
                             "RG requests decision: ns={ns} pid={pid} ent={ent} allowed={al} ra={ra} limit={lim}",
                             ns=self._keys.ns, pid=policy_id, ent=req.entity, al=allowed, ra=retry_after, lim=limit,
                         )
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         pass
                     # Persist/clear backoff window based on decision
                     if not allowed and retry_after > 0:
@@ -836,17 +849,17 @@ class RedisResourceGovernor(ResourceGovernor):
                             # Set Redis TTL for cross-process stability
                             client = await self._client_get()
                             await client.set(self._keys.backoff(policy_id, category, req.entity), "1", ex=int(retry_after))
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             pass
                     elif allowed and key_b in self._stub_backoff_until:
                         try:
                             del self._stub_backoff_until[key_b]
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             pass
                     # Optional durable daily caps (v1.1) backed by ResourceDailyLedger.
                     try:
                         daily_cap = int((pol.get(category) or {}).get("daily_cap") or 0)
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         daily_cap = 0
                     daily_details: dict[str, Any] = {}
                     if daily_cap > 0:
@@ -892,7 +905,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         if not allowed and limit > 0 and int(units or 0) > int(limit) and counts and max(counts) == 0:
                             allowed = True
                             retry_after = 0
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         pass
                     # Robust guard: if still denied for an over-limit first batch, re-check
                     # both scopes directly. If both effective windows are empty (no members
@@ -913,12 +926,12 @@ class RedisResourceGovernor(ResourceGovernor):
                                 # Best-effort purge of expired members for correctness
                                 try:
                                     await client.zremrangebyscore(key, float("-inf"), float(now - window))
-                                except Exception:
+                                except _RG_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 # If ZSET is empty after purge, treat as empty
                                 try:
                                     card = int(await client.zcard(key))
-                                except Exception:
+                                except _RG_NONCRITICAL_EXCEPTIONS:
                                     card = 0
                                 if card <= 0:
                                     continue
@@ -930,7 +943,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                     if float(now) < 1.0:
                                         # Consider this scope effectively empty in test-mode
                                         continue
-                                except Exception:
+                                except _RG_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 # For FakeTime near zero, treat any oldest-score strictly
                                 # greater than 'now' as cross-run contamination and thus empty
@@ -942,7 +955,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                     if oscore is not None and (float(now) < 1.0) and (float(oscore) > float(now)):
                                         # Consider this scope effectively empty for initial allowance
                                         continue
-                                except Exception:
+                                except _RG_NONCRITICAL_EXCEPTIONS:
                                     # If we cannot inspect the oldest score, be conservative
                                     effective_empty_all = False
                                     break
@@ -952,14 +965,14 @@ class RedisResourceGovernor(ResourceGovernor):
                             if effective_empty_all:
                                 allowed = True
                                 retry_after = 0
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             # Non-fatal: keep original decision
                             pass
                     # Optional durable daily caps (v1.1) for tokens via ResourceDailyLedger.
                     daily_details: dict[str, Any] = {}
                     try:
                         daily_cap = int((pol.get("tokens") or {}).get("daily_cap") or 0)
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         daily_cap = 0
                     if daily_cap > 0:
                         daily_allowed, daily_ra, daily_details = await check_daily_cap(
@@ -1001,7 +1014,7 @@ class RedisResourceGovernor(ResourceGovernor):
                             # Purge expired and count active members in real Redis
                             await client.zremrangebyscore(key, float("-inf"), now)
                             active_real = int(await client.zcard(key))
-                        except Exception as exc:
+                        except _RG_NONCRITICAL_EXCEPTIONS as exc:
                             if cat_fail == "fallback_memory":
                                 raise _FallbackToMemory from exc
                             active_real = 0
@@ -1018,7 +1031,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                     float(active),
                                     _labels(category=category, scope=sc, policy_id=policy_id),
                                 )
-                            except Exception:
+                            except _RG_NONCRITICAL_EXCEPTIONS:
                                 pass
 
                     effective_remaining = min(remainings) if remainings else 0
@@ -1037,7 +1050,7 @@ class RedisResourceGovernor(ResourceGovernor):
                     details_other: dict[str, Any] = {"allowed": True, "retry_after": 0}
                     try:
                         daily_cap = int((pol.get(category) or {}).get("daily_cap") or 0)
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         daily_cap = 0
                     if daily_cap > 0:
                         daily_allowed, daily_ra, daily_details = await check_daily_cap(
@@ -1052,7 +1065,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         retry_after = max(int(retry_after or 0), int(daily_ra or 0))
                         try:
                             details_other.update({"limit": int(daily_cap), **(daily_details or {})})
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             details_other["limit"] = int(daily_cap)
                     details_other["allowed"] = allowed
                     details_other["retry_after"] = retry_after
@@ -1098,9 +1111,9 @@ class RedisResourceGovernor(ResourceGovernor):
                                         1,
                                         {"category": category, "scope": entity_scope, "reason": "insufficient_capacity", "policy_id": policy_id, "entity": ent_h},
                                     )
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             pass
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         pass
 
             # Record decision metric (summary per-category already emitted via caller ideally)
@@ -1115,7 +1128,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 try:
                     if isinstance(dec.details, dict):
                         dec.details["fallback_memory"] = True
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     pass
                 return dec
             return RGDecision(allowed=True, retry_after=None, details={"policy_id": policy_id, "categories": {}})
@@ -1128,7 +1141,7 @@ class RedisResourceGovernor(ResourceGovernor):
         try:
             now0 = self._time()
             await self._maybe_test_purge_windows_once(policy_id=policy_id, categories=req.categories, now=now0)
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Bootstrap acceptance-window from existing ZSET counts before first admit
@@ -1139,7 +1152,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 limit_bs = int((pol_bs.get("requests") or {}).get("rpm") or 0)
                 if limit_bs > 0:
                     await self._bootstrap_accept_window_from_zset(policy_id=policy_id_bs, entity=req.entity, limit=limit_bs, now=self._time())
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Early deny guard: if a requests-category deny-until floor is set for this
@@ -1155,7 +1168,7 @@ class RedisResourceGovernor(ResourceGovernor):
             try:
                 pol_e = self._get_policy(policy_id_early)
                 limit_e = int((pol_e.get("requests") or {}).get("rpm") or 0)
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 limit_e = 0
             if limit_e > 0 and "requests" in req.categories:
                 aw = self._requests_accept_window.get((self._keys.ns, policy_id_early, req.entity))
@@ -1163,7 +1176,7 @@ class RedisResourceGovernor(ResourceGovernor):
                     start_aw, lim_aw, cnt_aw = aw
                     try:
                         start_aw_f = float(start_aw)
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         start_aw_f = now_early
                     # If still inside window and cnt>=limit, enforce deny — unless
                     # we are within the final step of the window (stub steady-rate smoothing).
@@ -1206,13 +1219,13 @@ class RedisResourceGovernor(ResourceGovernor):
                                             policy_id=policy_id_early,
                                         ),
                                     )
-                                except Exception:
+                                except _RG_NONCRITICAL_EXCEPTIONS:
                                     pass
                             # Persist idempotency record if requested
                             if op_id:
                                 try:
                                     await client.set(self._keys.op(op_id), json.dumps({"type": "reserve", "decision": decision_e.__dict__, "handle_id": None}), ex=86400)
-                                except Exception:
+                                except _RG_NONCRITICAL_EXCEPTIONS:
                                     pass
                             return decision_e, None
             try:
@@ -1224,7 +1237,7 @@ class RedisResourceGovernor(ResourceGovernor):
                     du=deny_until,
                     bu=backoff_until,
                 )
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 pass
             floor_until = max(deny_until, backoff_until)
             # Stub-rate smoothing: if we're within the final step of the window, allow
@@ -1239,7 +1252,7 @@ class RedisResourceGovernor(ResourceGovernor):
                             # Only smooth when step < window (limit > 1)
                             if (step_aw < 60) and (now_early >= float(start_aw) + float(60 - step_aw)):
                                 smoothing_ok = True
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 smoothing_ok = False
             # Only enforce early deny floor for requests category
             if ("requests" in req.categories) and (now_early < floor_until) and not smoothing_ok:
@@ -1251,7 +1264,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         now=now_early,
                         du=deny_until,
                     )
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     pass
                 # Build a denial decision reflecting remaining backoff
                 pol_e = self._get_policy(policy_id_early)
@@ -1293,16 +1306,16 @@ class RedisResourceGovernor(ResourceGovernor):
                                     1,
                                     _labels(category=cat_name, scope=entity_scope_e, reason="insufficient_capacity", policy_id=policy_id_early),
                                 )
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         pass
                 # Persist idempotency record if requested
                 if op_id:
                     try:
                         await client.set(self._keys.op(op_id), json.dumps({"type": "reserve", "decision": decision_e.__dict__, "handle_id": None}), ex=86400)
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         pass
                 return decision_e, None
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             # best-effort guard; fall through to normal path
             pass
         if op_id:
@@ -1311,14 +1324,14 @@ class RedisResourceGovernor(ResourceGovernor):
                 if prev:
                     rec = json.loads(prev)
                     return RGDecision(**rec["decision"]), rec.get("handle_id")
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Best-effort pre-reserve purge of expired leases for this policy to make
         # unique ns/policy deletions effective in tests.
         try:
             await self._maybe_test_purge_leases(policy_id=policy_id, now=self._time())
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             pass
 
         dec = await self.check(req)
@@ -1335,7 +1348,7 @@ class RedisResourceGovernor(ResourceGovernor):
             if has_requests_denial and ("requests" in req.categories):
                 try:
                     logger.debug("RG reserve denied at pre-add check: decision={d}", d=dec.__dict__)
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     pass
                 # Emit denial metrics redundantly to ensure visibility for tests
                 reg = self._reg()
@@ -1349,7 +1362,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                     1,
                                     _labels(category=cat_name, scope=entity_scope_b, reason="insufficient_capacity", policy_id=dec.details.get("policy_id") or policy_id),
                                 )
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         pass
                 # Establish backoff for denied categories
                 try:
@@ -1370,7 +1383,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                 try:
                                     pol_b = self._get_policy(policy_id_b)
                                     win = int((pol_b.get("requests") or {}).get("window") or 60)
-                                except Exception:
+                                except _RG_NONCRITICAL_EXCEPTIONS:
                                     win = 60
                                 floor_s = int(ra_b) if int(ra_b) >= 2 else int(win)
                                 self._requests_deny_until[(self._keys.ns, policy_id_b, req.entity)] = now_b + float(floor_s)
@@ -1383,22 +1396,22 @@ class RedisResourceGovernor(ResourceGovernor):
                                         floor=floor_s,
                                         du=self._requests_deny_until.get((self._keys.ns, policy_id_b, req.entity)),
                                     )
-                                except Exception:
+                                except _RG_NONCRITICAL_EXCEPTIONS:
                                     pass
                             # Redis TTL backoff (best-effort)
                             try:
                                 client_b = await self._client_get()
                                 await client_b.set(self._keys.backoff(policy_id_b, cat_name, req.entity), "1", ex=int(ra_b))
-                            except Exception:
+                            except _RG_NONCRITICAL_EXCEPTIONS:
                                 pass
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             continue
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     pass
             if op_id:
                 try:
                     await client.set(self._keys.op(op_id), json.dumps({"type": "reserve", "decision": dec.__dict__, "handle_id": None}), ex=86400)
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     pass
             return dec, None
 
@@ -1419,10 +1432,10 @@ class RedisResourceGovernor(ResourceGovernor):
                             json.dumps({"type": "reserve", "decision": dec.__dict__, "handle_id": None}),
                             ex=86400,
                         )
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         pass
                 return dec, None
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             # Never fail reserve due to diagnostics around concurrency categories.
             pass
 
@@ -1445,7 +1458,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         },
                     )
                     await client.expire(self._keys.handle(handle_id), 86400)
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     pass
                 self._local_handles[handle_id] = {
                     "entity": req.entity,
@@ -1456,10 +1469,10 @@ class RedisResourceGovernor(ResourceGovernor):
                 if op_id:
                     try:
                         await client.set(self._keys.op(op_id), json.dumps({"type": "reserve", "decision": dec.__dict__, "handle_id": handle_id}), ex=86400)
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         pass
                 return dec, handle_id
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             pass
         # Pre-add acceptance-window tracking removed: we track only after successful add
         # to avoid off-by-one denials under steady-rate scenarios.
@@ -1521,10 +1534,10 @@ class RedisResourceGovernor(ResourceGovernor):
                             try:
                                 if isinstance(res, (list, tuple)) and len(res) >= 2:
                                     denial_retry_after = max(denial_retry_after, int(res[1]) or 0)
-                            except Exception:
+                            except _RG_NONCRITICAL_EXCEPTIONS:
                                 pass
                             add_failed = True
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             # fall through to Python fallback
             used_lua = False
             self._last_used_multi_lua = False
@@ -1578,7 +1591,7 @@ class RedisResourceGovernor(ResourceGovernor):
                     if op_id:
                         try:
                             await client.set(self._keys.op(op_id), json.dumps({"type": "reserve", "decision": denial_decision.__dict__, "handle_id": None}), ex=86400)
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             pass
                     return denial_decision, None
                 # Perform additions now using Redis ZSETs on the stub client
@@ -1607,7 +1620,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                     ev=ev,
                                     units=units,
                                 )
-                            except Exception:
+                            except _RG_NONCRITICAL_EXCEPTIONS:
                                 pass
                             added_members[category][(sc, ev)] = list(members)
             else:
@@ -1639,7 +1652,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                     member = f"{handle_id}:{sc}:{ev}:{i}:{uuid.uuid4().hex}"
                                     await self._add_members(key=key, members=[member], now=now)
                                     added_for_scope.append(member)
-                                except Exception:
+                                except _RG_NONCRITICAL_EXCEPTIONS:
                                     if cat_fail == "fail_open":
                                         continue
                                     add_failed = True
@@ -1666,7 +1679,7 @@ class RedisResourceGovernor(ResourceGovernor):
                     floor_df = int(ra_df) if int(ra_df) >= 2 else 60
                     self._requests_deny_until[(self._keys.ns, policy_id_df, req.entity)] = now_df + float(floor_df)
                     self._stub_backoff_until[(self._keys.ns, policy_id_df, req.entity, "requests")] = now_df + float(ra_df)
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 pass
             for category, scopes in added_members.items():
                 for (sc, ev), mems in scopes.items():
@@ -1675,7 +1688,7 @@ class RedisResourceGovernor(ResourceGovernor):
             # Build a denial decision reflecting max retry_after across attempted keys
             try:
                 base_cats = dict((dec.details or {}).get("categories") or {})
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 base_cats = {}
             per_category: dict[str, Any] = {}
             # Populate categories from request, overriding requests/tokens to denied
@@ -1717,12 +1730,12 @@ class RedisResourceGovernor(ResourceGovernor):
                                 1,
                                 _labels(category=cat_name, scope=ent_scope_df, reason="insufficient_capacity", policy_id=policy_id),
                             )
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     pass
             if op_id:
                 try:
                     await client.set(self._keys.op(op_id), json.dumps({"type": "reserve", "decision": denial_decision.__dict__, "handle_id": None}), ex=86400)
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     pass
             return denial_decision, None
 
@@ -1750,7 +1763,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         client = await self._client_get()
                         await client.zremrangebyscore(key, float("-inf"), now)
                         await client.zadd(key, {mem: float(expires_at) for mem in members})
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         pass
                     # Metrics: update concurrency gauge based on stub size after purge
                     reg = self._reg()
@@ -1762,7 +1775,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                 float(active),
                                 _labels(category=category, scope=sc, policy_id=policy_id),
                             )
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             pass
 
         for cat, scopes in concurrency_members.items():
@@ -1788,7 +1801,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 },
             )
             await client.expire(self._keys.handle(handle_id), 86400)
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             pass
         # Best-effort: ensure a success-path decision metric per category, in case
         # upstream callers rely on reserve() to emit decisions (in addition to check()).
@@ -1808,7 +1821,7 @@ class RedisResourceGovernor(ResourceGovernor):
                             policy_id=policy_id,
                         ),
                     )
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 pass
         # Harden burst behavior tracking (gated for tests)
         try:
@@ -1830,7 +1843,7 @@ class RedisResourceGovernor(ResourceGovernor):
                             cnt=cnt,
                             lim=lim,
                         )
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         pass
                     if cnt >= limit_req:
                         floor_until = float(start) + 60.0
@@ -1844,9 +1857,9 @@ class RedisResourceGovernor(ResourceGovernor):
                                 cnt=cnt,
                                 fu=floor_until,
                             )
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             pass
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             pass
         # Also keep local map for best-effort release in tests / single-process
         self._local_handles[handle_id] = {
@@ -1859,7 +1872,7 @@ class RedisResourceGovernor(ResourceGovernor):
         if op_id:
             try:
                 await client.set(self._keys.op(op_id), json.dumps({"type": "reserve", "decision": dec.__dict__, "handle_id": handle_id}), ex=86400)
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 pass
         return dec, handle_id
 
@@ -1895,7 +1908,7 @@ class RedisResourceGovernor(ResourceGovernor):
             members_raw = data.get("members")
             try:
                 members = json.loads(members_raw or "{}") if isinstance(members_raw, str) else (members_raw or {})
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 members = {}
             # Release concurrency leases for this handle
             now = self._time()
@@ -1905,7 +1918,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 try:
                     if not (pol.get(category) or {}):
                         continue
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     continue
 
                 for sc, ev in (("global", "*"), (entity_scope, entity_value)):
@@ -1916,7 +1929,7 @@ class RedisResourceGovernor(ResourceGovernor):
                     members_list: list[str] = []
                     try:
                         members_list = list((members.get(category) or {}).get(scope_key) or [])
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         members_list = []
                     if not members_list:
                         members_list = [f"{handle_id}:{sc}:{ev}"]
@@ -1926,12 +1939,12 @@ class RedisResourceGovernor(ResourceGovernor):
                         if bucket is not None:
                             for mem in members_list:
                                 bucket.pop(mem, None)
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         for mem in members_list:
                             await client.zrem(key, mem)
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         pass
                     reg = self._reg()
                     if reg:
@@ -1942,7 +1955,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                 float(active),
                                 _labels(category=category, scope=sc, policy_id=policy_id),
                             )
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             pass
             # Handle refunds for requests/tokens based on actuals
             try:
@@ -1973,16 +1986,16 @@ class RedisResourceGovernor(ResourceGovernor):
                                         1,
                                         {"category": category, "scope": entity_scope, "reason": "commit_diff", "policy_id": policy_id, "entity": ent_h},
                                     )
-                                except Exception:
+                                except _RG_NONCRITICAL_EXCEPTIONS:
                                     pass
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             pass
                     # Remove up to refund_units members per scope (LIFO of what we added)
                     scope_map = members.get(category) or {}
                     for key_scope, mem_list in scope_map.items():
                         try:
                             sc, ev = key_scope.split(":", 1)
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             continue
                         key = self._keys.win(policy_id, category, sc, ev)
                         # Pop last N members to reduce usage
@@ -2001,7 +2014,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                 all_members = []
                                 try:
                                     all_members = await client.zrange(key, 0, -1)
-                                except Exception:
+                                except _RG_NONCRITICAL_EXCEPTIONS:
                                     all_members = []
                                 prefix = f"{handle_id}:{sc}:{ev}:"
                                 candidates = [m for m in (all_members or []) if isinstance(m, str) and m.startswith(prefix)]
@@ -2009,18 +2022,18 @@ class RedisResourceGovernor(ResourceGovernor):
                                 extra = candidates[-remaining:]
                                 if extra:
                                     await self._zrem_members(key=key, members=list(extra))
-                            except Exception:
+                            except _RG_NONCRITICAL_EXCEPTIONS:
                                 pass
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Delete handle record
             try:
                 await client.delete(hkey)
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 pass
             self._local_handles.pop(handle_id, None)
-        except Exception as e:
+        except _RG_NONCRITICAL_EXCEPTIONS as e:
             if self._fail_mode == "fail_open":
                 return
             logger.debug(f"commit failed: {e}")
@@ -2029,7 +2042,7 @@ class RedisResourceGovernor(ResourceGovernor):
         if op_id:
             try:
                 await client.set(self._keys.op(op_id), json.dumps({"type": "commit", "handle_id": handle_id}), ex=86400)
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 pass
 
     async def refund(self, handle_id: str, deltas: dict[str, int] | None = None, op_id: str | None = None) -> None:
@@ -2053,7 +2066,7 @@ class RedisResourceGovernor(ResourceGovernor):
             members_raw = data.get("members")
             try:
                 members = json.loads(members_raw or "{}") if isinstance(members_raw, str) else (members_raw or {})
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 members = {}
             deltas = deltas or {}
             for category, delta in deltas.items():
@@ -2067,7 +2080,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 for key_scope, mem_list in scope_map.items():
                     try:
                         sc, ev = key_scope.split(":", 1)
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         continue
                     key = self._keys.win(policy_id, category, sc, ev)
                     to_remove = []
@@ -2083,14 +2096,14 @@ class RedisResourceGovernor(ResourceGovernor):
                             all_members = []
                             try:
                                 all_members = await client.zrange(key, 0, -1)
-                            except Exception:
+                            except _RG_NONCRITICAL_EXCEPTIONS:
                                 all_members = []
                             prefix = f"{handle_id}:{sc}:{ev}:"
                             candidates = [m for m in (all_members or []) if isinstance(m, str) and m.startswith(prefix)]
                             extra = candidates[-remaining:]
                             if extra:
                                 await self._zrem_members(key=key, members=list(extra))
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             pass
             # Emit metrics for explicit refund requests (low-cardinality)
             reg = self._reg()
@@ -2114,14 +2127,14 @@ class RedisResourceGovernor(ResourceGovernor):
                                         1,
                                         {"category": category, "scope": "entity", "reason": "explicit_refund", "policy_id": policy_id, "entity": ent_h},
                                     )
-                                except Exception:
+                                except _RG_NONCRITICAL_EXCEPTIONS:
                                     pass
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     pass
 
             if op_id:
                 await client.set(self._keys.op(op_id), json.dumps({"type": "refund", "handle_id": handle_id}), ex=3600)
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             pass
 
     async def renew(self, handle_id: str, ttl_s: int) -> None:
@@ -2147,7 +2160,7 @@ class RedisResourceGovernor(ResourceGovernor):
             members_raw = data.get("members")
             try:
                 members = json.loads(members_raw or "{}") if isinstance(members_raw, str) else (members_raw or {})
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 members = {}
             now = self._time()
             for category in cats.keys():
@@ -2160,14 +2173,14 @@ class RedisResourceGovernor(ResourceGovernor):
                         members_list: list[str] = []
                         try:
                             members_list = list((members.get(category) or {}).get(scope_key) or [])
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             members_list = []
                         if not members_list:
                             members_list = [f"{handle_id}:{sc}:{ev}"]
                         # Update real Redis ZSET (best-effort)
                         try:
                             await client.zadd(key, {mem: now + max(1, int(ttl_s)) for mem in members_list})
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             pass
                         # Update stub TTL and gauge
                         try:
@@ -2182,9 +2195,9 @@ class RedisResourceGovernor(ResourceGovernor):
                                     float(active),
                                     _labels(category=category, scope=sc, policy_id=policy_id),
                                 )
-                        except Exception:
+                        except _RG_NONCRITICAL_EXCEPTIONS:
                             pass
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             pass
 
     async def release(self, handle_id: str) -> None:
@@ -2238,7 +2251,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                 resets.append(window)
                         else:
                             resets.append(window)
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         resets.append(window)
                 else:
                     resets.append(0)
@@ -2258,7 +2271,7 @@ class RedisResourceGovernor(ResourceGovernor):
     async def capabilities(self) -> dict[str, Any]:
         try:
             real = await self._is_real_redis()
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             real = False
         return {
             "backend": "redis",
@@ -2283,7 +2296,7 @@ class RedisResourceGovernor(ResourceGovernor):
         """
         try:
             now = float(self._time())
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             now = 0.0
         # Only act when tests are likely using FakeTime near zero to avoid
         # destructive behavior in real executions.
@@ -2293,7 +2306,7 @@ class RedisResourceGovernor(ResourceGovernor):
         cats = list(categories or ["requests", "tokens"])
         try:
             client = await self._client_get()
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             return
 
         # Delete any ZSET window keys in real/stub client
@@ -2303,12 +2316,12 @@ class RedisResourceGovernor(ResourceGovernor):
             pattern = f"{self._keys.ns}:win:{policy_id}:{cat}:*"
             try:
                 _cur, keys = await client.scan(0, match=pattern, count=1000)
-            except Exception:
+            except _RG_NONCRITICAL_EXCEPTIONS:
                 keys = []
             for k in keys or []:
                 try:
                     await client.delete(k)
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     pass
 
         # Best-effort: clear in-memory mirrors for leases/windows if any remain
@@ -2316,7 +2329,7 @@ class RedisResourceGovernor(ResourceGovernor):
             to_drop_stub = [k for k in list(self._stub_windows.keys()) if k.startswith(f"{self._keys.ns}:stub:{policy_id}:")]
             for k in to_drop_stub:
                 self._stub_windows.pop(k, None)
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             pass
     async def _maybe_test_purge_windows_once(self, *, policy_id: str, categories: dict[str, Any], now: float) -> None:
         """When FakeTime is near zero, clear any prior window keys for this policy
@@ -2339,7 +2352,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 try:
                     # Attempt broad scan patterns to delete any residual windows
                     cur, keys = await client.scan(0, match=pattern, count=1000)
-                except Exception:
+                except _RG_NONCRITICAL_EXCEPTIONS:
                     keys = []
                 for k in keys or []:
                     try:
@@ -2350,9 +2363,9 @@ class RedisResourceGovernor(ResourceGovernor):
                         if has_prefill:
                             continue
                         await client.delete(k)
-                    except Exception:
+                    except _RG_NONCRITICAL_EXCEPTIONS:
                         pass
             self._test_windows_policy_cleared.add(policy_id)
-        except Exception:
+        except _RG_NONCRITICAL_EXCEPTIONS:
             # best-effort only
             return

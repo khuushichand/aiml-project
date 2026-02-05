@@ -44,6 +44,33 @@ from .pg_migrations import ensure_job_counters_pg, ensure_jobs_tables_pg
 from .tracing import job_span
 
 
+try:
+    import psycopg  # type: ignore
+
+    _PG_ERRORS: tuple[type[BaseException], ...] = (psycopg.Error,)
+except ImportError:
+    _PG_ERRORS = ()
+
+_JOB_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    BadRequestError,
+    ConnectionError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    json.JSONDecodeError,
+    sqlite3.Error,
+    *_PG_ERRORS,
+)
+
+
 def _parse_dt(v: Any) -> datetime | None:
     """Parse a datetime from common storage formats."""
     if v is None:
@@ -55,7 +82,7 @@ def _parse_dt(v: Any) -> datetime | None:
         s = str(v).replace("Z", "+00:00")
         # Try fromisoformat
         return datetime.fromisoformat(s)
-    except Exception:
+    except _JOB_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -80,7 +107,7 @@ class JobManager:
             try:
                 _env = os.getenv("JOBS_TEST_NOW_EPOCH")
                 self._fixed_epoch = float(_env) if _env else None
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 self._fixed_epoch = None
 
         def now_utc(self) -> datetime:
@@ -143,14 +170,14 @@ class JobManager:
                 from .pg_util import negotiate_pg_dsn
 
                 self.db_url = negotiate_pg_dsn(self.db_url)
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
             skip_schema = JobManager._is_truthy(os.getenv("JOBS_PG_SKIP_SCHEMA_INIT"))
             if not skip_schema:
                 ensure_jobs_tables_pg(self.db_url)
                 try:
                     ensure_job_counters_pg(self.db_url)
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     pass
             self.db_path = Path(":memory:")  # unused
         else:
@@ -168,7 +195,7 @@ class JobManager:
         self._enforce_override = enforce_leases
         try:
             ensure_jobs_metrics_registered()
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             pass
 
     # Standard queues across domains
@@ -219,7 +246,7 @@ class JobManager:
                 logger.warning(
                     f"Jobs invariant: leased_until < acquired_at (id={row.get('id')}, leased_until={leased_until}, acquired_at={acquired_at})"
                 )
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             # Never raise from invariant checks
             pass
 
@@ -234,16 +261,16 @@ class JobManager:
         # Apply pragmatic SQLite settings for concurrent read/write under tests and dev
         try:
             conn.execute("PRAGMA journal_mode=WAL;")
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             conn.execute("PRAGMA synchronous=NORMAL;")
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             # Ensure reads wait briefly instead of raising 'database is locked'
             conn.execute("PRAGMA busy_timeout=5000;")
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             pass
         conn.row_factory = sqlite3.Row
         return conn
@@ -272,7 +299,7 @@ class JobManager:
         except sqlite3.Error as exc:
             try:
                 conn.rollback()
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
             logger.warning(f"Jobs schema backfill for batch_group failed: {exc}")
             return False
@@ -285,7 +312,7 @@ class JobManager:
         def _is_serialization_failure(exc: Exception) -> bool:
             try:
                 from psycopg import errors as pg_errors  # type: ignore
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 return False
             return isinstance(exc, pg_errors.SerializationFailure)
 
@@ -297,12 +324,12 @@ class JobManager:
 
                 if _re.match(r"^[A-Za-z0-9_]+$", role):
                     cur.execute(f"SET ROLE {role}")
-            except Exception as exc:
+            except _JOB_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_serialization_failure(exc):
                     raise
                 try:
                     conn.rollback()
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     pass
         try:
             from psycopg import sql as _sql  # type: ignore
@@ -321,10 +348,10 @@ class JobManager:
                     return
                 try:
                     cur.execute(_sql.SQL("RESET {}").format(_sql.SQL(name)))
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     try:
                         conn.rollback()
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         cur.execute(
@@ -333,10 +360,10 @@ class JobManager:
                                 _sql.Literal(""),
                             )
                         )
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         try:
                             conn.rollback()
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
 
             dom = JobManager._RLS_DOMAIN_ALLOWLIST.get()
@@ -353,9 +380,9 @@ class JobManager:
                     )
                     row = cur.fetchone()
                     print(f"[jobs-rls-debug] settings={row}")
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     pass
-        except Exception as exc:
+        except _JOB_NONCRITICAL_EXCEPTIONS as exc:
             if _is_serialization_failure(exc):
                 raise
             # Non-fatal: continue without RLS context if GUCs unavailable
@@ -364,7 +391,7 @@ class JobManager:
             # Roll back to clear the error so subsequent statements can proceed.
             try:
                 conn.rollback()
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
         return cur
 
@@ -393,7 +420,7 @@ class JobManager:
             # Default behavior across domains (including 'chatbooks'):
             # lower numeric value means higher priority -> ASC
             return "ASC"
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             return "ASC"
 
     def _tie_break_for(self, domain: str | None, backend: str) -> str | None:
@@ -437,7 +464,7 @@ class JobManager:
                     if v2 in {"fifo", "lifo"}:
                         return v2
             return None
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             return None
 
     @classmethod
@@ -446,7 +473,7 @@ class JobManager:
             cls._RLS_IS_ADMIN.set(bool(is_admin))
             cls._RLS_DOMAIN_ALLOWLIST.set(domain_allowlist if (domain_allowlist or "").strip() else None)
             cls._RLS_OWNER_USER_ID.set(owner_user_id if (owner_user_id or "").strip() else None)
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             pass
 
     @classmethod
@@ -455,7 +482,7 @@ class JobManager:
             cls._RLS_IS_ADMIN.set(False)
             cls._RLS_DOMAIN_ALLOWLIST.set(None)
             cls._RLS_OWNER_USER_ID.set(None)
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             pass
 
     def _should_enforce_ack(self) -> bool:
@@ -524,7 +551,7 @@ class JobManager:
                         try:
                             set_queue_flag(domain, queue, "paused", flags["paused"])
                             set_queue_flag(domain, queue, "drain", flags["drain"])
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         return flags
             else:
@@ -543,7 +570,7 @@ class JobManager:
                     try:
                         set_queue_flag(domain, queue, "paused", flags["paused"])
                         set_queue_flag(domain, queue, "drain", flags["drain"])
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     return flags
         finally:
@@ -553,7 +580,7 @@ class JobManager:
         # Optional lightweight debounce to reduce high-churn writes
         try:
             debounce_ms = int(os.getenv("JOBS_GAUGES_DEBOUNCE_MS", "0") or "0")
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             debounce_ms = 0
         if debounce_ms > 0:
             key = (str(domain), str(queue), str(job_type) if job_type is not None else None)
@@ -649,7 +676,7 @@ class JobManager:
                 set_queue_gauges(domain, queue, job_type, q_ready, p, backlog=(q_ready + q_sched), scheduled=q_sched)
             finally:
                 conn.close()
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             pass
 
     # --- SLA policies ---
@@ -674,7 +701,7 @@ class JobManager:
                                 logger.info(
                                     f"[JM TEST MUT] upsert_sla_policy domain={domain} queue={queue} job_type={job_type} backend=pg"
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         cur.execute(
                             (
@@ -742,15 +769,15 @@ class JobManager:
                         job={"id": int(job_id), "domain": domain, "queue": queue, "job_type": job_type},
                         attrs={"kind": kind, "value": float(value), "threshold": float(threshold)},
                     )
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     increment_sla_breach({"domain": domain, "queue": queue, "job_type": job_type}, kind)
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     pass
             finally:
                 conn.close()
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             pass
 
     # --- Encryption helpers ---
@@ -761,7 +788,7 @@ class JobManager:
             if domain:
                 if str(os.getenv(f"JOBS_ENCRYPT_{str(domain).upper()}", "")).lower() in {"1", "true", "yes", "y", "on"}:
                     return True
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             pass
         return False
 
@@ -773,7 +800,7 @@ class JobManager:
                 env = encrypt_json_blob(obj)
                 if env:
                     return {"_encrypted": env}
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             pass
         return obj
 
@@ -788,7 +815,7 @@ class JobManager:
                 if env:
                     dec = decrypt_json_blob(env)  # returns dict or None
                     return dec if dec is not None else obj
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             return obj
         return obj
 
@@ -804,12 +831,12 @@ class JobManager:
         if isinstance(value, (bytes, bytearray)):
             try:
                 return JobManager._parse_json_value(bytes(value).decode("utf-8"))
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 return value
         if isinstance(value, str):
             try:
                 return json.loads(value)
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 return value
         return value
 
@@ -826,7 +853,7 @@ class JobManager:
 
                 decoded = gzip.decompress(bytes(value)).decode("utf-8")
                 return JobManager._parse_json_value(decoded)
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 return JobManager._parse_json_value(value)
         if isinstance(value, str) and value.startswith("gzip64:"):
             try:
@@ -836,7 +863,7 @@ class JobManager:
                 payload = value[len("gzip64:") :]
                 decoded = gzip.decompress(base64.b64decode(payload)).decode("utf-8")
                 return JobManager._parse_json_value(decoded)
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 return JobManager._parse_json_value(value)
         return JobManager._parse_json_value(value)
 
@@ -877,7 +904,7 @@ class JobManager:
             defaults.extend([p.strip() for p in extra.split(";") if p.strip()])
         try:
             compiled = [re.compile(p, re.IGNORECASE) for p in defaults]
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             compiled = [re.compile(p) for p in defaults if p]
         return compiled, default_keys
 
@@ -896,7 +923,7 @@ class JobManager:
                     if pat.search(s or ""):
                         return True
                 return False
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 return False
 
         def _recurse(x: Any, key_path: str = "") -> Any:
@@ -921,7 +948,7 @@ class JobManager:
                         return "***REDACTED***" if redact else x
                     return x
                 return x
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 return x
 
         new_obj = _recurse(obj)
@@ -932,7 +959,7 @@ class JobManager:
         def _parse(v: str | None) -> int:
             try:
                 return int(str(v or "").strip() or 0)
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 return 0
 
         dom = str(domain or "").upper()
@@ -974,7 +1001,7 @@ class JobManager:
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def _pg_advisory_unlock(self, key: int) -> None:
@@ -985,12 +1012,12 @@ class JobManager:
             with self._pg_cursor(conn) as cur:
                 try:
                     cur.execute("SELECT pg_advisory_unlock(%s)", (int(key),))
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     pass
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
 
     # CRUD / queries
@@ -1040,7 +1067,7 @@ class JobManager:
             if found and str(os.getenv("JOBS_SECRET_REJECT", "")).lower() in {"1", "true", "yes", "y", "on"}:
                 raise ValueError(f"Payload appears to contain secrets at: {where[:3]}{'...' if len(where) > 3 else ''}")
             payload = cleaned if found else payload
-        except Exception as _sec_e:
+        except _JOB_NONCRITICAL_EXCEPTIONS as _sec_e:
             logger.debug(f"Jobs secret hygiene scan error: {_sec_e}")
 
         # JSON payload size cap
@@ -1056,7 +1083,7 @@ class JobManager:
                 payload_json = json.dumps(payload)
                 try:
                     increment_json_truncated({"domain": domain, "queue": queue, "job_type": job_type}, "payload")
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     pass
             else:
                 raise ValueError(f"Payload too large: {payload_bytes} bytes > limit {max_bytes}")
@@ -1071,7 +1098,7 @@ class JobManager:
                     attrs={"idempotency_key": idempotency_key},
                 ):
                     pass
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
             # Use consistent clock
             _now_dt = self._clock.now_utc()
@@ -1080,7 +1107,7 @@ class JobManager:
             if not trace_id:
                 try:
                     trace_id = str(_uuid.uuid4())
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     trace_id = None
             # Ensure PG receives timezone-aware timestamps
             avail_param = available_at
@@ -1125,7 +1152,7 @@ class JobManager:
                                 row_spm = cur.fetchone()
                                 if int(row_spm.get("c") if isinstance(row_spm, dict) else 0) >= spm:
                                     raise ValueError("Quota exceeded: submits per minute")
-                        except Exception as _db_exc:
+                        except _JOB_NONCRITICAL_EXCEPTIONS as _db_exc:
                             # Let ValueError propagate; swallow only DB/adapter errors
                             try:
                                 import psycopg
@@ -1134,7 +1161,7 @@ class JobManager:
                                     pass
                                 else:
                                     raise
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 raise
                             pass
                         if idempotency_key:
@@ -1184,7 +1211,7 @@ class JobManager:
                             try:
                                 if was_insert:
                                     increment_created({"domain": domain, "queue": queue, "job_type": job_type})
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             # Counters bump (PG, idempotent insert occurred)
                             try:
@@ -1203,7 +1230,7 @@ class JobManager:
                                         ),
                                         (domain, queue, job_type, 0 if is_sched else 1, 1 if is_sched else 0),
                                     )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             try:
                                 # Write to outbox within the same transaction (Postgres path)
@@ -1232,7 +1259,7 @@ class JobManager:
                                         d.get("trace_id"),
                                     ),
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 # Best-effort; do not fail job create on outbox errors
                                 pass
                             # Emit event for in-process listeners when outbox is disabled
@@ -1253,7 +1280,7 @@ class JobManager:
                                             "retry_count": int(d.get("retry_count") or 0),
                                         },
                                     )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             # Audit bridge (best-effort)
                             try:
@@ -1266,7 +1293,7 @@ class JobManager:
                                         "retry_count": int(d.get("retry_count") or 0),
                                     },
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             return d
                         # Non-idempotent insert
@@ -1312,15 +1339,15 @@ class JobManager:
                                             qlat,
                                             float(pol.get("max_queue_latency_seconds")),
                                         )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             self._assert_invariants(d)
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             increment_created({"domain": domain, "queue": queue, "job_type": job_type})
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         # Counters bump (PG, non-idempotent path)
                         try:
@@ -1333,7 +1360,7 @@ class JobManager:
                                     ),
                                     (domain, queue, job_type, 0 if is_sched else 1, 1 if is_sched else 0),
                                 )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             attrs_json = json.dumps(
@@ -1361,7 +1388,7 @@ class JobManager:
                                     d.get("trace_id"),
                                 ),
                             )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         # Emit event for in-process listeners when outbox is disabled
                         try:
@@ -1375,7 +1402,7 @@ class JobManager:
                                         "retry_count": int(d.get("retry_count") or 0),
                                     },
                                 )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             submit_job_audit_event(
@@ -1387,7 +1414,7 @@ class JobManager:
                                     "retry_count": int(d.get("retry_count") or 0),
                                 },
                             )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         return d
             else:
@@ -1453,7 +1480,7 @@ class JobManager:
                                         self._update_gauges(domain=domain, queue=queue, job_type=job_type)
                                         if inserted:
                                             increment_created({"domain": domain, "queue": queue, "job_type": job_type})
-                                    except Exception:
+                                    except _JOB_NONCRITICAL_EXCEPTIONS:
                                         pass
                                     try:
                                         emit_job_event(
@@ -1465,7 +1492,7 @@ class JobManager:
                                                 "retry_count": int(d.get("retry_count") or 0),
                                             },
                                         )
-                                    except Exception:
+                                    except _JOB_NONCRITICAL_EXCEPTIONS:
                                         pass
                                     return d
                             # Non-idempotent (or no existing row on IGNORE path): normal insert
@@ -1513,7 +1540,7 @@ class JobManager:
                             try:
                                 self._update_gauges(domain=domain, queue=queue, job_type=job_type)
                                 increment_created({"domain": domain, "queue": queue, "job_type": job_type})
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             try:
                                 if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
@@ -1534,7 +1561,7 @@ class JobManager:
                                             1 if is_sched else 0,
                                         ),
                                     )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             try:
                                 attrs_json = json.dumps(
@@ -1561,7 +1588,7 @@ class JobManager:
                                         trace_id,
                                     ),
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             # Emit event for in-process listeners when outbox is disabled
                             try:
@@ -1575,7 +1602,7 @@ class JobManager:
                                             "retry_count": int(d.get("retry_count") or 0),
                                         },
                                     )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             try:
                                 submit_job_audit_event(
@@ -1587,7 +1614,7 @@ class JobManager:
                                         "retry_count": int(d.get("retry_count") or 0),
                                     },
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             return d
                     except sqlite3.OperationalError as exc:
@@ -1710,7 +1737,7 @@ class JobManager:
         for dep_id in ids:
             try:
                 self.cancel_job(dep_id, reason=reason)
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 continue
 
     def get_job(self, job_id: int) -> dict[str, Any] | None:
@@ -1732,7 +1759,7 @@ class JobManager:
                 try:
                     d["payload"] = self._maybe_decrypt_json(d.get("payload"))
                     d["result"] = self._maybe_decrypt_json(d.get("result"))
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     pass
                 return d
             else:
@@ -1747,7 +1774,7 @@ class JobManager:
                         d["result"] = json.loads(d["result"]) if d["result"] else None
                     d["payload"] = self._maybe_decrypt_json(d.get("payload"))
                     d["result"] = self._maybe_decrypt_json(d.get("result"))
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     pass
                 return d
         finally:
@@ -1771,7 +1798,7 @@ class JobManager:
                 try:
                     d["payload"] = self._maybe_decrypt_json(d.get("payload"))
                     d["result"] = self._maybe_decrypt_json(d.get("result"))
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     pass
                 return d
             else:
@@ -1786,7 +1813,7 @@ class JobManager:
                         d["result"] = json.loads(d["result"]) if d["result"] else None
                     d["payload"] = self._maybe_decrypt_json(d.get("payload"))
                     d["result"] = self._maybe_decrypt_json(d.get("result"))
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     pass
                 return d
         finally:
@@ -1920,7 +1947,7 @@ class JobManager:
                     try:
                         d["payload"] = self._maybe_decrypt_json(d.get("payload"))
                         d["result"] = self._maybe_decrypt_json(d.get("result"))
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                 return out
             else:
@@ -1974,7 +2001,7 @@ class JobManager:
                             d["result"] = json.loads(d["result"]) if d["result"] else None
                         d["payload"] = self._maybe_decrypt_json(d.get("payload"))
                         d["result"] = self._maybe_decrypt_json(d.get("result"))
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     out.append(d)
                 return out
@@ -2012,7 +2039,7 @@ class JobManager:
                     return 0
                 try:
                     return int(row["c"])
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     return 0
             else:
                 query = "SELECT COUNT(*) FROM jobs WHERE 1=1"
@@ -2031,7 +2058,7 @@ class JobManager:
                     return 0
                 try:
                     return int(row[0])
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     return 0
         finally:
             conn.close()
@@ -2065,7 +2092,7 @@ class JobManager:
                     try:
                         status_val = str(r["status"])
                         count_val = int(r["c"])
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         continue
                     if status_val:
                         out[status_val] = count_val
@@ -2086,7 +2113,7 @@ class JobManager:
                     try:
                         status_val = str(r[0])
                         count_val = int(r[1])
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         continue
                     if status_val:
                         out[status_val] = count_val
@@ -2120,7 +2147,7 @@ class JobManager:
                         owner = r["owner_user_id"]
                         status_val = str(r["status"])
                         count_val = int(r["c"])
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         continue
                     out.append(
                         {
@@ -2149,7 +2176,7 @@ class JobManager:
                                 "count": int(count_val),
                             }
                         )
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         continue
                 return out
         finally:
@@ -2179,12 +2206,12 @@ class JobManager:
                 logger.info(
                     f"[JM TEST] acquire_next_job enter backend={self.backend} domain={domain} queue={queue} owner={owner_user_id} gate={JobManager._ACQUIRE_GATE_ENABLED} db={(str(self.db_path) if getattr(self, 'db_path', None) else self.db_url)}"
                 )
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
         if JobManager._ACQUIRE_GATE_ENABLED:
             try:
                 logger.debug("Jobs acquire gate enabled; declining new acquisition")
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
             return None
         # Queue-specific pause/drain gate
@@ -2192,7 +2219,7 @@ class JobManager:
         if _test_mode:
             try:
                 logger.info(f"[JM TEST] queue flags paused={flags.get('paused')} drain={flags.get('drain')}")
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
         if flags.get("paused"):
             return None
@@ -2202,7 +2229,7 @@ class JobManager:
             if _test_mode:
                 try:
                     logger.info(f"[JM TEST] inflight quota={max_inflight} owner={owner_user_id}")
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     pass
             if max_inflight and owner_user_id:
                 conn_q = self._connect()
@@ -2226,20 +2253,20 @@ class JobManager:
                 finally:
                     try:
                         conn_q.close()
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             pass
         max_lease = int(os.getenv("JOBS_LEASE_MAX_SECONDS", "3600") or "3600")
         # Adaptive default when seconds <= 0 and enabled
         try:
             req = int(lease_seconds)
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             req = 0
         if req <= 0 and str(os.getenv("JOBS_ADAPTIVE_LEASE_ENABLE", "")).lower() in {"1", "true", "yes", "y", "on"}:
             try:
                 req = self._adaptive_lease_seconds(domain, queue, None)
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 req = 30
         lease_seconds = max(1, min(max_lease, int(req)))
         conn = self._connect()
@@ -2361,7 +2388,7 @@ class JobManager:
                                             qlat,
                                             float(pol.get("max_queue_latency_seconds")),
                                         )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         # Counters: adjust queued->processing
                         try:
@@ -2384,11 +2411,11 @@ class JobManager:
                                         -1 if is_sched else 0,
                                     ),
                                 )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             self._assert_invariants(d)
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         # Metrics: queue latency
                         try:
@@ -2399,25 +2426,25 @@ class JobManager:
                             if isinstance(acquired_at, str):
                                 acquired_at = _parse_dt(acquired_at)
                             observe_queue_latency(d, acquired_at, created_at)
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         if isinstance(d.get("payload"), str):
                             try:
                                 d["payload"] = json.loads(d["payload"]) if d["payload"] else {}
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         try:
                             d["payload"] = self._maybe_decrypt_json(d.get("payload"))
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             self._update_gauges(domain=domain, queue=queue, job_type=d.get("job_type"))
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             with job_span("job.acquire", job=d):
                                 pass
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             emit_job_event(
@@ -2429,7 +2456,7 @@ class JobManager:
                                     "retry_count": int(d.get("retry_count") or 0),
                                 },
                             )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         return d
             else:
@@ -2479,7 +2506,7 @@ class JobManager:
                         conn.execute(sql, tuple(params_upd))
                         try:
                             conn.commit()
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         if conn.total_changes == 0:
                             return None
@@ -2505,11 +2532,11 @@ class JobManager:
                                             qlat,
                                             float(pol.get("max_queue_latency_seconds")),
                                         )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             self._assert_invariants(d)
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         # Counters queued->processing
                         try:
@@ -2536,7 +2563,7 @@ class JobManager:
                                         -1 if is_sched else 0,
                                     ),
                                 )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                     else:
                         # Consider queued jobs and reclaim expired processing leases (SQLite)
@@ -2569,7 +2596,7 @@ class JobManager:
                                         (domain, queue),
                                     ).fetchone()
                                     _has_sched = bool(_r)
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     _has_sched = False
                                 if _has_sched:
                                     order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
@@ -2581,7 +2608,7 @@ class JobManager:
                         if _test_mode:
                             try:
                                 logger.info(f"[JM TEST] acquire SELECT sql={base} params={params}")
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         # Spin a few times if a race causes the UPDATE to affect zero rows
                         _max_spin = 20 if _test_mode else 3
@@ -2597,7 +2624,7 @@ class JobManager:
                             if _test_mode:
                                 try:
                                     logger.info(f"[JM TEST] selected job_id={job_id} spin={_spin}")
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                             # Transition to processing with lease; allow both queued and expired processing
                             conn.execute(
@@ -2612,13 +2639,13 @@ class JobManager:
                             )
                             try:
                                 conn.commit()
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             if conn.total_changes == 0:
                                 if _test_mode:
                                     try:
                                         logger.info(f"[JM TEST] update changed=0 for job_id={job_id}; retrying")
-                                    except Exception:
+                                    except _JOB_NONCRITICAL_EXCEPTIONS:
                                         pass
                                 continue
                             # Success
@@ -2634,7 +2661,7 @@ class JobManager:
                                 logger.info(
                                     f"[JM TEST] acquired id={d.get('id')} status={d.get('status')} leased_until={d.get('leased_until')} worker_id={d.get('worker_id')} lease_id={d.get('lease_id')}"
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         try:
                             if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
@@ -2660,32 +2687,32 @@ class JobManager:
                                         -1 if is_sched else 0,
                                     ),
                                 )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                     # Metrics: queue latency
                     try:
                         created_at = d.get("created_at")
                         acquired_at = d.get("acquired_at")
                         observe_queue_latency(d, _parse_dt(acquired_at), _parse_dt(created_at))
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         if isinstance(d.get("payload"), str):
                             d["payload"] = json.loads(d["payload"]) if d["payload"] else {}
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         d["payload"] = self._maybe_decrypt_json(d.get("payload"))
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         self._update_gauges(domain=domain, queue=queue, job_type=d.get("job_type"))
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         with job_span("job.acquire", job=d):
                             pass
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         emit_job_event(
@@ -2697,12 +2724,12 @@ class JobManager:
                                 "retry_count": int(d.get("retry_count") or 0),
                             },
                         )
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     if _test_mode:
                         try:
                             JobManager._LAST_ACQUIRED_TEST[(domain, queue)] = dict(d)
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                     if _test_mode:
                         try:
@@ -2715,7 +2742,7 @@ class JobManager:
                                 (domain, queue),
                             ).fetchone()[0]
                             logger.info(f"[JM TEST] post-acquire counts queued={cq} processing={cp}")
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                     return d
         finally:
@@ -2770,7 +2797,7 @@ class JobManager:
                                     emit_job_event(
                                         "job.lease_renewed", job={"id": int(job_id)}, attrs={"seconds": int(seconds)}
                                     )
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                             return ok
                         else:
@@ -2794,7 +2821,7 @@ class JobManager:
                                     emit_job_event(
                                         "job.lease_renewed", job={"id": int(job_id)}, attrs={"seconds": int(seconds)}
                                     )
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                             return ok2
             else:
@@ -2822,7 +2849,7 @@ class JobManager:
                                 emit_job_event(
                                     "job.lease_renewed", job={"id": int(job_id)}, attrs={"seconds": int(seconds)}
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         return ok3
                     else:
@@ -2845,7 +2872,7 @@ class JobManager:
                                 emit_job_event(
                                     "job.lease_renewed", job={"id": int(job_id)}, attrs={"seconds": int(seconds)}
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         return ok4
         finally:
@@ -2937,7 +2964,7 @@ class JobManager:
 
         try:
             res_obj = self._maybe_encrypt_json(res_obj, str(job.get("domain")))
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             pass
 
         conn = self._connect()
@@ -3012,7 +3039,7 @@ class JobManager:
                                 logger.info(
                                     f"[JM TEST MUT] complete_job enter job_id={job_id} enforce={enforce} backend=pg"
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         # Pre-fetch for metrics and idempotency
                         cur.execute(
@@ -3032,7 +3059,7 @@ class JobManager:
                         try:
                             if base:
                                 res_obj = self._maybe_encrypt_json(res_obj, str(base.get("domain")))
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         completed_from_processing = False
                         completed_from_queued = False
@@ -3090,7 +3117,7 @@ class JobManager:
                                     cur.execute("SELECT domain FROM jobs WHERE id = %s", (int(job_id),))
                                     row_dom = cur.fetchone()
                                     dom_val = str(row_dom.get("domain") or "").lower() if row_dom else ""
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     allow = {"chatbooks", "embeddings"}
                                     dom_val = ""
                                 if dom_val in allow:
@@ -3117,7 +3144,7 @@ class JobManager:
                                 logger.info(
                                     f"[JM TEST MUT] complete_job affected ok={bool(ok)} row={(dict(_r) if _r else None)} total={_total} dist={_dist}"
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         # Truncation metric (PG)
                         try:
@@ -3131,7 +3158,7 @@ class JobManager:
                                     },
                                     "result",
                                 )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         # Metrics: duration + counters
                         try:
@@ -3152,7 +3179,7 @@ class JobManager:
                                         started_at,
                                         self._clock.now_utc(),
                                     )
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 # Update gauges after terminal state
                                 increment_completed(
@@ -3179,7 +3206,7 @@ class JobManager:
                                                     dur,
                                                     float(pol.get("max_duration_seconds")),
                                                 )
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 # Decrement processing counter
                                 try:
@@ -3216,7 +3243,7 @@ class JobManager:
                                                     d.get("job_type"),
                                                 ),
                                             )
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 self._update_gauges(
                                     domain=d.get("domain"), queue=d.get("queue"), job_type=d.get("job_type")
@@ -3224,9 +3251,9 @@ class JobManager:
                                 try:
                                     with job_span("job.complete", job=d):
                                         pass
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         if base and ok:
                             try:
@@ -3238,7 +3265,7 @@ class JobManager:
                                     "job_type": d_ev.get("job_type"),
                                 }
                                 emit_job_event("job.completed", job=ev)
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         res_ok = ok
                         # fall through to finally and return
@@ -3249,7 +3276,7 @@ class JobManager:
                             logger.info(
                                 f"[JM TEST MUT] complete_job enter job_id={job_id} enforce={enforce} backend=sqlite"
                             )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                     # Pre-fetch for metrics + idempotency
                     rowm = conn.execute(
@@ -3267,7 +3294,7 @@ class JobManager:
                     try:
                         if rowm:
                             res_obj = self._maybe_encrypt_json(res_obj, str(rowm[2]))
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     completed_from_processing = False
                     completed_from_queued = False
@@ -3325,7 +3352,7 @@ class JobManager:
                                 }
                                 row_dom = conn.execute("SELECT domain FROM jobs WHERE id = ?", (job_id,)).fetchone()
                                 dom_val = str(row_dom[0]).lower() if row_dom and row_dom[0] else ""
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 allow = {"chatbooks", "embeddings"}
                                 dom_val = ""
                             if dom_val in allow:
@@ -3355,7 +3382,7 @@ class JobManager:
                             logger.info(
                                 f"[JM TEST MUT] complete_job affected ok={bool(ok)} row={(dict(_r) if _r else None)} total={int(_total)} dist={_dist}"
                             )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                     # Truncation metric (SQLite)
                     try:
@@ -3363,7 +3390,7 @@ class JobManager:
                             increment_json_truncated(
                                 {"domain": rowm[2], "queue": rowm[3], "job_type": rowm[4]}, "result"
                             )
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     # Metrics: duration + counters
                     try:
@@ -3414,7 +3441,7 @@ class JobManager:
                                                 dur,
                                                 float(pol.get("max_duration_seconds")),
                                             )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             try:
                                 if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
@@ -3453,7 +3480,7 @@ class JobManager:
                                                 d.get("job_type"),
                                             ),
                                         )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             self._update_gauges(
                                 domain=d.get("domain"), queue=d.get("queue"), job_type=d.get("job_type")
@@ -3461,7 +3488,7 @@ class JobManager:
                             try:
                                 with job_span("job.complete", job=d):
                                     pass
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             # Outbox insert within the same transaction (avoid lock)
                             try:
@@ -3480,7 +3507,7 @@ class JobManager:
                                         d.get("trace_id"),
                                     ),
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             # Emit event for in-process listeners when outbox is disabled
                             try:
@@ -3500,7 +3527,7 @@ class JobManager:
                                             "job_type": d.get("job_type"),
                                         },
                                     )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             try:
                                 ev = {
@@ -3510,9 +3537,9 @@ class JobManager:
                                     "job_type": d.get("job_type"),
                                 }
                                 submit_job_audit_event("job.completed", job=ev, attrs=None)
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     res_ok = ok
         finally:
@@ -3563,7 +3590,7 @@ class JobManager:
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
         if not value or value <= 0:
             return max(min_s, 30)
@@ -3650,7 +3677,7 @@ class JobManager:
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def batch_complete_jobs(self, items: list[dict[str, Any]], *, enforce: bool | None = None) -> int:
@@ -3672,7 +3699,7 @@ class JobManager:
                                     _r = cur.fetchone()
                                     dom = (_r.get("domain") if isinstance(_r, dict) else None) if _r else None
                                 res_obj = self._maybe_encrypt_json(res_obj, dom)
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             ctok = it.get("completion_token")
                             if enforce:
@@ -3711,7 +3738,7 @@ class JobManager:
                                 ).fetchone()
                                 dom = rowd[0] if rowd else None
                             res_obj = self._maybe_encrypt_json(res_obj, dom)
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         ctok = it.get("completion_token")
                         if enforce:
@@ -3742,7 +3769,7 @@ class JobManager:
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def batch_fail_jobs(self, items: list[dict[str, Any]], *, enforce: bool | None = None) -> int:
@@ -3821,7 +3848,7 @@ class JobManager:
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def fail_job(
@@ -3865,7 +3892,7 @@ class JobManager:
                                 logger.info(
                                     f"[JM TEST MUT] fail_job enter job_id={job_id} retryable={retryable} backoff={backoff_seconds} enforce={enforce} backend=pg"
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         cur.execute(
                             "SELECT status, completion_token, retry_count, failure_streak_code, failure_streak_count, domain, queue, job_type, uuid FROM jobs WHERE id = %s",
@@ -3908,7 +3935,7 @@ class JobManager:
                                 try:
                                     if _outbox and int(backoff_seconds) <= 0 and delay < 10:
                                         delay = 10
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     if _outbox and delay < 3:
                                         delay = 3
                             # Poison message quarantine check: increment failure_streak_* and quarantine if threshold reached
@@ -3983,7 +4010,7 @@ class JobManager:
                                     _srow = cur.fetchone()
                                     if _srow and str(_srow.get("status")) == "quarantined":
                                         self._cancel_dependent_jobs(_srow.get("uuid"), reason="dependency_failed")
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 try:
                                     if elem:
@@ -3992,7 +4019,7 @@ class JobManager:
                                             from .metrics import observe_retry_after
 
                                             observe_retry_after(dict(elem), float(delay))
-                                        except Exception:
+                                        except _JOB_NONCRITICAL_EXCEPTIONS:
                                             pass
                                         try:
                                             ev = {
@@ -4010,7 +4037,7 @@ class JobManager:
                                                     "retry_count": int(current + 1),
                                                 },
                                             )
-                                        except Exception:
+                                        except _JOB_NONCRITICAL_EXCEPTIONS:
                                             pass
                                         # Counters: processing -> queued (ready/scheduled) or quarantined
                                         try:
@@ -4050,7 +4077,7 @@ class JobManager:
                                                     ),
                                                     (dmn, qq, jt, int(add_ready), int(add_sched), int(add_quar)),
                                                 )
-                                        except Exception:
+                                        except _JOB_NONCRITICAL_EXCEPTIONS:
                                             pass
                                         # Append to failure_timeline (retryable)
                                         try:
@@ -4064,7 +4091,7 @@ class JobManager:
                                             elif isinstance(tl_val, str):
                                                 try:
                                                     tl = json.loads(tl_val)
-                                                except Exception:
+                                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                                     tl = []
                                             else:
                                                 tl = []
@@ -4080,9 +4107,9 @@ class JobManager:
                                                 "UPDATE jobs SET failure_timeline = %s::jsonb WHERE id = %s",
                                                 (json.dumps(tl), int(job_id)),
                                             )
-                                        except Exception:
+                                        except _JOB_NONCRITICAL_EXCEPTIONS:
                                             pass
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}:
                                     try:
@@ -4096,7 +4123,7 @@ class JobManager:
                                                 if _tlrow and _tlrow.get("failure_timeline")
                                                 else 0
                                             )
-                                        except Exception:
+                                        except _JOB_NONCRITICAL_EXCEPTIONS:
                                             _tl_len = 0
                                         cur.execute("SELECT COUNT(*) AS c FROM jobs")
                                         _total = (cur.fetchone() or {}).get("c", 0)
@@ -4106,7 +4133,7 @@ class JobManager:
                                         logger.info(
                                             f"[JM TEST MUT] fail_job retryable scheduled delay={int(delay)} tl_len={_tl_len} total={_total} dist={_dist}"
                                         )
-                                    except Exception:
+                                    except _JOB_NONCRITICAL_EXCEPTIONS:
                                         pass
                                 return True
                         # terminal failure
@@ -4160,7 +4187,7 @@ class JobManager:
                                     cur.execute("SELECT domain FROM jobs WHERE id = %s", (int(job_id),))
                                     row_dom = cur.fetchone()
                                     dom_val = str(row_dom.get("domain") or "").lower() if row_dom else ""
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     allow = {"chatbooks", "embeddings"}
                                     dom_val = ""
                                 if dom_val in allow:
@@ -4198,12 +4225,12 @@ class JobManager:
                                         int(job_id),
                                     ),
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         if ok:
                             try:
                                 conn.commit()
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         try:
                             if ok and elem:
@@ -4214,7 +4241,7 @@ class JobManager:
                                         from .metrics import increment_failures_by_code
 
                                         increment_failures_by_code(d, error_code)
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 # Counters: processing -> failed (terminal)
                                 try:
@@ -4230,7 +4257,7 @@ class JobManager:
                                                 "UPDATE job_counters SET processing_count = GREATEST(processing_count - 1, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
                                                 (d.get("domain"), d.get("queue"), d.get("job_type")),
                                             )
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 try:
                                     # Append terminal failure to timeline (no backoff)
@@ -4239,14 +4266,14 @@ class JobManager:
                                             "UPDATE jobs SET failure_timeline = COALESCE(failure_timeline, '[]'::jsonb) || jsonb_build_array(jsonb_build_object('ts', NOW(), 'error_code', %s, 'retry_backoff', 0)) WHERE id = %s",
                                             ((error_code or error), int(job_id)),
                                         )
-                                    except Exception:
+                                    except _JOB_NONCRITICAL_EXCEPTIONS:
                                         pass
 
                                     with job_span(
                                         "job.fail", job=d, attrs={"retryable": False, "error_code": error_code}
                                     ):
                                         pass
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 self._update_gauges(
                                     domain=d.get("domain"), queue=d.get("queue"), job_type=d.get("job_type")
@@ -4259,13 +4286,13 @@ class JobManager:
                                         "job_type": d.get("job_type"),
                                     }
                                     emit_job_event("job.failed", job=ev, attrs={"error_code": (error_code or error)})
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 try:
                                     self._cancel_dependent_jobs(d.get("uuid"), reason="dependency_failed")
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}:
                             try:
@@ -4277,7 +4304,7 @@ class JobManager:
                                 logger.info(
                                     f"[JM TEST MUT] fail_job terminal ok={bool(ok)} total={_total} dist={_dist}"
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         return ok
             else:
@@ -4290,7 +4317,7 @@ class JobManager:
                             logger.info(
                                 f"[JM TEST MUT] fail_job enter job_id={job_id} retryable={retryable} backoff={backoff_seconds} enforce={enforce} backend=sqlite"
                             )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                     # For metrics, fetch labels
                     rowl = conn.execute(
@@ -4331,7 +4358,7 @@ class JobManager:
                             try:
                                 if _outbox and int(backoff_seconds) <= 0 and delay < 10:
                                     delay = 10
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 if _outbox and delay < 3:
                                     delay = 3
                             if test_mode and int(backoff_seconds) <= 0:
@@ -4404,7 +4431,7 @@ class JobManager:
                                 if rowq and str(rowq[0]) == "quarantined":
                                     post_commit_cancel_uuid = rowq[1]
                                     post_commit_cancel_reason = "dependency_failed"
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             try:
                                 if rowl:
@@ -4414,7 +4441,7 @@ class JobManager:
                                         from .metrics import observe_retry_after
 
                                         observe_retry_after(dtmp, float(delay))
-                                    except Exception:
+                                    except _JOB_NONCRITICAL_EXCEPTIONS:
                                         pass
                                     try:
                                         ev = {
@@ -4432,7 +4459,7 @@ class JobManager:
                                                 "retry_count": int(current + 1),
                                             },
                                         )
-                                    except Exception:
+                                    except _JOB_NONCRITICAL_EXCEPTIONS:
                                         pass
                                     # Counters: processing -> queued (ready/scheduled) or quarantined
                                     try:
@@ -4449,7 +4476,7 @@ class JobManager:
                                                     "SELECT failure_streak_count FROM jobs WHERE id = ?", (job_id,)
                                                 ).fetchone()
                                                 cur_fs = int(row_fs[0]) if row_fs and row_fs[0] else 0
-                                            except Exception:
+                                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                                 cur_fs = 0
                                             will_quarantine = cur_fs >= int(
                                                 os.getenv("JOBS_QUARANTINE_THRESHOLD", "2") or "2"
@@ -4481,7 +4508,7 @@ class JobManager:
                                                     int(add_quar),
                                                 ),
                                             )
-                                    except Exception:
+                                    except _JOB_NONCRITICAL_EXCEPTIONS:
                                         pass
                                     # Append to failure_timeline
                                     try:
@@ -4491,7 +4518,7 @@ class JobManager:
                                         timeline_json = row_t[0] if row_t else None
                                         try:
                                             tl = json.loads(timeline_json) if timeline_json else []
-                                        except Exception:
+                                        except _JOB_NONCRITICAL_EXCEPTIONS:
                                             tl = []
                                         tl.append(
                                             {
@@ -4517,11 +4544,11 @@ class JobManager:
                                                 ).fetchone()
                                                 if rnow:
                                                     JobManager._LAST_ACQUIRED_TEST[(rowl[2], rowl[3])] = dict(rnow)
-                                        except Exception:
+                                        except _JOB_NONCRITICAL_EXCEPTIONS:
                                             pass
-                                    except Exception:
+                                    except _JOB_NONCRITICAL_EXCEPTIONS:
                                         pass
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}:
                                 try:
@@ -4531,7 +4558,7 @@ class JobManager:
                                     _tl_len = 0
                                     try:
                                         _tl_len = len(json.loads(_row[0])) if (_row and _row[0]) else 0
-                                    except Exception:
+                                    except _JOB_NONCRITICAL_EXCEPTIONS:
                                         _tl_len = 0
                                     _total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
                                     _dist = {
@@ -4543,7 +4570,7 @@ class JobManager:
                                     logger.info(
                                         f"[JM TEST MUT] fail_job retryable scheduled delay={int(delay)} tl_len={_tl_len} total={int(_total)} dist={_dist}"
                                     )
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                             result = True
                     if not retry_scheduled:
@@ -4601,7 +4628,7 @@ class JobManager:
                                     }
                                     row_dom = conn.execute("SELECT domain FROM jobs WHERE id = ?", (job_id,)).fetchone()
                                     dom_val = str(row_dom[0]).lower() if row_dom and row_dom[0] else ""
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     allow = {"chatbooks", "embeddings"}
                                     dom_val = ""
                                 if dom_val in allow:
@@ -4631,7 +4658,7 @@ class JobManager:
                                         from .metrics import increment_failures_by_code
 
                                         increment_failures_by_code(d, error_code)
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 # Counters: processing -> failed (terminal)
                                 try:
@@ -4647,7 +4674,7 @@ class JobManager:
                                                 "UPDATE job_counters SET processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
                                                 (d.get("domain"), d.get("queue"), d.get("job_type")),
                                             )
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 # Append terminal failure to timeline (no backoff)
                                 try:
@@ -4657,7 +4684,7 @@ class JobManager:
                                     timeline_json2 = row_t2[0] if row_t2 else None
                                     try:
                                         tl2 = json.loads(timeline_json2) if timeline_json2 else []
-                                    except Exception:
+                                    except _JOB_NONCRITICAL_EXCEPTIONS:
                                         tl2 = []
                                     tl2.append(
                                         {
@@ -4671,14 +4698,14 @@ class JobManager:
                                         "UPDATE jobs SET failure_timeline = ? WHERE id = ?",
                                         (json.dumps(tl2), int(job_id)),
                                     )
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 try:
                                     with job_span(
                                         "job.fail", job=d, attrs={"retryable": False, "error_code": error_code}
                                     ):
                                         pass
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 self._update_gauges(
                                     domain=d.get("domain"), queue=d.get("queue"), job_type=d.get("job_type")
@@ -4691,15 +4718,15 @@ class JobManager:
                                         "job_type": d.get("job_type"),
                                     }
                                     emit_job_event("job.failed", job=ev, attrs={"error_code": (error_code or error)})
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 try:
                                     if d.get("uuid"):
                                         post_commit_cancel_uuid = d.get("uuid")
                                         post_commit_cancel_reason = "dependency_failed"
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}:
                             try:
@@ -4713,7 +4740,7 @@ class JobManager:
                                 logger.info(
                                     f"[JM TEST MUT] fail_job terminal ok={bool(ok)} total={int(_total)} dist={_dist}"
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         result = bool(ok)
             if post_commit_cancel_uuid:
@@ -4722,7 +4749,7 @@ class JobManager:
                         post_commit_cancel_uuid,
                         reason=post_commit_cancel_reason or "dependency_failed",
                     )
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     pass
             return bool(result)
         finally:
@@ -4742,13 +4769,13 @@ class JobManager:
                         if _test_mode:
                             try:
                                 logger.info(f"[JM TEST MUT] cancel_job enter job_id={job_id} backend=pg")
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         # Capture grouping keys for gauges
                         try:
                             cur.execute("SELECT domain, queue, job_type, uuid FROM jobs WHERE id = %s", (int(job_id),))
                             row0 = cur.fetchone()
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             row0 = None
                         # For counters, inspect ready vs scheduled before cancelling queued
                         cur.execute(
@@ -4767,7 +4794,7 @@ class JobManager:
                                         domain=row0["domain"], queue=row0["queue"], job_type=row0["job_type"]
                                     )
                                     increment_cancelled(dict(row0))
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             # Counters: queued (ready/scheduled) -> cancelled
                             try:
@@ -4798,7 +4825,7 @@ class JobManager:
                                             int(add_sched),
                                         ),
                                     )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             try:
                                 if row0:
@@ -4809,14 +4836,14 @@ class JobManager:
                                         "job_type": row0["job_type"],
                                     }
                                     emit_job_event("job.cancelled", job=ev, attrs={"reason": reason, "terminal": True})
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             try:
                                 if row0 and row0.get("uuid"):
                                     self._cancel_dependent_jobs(
                                         row0.get("uuid"), reason=(reason or "dependency_cancelled")
                                     )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             if _test_mode:
                                 try:
@@ -4828,7 +4855,7 @@ class JobManager:
                                     logger.info(
                                         f"[JM TEST MUT] cancel_job queued->cancelled ok=True total={_total} dist={_dist}"
                                     )
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                             return True
                         # Terminally cancel processing jobs as well (more responsive semantics)
@@ -4843,7 +4870,7 @@ class JobManager:
                                     domain=row0["domain"], queue=row0["queue"], job_type=row0["job_type"]
                                 )
                                 increment_cancelled(dict(row0))
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         # Counters: processing -> cancelled
                         try:
@@ -4857,7 +4884,7 @@ class JobManager:
                                     "UPDATE job_counters SET processing_count = GREATEST(processing_count - 1, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
                                     (row0["domain"], row0["queue"], row0["job_type"]),
                                 )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             if ok and row0:
@@ -4868,12 +4895,12 @@ class JobManager:
                                     "job_type": row0["job_type"],
                                 }
                                 emit_job_event("job.cancelled", job=ev, attrs={"reason": reason, "terminal": True})
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             if ok and row0 and row0.get("uuid"):
                                 self._cancel_dependent_jobs(row0.get("uuid"), reason=(reason or "dependency_cancelled"))
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         if _test_mode:
                             try:
@@ -4885,7 +4912,7 @@ class JobManager:
                                 logger.info(
                                     f"[JM TEST MUT] cancel_job processing->cancelled ok={bool(ok)} total={_total} dist={_dist}"
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         return ok
             else:
@@ -4896,7 +4923,7 @@ class JobManager:
                     if _test_mode:
                         try:
                             logger.info(f"[JM TEST MUT] cancel_job enter job_id={job_id} backend=sqlite")
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                     # Capture grouping keys for gauges
                     try:
@@ -4904,7 +4931,7 @@ class JobManager:
                             "SELECT domain, queue, job_type, uuid FROM jobs WHERE id = ?",
                             (job_id,),
                         ).fetchone()
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         row0 = None
                     # cancel queued immediately (capture ready vs scheduled for counters)
                     rowd = conn.execute(
@@ -4922,7 +4949,7 @@ class JobManager:
                                     domain=row0["domain"], queue=row0["queue"], job_type=row0["job_type"]
                                 )
                                 increment_cancelled(dict(row0))
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         # Counters: queued (ready/scheduled) -> cancelled
                         try:
@@ -4955,7 +4982,7 @@ class JobManager:
                                         int(add_sched),
                                     ),
                                 )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             if row0:
@@ -4966,13 +4993,13 @@ class JobManager:
                                     "job_type": row0["job_type"],
                                 }
                                 emit_job_event("job.cancelled", job=ev, attrs={"reason": reason, "terminal": True})
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             if row0 and row0["uuid"]:
                                 post_commit_cancel_uuid = row0["uuid"]
                                 post_commit_cancel_reason = reason or "dependency_cancelled"
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         if _test_mode:
                             try:
@@ -4986,7 +5013,7 @@ class JobManager:
                                 logger.info(
                                     f"[JM TEST MUT] cancel_job queued->cancelled ok=True total={int(_total)} dist={_dist}"
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         result = True
                     if not queued_cancelled:
@@ -5002,7 +5029,7 @@ class JobManager:
                                     domain=row0["domain"], queue=row0["queue"], job_type=row0["job_type"]
                                 )
                                 increment_cancelled(dict(row0))
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         if _test_mode:
                             try:
@@ -5016,7 +5043,7 @@ class JobManager:
                                 logger.info(
                                     f"[JM TEST MUT] cancel_job processing->cancelled ok={bool(ok)} total={int(_total)} dist={_dist}"
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         # Counters: processing -> cancelled
                         try:
@@ -5030,7 +5057,7 @@ class JobManager:
                                     "UPDATE job_counters SET processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
                                     (row0["domain"], row0["queue"], row0["job_type"]),
                                 )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             if ok and row0:
@@ -5041,13 +5068,13 @@ class JobManager:
                                     "job_type": row0["job_type"],
                                 }
                                 emit_job_event("job.cancelled", job=ev, attrs={"reason": reason, "terminal": True})
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             if ok and row0 and row0["uuid"]:
                                 post_commit_cancel_uuid = row0["uuid"]
                                 post_commit_cancel_reason = reason or "dependency_cancelled"
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         result = bool(ok)
             if post_commit_cancel_uuid:
@@ -5056,7 +5083,7 @@ class JobManager:
                         post_commit_cancel_uuid,
                         reason=post_commit_cancel_reason or "dependency_cancelled",
                     )
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     pass
             return bool(result)
         finally:
@@ -5112,7 +5139,7 @@ class JobManager:
                         if ok:
                             try:
                                 self._update_gauges(domain=row["domain"], queue=row["queue"], job_type=row["job_type"])
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         try:
                             if ok and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
@@ -5140,7 +5167,7 @@ class JobManager:
                                     ),
                                     (row["domain"], row["queue"], row["job_type"], int(add_ready), int(add_sched)),
                                 )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         if ok and reason:
                             try:
@@ -5151,7 +5178,7 @@ class JobManager:
                                     "job_type": row["job_type"],
                                 }
                                 emit_job_event("job.released", job=ev, attrs={"reason": reason})
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         return ok
             else:
@@ -5186,7 +5213,7 @@ class JobManager:
                     if ok:
                         try:
                             self._update_gauges(domain=row["domain"], queue=row["queue"], job_type=row["job_type"])
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                     try:
                         if ok and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
@@ -5222,7 +5249,7 @@ class JobManager:
                                     int(add_sched),
                                 ),
                             )
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     if ok and reason:
                         try:
@@ -5233,7 +5260,7 @@ class JobManager:
                                 "job_type": row["job_type"],
                             }
                             emit_job_event("job.released", job=ev, attrs={"reason": reason})
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                     return ok
         finally:
@@ -5303,7 +5330,7 @@ class JobManager:
                             if _test_mode:
                                 try:
                                     logger.info(f"[JM TEST MUT] prune_jobs dry_run count={_cnt}")
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
                             return _cnt
                         # Optional archive copy
@@ -5357,9 +5384,9 @@ class JobManager:
                                                     "UPDATE jobs_archive SET payload_compressed=%s, result_compressed=%s WHERE id=%s",
                                                     (pbytes, rbytes, rid),
                                                 )
-                                        except Exception:
+                                        except _JOB_NONCRITICAL_EXCEPTIONS:
                                             continue
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         # Counters: subtract queued/processing/quarantined rows if they are part of prune set
                         try:
@@ -5404,13 +5431,13 @@ class JobManager:
                                         "UPDATE job_counters SET quarantined_count = GREATEST(quarantined_count - %s, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
                                         (int(r["c"]), r["domain"], r["queue"], r["job_type"]),
                                     )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         if _test_mode:
                             try:
                                 cur.execute("SELECT COUNT(*) AS c FROM jobs")
                                 _before = (cur.fetchone() or {}).get("c", 0)
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 _before = None
                         cur.execute(f"DELETE FROM jobs{where_clause}", tuple(params))
                         deleted = cur.rowcount or 0
@@ -5421,7 +5448,7 @@ class JobManager:
                                 logger.info(
                                     f"[JM TEST MUT] prune_jobs deleted={int(deleted)} before={_before} after={_after}"
                                 )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         try:
                             emit_job_event(
@@ -5437,7 +5464,7 @@ class JobManager:
                                     "job_type": job_type,
                                 },
                             )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         return deleted
             else:
@@ -5447,7 +5474,7 @@ class JobManager:
                             logger.info(
                                 f"[JM TEST MUT] prune_jobs enter statuses={statuses} older_than_days={older_than_days} domain={domain} queue={queue} job_type={job_type} backend=sqlite"
                             )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                     where_parts: list[str] = []
                     params: list[Any] = []
@@ -5483,7 +5510,7 @@ class JobManager:
                             logger.debug(
                                 f"SQLite prune debug: matches={len(dbg_rows)} statuses={statuses} older_than_days={older_than_days} ids={[int(r[0]) for r in dbg_rows]}"
                             )
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     # Compute match count up front for accurate reporting
                     cur_cnt = conn.execute(f"SELECT COUNT(*) FROM jobs{where_clause}", tuple(params))
@@ -5504,12 +5531,12 @@ class JobManager:
                                     "job_type": job_type,
                                 },
                             )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         if _test_mode:
                             try:
                                 logger.info(f"[JM TEST MUT] prune_jobs dry_run count={int(count)}")
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                         return count
                     # Optional archive copy
@@ -5554,9 +5581,9 @@ class JobManager:
                                                 "UPDATE jobs_archive SET payload_compressed=?, result_compressed=? WHERE id=?",
                                                 (p64, r64, int(rid)),
                                             )
-                                    except Exception:
+                                    except _JOB_NONCRITICAL_EXCEPTIONS:
                                         continue
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                     # Counters: subtract queued/processing/quarantined rows if they are part of prune set
                     try:
@@ -5605,12 +5632,12 @@ class JobManager:
                                     "UPDATE job_counters SET quarantined_count = CASE WHEN (quarantined_count - ?) < 0 THEN 0 ELSE quarantined_count - ? END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
                                     (int(r[3]), int(r[3]), r[0], r[1], r[2]),
                                 )
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     if _test_mode:
                         try:
                             _before2 = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             _before2 = None
                     conn.execute(f"DELETE FROM jobs{where_clause}", tuple(params))
                     deleted = int(count)
@@ -5620,7 +5647,7 @@ class JobManager:
                             logger.info(
                                 f"[JM TEST MUT] prune_jobs deleted={int(deleted)} before={_before2} after={_after2}"
                             )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                     try:
                         emit_job_event(
@@ -5636,7 +5663,7 @@ class JobManager:
                                 "job_type": job_type,
                             },
                         )
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     return deleted
         finally:
@@ -5751,9 +5778,9 @@ class JobManager:
                                                     labs = dict(labels)
                                                     labs["reason"] = "ttl_age"
                                                     reg.increment("jobs.failures_total", cval, labs)
-                                    except Exception:
+                                    except _JOB_NONCRITICAL_EXCEPTIONS:
                                         pass
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             if action == "cancel":
                                 cur.execute(
@@ -5823,9 +5850,9 @@ class JobManager:
                                                     labs = dict(labels)
                                                     labs["reason"] = "ttl_runtime"
                                                     reg.increment("jobs.failures_total", cval, labs)
-                                    except Exception:
+                                    except _JOB_NONCRITICAL_EXCEPTIONS:
                                         pass
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             if action == "cancel":
                                 cur.execute(
@@ -5855,7 +5882,7 @@ class JobManager:
                                     "job_type": job_type,
                                 },
                             )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         return affected
             else:
@@ -5929,9 +5956,9 @@ class JobManager:
                                                 labs = dict(labels)
                                                 labs["reason"] = "ttl_age"
                                                 reg.increment("jobs.failures_total", float(int(c)), labs)
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         sql = (
                             "UPDATE jobs SET "
@@ -5953,7 +5980,7 @@ class JobManager:
                                 logger.debug(
                                     f"TTL(age) SQLite updated rows={cur.rowcount} for where={where} params={params3}"
                                 )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         affected2_age = int(cur.rowcount or 0)
                         affected2 += affected2_age
@@ -5997,9 +6024,9 @@ class JobManager:
                                                 labs = dict(labels)
                                                 labs["reason"] = "ttl_runtime"
                                                 reg.increment("jobs.failures_total", float(int(c)), labs)
-                                except Exception:
+                                except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         sql2 = (
                             "UPDATE jobs SET "
@@ -6021,7 +6048,7 @@ class JobManager:
                                 logger.debug(
                                     f"TTL(runtime) SQLite updated rows={cur2.rowcount} for where={where} params={params4}"
                                 )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         affected2_runtime = int(cur2.rowcount or 0)
                         affected2 += affected2_runtime
@@ -6041,7 +6068,7 @@ class JobManager:
                             "job_type": job_type,
                         },
                     )
-                except Exception:
+                except _JOB_NONCRITICAL_EXCEPTIONS:
                     pass
                 return affected2
         finally:
@@ -6133,7 +6160,7 @@ class JobManager:
                                         "UPDATE job_counters SET scheduled_count = GREATEST(scheduled_count - %s, 0), ready_count = job_counters.ready_count + %s, updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
                                         (int(r["c"]), int(r["c"]), r["domain"], r["queue"], r["job_type"]),
                                     )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         cur.execute(f"UPDATE jobs SET available_at=NOW() WHERE {wh}", tuple(params))
                     else:
@@ -6145,7 +6172,7 @@ class JobManager:
                         )
                     try:
                         conn.commit()
-                    except Exception:
+                    except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     return count
             else:
@@ -6191,7 +6218,7 @@ class JobManager:
                                         ),
                                         (int(r[3]), int(r[3]), int(r[3]), r[0], r[1], r[2]),
                                     )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         conn.execute(f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh}", tuple(params))
                     else:
@@ -6284,7 +6311,7 @@ class JobManager:
                                             "UPDATE job_counters SET scheduled_count = GREATEST(scheduled_count - %s, 0), ready_count = job_counters.ready_count + %s, updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
                                             (int(r["c"]), int(r["c"]), r["domain"], r["queue"], r["job_type"]),
                                         )
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             cur.execute(
                                 f"UPDATE jobs SET available_at=NOW() WHERE {wh} AND status='queued' AND available_at >= NOW()",
@@ -6342,7 +6369,7 @@ class JobManager:
                                         ),
                                         (int(r[3]), int(r[3]), int(r[3]), r[0], r[1], r[2]),
                                     )
-                        except Exception:
+                        except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         conn.execute(
                             f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh} AND status='queued' AND available_at >= DATETIME('now')",
@@ -6437,7 +6464,7 @@ class JobManager:
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def count_active_processing(self, *, domain: str | None = None, queue: str | None = None) -> int:
@@ -6471,7 +6498,7 @@ class JobManager:
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def add_job_attachment(
@@ -6522,7 +6549,7 @@ class JobManager:
                 (domain, owner_user_id),
             ).fetchone()
             return int(row[0] or 0)
-        except Exception:
+        except _JOB_NONCRITICAL_EXCEPTIONS:
             return 0
         finally:
             conn.close()
@@ -6655,7 +6682,7 @@ class JobManager:
                                     obj = val
                                 else:
                                     obj = None
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 obj = None
                             if isinstance(obj, dict) and (
                                 obj.get("_enc") == "aesgcm:v1" or isinstance(obj.get("_encrypted"), dict)
@@ -6677,7 +6704,7 @@ class JobManager:
                                     val_obj = val
                                 else:
                                     val_obj = None
-                            except Exception:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:
                                 val_obj = None
                             if isinstance(val_obj, dict) and val_obj.get("_enc") == "aesgcm:v1":
                                 obj = decrypt_json_blob_with_key(val_obj, old_key_b64)
@@ -6700,7 +6727,7 @@ class JobManager:
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def finalize_cancelled(self, job_id: int, *, reason: str | None = None) -> bool:
@@ -6842,11 +6869,11 @@ class JobManager:
                         "fix": bool(fix),
                     },
                 )
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass
             return res
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOB_NONCRITICAL_EXCEPTIONS:
                 pass

@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
@@ -16,7 +19,11 @@ from tldw_Server_API.app.api.v1.schemas.document_references import (
     DocumentReferencesResponse,
     ReferenceEntry,
 )
-from tldw_Server_API.app.api.v1.utils.cache import cache_response, get_cached_response
+from tldw_Server_API.app.api.v1.utils.cache import (
+    cache_response,
+    get_cached_response,
+    get_cache_client,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
 
@@ -24,9 +31,14 @@ router = APIRouter(tags=["Document Workspace"])
 
 
 # Maximum number of references to enrich (to avoid long response times)
-MAX_ENRICHMENT_REFS = 20
-# Delay between Semantic Scholar API calls (to avoid rate limiting)
-SEMANTIC_SCHOLAR_DELAY = 0.2  # 200ms = max 5 requests/sec
+MAX_ENRICHMENT_REFS = 5
+# Delay between external API calls (to avoid rate limiting)
+SEMANTIC_SCHOLAR_DELAY = 0.35
+CROSSREF_DELAY = 0.1
+ARXIV_DELAY = 0.1
+# Cache TTL for external enrichment lookups (seconds)
+EXTERNAL_ENRICHMENT_CACHE_TTL = 3600
+EXTERNAL_ENRICHMENT_COOLDOWN = 300
 
 # Reference section detection patterns
 REFERENCES_PARSER_VERSION = "4"
@@ -72,12 +84,14 @@ def _build_references_cache_key(
     enrich: bool,
     user_id: str,
     db_scope: str,
+    reference_index: int | None = None,
 ) -> str:
     scope_str = f"user:{user_id}:db:{db_scope}"
     enrich_flag = "enrich" if enrich else "basic"
+    index_flag = f":idx:{reference_index}" if reference_index is not None else ""
     return (
         f"cache:/api/v1/media/{media_id}/references:"
-        f"{scope_str}:{enrich_flag}:v{REFERENCES_PARSER_VERSION}"
+        f"{scope_str}:{enrich_flag}{index_flag}:v{REFERENCES_PARSER_VERSION}"
     )
 
 
@@ -91,6 +105,74 @@ def _parse_year_from_date(date_str: str | None) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def _is_rate_limited(err: str | None) -> bool:
+    if not err:
+        return False
+    lowered = err.lower()
+    return any(
+        token in lowered
+        for token in ("429", "too many requests", "rate limit", "throttl")
+    )
+
+
+def _make_external_cache_key(provider: str, lookup: str) -> str:
+    normalized = re.sub(r"\s+", " ", lookup).strip().lower()
+    digest = hashlib.md5(normalized.encode("utf-8")).hexdigest()
+    return f"cache:/references/enrich:{provider}:{digest}"
+
+
+def _get_cached_external(key: str) -> tuple[dict[str, Any] | None, str | None] | None:
+    cached = get_cached_response(key)
+    if cached is None:
+        return None
+    _etag, payload = cached
+    if isinstance(payload, dict):
+        return payload.get("data"), payload.get("err")
+    return None
+
+
+def _set_cached_external(key: str, data: dict[str, Any] | None, err: str | None) -> None:
+    cache = get_cache_client()
+    if cache is None:
+        return
+    payload = {"data": data, "err": err}
+    serialized = json.dumps(payload, default=str, separators=(",", ":"))
+    cache.setex(key, EXTERNAL_ENRICHMENT_CACHE_TTL, f"external|{serialized}")
+
+
+def _get_provider_cooldown_key(provider: str) -> str:
+    return f"cache:/references/enrich:cooldown:{provider}"
+
+
+def _is_provider_cooldown(provider: str) -> bool:
+    cache = get_cache_client()
+    if cache is None:
+        return False
+    key = _get_provider_cooldown_key(provider)
+    try:
+        value = cache.get(key)
+        if not value:
+            return False
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
+        until_ts = float(value)
+        return time.time() < until_ts
+    except Exception:
+        return False
+
+
+def _set_provider_cooldown(provider: str) -> None:
+    cache = get_cache_client()
+    if cache is None:
+        return
+    key = _get_provider_cooldown_key(provider)
+    try:
+        until_ts = time.time() + EXTERNAL_ENRICHMENT_COOLDOWN
+        cache.setex(key, EXTERNAL_ENRICHMENT_COOLDOWN, str(until_ts))
+    except Exception:
+        return
 
 
 def _find_reference_section(content: str) -> str | None:
@@ -365,9 +447,13 @@ async def _enrich_with_semantic_scholar(references: list[ReferenceEntry]) -> tup
     enriched = []
     enrichment_performed = False
     api_call_count = 0
+    rate_limited = False
 
-    for ref in refs_to_enrich:
+    for idx, ref in enumerate(refs_to_enrich):
         enriched_ref = ref.model_copy()
+        if rate_limited:
+            enriched.append(enriched_ref)
+            continue
 
         # Add delay between API calls (skip first)
         if api_call_count > 0:
@@ -376,16 +462,28 @@ async def _enrich_with_semantic_scholar(references: list[ReferenceEntry]) -> tup
         # Try to look up by DOI first
         if ref.doi:
             try:
-                api_call_count += 1
-                paper_data, err = await asyncio.to_thread(
-                    get_paper_details_semantic_scholar,
-                    f"DOI:{ref.doi}",
-                )
+                cache_key = _make_external_cache_key("semantic_scholar", f"doi:{ref.doi}")
+                cached = _get_cached_external(cache_key)
+                if cached is not None:
+                    paper_data, err = cached
+                else:
+                    api_call_count += 1
+                    paper_data, err = await asyncio.to_thread(
+                        get_paper_details_semantic_scholar,
+                        f"DOI:{ref.doi}",
+                    )
+                    _set_cached_external(cache_key, paper_data, err)
                 if paper_data and not err:
                     enriched_ref = _apply_semantic_scholar_data(enriched_ref, paper_data)
                     enrichment_performed = True
                     enriched.append(enriched_ref)
                     continue
+                if _is_rate_limited(err):
+                    rate_limited = True
+                    _set_provider_cooldown("semantic_scholar")
+                    enriched.append(enriched_ref)
+                    enriched.extend(refs_to_enrich[idx + 1 :])
+                    break
             except Exception as e:
                 logger.debug("DOI lookup failed for {}: {}", ref.doi, e)
 
@@ -394,16 +492,28 @@ async def _enrich_with_semantic_scholar(references: list[ReferenceEntry]) -> tup
             if api_call_count > 0:
                 await asyncio.sleep(SEMANTIC_SCHOLAR_DELAY)
             try:
-                api_call_count += 1
-                paper_data, err = await asyncio.to_thread(
-                    get_paper_details_semantic_scholar,
-                    f"ARXIV:{ref.arxiv_id}",
-                )
+                cache_key = _make_external_cache_key("semantic_scholar", f"arxiv:{ref.arxiv_id}")
+                cached = _get_cached_external(cache_key)
+                if cached is not None:
+                    paper_data, err = cached
+                else:
+                    api_call_count += 1
+                    paper_data, err = await asyncio.to_thread(
+                        get_paper_details_semantic_scholar,
+                        f"ARXIV:{ref.arxiv_id}",
+                    )
+                    _set_cached_external(cache_key, paper_data, err)
                 if paper_data and not err:
                     enriched_ref = _apply_semantic_scholar_data(enriched_ref, paper_data)
                     enrichment_performed = True
                     enriched.append(enriched_ref)
                     continue
+                if _is_rate_limited(err):
+                    rate_limited = True
+                    _set_provider_cooldown("semantic_scholar")
+                    enriched.append(enriched_ref)
+                    enriched.extend(refs_to_enrich[idx + 1 :])
+                    break
             except Exception as e:
                 logger.debug("arXiv lookup failed for {}: {}", ref.arxiv_id, e)
 
@@ -412,12 +522,18 @@ async def _enrich_with_semantic_scholar(references: list[ReferenceEntry]) -> tup
             if api_call_count > 0:
                 await asyncio.sleep(SEMANTIC_SCHOLAR_DELAY)
             try:
-                api_call_count += 1
-                search_result, err = await asyncio.to_thread(
-                    search_papers_semantic_scholar,
-                    ref.title,
-                    limit=1,
-                )
+                cache_key = _make_external_cache_key("semantic_scholar_search", ref.title)
+                cached = _get_cached_external(cache_key)
+                if cached is not None:
+                    search_result, err = cached
+                else:
+                    api_call_count += 1
+                    search_result, err = await asyncio.to_thread(
+                        search_papers_semantic_scholar,
+                        ref.title,
+                        limit=1,
+                    )
+                    _set_cached_external(cache_key, search_result, err)
                 if search_result and not err:
                     papers = search_result.get("data", [])
                     if papers:
@@ -429,6 +545,12 @@ async def _enrich_with_semantic_scholar(references: list[ReferenceEntry]) -> tup
                         if ref_title[:30] in paper_title or paper_title[:30] in ref_title:
                             enriched_ref = _apply_semantic_scholar_data(enriched_ref, paper)
                             enrichment_performed = True
+                if _is_rate_limited(err):
+                    rate_limited = True
+                    _set_provider_cooldown("semantic_scholar")
+                    enriched.append(enriched_ref)
+                    enriched.extend(refs_to_enrich[idx + 1 :])
+                    break
             except Exception as e:
                 logger.debug("Title search failed for {}: {}", ref.title, e)
 
@@ -544,15 +666,35 @@ async def _enrich_with_crossref(references: list[ReferenceEntry]) -> tuple[list[
 
     enriched: list[ReferenceEntry] = []
     enrichment_performed = False
+    api_call_count = 0
+    rate_limited = False
 
-    for ref in refs_to_enrich:
+    for idx, ref in enumerate(refs_to_enrich):
         enriched_ref = ref.model_copy()
+        if rate_limited:
+            enriched.append(enriched_ref)
+            continue
         if ref.doi and _needs_external_enrichment(enriched_ref):
             try:
-                item, err = await asyncio.to_thread(get_crossref_by_doi, ref.doi)
+                if api_call_count > 0:
+                    await asyncio.sleep(CROSSREF_DELAY)
+                cache_key = _make_external_cache_key("crossref", f"doi:{ref.doi}")
+                cached = _get_cached_external(cache_key)
+                if cached is not None:
+                    item, err = cached
+                else:
+                    api_call_count += 1
+                    item, err = await asyncio.to_thread(get_crossref_by_doi, ref.doi)
+                    _set_cached_external(cache_key, item, err)
                 if item and not err:
                     enriched_ref = _apply_crossref_data(enriched_ref, item)
                     enrichment_performed = True
+                if _is_rate_limited(err):
+                    rate_limited = True
+                    _set_provider_cooldown("crossref")
+                    enriched.append(enriched_ref)
+                    enriched.extend(refs_to_enrich[idx + 1 :])
+                    break
             except Exception as e:
                 logger.debug("Crossref lookup failed for {}: {}", ref.doi, e)
         enriched.append(enriched_ref)
@@ -574,15 +716,35 @@ async def _enrich_with_arxiv(references: list[ReferenceEntry]) -> tuple[list[Ref
 
     enriched: list[ReferenceEntry] = []
     enrichment_performed = False
+    api_call_count = 0
+    rate_limited = False
 
-    for ref in refs_to_enrich:
+    for idx, ref in enumerate(refs_to_enrich):
         enriched_ref = ref.model_copy()
+        if rate_limited:
+            enriched.append(enriched_ref)
+            continue
         if ref.arxiv_id and _needs_external_enrichment(enriched_ref):
             try:
-                item, err = await asyncio.to_thread(get_arxiv_by_id, ref.arxiv_id)
+                if api_call_count > 0:
+                    await asyncio.sleep(ARXIV_DELAY)
+                cache_key = _make_external_cache_key("arxiv", f"id:{ref.arxiv_id}")
+                cached = _get_cached_external(cache_key)
+                if cached is not None:
+                    item, err = cached
+                else:
+                    api_call_count += 1
+                    item, err = await asyncio.to_thread(get_arxiv_by_id, ref.arxiv_id)
+                    _set_cached_external(cache_key, item, err)
                 if item and not err:
                     enriched_ref = _apply_arxiv_data(enriched_ref, item)
                     enrichment_performed = True
+                if _is_rate_limited(err):
+                    rate_limited = True
+                    _set_provider_cooldown("arxiv")
+                    enriched.append(enriched_ref)
+                    enriched.extend(refs_to_enrich[idx + 1 :])
+                    break
             except Exception as e:
                 logger.debug("arXiv lookup failed for {}: {}", ref.arxiv_id, e)
         enriched.append(enriched_ref)
@@ -609,8 +771,12 @@ async def _enrich_with_arxiv(references: list[ReferenceEntry]) -> tuple[list[Ref
 async def get_document_references(
     media_id: int = Path(..., description="The ID of the media item"),
     enrich: bool = Query(
-        True,
+        False,
         description="Enrich references with external API data (citation counts, PDFs)",
+    ),
+    reference_index: int | None = Query(
+        None,
+        description="When provided, only enrich the reference at this index (0-based).",
     ),
     db: MediaDatabase = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
@@ -635,7 +801,7 @@ async def get_document_references(
 
     ## Enrichment
 
-    When `enrich=true` (default), the endpoint attempts to look up each
+    When `enrich=true`, the endpoint attempts to look up each
     reference using:
     - Semantic Scholar (DOI/arXiv ID lookup, title search fallback)
     - Crossref (DOI metadata)
@@ -648,7 +814,7 @@ async def get_document_references(
     - Missing metadata (title, authors, year)
 
     Enrichment is best-effort and gracefully degrades if external APIs fail.
-    Enrichment is limited to the first 20 references to avoid long response times.
+    Enrichment is limited to the first 5 references to avoid long response times.
     """
     user_id = str(getattr(current_user, "id", "anonymous"))
     db_scope = _get_db_scope(db)
@@ -657,6 +823,7 @@ async def get_document_references(
         enrich=enrich,
         user_id=user_id,
         db_scope=db_scope,
+        reference_index=reference_index,
     )
     cached = get_cached_response(cache_key)
     if cached is not None:
@@ -748,29 +915,52 @@ async def get_document_references(
     enrichment_sources: set[str] = set()
     if enrich and references:
         try:
-            references, enriched = await _enrich_with_semantic_scholar(references)
-            if enriched:
-                enrichment_sources.add("semantic_scholar")
-                logger.debug(
-                    "Enriched references with Semantic Scholar for media_id={}",
-                    media_id,
-                )
-
-            references, enriched = await _enrich_with_crossref(references)
-            if enriched:
-                enrichment_sources.add("crossref")
-                logger.debug(
-                    "Enriched references with Crossref for media_id={}",
-                    media_id,
-                )
-
-            references, enriched = await _enrich_with_arxiv(references)
-            if enriched:
-                enrichment_sources.add("arxiv")
-                logger.debug(
-                    "Enriched references with arXiv for media_id={}",
-                    media_id,
-                )
+            if reference_index is not None:
+                if reference_index < 0 or reference_index >= len(references):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="reference_index out of range",
+                    )
+                target_ref = references[reference_index]
+                enriched_refs = [target_ref]
+                if not _is_provider_cooldown("semantic_scholar"):
+                    enriched_refs, enriched = await _enrich_with_semantic_scholar(enriched_refs)
+                    if enriched:
+                        enrichment_sources.add("semantic_scholar")
+                if not _is_provider_cooldown("crossref"):
+                    enriched_refs, enriched = await _enrich_with_crossref(enriched_refs)
+                    if enriched:
+                        enrichment_sources.add("crossref")
+                if not _is_provider_cooldown("arxiv"):
+                    enriched_refs, enriched = await _enrich_with_arxiv(enriched_refs)
+                    if enriched:
+                        enrichment_sources.add("arxiv")
+                references[reference_index] = enriched_refs[0]
+            else:
+                if not _is_provider_cooldown("semantic_scholar"):
+                    references, enriched = await _enrich_with_semantic_scholar(references)
+                    if enriched:
+                        enrichment_sources.add("semantic_scholar")
+                        logger.debug(
+                            "Enriched references with Semantic Scholar for media_id={}",
+                            media_id,
+                        )
+                if not _is_provider_cooldown("crossref"):
+                    references, enriched = await _enrich_with_crossref(references)
+                    if enriched:
+                        enrichment_sources.add("crossref")
+                        logger.debug(
+                            "Enriched references with Crossref for media_id={}",
+                            media_id,
+                        )
+                if not _is_provider_cooldown("arxiv"):
+                    references, enriched = await _enrich_with_arxiv(references)
+                    if enriched:
+                        enrichment_sources.add("arxiv")
+                        logger.debug(
+                            "Enriched references with arXiv for media_id={}",
+                            media_id,
+                        )
         except Exception as e:
             logger.warning(
                 "Failed to enrich references for media_id={}: {}",

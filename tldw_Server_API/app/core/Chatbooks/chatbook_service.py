@@ -67,9 +67,32 @@ from .exceptions import (
     ValidationError,
 )
 
+_CHATBOOK_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    ArchiveError,
+    DatabaseError,
+    ExportError,
+    FileOperationError,
+    JobError,
+    SecurityError,
+    ValidationError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    json.JSONDecodeError,
+    zipfile.BadZipFile,
+    asyncio.CancelledError,
+)
+
 try:  # Prompts database is optional in some deployments
     from ..DB_Management.Prompts_DB import PromptsDatabase  # type: ignore
-except Exception:  # pragma: no cover - defensive guard for stripped builds
+except _CHATBOOK_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive guard for stripped builds
     PromptsDatabase = None  # type: ignore
 
 try:
@@ -78,14 +101,14 @@ try:
         get_media_prompts,
         get_media_transcripts,
     )
-except Exception:  # pragma: no cover
+except _CHATBOOK_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
     MediaDatabase = None  # type: ignore
     get_media_transcripts = None  # type: ignore
     get_media_prompts = None  # type: ignore
 
 try:
     from ..DB_Management.Evaluations_DB import EvaluationsDatabase  # type: ignore
-except Exception:  # pragma: no cover
+except _CHATBOOK_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
     EvaluationsDatabase = None  # type: ignore
 
 
@@ -167,7 +190,7 @@ class ChatbookService:
         """Return the maximum size for message images in bytes."""
         try:
             return int(core_settings.get("MAX_MESSAGE_IMAGE_BYTES", 5 * 1024 * 1024))
-        except Exception:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
             return 5 * 1024 * 1024
 
     @classmethod
@@ -321,12 +344,12 @@ class ChatbookService:
         try:
             from tldw_Server_API.app.core.Jobs.migrations import ensure_jobs_tables
             self._jobs_db_path = ensure_jobs_tables()
-        except Exception as exc:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Jobs core backend migrations skipped: {exc}")
         try:
             from .jobs_adapter import ChatbooksJobsAdapter
             self._jobs_adapter = ChatbooksJobsAdapter(owner_user_id=self.user_id)
-        except Exception as exc:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Chatbooks: core Jobs adapter unavailable: {exc}")
 
         # Initialize job tracking tables
@@ -409,7 +432,7 @@ class ChatbookService:
         for base_name, base in base_dirs:
             try:
                 return f"{base_name}/{resolved_path.relative_to(base).as_posix()}"
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 continue
         logger.debug(
             "Chatbooks: path {} not under import/temp dirs; using filename only",
@@ -430,7 +453,7 @@ class ChatbookService:
         try:
             db_path = DatabasePaths.get_prompts_db_path(self.user_id_int)
             self._prompts_db = PromptsDatabase(db_path, client_id=self.user_id)
-        except Exception as exc:  # pragma: no cover - defensive guard
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive guard
             logger.warning(f"Failed to initialize PromptsDatabase for chatbooks export: {exc}")
             self._note_todo("Prompts export/import initialization failed; inspect logs for details.")
             self._prompts_db = None
@@ -449,7 +472,7 @@ class ChatbookService:
         try:
             db_path = DatabasePaths.get_media_db_path(self.user_id_int)
             self._media_db = MediaDatabase(db_path, client_id=self.user_id)
-        except Exception as exc:  # pragma: no cover
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover
             logger.warning(f"Failed to initialize MediaDatabase for chatbooks export: {exc}")
             self._note_todo("Media export/import initialization failed; inspect logs for details.")
             self._media_db = None
@@ -469,7 +492,7 @@ class ChatbookService:
             db_path = DatabasePaths.get_evaluations_db_path(self.user_id_int)
             # EvaluationsDatabase handles backend resolution internally
             self._evaluations_db = EvaluationsDatabase(str(db_path))
-        except Exception as exc:  # pragma: no cover
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover
             logger.warning(f"Failed to initialize EvaluationsDatabase for chatbooks export: {exc}")
             self._note_todo("Evaluations export/import initialization failed; inspect logs for details.")
             self._evaluations_db = None
@@ -548,7 +571,7 @@ class ChatbookService:
             record = self.db.get_character_card_by_id(1)
             if record and record.get("id"):
                 return int(record["id"])
-        except Exception:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             cursor = self.db.execute_query(
@@ -561,7 +584,7 @@ class ChatbookService:
                     return int(row["id"])
                 if isinstance(row, (list, tuple)) and row:
                     return int(row[0])
-        except Exception:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
             pass
         return None
 
@@ -591,7 +614,7 @@ class ChatbookService:
                 record = self.db.get_character_card_by_id(char_id_int)
                 if record:
                     return char_id_int, None
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
 
         fallback = self._get_fallback_character_id()
@@ -611,12 +634,12 @@ class ChatbookService:
         record: dict[str, Any] | None = None
         try:
             record = media_db.get_media_by_id(int(identifier))
-        except Exception:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
             record = None
         if not record:
             try:
                 record = media_db.get_media_by_uuid(str(identifier))
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 record = None
         if record and isinstance(record, dict):
             return dict(record)
@@ -737,7 +760,7 @@ class ChatbookService:
             try:
                 # This works for sqlite3.Row objects
                 return [dict(row) for row in results]
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 # If that fails, use cursor description
                 if hasattr(cursor_or_list, 'description') and cursor_or_list.description:
                     columns = [desc[0] for desc in cursor_or_list.description]
@@ -792,7 +815,7 @@ class ChatbookService:
 
             logger.debug(f"No match found for '{name}' via FTS or direct query")
             return None
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Error searching for conversation by name: {e}")
             return None
 
@@ -834,7 +857,7 @@ class ChatbookService:
 
             logger.debug(f"No match found for note '{title}' via FTS or direct query")
             return None
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Error searching for note by title: {e}")
             return None
 
@@ -887,7 +910,7 @@ class ChatbookService:
                     warnings TEXT    -- JSON array
                 )
             """)
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error initializing job tables: {e}")
 
     # Alias for compatibility with tests
@@ -924,7 +947,7 @@ class ChatbookService:
                             for row in (rows or [])
                             if row is not None
                         ]
-                    except Exception as e:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Error getting conversations for export: {e}")
                     content_selections[ContentType.CONVERSATION] = conv_ids
                 elif ct == "characters":
@@ -940,7 +963,7 @@ class ChatbookService:
                             for row in (rows or [])
                             if row is not None
                         ]
-                    except Exception as e:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Error getting characters for export: {e}")
                     content_selections[ContentType.CHARACTER] = char_ids
                 elif ct == "notes":
@@ -956,7 +979,7 @@ class ChatbookService:
                             for row in (rows or [])
                             if row is not None
                         ]
-                    except Exception as e:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Error getting notes for export: {e}")
                     content_selections[ContentType.NOTE] = note_ids
                 elif ct == "world_books":
@@ -969,7 +992,7 @@ class ChatbookService:
                         else:
                             # Fallback to direct database query
                             logger.debug("WorldBookService not available, using direct query")
-                    except Exception as e:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Error getting world books for export: {e}")
                     content_selections[ContentType.WORLD_BOOK] = wb_ids
                 elif ct == "dictionaries":
@@ -982,7 +1005,7 @@ class ChatbookService:
                         else:
                             # Fallback to direct database query
                             logger.debug("ChatDictionary not available, using direct query")
-                    except Exception as e:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Error getting dictionaries for export: {e}")
                     content_selections[ContentType.DICTIONARY] = dict_ids
             kwargs['content_selections'] = content_selections
@@ -1027,7 +1050,7 @@ class ChatbookService:
                             }
                             # Only include non-zero entries to keep it tidy
                             content_summary = {k: v for k, v in totals.items() if isinstance(v, int) and v >= 0}
-                except Exception as _e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as _e:
                     # Fallback to empty summary on any error
                     logger.debug(f"Could not read manifest for content summary: {_e}")
 
@@ -1095,7 +1118,7 @@ class ChatbookService:
                     ps_job = self._ps_job_adapter.create_export_job(payload, request_id=request_id)
                     if ps_job and ps_job.get("id") is not None:
                         job_id = str(ps_job["id"])  # mirror PS id
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Failed to create PS export job, falling back to core: {e}")
                     job_id = None
             if job_id is None:
@@ -1143,7 +1166,7 @@ class ChatbookService:
                         max_retries=3,
                         request_id=request_id,
                     )
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     enqueue_error = str(e)
                     logger.warning(f"Failed to enqueue export job into core Jobs: {e}")
                 if not job_created:
@@ -1153,7 +1176,7 @@ class ChatbookService:
                     job.error_message = err_msg
                     try:
                         self._save_export_job(job)
-                    except Exception as save_err:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as save_err:
                         logger.warning(f"Failed to persist failed export job state: {save_err}")
                     return False, f"Export job failed to enqueue: {err_msg}", job_id
             elif self._jobs_backend == "prompt_studio":
@@ -1188,12 +1211,12 @@ class ChatbookService:
 
             return result
 
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             # Rollback on error
             if conn:
                 try:
                     conn.execute("ROLLBACK")
-                except Exception as e2:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e2:
                     logger.warning(f"Transaction rollback failed: error={e2}")
             logger.error(f"Transaction rolled back: {e}")
             raise
@@ -1202,7 +1225,7 @@ class ChatbookService:
             if conn:
                 try:
                     conn.close()
-                except Exception as e3:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e3:
                     logger.warning(f"Connection close failed after transaction: error={e3}")
 
     async def _create_chatbook_sync_wrapper(
@@ -1359,19 +1382,19 @@ class ChatbookService:
 
             return True, "Chatbook created successfully", str(output_path)
 
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error creating chatbook: {e}")
             if output_path and output_path.exists():
                 try:
                     await asyncio.to_thread(output_path.unlink)
-                except Exception as cleanup_err:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as cleanup_err:
                     logger.warning(f"Failed to remove partial archive {output_path}: {cleanup_err}")
             return False, f"Error creating chatbook: {str(e)}", None
         finally:
             if work_dir and work_dir.exists():
                 try:
                     await asyncio.to_thread(shutil.rmtree, work_dir)
-                except Exception as cleanup_err:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as cleanup_err:
                     logger.warning(f"Failed to remove work directory {work_dir}: {cleanup_err}")
 
     async def _create_chatbook_job_async(
@@ -1405,7 +1428,7 @@ class ChatbookService:
             if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                 try:
                     self._ps_job_adapter.update_status(int(job.job_id), "in_progress")
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"PS adapter update_status failed for export job {job.job_id}: {e}")
 
             # Create chatbook using the sync wrapper (could be made truly async)
@@ -1423,7 +1446,7 @@ class ChatbookService:
                     if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                         try:
                             self._ps_job_adapter.update_status(int(job.job_id), "cancelled")
-                        except Exception as e:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(f"PS adapter update_status (cancelled) failed for export job {job.job_id}: {e}")
                     return
                 job.status = ExportStatus.COMPLETED
@@ -1447,11 +1470,11 @@ class ChatbookService:
                         self._ps_job_adapter.update_status(int(job.job_id), "completed", result={"path": job.output_path})
                     elif job.status == ExportStatus.FAILED:
                         self._ps_job_adapter.update_status(int(job.job_id), "failed", error_message=job.error_message)
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"PS adapter update_status (completion) failed for export job {job.job_id}: {e}")
             self._save_export_job(job)
 
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             # Update job with error
             job.status = ExportStatus.FAILED
             job.completed_at = datetime.now(timezone.utc)
@@ -1460,7 +1483,7 @@ class ChatbookService:
             if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                 try:
                     self._ps_job_adapter.update_status(int(job.job_id), "failed", error_message=str(e))
-                except Exception as ps_err:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as ps_err:
                     logger.debug(f"PS adapter update_status (failed) failed for export job {job.job_id}: {ps_err}")
 
     async def import_chatbook(
@@ -1548,7 +1571,7 @@ class ChatbookService:
 
         try:
             resolved_path = self._resolve_import_archive_path(file_path)
-        except Exception as exc:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Chatbooks import rejected file path: {exc}")
             return False, "Invalid or potentially malicious archive file", None
         file_token = self._build_import_file_token(resolved_path)
@@ -1571,7 +1594,7 @@ class ChatbookService:
                     ps_job = self._ps_job_adapter.create_import_job(payload, request_id=request_id)
                     if ps_job and ps_job.get("id") is not None:
                         job_id = str(ps_job["id"])  # mirror PS id
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Failed to create PS import job, falling back to core: {e}")
                     job_id = None
             if job_id is None:
@@ -1614,7 +1637,7 @@ class ChatbookService:
                         max_retries=3,
                         request_id=request_id,
                     )
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     enqueue_error = str(e)
                     logger.warning(f"Failed to enqueue import job into core Jobs: {e}")
                 if not job_created:
@@ -1624,7 +1647,7 @@ class ChatbookService:
                     job.error_message = err_msg
                     try:
                         self._save_import_job(job)
-                    except Exception as save_err:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as save_err:
                         logger.warning(f"Failed to persist failed import job state: {save_err}")
                     return False, f"Import job failed to enqueue: {err_msg}", job_id
             else:
@@ -1663,7 +1686,7 @@ class ChatbookService:
         try:
             try:
                 resolved_path = self._resolve_import_archive_path(file_path)
-            except Exception as exc:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Chatbooks import rejected file path: {exc}")
                 return False, "Invalid or potentially malicious archive file", None
             file_path = str(resolved_path)
@@ -1846,7 +1869,7 @@ class ChatbookService:
                 logger.debug("Import failed: No items were successfully imported or skipped")
                 return False, "No items were imported", list(import_status.warnings or [])
 
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error importing chatbook: {e}")
             return False, f"Error importing chatbook: {str(e)}", None
         finally:
@@ -1879,7 +1902,7 @@ class ChatbookService:
             if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                 try:
                     self._ps_job_adapter.update_status(int(job.job_id), "in_progress")
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"PS adapter update_status failed for import job {job.job_id}: {e}")
 
             # Import chatbook synchronously using thread pool
@@ -1896,7 +1919,7 @@ class ChatbookService:
                     if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                         try:
                             self._ps_job_adapter.update_status(int(job.job_id), "cancelled")
-                        except Exception as e:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(f"PS adapter update_status (cancelled) failed for import job {job.job_id}: {e}")
                     return
                 job.status = ImportStatus.COMPLETED
@@ -1912,10 +1935,10 @@ class ChatbookService:
                         self._ps_job_adapter.update_status(int(job.job_id), "completed")
                     elif job.status == ImportStatus.FAILED:
                         self._ps_job_adapter.update_status(int(job.job_id), "failed", error_message=job.error_message)
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"PS adapter update_status (completion) failed for import job {job.job_id}: {e}")
 
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             job.status = ImportStatus.FAILED
             job.completed_at = datetime.now(timezone.utc)
             job.error_message = str(e)
@@ -1923,7 +1946,7 @@ class ChatbookService:
             if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                 try:
                     self._ps_job_adapter.update_status(int(job.job_id), "failed", error_message=str(e))
-                except Exception as ps_err:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as ps_err:
                     logger.debug(f"PS adapter update_status (failed) failed for import job {job.job_id}: {ps_err}")
         finally:
             # Ensure original import archive is removed for async mode
@@ -1931,7 +1954,7 @@ class ChatbookService:
                 fp = self._resolve_import_archive_path(file_path)
                 if fp.exists() and fp.is_file():
                     fp.unlink()
-            except Exception as _e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as _e:
                 logger.warning(f"Could not remove import archive (async) {file_path}: {_e}")
 
     def preview_chatbook(self, file_path: str) -> tuple[ChatbookManifest | None, str | None]:
@@ -1948,7 +1971,7 @@ class ChatbookService:
         try:
             try:
                 resolved_path = self._resolve_import_archive_path(file_path)
-            except Exception as exc:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Chatbooks preview rejected file path: {exc}")
                 return None, "Invalid or potentially malicious archive file"
             file_path = str(resolved_path)
@@ -1959,7 +1982,7 @@ class ChatbookService:
                 ok, err = ChatbookValidator.validate_zip_file(file_path)
                 if not ok:
                     return None, err or "Invalid archive"
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 # If validator import fails, continue with cautious extraction guards
                 pass
             # Extract to temporary directory with UUID to prevent collisions
@@ -2004,7 +2027,7 @@ class ChatbookService:
 
             return manifest, None
 
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error previewing chatbook: {e}")
             return None, f"Error previewing chatbook: {str(e)}"
         finally:
@@ -2045,12 +2068,12 @@ class ChatbookService:
                     mapped = status_map.get(ps_status)
                     if mapped and job.status not in {ExportStatus.COMPLETED, ExportStatus.FAILED}:
                         job.status = mapped
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
         if job and getattr(self, "_jobs_backend", "core") == "core" and getattr(self, "_jobs_adapter", None) is not None:
             try:
                 self._jobs_adapter.apply_export_status(job)
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
         return job
 
@@ -2073,12 +2096,12 @@ class ChatbookService:
                     mapped = status_map.get(ps_status)
                     if mapped and job.status not in {ImportStatus.COMPLETED, ImportStatus.FAILED}:
                         job.status = mapped
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
         if job and getattr(self, "_jobs_backend", "core") == "core" and getattr(self, "_jobs_adapter", None) is not None:
             try:
                 self._jobs_adapter.apply_import_status(job)
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
         return job
 
@@ -2195,7 +2218,7 @@ class ChatbookService:
                             mapped = status_map.get(ps_status)
                             if mapped and job.status not in {ExportStatus.COMPLETED, ExportStatus.FAILED}:
                                 job.status = mapped
-                    except Exception:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                         pass
                 jobs.append(job)
 
@@ -2207,11 +2230,11 @@ class ChatbookService:
                         row = job_map.get(job.job_id)
                         if row:
                             self._jobs_adapter.apply_export_status(job, job_row=row)
-                except Exception:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                     pass
 
             return jobs
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error listing export jobs: {e}")
             return []
 
@@ -2328,7 +2351,7 @@ class ChatbookService:
                             mapped = status_map.get(ps_status)
                             if mapped and job.status not in {ImportStatus.COMPLETED, ImportStatus.FAILED}:
                                 job.status = mapped
-                    except Exception:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                         pass
                 jobs.append(job)
 
@@ -2340,11 +2363,11 @@ class ChatbookService:
                         row = job_map.get(job.job_id)
                         if row:
                             self._jobs_adapter.apply_import_status(job, job_row=row)
-                except Exception:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                     pass
 
             return jobs
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error listing import jobs: {e}")
             return []
 
@@ -2369,7 +2392,7 @@ class ChatbookService:
             if isinstance(row, dict):
                 return int(row.get("c") or 0)
             return int(row[0]) if row else 0
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error counting export jobs: {e}")
             return 0
 
@@ -2394,7 +2417,7 @@ class ChatbookService:
             if isinstance(row, dict):
                 return int(row.get("c") or 0)
             return int(row[0]) if row else 0
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error counting import jobs: {e}")
             return 0
 
@@ -2440,7 +2463,7 @@ class ChatbookService:
                             elif file_path.exists() and file_path.is_file():
                                 file_path.unlink()
                                 deleted_count += 1
-                        except Exception as e:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                             logger.error(f"Error deleting expired export: {e}")
 
                     # Update job status
@@ -2450,7 +2473,7 @@ class ChatbookService:
                             ('expired', job_id),
                             commit=True,
                         )
-                    except Exception as _e:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as _e:
                         logger.warning(f"Failed to mark job {job_id} expired: {_e}")
 
                 # If we got fewer results than batch_size, we're done
@@ -2458,7 +2481,7 @@ class ChatbookService:
                     break
 
             return deleted_count
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error cleaning up expired exports: {e}")
             return 0
 
@@ -2484,12 +2507,12 @@ class ChatbookService:
             # Attempt ID lookup (int) first, then UUID
             try:
                 prompt_record = prompts_db.get_prompt_by_id(int(prompt_identifier))
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 prompt_record = None
             if not prompt_record:
                 try:
                     prompt_record = prompts_db.get_prompt_by_uuid(str(prompt_identifier))
-                except Exception:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                     prompt_record = None
             if not prompt_record:
                 logger.debug(f"Prompt {prompt_identifier} not found; skipping.")
@@ -2549,7 +2572,7 @@ class ChatbookService:
                 try:
                     transcripts_raw = get_media_transcripts(media_db, int(media_record["id"]))
                     transcripts = [self._normalize_transcript_row(row) for row in transcripts_raw]
-                except Exception as exc:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"Failed to fetch transcripts for media {media_id}: {exc}")
                     self._note_todo("Media transcripts export failed for some items; inspect logs.")
             normalized["transcripts"] = transcripts
@@ -2559,7 +2582,7 @@ class ChatbookService:
             if get_media_prompts is not None:
                 try:
                     media_prompts = get_media_prompts(media_db, int(media_record["id"]))
-                except Exception as exc:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"Failed to fetch media prompts for media {media_id}: {exc}")
                     self._note_todo("Media prompts export encountered failures; inspect logs.")
             normalized["related_prompts"] = media_prompts
@@ -2635,7 +2658,7 @@ class ChatbookService:
             record = None
             try:
                 record = evals_db.get_evaluation(str(eval_id))
-            except Exception as exc:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to fetch evaluation {eval_id}: {exc}")
                 record = None
             if not record:
@@ -2667,7 +2690,7 @@ class ChatbookService:
                                 "continuation_token": str(last_run_id)
                             })
                     self._note_todo("Evaluation export limited to max rows; add resumable export support.")
-            except Exception as exc:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to list evaluation runs for {eval_id}: {exc}")
                 self._note_todo("Evaluation runs export failed for some items; inspect logs.")
             normalized["runs"] = runs_payload
@@ -2756,7 +2779,7 @@ class ChatbookService:
                             try:
                                 with open(attachment_path, "wb") as af:
                                     af.write(bytes(primary_bytes))
-                            except Exception as exc:
+                            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                                 logger.debug(f"Failed to persist primary image attachment for message {msg['id']}: {exc}")
                                 self._note_todo("Failed to export some conversation image attachments; inspect logs.")
                             else:
@@ -2797,7 +2820,7 @@ class ChatbookService:
                         try:
                             with open(attachment_path, "wb") as af:
                                 af.write(bytes(image_bytes))
-                        except Exception as exc:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                             logger.debug(f"Failed to persist image attachment for message {msg['id']}: {exc}")
                             self._note_todo("Failed to export some conversation image attachments; inspect logs.")
                             continue
@@ -2848,7 +2871,7 @@ class ChatbookService:
                             # Include search query for context
                             if rag_context.get('search_query'):
                                 message_payload["rag_search_query"] = rag_context.get('search_query')
-                    except Exception as cite_err:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as cite_err:
                         logger.debug(f"Failed to extract citations for message {msg['id']}: {cite_err}")
 
                     conversation_messages.append(message_payload)
@@ -2878,7 +2901,7 @@ class ChatbookService:
                     file_path=f"content/conversations/conversation_{conv_id}.json"
                 ))
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error collecting conversation {conv_id}: {e}")
 
     def _collect_notes(
@@ -2943,7 +2966,7 @@ class ChatbookService:
                     file_path=f"content/notes/note_{note_id}.md"
                 ))
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error collecting note {note_id}: {e}")
 
     def _collect_characters(
@@ -2980,7 +3003,7 @@ class ChatbookService:
                     file_path=f"content/characters/character_{char_id}.json"
                 ))
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error collecting character {char_id}: {e}")
 
     def _collect_world_books(
@@ -3023,7 +3046,7 @@ class ChatbookService:
                     file_path=f"content/world_books/world_book_{wb_id}.json"
                 ))
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error collecting world book {wb_id}: {e}")
 
     def _collect_dictionaries(
@@ -3072,7 +3095,7 @@ class ChatbookService:
                     file_path=f"content/dictionaries/dictionary_{dict_id}.json"
                 ))
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error collecting dictionary {dict_id}: {e}")
 
     def _collect_generated_documents(
@@ -3114,7 +3137,7 @@ class ChatbookService:
                     file_path=f"content/generated_documents/document_{doc_id}.json"
                 ))
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error collecting document {doc_id}: {e}")
 
     # Helper methods for importing content
@@ -3214,17 +3237,17 @@ class ChatbookService:
                                     continue
                                 try:
                                     attachment_rel = Path(rel_path)
-                                except Exception:
+                                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                                     continue
                                 candidate_path = (base_path / attachment_rel).resolve()
                                 try:
                                     candidate_path.relative_to(base_path)
-                                except Exception:
+                                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                                     status.warnings.append(f"Skipped attachment outside extract dir: {rel_path}")
                                     continue
                                 try:
                                     size_bytes = candidate_path.stat().st_size
-                                except Exception:
+                                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                                     size_bytes = None
                                 if size_bytes is not None and size_bytes > max_img_bytes:
                                     status.warnings.append(
@@ -3233,7 +3256,7 @@ class ChatbookService:
                                     continue
                                 try:
                                     image_bytes = candidate_path.read_bytes()
-                                except Exception as read_exc:
+                                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as read_exc:
                                     status.warnings.append(f"Failed to read attachment {rel_path}: {read_exc}")
                                     continue
                                 if len(image_bytes) > max_img_bytes:
@@ -3272,7 +3295,7 @@ class ChatbookService:
                         else:
                             status.failed_items += 1
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 status.failed_items += 1
                 status.warnings.append(f"Error importing conversation {conv_id}: {str(e)}")
 
@@ -3342,7 +3365,7 @@ class ChatbookService:
                                 note_title = str(parsed.get('title'))
                             else:
                                 note_title = _extract_title_frontmatter(frontmatter, note_title)
-                        except Exception:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             note_title = _extract_title_frontmatter(frontmatter, note_title)
                         note_content = parts[2].strip()
 
@@ -3370,7 +3393,7 @@ class ChatbookService:
                     else:
                         status.failed_items += 1
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 status.failed_items += 1
                 status.warnings.append(f"Error importing note {note_id}: {str(e)}")
 
@@ -3424,7 +3447,7 @@ class ChatbookService:
                     if character_id_map is not None:
                         try:
                             character_id_map[str(char_id)] = int(new_char_id)
-                        except Exception:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             character_id_map[str(char_id)] = new_char_id
                     status.successful_items += 1
                 else:
@@ -3435,7 +3458,7 @@ class ChatbookService:
                     else:
                         status.failed_items += 1
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 status.failed_items += 1
                 status.warnings.append(f"Error importing character {char_id}: {str(e)}")
 
@@ -3492,7 +3515,7 @@ class ChatbookService:
                 else:
                     status.failed_items += 1
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 status.failed_items += 1
                 status.warnings.append(f"Error importing world book {wb_id}: {str(e)}")
 
@@ -3559,7 +3582,7 @@ class ChatbookService:
                         prob = e.get('probability', 1.0)
                         try:
                             prob = float(prob)
-                        except Exception:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             prob = 1.0
                         norm_entries.append({
                             'type': str(typ_val).lower(),
@@ -3585,7 +3608,7 @@ class ChatbookService:
                         status.warnings.append(
                             f"Dictionary '{dict_name}' validation warnings: {', '.join(wc)}"
                         )
-                except Exception as _ve:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as _ve:
                     # Non-fatal: surface as a warning and continue with import
                     status.warnings.append(f"Dictionary '{dict_name}' validation failed: {_ve}")
 
@@ -3611,12 +3634,12 @@ class ChatbookService:
                             pf = float(p_raw)
                             if pf > 1.0:
                                 pf = max(0.0, min(1.0, pf / 100.0))
-                        except Exception:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             pf = 1.0
                         max_rep_raw = entry.get("max_replacements", 1)
                         try:
                             max_rep_val = int(max_rep_raw)
-                        except Exception:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             max_rep_val = 1
                         group = entry.get("group") or entry.get("group_name")
                         timed_effects = entry.get("timed_effects")
@@ -3638,7 +3661,7 @@ class ChatbookService:
                 else:
                     status.failed_items += 1
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 status.failed_items += 1
                 status.warnings.append(f"Error importing dictionary {dict_id}: {str(e)}")
 
@@ -3669,7 +3692,7 @@ class ChatbookService:
                 job.processed_items, job.file_size_bytes, job.download_url,
                 job.expires_at.strftime('%Y-%m-%d %H:%M:%S.%f') if job.expires_at else None
             ), commit=True)
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error saving export job: {e}")
             raise
 
@@ -3702,7 +3725,7 @@ class ChatbookService:
             else:
                 logger.debug(f"Export job {job_id} was already claimed or not found")
                 return False
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error claiming export job {job_id}: {e}")
             return False
 
@@ -3735,7 +3758,7 @@ class ChatbookService:
             else:
                 logger.debug(f"Import job {job_id} was already claimed or not found")
                 return False
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error claiming import job {job_id}: {e}")
             return False
 
@@ -3810,7 +3833,7 @@ class ChatbookService:
                 expires_at=self._parse_timestamp(row.get('expires_at')),
                 metadata=metadata
             )
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error getting export job: {e}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
@@ -3841,7 +3864,7 @@ class ChatbookService:
                 job.processed_items, job.successful_items, job.failed_items,
                 job.skipped_items, json.dumps(job.conflicts), json.dumps(job.warnings)
             ), commit=True)
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error saving import job: {e}")
             raise
 
@@ -3901,7 +3924,7 @@ class ChatbookService:
                 conflicts=json.loads(row['conflicts']) if row['conflicts'] else [],
                 warnings=json.loads(row['warnings']) if row['warnings'] else []
             )
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error getting import job: {e}")
             return None
 
@@ -3996,7 +4019,7 @@ class ChatbookService:
                 "name": name,
                 "description": description
             }
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             raise JobError(f"Failed to create export job: {e}", job_type="export", cause=e)
 
     def get_export_job_status(self, job_id: str) -> dict[str, Any]:
@@ -4045,13 +4068,13 @@ class ChatbookService:
         if task:
             try:
                 task.cancel()
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
         # PS backend cancel
         if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
             try:
                 self._ps_job_adapter.cancel(int(job_id))
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
         # Core backend: cancel queued or request cancel for processing in core Jobs
         if getattr(self, "_jobs_backend", "core") == "core":
@@ -4067,9 +4090,9 @@ class ChatbookService:
                             job_uuid = str(j.get("uuid") or j.get("id"))
                             if payload.get("chatbooks_job_id") == job_id or job_uuid == job_id:
                                 jm.cancel_job(int(j["id"]))
-                        except Exception:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             pass
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Audit is performed at the API layer.
@@ -4089,12 +4112,12 @@ class ChatbookService:
         if task:
             try:
                 task.cancel()
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
         if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
             try:
                 self._ps_job_adapter.cancel(int(job_id))
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
         if getattr(self, "_jobs_backend", "core") == "core":
             try:
@@ -4108,9 +4131,9 @@ class ChatbookService:
                             job_uuid = str(j.get("uuid") or j.get("id"))
                             if payload.get("chatbooks_job_id") == job_id or job_uuid == job_id:
                                 jm.cancel_job(int(j["id"]))
-                        except Exception:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             pass
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
         return True
 
@@ -4132,7 +4155,7 @@ class ChatbookService:
                     logger.warning(f"Refusing to delete export outside export dir: {file_path}")
                 elif file_path.exists() and file_path.is_file():
                     file_path.unlink()
-            except Exception as exc:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Failed to delete export file for job {job_id}: {exc}")
 
         try:
@@ -4141,7 +4164,7 @@ class ChatbookService:
                 (job_id, self.user_id),
                 commit=True,
             )
-        except Exception as exc:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"Failed to delete export job {job_id}: {exc}")
             raise
 
@@ -4163,7 +4186,7 @@ class ChatbookService:
                 (job_id, self.user_id),
                 commit=True,
             )
-        except Exception as exc:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"Failed to delete import job {job_id}: {exc}")
             raise
 
@@ -4197,7 +4220,7 @@ class ChatbookService:
                 "status": "pending",
                 "file_path": file_path
             }
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             raise JobError(f"Failed to create import job: {e}", job_type="import", cause=e)
 
     def get_import_job_status(self, job_id: str) -> dict[str, Any]:
@@ -4273,7 +4296,7 @@ class ChatbookService:
                                 ()
                             )
                             items = self._fetch_results(cursor)
-                        except Exception as q_err:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as q_err:
                             # Table might not exist or have different schema
                             logger.debug(f"world_books count query failed (no user filter): error={q_err}")
                             items = []
@@ -4286,7 +4309,7 @@ class ChatbookService:
                                 ()
                             )
                             items = self._fetch_results(cursor)
-                        except Exception as q_err:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as q_err:
                             # Table might not exist
                             logger.debug(f"dictionaries count query failed: error={q_err}")
                             items = []
@@ -4299,18 +4322,18 @@ class ChatbookService:
                                 ()
                             )
                             items = self._fetch_results(cursor)
-                        except Exception as q_err:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as q_err:
                             # Table might not exist
                             logger.debug(f"prompts count query failed: error={q_err}")
                             items = []
                         result["prompts"] = len(items) if items else 0
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     # If query fails for any type, just set to 0
                     logger.debug(f"Query failed for {content_type}: {e}")
                     result[content_type] = 0
 
             return result
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             raise DatabaseError(f"Failed to preview export: {e}", cause=e)
 
     def clean_old_exports(self, days_old: int = 7) -> int:
@@ -4357,7 +4380,7 @@ class ChatbookService:
                                 file_path.unlink()
                                 deleted_count += 1
                                 logger.info(f"Deleted old export: {output_path}")
-                        except Exception as e:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                             logger.error(f"Failed to delete {output_path}: {e}")
 
                     # Delete from database
@@ -4367,13 +4390,13 @@ class ChatbookService:
                             (job_id,),
                             commit=True
                         )
-                    except Exception as e:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                         logger.error(f"Failed to delete job record {job_id}: {e}")
 
             # Audit is performed at the API layer.
 
             return deleted_count
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             raise FileOperationError(f"Failed to clean old exports: {e}", operation="cleanup", cause=e)
 
     def validate_chatbook(self, file_path: str) -> bool:
@@ -4389,7 +4412,7 @@ class ChatbookService:
         try:
             try:
                 resolved_path = self._resolve_import_archive_path(file_path)
-            except Exception as exc:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                 raise ValidationError("Invalid or potentially malicious archive file", field="file_path") from exc
             file_path = str(resolved_path)
 
@@ -4411,7 +4434,7 @@ class ChatbookService:
                 return True
         except zipfile.BadZipFile:
             raise ArchiveError("Invalid ZIP file", archive_path=file_path)
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             if isinstance(e, (ValidationError, ArchiveError)):
                 raise
             raise ValidationError(f"Validation failed: {e}", cause=e)
@@ -4438,7 +4461,7 @@ class ChatbookService:
                     with zipfile.ZipFile(resolved_path, 'r') as zf:
                         manifest_data = zf.read('manifest.json')
                         manifest = json.loads(manifest_data)
-                except Exception as mf_err:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as mf_err:
                     logger.debug(f"Failed to read chatbook manifest.json: path={file_path}, error={mf_err}")
 
             return {
@@ -4446,7 +4469,7 @@ class ChatbookService:
                 "manifest": manifest,
                 "error": None
             }
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             return {
                 "is_valid": False,
                 "manifest": None,
@@ -4493,7 +4516,7 @@ class ChatbookService:
                 "total_exports": sum(export_stats.values()),
                 "total_imports": sum(import_stats.values())
             }
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get statistics: {e}")
             return {
                 "exports": {},
@@ -4516,7 +4539,7 @@ class ChatbookService:
                         else:
                             zf.write(file_path, arcname)
             return True
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create archive: {e}")
             return False
 
@@ -4559,7 +4582,7 @@ class ChatbookService:
                 else:
                     # Import new item
                     status.successful_items += 1
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 status.failed_items += 1
                 status.warnings.append(f"Failed to import {item.id}: {str(e)}")
 
@@ -4641,7 +4664,7 @@ class ChatbookService:
             from .chatbook_validators import ChatbookValidator
             ok, _ = ChatbookValidator.validate_zip_file(file_path)
             return bool(ok)
-        except Exception:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
             return False
 
     async def _create_zip_archive_async(self, work_dir: Path, output_path: Path):
