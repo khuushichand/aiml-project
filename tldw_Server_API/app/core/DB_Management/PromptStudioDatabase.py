@@ -16,10 +16,10 @@ from typing import Any, Optional, Union
 
 try:  # psycopg v3 preferred; fall back to psycopg2 if installed
     from psycopg import sql as psycopg_sql  # type: ignore
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     try:
         from psycopg2 import sql as psycopg_sql  # type: ignore
-    except Exception:  # pragma: no cover
+    except ImportError:  # pragma: no cover
         psycopg_sql = None  # type: ignore
 
 from loguru import logger
@@ -42,6 +42,31 @@ from .backends.query_utils import (
 
 # Local imports
 from .Prompts_DB import ConflictError, DatabaseError, InputError, PromptsDatabase, SchemaError
+
+_PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    sqlite3.Error,
+    BackendDatabaseError,
+    ConflictError,
+    DatabaseError,
+    InputError,
+    SchemaError,
+)
 
 
 def _serialise_tags(tags: Optional[Union[str, Iterable[str]]]) -> Optional[str]:
@@ -79,7 +104,7 @@ def _parse_tags(value: Any) -> list[str]:
 
     try:
         decoded = bytes(value).decode("utf-8") if isinstance(value, (bytes, bytearray, memoryview)) else None
-    except Exception:  # pragma: no cover - defensive
+    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive
         decoded = None
 
     if decoded:
@@ -134,13 +159,13 @@ class PromptStudioRowAdapter:
                 col = self._columns[key]
                 if isinstance(col, str) and isinstance(self._mapping, dict):
                     return self._mapping.get(col)
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 pass
             # Fallback: positional access over mapping values
             if isinstance(self._mapping, dict):
                 try:
                     return list(self._mapping.values())[key]
-                except Exception:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     return None
             return None
         return self._mapping.get(key)
@@ -389,7 +414,7 @@ class BackendPromptStudioDatabaseBase:
             def close(self) -> None:  # pragma: no cover - compatibility shim
                 try:
                     self._outer.close_connection()
-                except Exception:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     pass
 
         self.conn = _ConnCloseProxy(self)
@@ -438,9 +463,9 @@ class BackendPromptStudioDatabaseBase:
                         cur.execute(f"SET SESSION app.current_user_id = '{safe_value}'")
                 try:
                     raw_conn.commit()
-                except Exception:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     pass
-        except Exception:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
             # Non-fatal if SET fails
             pass
         wrapper = PromptStudioBackendConnectionWrapper(self, raw_conn)
@@ -464,7 +489,7 @@ class BackendPromptStudioDatabaseBase:
             if wrapper.raw_connection and getattr(wrapper.raw_connection, 'in_transaction', False):
                 try:
                     wrapper.rollback()
-                except Exception:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     pass
             self._release_connection(wrapper)
         finally:
@@ -480,7 +505,7 @@ class BackendPromptStudioDatabaseBase:
         try:
             yield conn
             ctx.__exit__(None, None, None)
-        except Exception as exc:  # noqa: BLE001
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
             ctx.__exit__(exc.__class__, exc, exc.__traceback__)
             raise
 
@@ -955,7 +980,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                             "sync_log",
                             connection=conn.raw_connection,
                         )
-                    except Exception as exc:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:
                         logger.debug("Prompt Studio sync_log availability check failed: %s", exc)
                         self._sync_log_available = False
                         return
@@ -975,7 +1000,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         json.dumps(payload, separators=(',', ':')) if payload else None,
                     ),
                 )
-        except Exception as e:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
             # sync_log is optional across backends
             err_str = str(e).lower()
             if "no such table" in err_str or "does not exist" in err_str or "relation" in err_str:
@@ -1058,7 +1083,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             if 'duplicate' in message.lower() and 'prompt_studio_projects_name_user_id_deleted_key' in message:
                 raise ConflictError(f"Project with name '{name}' already exists for this user") from exc
             raise DatabaseError(f"Failed to create prompt studio project: {exc}") from exc
-        except Exception as exc:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:
             # Psycopg unique violations, etc.
             msg = str(exc).lower()
             if 'duplicate' in msg or 'unique constraint' in msg or 'unique violation' in msg:
@@ -1213,7 +1238,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     f"Prompt with name '{name}' already exists in project {project_id}"
                 ) from exc
             raise DatabaseError(f"Failed to create prompt studio prompt: {exc}") from exc
-        except Exception as exc:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:
             msg = str(exc).lower()
             if 'duplicate' in msg or 'unique constraint' in msg or 'unique violation' in msg:
                 raise ConflictError(
@@ -2512,7 +2537,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
     def renew_job_lease(self, job_id: int, seconds: int = 60, worker_id: Optional[str] = None) -> bool:
         try:
             seconds = max(1, min(3600, int(seconds)))
-        except Exception:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
             seconds = 60
 
         owner_value: Optional[str] = None
@@ -2521,7 +2546,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 owner_value = str(worker_id).strip()[:128]
                 if not owner_value:
                     owner_value = None
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 owner_value = None
 
         set_owner_sql = ", lease_owner = COALESCE(?, lease_owner)" if owner_value is not None else ""
@@ -2563,13 +2588,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         owner_value = str(worker_id).strip()[:128]
                         if not owner_value:
                             owner_value = None
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         owner_value = None
                 if self.backend_type == BackendType.POSTGRESQL:
                     import os as _os
                     try:
                         _lease_secs = max(1, min(3600, int(_os.getenv("TLDW_PS_JOB_LEASE_SECONDS", "60"))))
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         _lease_secs = 60
                     # Acquire using advisory lock as a gate to avoid double-processing across processes
                     # Metrics: advisory lock attempt
@@ -2578,7 +2603,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import (
                             prompt_studio_metrics as _psm,
                         )
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         _psm = None
 
                     def _inc_metric(name: str, labels: Optional[dict[str, str]] = None) -> None:
@@ -2586,7 +2611,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                             return
                         try:
                             _psm.metrics_manager.increment(name, labels=labels)
-                        except Exception:
+                        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                             pass
 
                     _inc_metric("prompt_studio.pg_advisory.lock_attempts_total")
@@ -2637,7 +2662,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                                 return v
                             try:
                                 return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
-                            except Exception:
+                            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                                 return None
                         cdt = _parse(created)
                         sdt = _parse(started)
@@ -2650,21 +2675,21 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                                         qlat,
                                         labels={"job_type": str(record.get("job_type", ""))},
                                     )
-                                except Exception:
+                                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                                     pass
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         pass
                     # Increment reclaims if applicable
                     try:
                         was_reclaim = False
                         try:
                             was_reclaim = bool(row["was_reclaim"])  # dict_row in pg
-                        except Exception:
+                        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                             # positional
                             was_reclaim = bool(row[-1])
                         if was_reclaim:
                             _inc_metric("jobs.reclaims_total", labels={"job_type": str(record.get("job_type", ""))})
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         pass
                     return record
                 else:
@@ -2685,7 +2710,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     import os as _os2
                     try:
                         _lease_secs2 = max(1, min(3600, int(_os2.getenv("TLDW_PS_JOB_LEASE_SECONDS", "60"))))
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         _lease_secs2 = 60
                     cursor.execute(
                         f"""
@@ -2720,7 +2745,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                             return v
                         try:
                             return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
-                        except Exception:
+                        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                             return None
                     cdt = _parse(created)
                     sdt = _parse(started)
@@ -2735,9 +2760,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                                 qlat,
                                 labels={"job_type": str(job.get("job_type", ""))},
                             )
-                        except Exception:
+                        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                             pass
-                except Exception:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     pass
         return job
 
@@ -3547,11 +3572,11 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 _wal_requested = _ps_os.getenv("TLDW_PS_SQLITE_WAL", "0").lower() in {"1", "true", "yes", "on"}
                 _mode = "WAL" if _wal_requested else "DELETE"
                 cursor.execute(f"PRAGMA journal_mode={_mode}")
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 pass
             cursor.execute("PRAGMA busy_timeout=1000")  # 1 second timeout for locked database
             conn.commit()
-        except Exception as e:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Could not set pragmas: {e}")
 
         logger.info(f"PromptStudioDatabase initialized for {db_path} with client {client_id}")
@@ -3593,37 +3618,37 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     "CREATE INDEX IF NOT EXISTS idx_ps_idem_entity ON prompt_studio_idempotency(entity_type, user_id)"
                 )
                 conn.commit()
-            except Exception as _e:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as _e:
                 logger.warning(f"Failed ensuring idempotency table: {_e}")
 
             # Ensure leasing columns exist on job queue (SQLite)
             try:
                 cursor.execute("SELECT leased_until FROM prompt_studio_job_queue LIMIT 1")
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 try:
                     cursor.execute("ALTER TABLE prompt_studio_job_queue ADD COLUMN leased_until TIMESTAMP")
                     conn.commit()
-                except Exception:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     pass
             try:
                 cursor.execute("SELECT lease_owner FROM prompt_studio_job_queue LIMIT 1")
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 try:
                     cursor.execute("ALTER TABLE prompt_studio_job_queue ADD COLUMN lease_owner TEXT")
                     conn.commit()
-                except Exception:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     pass
             # Ensure optimization test_case_ids column exists (SQLite)
             try:
                 cursor.execute("SELECT test_case_ids FROM prompt_studio_optimizations LIMIT 1")
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 try:
                     cursor.execute("ALTER TABLE prompt_studio_optimizations ADD COLUMN test_case_ids JSON")
                     conn.commit()
-                except Exception:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     pass
 
-        except Exception as e:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error initializing Prompt Studio schema: {e}")
             raise SchemaError(f"Failed to initialize Prompt Studio schema: {e}")
 
@@ -3675,7 +3700,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             import os as _os
             if _os.getenv("SKIP_PROMPT_STUDIO_FTS", "").lower() == "true":
                 migration_files = [mf for mf in migration_files if not mf.startswith("004_")]
-        except Exception:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
             pass
 
         for migration_file in migration_files:
@@ -3690,7 +3715,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     conn.executescript(migration_sql)
                     conn.commit()
                     logger.info(f"Successfully applied {migration_file}")
-                except Exception as e:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to apply {migration_file}: {e}")
                     raise SchemaError(f"Migration {migration_file} failed: {e}")
             else:
@@ -3716,7 +3741,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             )
             row = cursor.fetchone()
             return int(row[0]) if row else None
-        except Exception:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
             return None
 
     def _idem_record(self, entity_type: str, key: str, entity_id: int, user_id: Optional[str]) -> None:
@@ -3728,7 +3753,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 (entity_type, key, entity_id, user_id),
             )
             conn.commit()
-        except Exception:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
             pass
 
     ####################################################################################################################
@@ -3804,7 +3829,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     if "UNIQUE" in str(e):
                         raise ConflictError(f"Project with name '{name}' already exists for this user")
                     raise DatabaseError(f"Failed to create project: {e}")
-                except Exception as e:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
                     raise DatabaseError(f"Failed to create project: {e}")
 
             # Sleep outside the lock if we need to retry
@@ -4037,7 +4062,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     time.sleep(delay)
                     continue
                 raise DatabaseError(f"Failed to update project: {exc}")
-            except Exception as exc:  # noqa: BLE001
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 raise DatabaseError(f"Failed to update project: {exc}")
 
         raise DatabaseError("Failed to update project after retries")
@@ -4840,7 +4865,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     time.sleep(delay)
                 else:
                     raise DatabaseError(f"Failed to delete project: {e}")
-            except Exception as e:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
                 raise DatabaseError(f"Failed to delete project: {e}")
 
             if not should_retry:
@@ -4924,7 +4949,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                             json.dumps(payload),
                         ),
                     )
-        except Exception as e:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
             err_str = str(e).lower()
             if "no such table" in err_str or "does not exist" in err_str:
                 logger.debug(f"sync_log table not available: {e}")
@@ -4972,7 +4997,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             if not row:
                 return None
             return self._row_to_dict(cursor, row)
-        except Exception as e:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get prompt {prompt_id}: {e}")
             return None
 
@@ -4999,7 +5024,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             if not row:
                 return None
             return self._row_to_dict(cursor, row)
-        except Exception as exc:  # noqa: BLE001
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
             logger.error(f"Failed to fetch prompt {prompt_id}: {exc}")
             return None
 
@@ -5662,7 +5687,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         import os as _os_ul
                         try:
                             _lease_secs_upd = max(1, min(3600, int(_os_ul.getenv("TLDW_PS_JOB_LEASE_SECONDS", "60"))))
-                        except Exception:
+                        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                             _lease_secs_upd = 60
                         updates.append(f"leased_until = DATETIME('now', '+{_lease_secs_upd} seconds')")
                     elif status in {"completed", "failed", "cancelled"}:
@@ -5724,7 +5749,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 owner_value = str(worker_id).strip()[:128]
                 if not owner_value:
                     owner_value = None
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 owner_value = None
 
         for attempt in range(5):
@@ -5750,7 +5775,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     import os as _os_s1
                     try:
                         _lease_secs_sqlite = max(1, min(3600, int(_os_s1.getenv("TLDW_PS_JOB_LEASE_SECONDS", "60"))))
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         _lease_secs_sqlite = 60
                     query = (
                         "UPDATE prompt_studio_job_queue "
@@ -5764,7 +5789,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     cursor.execute(query, (owner_value, job_id))
                     try:
                         row = cursor.fetchone()
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         row = None
 
                     if row is not None or cursor.rowcount > 0:
@@ -5783,7 +5808,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                                         return v
                                     try:
                                         return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
-                                    except Exception:
+                                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                                         return None
                                 cdt = _parse(created)
                                 sdt = _parse(started)
@@ -5798,9 +5823,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                                             qlat,
                                             labels={"job_type": str(job.get("job_type", ""))},
                                         )
-                                    except Exception:
+                                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                                         pass
-                        except Exception:
+                        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                             pass
                         return job
                     # Lost race to another worker updating this job; retry selection
@@ -5818,7 +5843,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             if should_retry:
                 try:
                     time.sleep(delay)
-                except Exception:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     time.sleep(0.01)
 
         raise DatabaseError("Failed to acquire job due to database locks or contention")
@@ -5865,7 +5890,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                             owner = str(row2[1]) if row2[1] is not None else None
                             if st.lower() == "processing" and (owner_value is None or owner == owner_value):
                                 return True
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         pass
                     return False
                 except sqlite3.OperationalError as exc:
@@ -5952,7 +5977,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         import time
         try:
             seconds = max(1, min(3600, int(seconds)))
-        except Exception:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
             seconds = 60
         owner_value: Optional[str] = None
         if worker_id:
@@ -5960,7 +5985,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 owner_value = str(worker_id).strip()[:128]
                 if not owner_value:
                     owner_value = None
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 owner_value = None
 
         conn = self.get_connection()
@@ -6227,7 +6252,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 raise DatabaseError(f"Failed to create test case: {exc}") from exc
             except sqlite3.IntegrityError as exc:  # noqa: BLE001
                 raise ConflictError(f"Failed to create test case: {exc}") from exc
-            except Exception as exc:  # noqa: BLE001
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 raise DatabaseError(f"Failed to create test case: {exc}") from exc
 
         raise DatabaseError("Failed to create test case after multiple retries")
@@ -6621,7 +6646,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         try:
             yield conn
             conn.commit()
-        except Exception:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
             conn.rollback()
             raise
 
@@ -6679,7 +6704,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 cursor = self._cursor_exec(conn, insert_sql, payload)
                 row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else {}
-        except Exception as exc:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:
             raise DatabaseError(f"Failed to create prompt studio optimization: {exc}") from exc
 
 
@@ -6732,7 +6757,7 @@ class PromptStudioDatabase:
         if hasattr(self._impl, '_idem_record'):
             try:
                 self._impl._idem_record(entity_type, key, entity_id, user_id)  # type: ignore[attr-defined]
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def update_project(self, project_id: int, updates: Optional[dict[str, Any]] = None, **fields: Any) -> dict[str, Any]:
@@ -6832,7 +6857,7 @@ class PromptStudioDatabase:
         if hasattr(self._impl, 'renew_job_lease'):
             try:
                 return bool(self._impl.renew_job_lease(job_id, seconds, worker_id=worker_id))  # type: ignore[attr-defined]
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 return False
         return False
 

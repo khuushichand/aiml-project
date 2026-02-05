@@ -33,6 +33,11 @@ export const FiguresTab: React.FC = () => {
   const documentUrl = activeDocument?.url
   const pageCount = totalPages || numPages
 
+  React.useEffect(() => {
+    setNumPages(0)
+    setLoadError(null)
+  }, [documentUrl])
+
   const safeCurrentPage =
     typeof currentPage === "number" && currentPage > 0 ? currentPage : 1
 

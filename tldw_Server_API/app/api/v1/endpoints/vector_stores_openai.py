@@ -82,6 +82,27 @@ from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 RBAC_VECTOR_ADMIN = rbac_rate_limit("vector.admin")
 
+_VECTORSTORE_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    HTTPException,
+)
+
 # Embeddings batch generator hook. Tests may monkeypatch this attribute directly or
 # replace the provider resolver via _get_embeddings_fn(). We intentionally avoid
 # importing the heavy embeddings stack at module import time.
@@ -102,11 +123,11 @@ def _get_embeddings_fn():
         )
         globals()["create_embeddings_batch"] = _impl
         return _impl
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as exc:
         def _err(*_args, **_kwargs):
             raise RuntimeError(
                 "Embeddings service not available; patch _get_embeddings_fn() or create_embeddings_batch"
-            ) from e
+            ) from exc
         return _err
 
 router = APIRouter(
@@ -116,7 +137,7 @@ router = APIRouter(
 # Ensure DB is initialized for single-user default on import; per-user init done on demand
 try:
     init_batches_db(str(settings.get("SINGLE_USER_FIXED_ID", "1")))
-except Exception as _e:
+except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as _e:
     logger.warning(f"Vector store batch DB init warning: {_e}")
 
 
@@ -128,7 +149,7 @@ _CREATED_NAMES_BY_USER: dict[str, set[str]] = {}
 def _as_int(val: Any | None) -> int | None:
     try:
         return int(val) if val is not None else None
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -141,7 +162,7 @@ def _allowed_providers() -> list[str] | None:
         vals = settings.get("ALLOWED_EMBEDDING_PROVIDERS", [])
         if isinstance(vals, list) and vals:
             return [str(v).lower() for v in vals]
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         pass
     return None
 
@@ -151,7 +172,7 @@ def _allowed_models() -> list[str] | None:
         vals = settings.get("ALLOWED_EMBEDDING_MODELS", [])
         if isinstance(vals, list) and vals:
             return [str(v) for v in vals]
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         pass
     return None
 
@@ -173,7 +194,7 @@ def _get_model_max_tokens(provider: str, model: str) -> int:
             return int(mapping[key])
         if model in mapping:
             return int(mapping[model])
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         pass
     # default
     if provider.lower() == 'openai':
@@ -184,7 +205,7 @@ def _get_model_max_tokens(provider: str, model: str) -> int:
 def _get_tokenizer(model_name: str):
     try:
         return tiktoken.encoding_for_model(model_name)
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         return tiktoken.get_encoding("cl100k_base")
 
 
@@ -192,7 +213,7 @@ def _count_tokens(text: str, model_name: str) -> int:
     try:
         enc = _get_tokenizer(model_name)
         return len(enc.encode(text))
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         return max(1, len(text) // 4)
 
 
@@ -329,7 +350,7 @@ async def create_vector_store(
                 raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
         except HTTPException:
             raise
-        except Exception as _e:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as _e:
             logger.warning(f"Meta DB uniqueness check failed: {_e}")
         # As a fallback when meta lookup fails, scan adapter collections by metadata.name
         try:
@@ -341,11 +362,11 @@ async def create_vector_store(
                         raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
                 except HTTPException:
                     raise
-                except Exception:
+                except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                     continue
         except HTTPException:
             raise
-        except Exception:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
             pass
 
     # Use store_id as collection name for uniqueness; keep human name in metadata
@@ -371,7 +392,7 @@ async def create_vector_store(
                 # Some fakes/clients don't persist metadata; best-effort only
                 if hasattr(col, 'set_metadata'):
                     col.set_metadata(metadata)
-            except Exception:
+            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                 pass
     except AttributeError:
         # Very minimal fake: only manager API available
@@ -380,19 +401,19 @@ async def create_vector_store(
     # Register in meta DB
     try:
         meta_register_store(uid, store_id, name)
-    except Exception as _e:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as _e:
         logger.warning(f"Failed to register vector store in meta DB: {_e}")
 
     # Track expected dimension in-memory for correctness in tests and fakes
     try:
         _STORE_DIMENSIONS[store_id] = payload.dimensions
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         pass
     # Track created name in this process for duplicate policies during tests
     try:
         if payload.name and payload.name.strip():
             _CREATED_NAMES_BY_USER.setdefault(uid, set()).add(name_lower)
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         pass
 
     return VectorStoreObject(
@@ -437,9 +458,9 @@ async def list_vector_stores(
                     'dimensions': stats.get('dimension', 1536)
                 })
                 used_ids.add(row['id'])
-            except Exception:
+            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                 continue
-    except Exception as _e:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as _e:
         logger.warning(f"Meta DB list failed; falling back to Chroma-only: {_e}")
     # Include any collections not in meta DB
     try:
@@ -459,9 +480,9 @@ async def list_vector_stores(
                     'metadata': md,
                     'dimensions': stats.get('dimension', 1536)
                 })
-            except Exception:
+            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                 continue
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         pass
     return {'data': stores}
 
@@ -484,7 +505,7 @@ async def list_vector_store_users(current_user: User = Depends(get_request_user)
             uid = entry.name
             try:
                 user_dir = DatabasePaths.get_user_base_directory(uid)
-            except Exception:
+            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                 user_dir = entry
             vec_dir = user_dir / DatabasePaths.VECTOR_STORE_SUBDIR
             has_vec_dir = vec_dir.exists()
@@ -495,7 +516,7 @@ async def list_vector_store_users(current_user: User = Depends(get_request_user)
                 try:
                     init_meta_db(uid)
                     store_count = len(meta_list_stores(uid))
-                except Exception:
+                except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                     store_count = 0
                 # Count batches
                 try:
@@ -506,9 +527,9 @@ async def list_vector_store_users(current_user: User = Depends(get_request_user)
                             row = cur.fetchone()
                             if row and row[0] is not None:
                                 batch_count = int(row[0])
-                        except Exception:
+                        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                             batch_count = 0
-                except Exception:
+                except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                     batch_count = 0
             users.append({
                 'user_id': uid,
@@ -516,7 +537,7 @@ async def list_vector_store_users(current_user: User = Depends(get_request_user)
                 'store_count': store_count,
                 'batch_count': batch_count
             })
-    except Exception as e:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=500, detail=f"Failed to scan user directories: {e}")
 
     return { 'data': users }
@@ -540,7 +561,7 @@ async def update_vector_store(
     await adapter.initialize()
     try:
         stats = await adapter.get_collection_stats(store_id)
-    except Exception as e:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=404, detail=f"Vector store not found: {e}")
     md = stats.get("metadata", {}) or {}
     # Enforce unique name per-user using meta DB first
@@ -556,7 +577,7 @@ async def update_vector_store(
                 raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
         except HTTPException:
             raise
-        except Exception:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
             pass
     # Enforce unique name per-user on rename
     if payload.name and payload.name.strip():
@@ -569,11 +590,11 @@ async def update_vector_store(
                     other_md = st.get('metadata') or {}
                     if other_md.get('name') and other_md.get('name').strip().lower() == payload.name.strip().lower():
                         raise HTTPException(status_code=409, detail=f"A vector store named '{payload.name}' already exists for this user")
-                except Exception:
+                except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                     continue
         except HTTPException:
             raise
-        except Exception:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
             pass
     if payload.name:
         md["name"] = payload.name
@@ -601,7 +622,7 @@ async def update_vector_store(
             else:
                 # Not present: register with the new name
                 meta_register_store(uid_str, store_id, payload.name)
-    except Exception as _e:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as _e:
         logger.warning(f"Failed to update/register vector store meta name: {_e}")
 
     return VectorStoreObject(
@@ -629,12 +650,12 @@ async def delete_vector_store(
             ),
             store_id,
         )
-    except Exception as _e:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as _e:
         logger.warning(f"Failed to delete store from meta DB: {_e}")
     # Remove from in-memory registry
     try:
         _STORE_DIMENSIONS.pop(store_id, None)
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         pass
     return {"id": store_id, "deleted": True}
 
@@ -662,7 +683,7 @@ async def upsert_vectors(
     # Fetch stats (may be from real or fake adapter). Be tolerant if collection isn't created yet.
     try:
         stats = await adapter.get_collection_stats(store_id)
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         stats = {"dimension": registry_dim or 1536, "metadata": {}, "count": 0}
     stats_dim = _as_int(stats.get("dimension"))
     stats_md = stats.get("metadata", {}) or {}
@@ -671,13 +692,13 @@ async def upsert_vectors(
     if registry_dim is None:
         try:
             md_dim = _as_int(stats_md.get("embedding_dimension"))
-        except Exception:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
             md_dim = None
         if md_dim and md_dim > 0:
             registry_dim = md_dim
             try:
                 _STORE_DIMENSIONS[store_id] = md_dim
-            except Exception:
+            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                 pass
 
     # Determine emptiness robustly
@@ -687,14 +708,14 @@ async def upsert_vectors(
         try:
             cnt = coll.count()
             is_empty = (cnt == 0)
-        except Exception:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
             is_empty = None
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         is_empty = None
     if is_empty is None:
         try:
             is_empty = bool(stats.get("count", 0) == 0)
-        except Exception:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
             is_empty = False
 
     # Enforce store dimension from registry always; enforce stats only when collection is non-empty
@@ -772,7 +793,7 @@ async def upsert_vectors(
             try:
                 candidates = [max_tokens] + [_get_model_max_tokens(p, model_id) for p in provs]
                 max_tokens = min([t for t in candidates if isinstance(t, int) and t > 0])
-            except Exception:
+            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                 pass
         too_long: list[tuple[int, int]] = []
         for idx, tx in enumerate(texts_to_embed):
@@ -803,7 +824,7 @@ async def upsert_vectors(
             loop = asyncio.get_running_loop()
             embed_fn = _get_embeddings_fn()
             embedded = await loop.run_in_executor(None, embed_fn, texts_to_embed, app_config, model_id)
-        except Exception as e:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Embedding generation failed for vectors upsert: {e}")
             raise HTTPException(500, detail="Failed to generate embeddings for provided content")
         # Assign back to vectors at corresponding indices
@@ -846,14 +867,14 @@ async def duplicate_vector_store(
             raise HTTPException(409, detail=f"A vector store named '{payload.new_name}' already exists for this user")
     except HTTPException:
         raise
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         pass
 
     adapter = await _get_adapter_for_user(current_user, (payload.dimensions or 1536))
     await adapter.initialize()
     try:
         src_stats = await adapter.get_collection_stats(store_id)
-    except Exception as e:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(404, detail=f"Source store not found: {e}")
     src_dim = src_stats.get('dimension', 1536)
     dim = payload.dimensions or src_dim
@@ -891,7 +912,7 @@ async def duplicate_vector_store(
                     emb_list.append(vec)
                     doc_list.append(it.get('content') or '')
                     meta_list_existing.append(it.get('metadata') or {})
-            except Exception:
+            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                 # Fallback to Chroma collection path on error
                 dup_fn = None
                 continue
@@ -900,7 +921,7 @@ async def duplicate_vector_store(
             source_collection = adapter.manager.get_or_create_collection(store_id)  # type: ignore[attr-defined]
             try:
                 total = int(source_collection.count())
-            except Exception:
+            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                 total = total or 0
             data = source_collection.get(limit=step, offset=offset, include=["embeddings", "documents", "metadatas"])  # type: ignore[attr-defined]
             if not data or not data.get('ids'):
@@ -910,7 +931,7 @@ async def duplicate_vector_store(
             try:
                 if hasattr(emb_list, 'tolist'):
                     emb_list = emb_list.tolist()
-            except Exception:
+            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                 pass
             doc_list = list(data.get('documents') or [])
             meta_list_existing = list(data.get('metadatas') or [])
@@ -1020,7 +1041,7 @@ async def rebuild_index(
             lists=payload.lists or 100,
         )
         return info
-    except Exception as e:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=400, detail=f"Index rebuild failed: {e}")
 
 
@@ -1081,7 +1102,7 @@ async def delete_by_filter(
         raise HTTPException(status_code=400, detail="Delete by filter not supported for this backend")
     try:
         deleted = await fn(store_id, payload.filter)  # type: ignore[misc]
-    except Exception as e:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=400, detail=f"Delete by filter failed: {e}")
     return {"deleted": int(deleted or 0)}
 
@@ -1101,7 +1122,7 @@ async def vector_stores_health(current_user: User = Depends(get_request_user)):
     if callable(fn):
         try:
             return await fn()  # type: ignore[misc]
-        except Exception as e:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
             return {"ok": False, "error": str(e)}
     return {"ok": True}
 
@@ -1144,7 +1165,7 @@ async def list_vectors(
             if not isinstance(parsed, dict):
                 raise ValueError("filter must be a JSON object")
             meta_filter = parsed
-        except Exception as e:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
             raise HTTPException(status_code=400, detail={"error":"invalid_filter","message":str(e)})
     if order_by and (order_by != 'id' and not order_by.startswith('metadata.')):
         raise HTTPException(status_code=400, detail={"error":"invalid_order_by","message":"order_by must be 'id' or 'metadata.<key>'"})
@@ -1163,7 +1184,7 @@ async def list_vectors(
                     metadata=row.get('metadata') or {},
                     content=row.get('content') or "",
                 ))
-        except Exception as e:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Adapter list_vectors_paginated failed; falling back to Chroma path: {e}")
     if not items and total == 0:
         # Fallback to Chroma collection semantics
@@ -1171,11 +1192,11 @@ async def list_vectors(
             collection = adapter.manager.get_or_create_collection(store_id)  # type: ignore[attr-defined]
             try:
                 total = int(collection.count())
-            except Exception:
+            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                 total = 0
             try:
                 data = collection.get(limit=limit, offset=offset, include=["documents", "metadatas"], where=meta_filter)  # type: ignore[attr-defined]
-            except Exception:
+            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                 data = collection.get(limit=limit, offset=offset, include=["documents", "metadatas"])  # type: ignore[attr-defined]
             if data and data.get("ids"):
                 for i, vid in enumerate(data["ids"]):
@@ -1189,7 +1210,7 @@ async def list_vectors(
                 key = order_by.split('.', 1)[1] if order_by.startswith('metadata.') else order_by
                 reverse = str(order_dir).lower() == 'desc'
                 items.sort(key=lambda x: (x.metadata or {}).get(key, ''), reverse=reverse)
-        except Exception as e:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Vector listing failed: {e}")
     next_offset = None
     returned = len(items)
@@ -1239,7 +1260,7 @@ async def delete_vector(
             raise HTTPException(status_code=404, detail="Vector store not found")
     except HTTPException:
         raise
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         raise HTTPException(status_code=404, detail="Vector store not found")
 
     adapter = await _get_adapter_for_user(current_user, 1536)
@@ -1259,7 +1280,7 @@ async def delete_vector(
                 raise HTTPException(status_code=404, detail="Vector not found")
         except HTTPException:
             raise
-        except Exception:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
             # If collection get fails unexpectedly, report not found
             raise HTTPException(status_code=404, detail="Vector not found")
     await adapter.delete_vectors(store_id, ids=[vector_id])
@@ -1293,7 +1314,7 @@ async def query_vectors(
             import os as _os
             if str(_os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"}:
                 provider = "openai"
-        except Exception:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
             pass
         mods_hint = _allowed_models()
         if mods_hint and len(mods_hint) > 0:
@@ -1306,7 +1327,7 @@ async def query_vectors(
             try:
                 candidates = [max_tokens] + [_get_model_max_tokens(p, model_id) for p in provs]
                 max_tokens = min([t for t in candidates if isinstance(t, int) and t > 0])
-            except Exception:
+            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                 pass
         token_len = _count_tokens(payload.query, model_id)
         if token_len > max_tokens:
@@ -1325,7 +1346,7 @@ async def query_vectors(
             loop = asyncio.get_running_loop()
             embedded = await loop.run_in_executor(None, create_embeddings_batch, [payload.query], app_config, model_id)
             qvec = embedded[0]
-        except Exception as e:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Embedding generation failed for query: {e}")
             raise HTTPException(500, detail="Failed to generate embedding for query")
     else:
@@ -1342,9 +1363,9 @@ async def query_vectors(
             try:
                 coll = adapter.manager.get_or_create_collection(store_id)
                 is_empty = (coll.count() == 0)
-            except Exception:
+            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                 is_empty = bool(stats.get('count', 0) == 0)
-        except Exception:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
             # If undeterminable, assume empty to avoid false rejections
             is_empty = True
 
@@ -1412,7 +1433,7 @@ async def upsert_vectors_batch(
             status='processing', upserted=0, error=None,
             meta={"records": len(payload.records) if payload and payload.records else 0}
         )
-    except Exception as _e:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as _e:
         logger.warning(f"Failed to persist batch creation: {_e}")
     try:
         res = await upsert_vectors(store_id=store_id, payload=payload, current_user=current_user)
@@ -1420,20 +1441,20 @@ async def upsert_vectors_batch(
         _BATCH_STATUS[batch_id].update({"status": "completed", "upserted": upserted})
         try:
             db_update_batch(batch_id, user_id=uid, status='completed', upserted=upserted)
-        except Exception as _e:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as _e:
             logger.warning(f"Failed to persist batch completion: {_e}")
     except HTTPException as e:
         _BATCH_STATUS[batch_id].update({"status": "failed", "error": e.detail})
         try:
             db_update_batch(batch_id, user_id=uid, status='failed', error=str(e.detail))
-        except Exception as _e:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as _e:
             logger.warning(f"Failed to persist batch failure: {_e}")
         raise
-    except Exception as e:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
         _BATCH_STATUS[batch_id].update({"status": "failed", "error": str(e)})
         try:
             db_update_batch(batch_id, user_id=uid, status='failed', error=str(e))
-        except Exception as _e:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as _e:
             logger.warning(f"Failed to persist batch failure: {_e}")
         raise
     return _BATCH_STATUS[batch_id]
@@ -1571,13 +1592,13 @@ async def create_store_from_media(
                         try:
                             mid = int(it.get('id'))
                             merged[mid] = it
-                        except Exception:
+                        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                             # Fallback: if id missing/non-int, just append
                             items.append(it)
                 items.extend(list(merged.values()))
         except HTTPException:
             raise
-        except Exception as e:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
             raise HTTPException(400, detail=f"Keyword fetch failed: {e}")
     else:
         raise HTTPException(400, detail="Provide media_ids or keywords")
@@ -1611,7 +1632,7 @@ async def create_store_from_media(
     try:
         init_batches_db(uid)
         db_create_batch(batch_id, store_id=created_store_id, user_id=uid, status='processing', upserted=0, meta={"source": "create_from_media", "items": len(items)})
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         pass
 
     # Initialize adapter for downstream operations
@@ -1623,7 +1644,7 @@ async def create_store_from_media(
         source_collection_name = f"user_{uid}_media_embeddings"
         try:
             source_col = adapter.manager.get_or_create_collection(source_collection_name)
-        except Exception as e:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
             raise HTTPException(404, detail=f"Source embeddings collection not found: {e}")
 
         upserted_total = 0
@@ -1633,7 +1654,7 @@ async def create_store_from_media(
                 continue
             try:
                 data = source_col.get(where={"media_id": mid}, include=["embeddings", "documents", "metadatas"], limit=100000)
-            except Exception as e:
+            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to read existing embeddings for media {mid}: {e}")
                 continue
             if not data or not data.get('ids'):
@@ -1642,7 +1663,7 @@ async def create_store_from_media(
             try:
                 if hasattr(emb_list, 'tolist'):
                     emb_list = emb_list.tolist()
-            except Exception:
+            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
                 pass
             doc_list = data.get('documents') or []
             meta_list_existing = data.get('metadatas') or []
@@ -1659,7 +1680,7 @@ async def create_store_from_media(
         # Persist batch status
         try:
             db_update_batch(batch_id, user_id=uid, status='completed', upserted=upserted_total)
-        except Exception:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
             pass
         return {"store_id": created_store_id, "batch_id": batch_id, "upserted": upserted_total}
 
@@ -1673,7 +1694,7 @@ async def create_store_from_media(
     method_value = (payload.chunk_method or 'words').lower()
     try:
         method_enum = ChunkingMethod(method_value)
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported chunk_method '{payload.chunk_method}'")
 
     ck_cfg = ChunkerConfig(
@@ -1747,7 +1768,7 @@ async def create_store_from_media(
             loop = asyncio.get_running_loop()
             embed_fn = _get_embeddings_fn()
             vecs = await loop.run_in_executor(None, embed_fn, subtexts, app_config, model_id)
-        except Exception as e:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
             db_update_batch(batch_id, user_id=uid, status='failed', error=str(e))
             raise HTTPException(500, detail=f"Embedding failed: {e}")
         # Prepare corresponding slice metadata
@@ -1762,7 +1783,7 @@ async def create_store_from_media(
         upserted_total += len(vecs)
         try:
             db_update_batch(batch_id, user_id=uid, upserted=upserted_total)
-        except Exception:
+        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
             pass
 
     db_update_batch(batch_id, user_id=uid, status='completed', upserted=upserted_total)
@@ -1783,7 +1804,7 @@ async def get_vector_store(
     await adapter.initialize()
     try:
         stats = await adapter.get_collection_stats(store_id)
-    except Exception as e:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=404, detail=f"Vector store not found: {e}")
     md = stats.get("metadata", {}) or {}
     # Prefer meta DB name if available (do not gate existence on meta DB)
@@ -1798,7 +1819,7 @@ async def get_vector_store(
             if r.get('id') == store_id:
                 md['name'] = r.get('name', md.get('name', store_id))
                 break
-    except Exception:
+    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
         pass
     return {
         "id": md.get("openai_id", store_id),

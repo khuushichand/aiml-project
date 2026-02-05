@@ -38,6 +38,8 @@ from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
     CharacterChatCompletionV2Response,
     CharacterChatStreamPersistRequest,
     CharacterChatStreamPersistResponse,
+    ChatSettingsResponse,
+    ChatSettingsUpdate,
     ChatSessionCreate,
     ChatSessionListResponse,
     ChatSessionResponse,
@@ -55,6 +57,9 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     map_sender_to_role,
     post_message_to_conversation,
     replace_placeholders,
+)
+from tldw_Server_API.app.core.Character_Chat.modules.character_prompt_presets import (
+    build_character_system_prompt,
 )
 
 # Rate limiting
@@ -88,7 +93,34 @@ from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_pr
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
 from tldw_Server_API.app.core.Utils.common import parse_boolean
 
+_CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    HTTPException,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
+
 THROTTLE_WINDOW_SIZE = 100
+MAX_CHAT_SETTINGS_BYTES = 200_000
+MAX_AUTHOR_NOTE_CHARS = 20_000
 
 def _safe_replace_placeholders(value: Any, char_name: str, user_name: str) -> str:
     if value is None:
@@ -98,7 +130,7 @@ def _safe_replace_placeholders(value: Any, char_name: str, user_name: str) -> st
         return ""
     try:
         return replace_placeholders(text, char_name, user_name)
-    except Exception as exc:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Placeholder replacement failed: {}", exc)
         return text
 
@@ -294,6 +326,44 @@ def _convert_db_message_to_response(msg_data: dict[str, Any]) -> MessageResponse
         version=msg_data.get('version', 1)
     )
 
+def _touch_conversation_metadata(db: CharactersRAGDB, conversation_id: str) -> bool:
+    """Best-effort bump last_modified/version after settings updates."""
+    for _ in range(2):
+        conversation = db.get_conversation_by_id(conversation_id)
+        if not conversation:
+            return False
+        try:
+            db.update_conversation(conversation_id, {}, conversation.get("version", 1))
+            return True
+        except ConflictError:
+            continue
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            return False
+    return False
+
+def _validate_chat_settings_payload(settings: dict[str, Any]) -> None:
+    """Validate settings payload size and author note length."""
+    try:
+        encoded = json.dumps(settings).encode("utf-8")
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid settings payload: {exc}"
+        ) from exc
+
+    if len(encoded) > MAX_CHAT_SETTINGS_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Settings payload exceeds {MAX_CHAT_SETTINGS_BYTES} bytes"
+        )
+
+    author_note = settings.get("authorNote")
+    if isinstance(author_note, str) and len(author_note) > MAX_AUTHOR_NOTE_CHARS:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"authorNote exceeds {MAX_AUTHOR_NOTE_CHARS} characters"
+        )
+
 """Role mapping provided by Character_Chat utility: map_sender_to_role"""
 
 # ========================================================================
@@ -344,7 +414,7 @@ async def create_chat_session(
         except HTTPException:
             # Propagate enforcement failures
             raise
-        except Exception as e:
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
             # Fail closed: quota enforcement must work to prevent resource exhaustion
             logger.error("Chat limit enforcement failed, denying request: {}", e)
             raise HTTPException(
@@ -438,19 +508,19 @@ async def create_chat_session(
                     # Update in-memory message count (best-effort)
                     try:
                         created_conv['message_count'] = (created_conv.get('message_count') or 0) + 1
-                    except Exception:
+                    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                         pass
                     seed_status = "ok"
                 else:
                     seed_status = "no_greeting"
-            except Exception as _seed_err:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as _seed_err:
                 seed_status = "failed"
                 logger.warning(f"Failed to seed first message for chat {created_id}: {_seed_err}")
 
         if response is not None and seed_status is not None:
             try:
                 response.headers["X-Chat-Seed-Status"] = seed_status
-            except Exception as exc:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Failed to set X-Chat-Seed-Status header: {}", exc)
 
         # Log creation
@@ -460,7 +530,7 @@ async def create_chat_session(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error creating chat session: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -496,7 +566,7 @@ async def get_chat_session(
         # Get message count efficiently
         try:
             conversation['message_count'] = db.count_messages_for_conversation(chat_id)
-        except Exception:
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             messages = db.get_messages_for_conversation(chat_id, limit=1000)
             conversation['message_count'] = len(messages) if messages else 0
 
@@ -504,7 +574,7 @@ async def get_chat_session(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting chat session {chat_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -553,7 +623,7 @@ async def get_chat_context(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting chat context for {chat_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while retrieving chat context")
 
@@ -601,7 +671,7 @@ async def complete_chat_legacy(
             from datetime import timezone as _tz
             sunset_days = int(os.getenv("DEPRECATION_SUNSET_DAYS", "90"))
             sunset = (datetime.now(_tz.utc) + timedelta(days=sunset_days)).strftime("%a, %d %b %Y %H:%M:%S GMT")
-        except Exception:
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             sunset = "Tue, 31 Dec 2025 00:00:00 GMT"
         dep_headers = {
             "Deprecation": "true",
@@ -612,7 +682,7 @@ async def complete_chat_legacy(
             if response is not None:
                 for k, v in dep_headers.items():
                     response.headers[k] = v
-        except Exception as exc:
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(
                 "Non-fatal: failed to set deprecation headers for chat {}: {}",
                 chat_id,
@@ -643,7 +713,7 @@ async def complete_chat_legacy(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error in legacy complete for {chat_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during completion")
 
@@ -689,14 +759,7 @@ async def prepare_chat_completion(
 
         formatted: list[dict[str, Any]] = []
         if include_ctx and character and offset == 0:
-            parts = [
-                f"You are {char_label}.",
-                _safe_replace_placeholders(character.get('description', ''), char_label, user_name),
-                _safe_replace_placeholders(character.get('personality', ''), char_label, user_name),
-                _safe_replace_placeholders(character.get('scenario', ''), char_label, user_name),
-                _safe_replace_placeholders(character.get('system_prompt', ''), char_label, user_name),
-            ]
-            sys_text = '\n'.join([p for p in parts if p])
+            sys_text = build_character_system_prompt(character, char_label, user_name)
             if sys_text.strip():
                 formatted.append({"role": "system", "content": sys_text.strip()})
 
@@ -723,7 +786,7 @@ async def prepare_chat_completion(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error preparing completion for {chat_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while preparing completion")
 
@@ -783,7 +846,7 @@ async def character_chat_completion(
             try:
                 from tldw_Server_API.app.api.v1.endpoints.chat import DEFAULT_SAVE_TO_DB as CHAT_DEFAULT_SAVE
                 save_to_db = CHAT_DEFAULT_SAVE
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 save_to_db = False
         will_persist = bool(save_to_db) and not stream_requested
 
@@ -793,14 +856,7 @@ async def character_chat_completion(
 
         formatted: list[dict[str, Any]] = []
         if include_ctx and character and offset == 0:
-            parts = [
-                f"You are {char_label}.",
-                _safe_replace_placeholders(character.get('description', ''), char_label, user_name),
-                _safe_replace_placeholders(character.get('personality', ''), char_label, user_name),
-                _safe_replace_placeholders(character.get('scenario', ''), char_label, user_name),
-                _safe_replace_placeholders(character.get('system_prompt', ''), char_label, user_name),
-            ]
-            sys_text = '\n'.join([p for p in parts if p])
+            sys_text = build_character_system_prompt(character, char_label, user_name)
             if sys_text.strip():
                 formatted.append({"role": "system", "content": sys_text.strip()})
 
@@ -835,7 +891,7 @@ async def character_chat_completion(
                 await rate_limiter.check_soft_message_limit(chat_id, current_count)
         except HTTPException:
             raise
-        except Exception:
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             logger.debug("Non-fatal: message cap pre-check skipped")
 
         # Resolve BYOK credentials (fall back to env/config)
@@ -843,7 +899,7 @@ async def character_chat_completion(
             try:
                 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys
                 return get_api_keys().get(name)
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 return None
 
         user_id_int: Optional[int] = None
@@ -901,13 +957,13 @@ async def character_chat_completion(
                 try:
                     if asyncio.iscoroutine(llm_resp):
                         llm_resp = await llm_resp  # type: ignore
-                except Exception as e:
+                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to await async LLM response: {e}")
                     raise HTTPException(
                         status_code=status.HTTP_502_BAD_GATEWAY,
                         detail="LLM provider error"
                     ) from e
-            except Exception as e:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Chat provider call failed: {e}")
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Chat provider error") from e
             await byok_resolution.touch_last_used()
@@ -937,7 +993,7 @@ async def character_chat_completion(
                     return ensure_sse_line(text.strip())
                 normalized = normalize_provider_line(text)
                 return normalized
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 return None
 
         # Extract assistant content from LLM response
@@ -952,11 +1008,11 @@ async def character_chat_completion(
                 # OpenAI-style
                 try:
                     return resp.get("choices", [{}])[0].get("message", {}).get("content", "") or resp.get("text", "")
-                except Exception:
+                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                     return resp.get("text", "")
             try:
                 return str(resp)
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 return ""
 
         def _chunk_text(text: str, size: int = 2000) -> list[str]:
@@ -1005,7 +1061,7 @@ async def character_chat_completion(
                     }
                     yield f"data: {json.dumps(tail)}\n\n"
                     yield "data: [DONE]\n\n"
-                except Exception as e:
+                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                     yield f"data: {json.dumps({'error': str(e)})}\n\n"
                     yield "data: [DONE]\n\n"
 
@@ -1040,7 +1096,7 @@ async def character_chat_completion(
                         tool_calls = llm_resp.get("choices", [{}])[0].get("message", {}).get("tool_calls")
                         if isinstance(tool_calls, list):
                             assistant_tool_calls = tool_calls
-                except Exception:
+                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                     pass
 
         # If streaming requested and we have a generator, stream SSE (real providers)
@@ -1062,7 +1118,7 @@ async def character_chat_completion(
                         logger.debug(
                             f"Unified SSE enabled: interval={stream.heartbeat_interval_s} mode={stream.heartbeat_mode}"
                         )
-                    except Exception:
+                    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                         pass
 
                     chunk_count = 0
@@ -1112,7 +1168,7 @@ async def character_chat_completion(
                                         return
                             # Ensure DONE if provider didn't send one
                             await stream.done()
-                        except Exception as e:
+                        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                             await stream.error("internal_error", f"{e}")
 
                     async def _generator():
@@ -1128,24 +1184,24 @@ async def character_chat_completion(
                             if not producer.done():
                                 try:
                                     await producer
-                                except Exception:
+                                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                                     pass
                             # If DONE wasn’t enqueued for any reason, append one now
                             try:
                                 if not getattr(stream, "_done_enqueued", False):
                                     yield sse_done()
-                            except Exception:
+                            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                                 pass
                         finally:
                             # Always tear down the background producer to avoid leaks
                             if not producer.done():
                                 try:
                                     producer.cancel()
-                                except Exception:
+                                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 try:
                                     await producer
-                                except (asyncio.CancelledError, Exception):
+                                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                                     # Swallow any errors from producer teardown
                                     pass
 
@@ -1184,7 +1240,7 @@ async def character_chat_completion(
                                 if normalized == "data: [done]":
                                     done_sent = True
                                 yield ensure_sse_line(line)
-                        except Exception as e:
+                        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                             if isinstance(e, AttributeError) and "object has no attribute 'close'" in str(e):
                                 logger.debug("Ignoring streaming session close error: %s", e)
                             else:
@@ -1224,7 +1280,7 @@ async def character_chat_completion(
                                 if normalized == "data: [done]":
                                     done_sent = True
                                 yield ensure_sse_line(line)
-                        except Exception:
+                        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                             logger.exception("Exception occurred in streaming SSE generator.")
                             yield f"data: {json.dumps({'error': 'An internal error has occurred.'})}\n\n"
                         finally:
@@ -1232,7 +1288,7 @@ async def character_chat_completion(
                                 yield "data: [DONE]\n\n"
                     # Note: streaming mode does not persist assistant content
                     return StreamingResponse(_sse_gen(), media_type="text/event-stream")
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 # Fall through to non-streaming response
                 pass
             if isinstance(llm_resp, (dict, str, bytes, bytearray)):
@@ -1281,7 +1337,7 @@ async def character_chat_completion(
                 if validated_tool_calls:
                     try:
                         db.add_message_metadata(assistant_msg_id, tool_calls=validated_tool_calls)
-                    except Exception as exc:
+                    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
                         logger.debug(f"Non-fatal: failed to persist tool_calls metadata: {exc}")
             saved = True
 
@@ -1311,7 +1367,7 @@ async def character_chat_completion(
     except CharactersRAGDBError as e:
         logger.error(f"DB error in character chat completion for {chat_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error in character chat completion for {chat_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during character chat completion")
 
@@ -1345,7 +1401,7 @@ async def list_chat_sessions(
             conversations = db.get_conversations_for_user_and_character(user_id_str, character_id, limit=limit, offset=offset)
             try:
                 total_count = db.count_conversations_for_user_by_character(user_id_str, character_id)
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 # Fallback: filter by client_id in-memory if efficient count isn't available
                 total_count = len([c for c in conversations if c.get('client_id') == user_id_str])
         else:
@@ -1353,7 +1409,7 @@ async def list_chat_sessions(
             conversations = db.get_conversations_for_user(user_id_str, limit=limit, offset=offset)
             try:
                 total_count = db.count_conversations_for_user(user_id_str)
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 total_count = len(conversations)
 
         # Filter by client_id for security (redundant in happy path, kept defensively)
@@ -1368,7 +1424,7 @@ async def list_chat_sessions(
         for conv in user_conversations:
             try:
                 conv['message_count'] = db.count_messages_for_conversation(conv['id'])
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 messages = db.get_messages_for_conversation(conv['id'], limit=1000)
                 conv['message_count'] = len(messages) if messages else 0
 
@@ -1379,7 +1435,7 @@ async def list_chat_sessions(
             offset=offset
         )
 
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error listing chat sessions: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1452,12 +1508,80 @@ async def update_chat_session(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error updating chat session {chat_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while updating chat session"
         )
+
+
+@router.get(
+    "/{chat_id}/settings",
+    response_model=ChatSettingsResponse,
+    summary="Get chat settings",
+    tags=["Chat Sessions"],
+)
+async def get_chat_settings(
+    chat_id: str = Path(..., description="Chat session ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        conversation = db.get_conversation_by_id(chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+        settings_row = db.get_conversation_settings(chat_id)
+        if not settings_row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat settings not found")
+
+        return ChatSettingsResponse(
+            conversation_id=chat_id,
+            settings=settings_row.get("settings") or {},
+            last_modified=settings_row.get("last_modified") or datetime.now(timezone.utc),
+        )
+    except HTTPException:
+        raise
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Error fetching chat settings for {chat_id}: {exc}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch chat settings") from exc
+
+
+@router.put(
+    "/{chat_id}/settings",
+    response_model=ChatSettingsResponse,
+    summary="Update chat settings",
+    tags=["Chat Sessions"],
+)
+async def update_chat_settings(
+    payload: ChatSettingsUpdate,
+    chat_id: str = Path(..., description="Chat session ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        conversation = db.get_conversation_by_id(chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+        settings = payload.settings or {}
+        _validate_chat_settings_payload(settings)
+
+        if not db.upsert_conversation_settings(chat_id, settings):
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update chat settings")
+
+        _touch_conversation_metadata(db, chat_id)
+        settings_row = db.get_conversation_settings(chat_id)
+
+        return ChatSettingsResponse(
+            conversation_id=chat_id,
+            settings=(settings_row or {}).get("settings") or settings,
+            last_modified=(settings_row or {}).get("last_modified") or datetime.now(timezone.utc),
+        )
+    except HTTPException:
+        raise
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Error updating chat settings for {chat_id}: {exc}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update chat settings") from exc
 
 
 @router.delete(
@@ -1530,7 +1654,7 @@ async def delete_chat_session(
                 try:
                     db.soft_delete_message(msg_id, msg.get("version", 1))
                     batch_deleted += 1
-                except Exception:
+                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                     logger.warning("Failed to soft-delete message {} during conversation delete.", msg_id)
                     failed_message_ids.add(msg_id)  # Track failed deletions
 
@@ -1564,7 +1688,7 @@ async def delete_chat_session(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error deleting chat session {chat_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1633,7 +1757,7 @@ async def export_chat_history(
         # Get total message count for pagination info
         try:
             total_messages = db.count_messages_for_conversation(chat_id)
-        except Exception:
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             # Fallback if count method not available
             total_messages = None
 
@@ -1719,7 +1843,7 @@ async def export_chat_history(
                 }
                 try:
                     md = db.get_message_metadata(msg.get('id'))
-                except Exception:
+                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                     md = None
                 role_for_tool_calls = map_sender_to_role(
                     msg.get('sender'),
@@ -1741,7 +1865,7 @@ async def export_chat_history(
                                 tc_list = parsed
                             if isinstance(tc_list, list):
                                 item["tool_calls"] = tc_list
-                    except Exception:
+                    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                         pass
                 export_data["messages"].append(item)
                 if include_metadata and md and md.get('extra') is not None and msg.get('id'):
@@ -1770,7 +1894,7 @@ async def export_chat_history(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error exporting chat {chat_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1811,7 +1935,7 @@ async def persist_streamed_assistant_message(
             await limiter.check_message_limit(chat_id, current_count + 1)
         except HTTPException:
             raise
-        except Exception:
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             logger.debug("Non-fatal: message cap check skipped in persist endpoint")
 
         # Validate optional parent message belongs to this conversation
@@ -1853,7 +1977,7 @@ async def persist_streamed_assistant_message(
             validated_tool_calls = _validate_and_truncate_tool_calls(getattr(body, 'tool_calls', None))
             if validated_tool_calls is not None or extra is not None:
                 db.add_message_metadata(assistant_msg_id, tool_calls=validated_tool_calls, extra=extra)
-        except Exception as exc:
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(
                 f"Non-fatal: failed to persist metadata for message {assistant_msg_id}: {exc}"
             )
@@ -1868,7 +1992,7 @@ async def persist_streamed_assistant_message(
                         {"rating": body.chat_rating},
                         conv_for_update.get('version', 1),
                     )
-            except Exception as e:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(
                     "Failed to update chat rating for chat_id={} rating={} error={}",
                     chat_id,
@@ -1893,7 +2017,7 @@ async def persist_streamed_assistant_message(
     except CharactersRAGDBError as e:
         logger.error(f"DB error persisting streamed assistant message for {chat_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error persisting streamed assistant message for {chat_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to persist assistant message")
 

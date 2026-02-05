@@ -34,6 +34,28 @@ from .backends.query_utils import (
 )
 
 
+_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    sqlite3.Error,
+    BackendDatabaseError,
+)
+
+
 class WorkflowsSchemaError(RuntimeError):
     """Raised when workflow schema initialization or migration fails."""
 
@@ -485,7 +507,7 @@ class WorkflowsDatabase:
         # Optional lightweight SQLite connection pool for high-churn operations
         try:
             pool_size = int(os.getenv("WORKFLOWS_SQLITE_POOL_SIZE", "0"))
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             pool_size = 0
         self._sqlite_pool: list[sqlite3.Connection] = []
         if pool_size and pool_size > 0:
@@ -498,7 +520,7 @@ class WorkflowsDatabase:
                     c.execute("PRAGMA foreign_keys=ON;")
                     c.execute("PRAGMA busy_timeout=5000;")
                     c.execute("PRAGMA wal_autocheckpoint=1000;")
-                except Exception:
+                except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                     pass
                 self._sqlite_pool.append(c)
         logger.debug(f"Workflows DB initialized at {self.db_path}")
@@ -586,7 +608,7 @@ class WorkflowsDatabase:
             if self.backend is not None:
                 try:
                     pool = self.backend.get_pool()
-                except Exception:  # noqa: BLE001 - defensive
+                except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:  # noqa: BLE001 - defensive
                     return
                 if hasattr(pool, "close_all"):
                     pool.close_all()
@@ -597,7 +619,7 @@ class WorkflowsDatabase:
             for c in self._sqlite_pool:
                 try:
                     c.close()
-                except Exception:
+                except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                     pass
             self._sqlite_pool = []
         if hasattr(self, "_conn") and self._conn is not None:
@@ -617,7 +639,7 @@ class WorkflowsDatabase:
             # Reduce writer stalls and enable periodic checkpoints
             self._conn.execute("PRAGMA busy_timeout=5000;")
             self._conn.execute("PRAGMA wal_autocheckpoint=1000;")
-        except Exception as e:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to enable WAL on workflows DB: {e}")
 
     def _get_backend_schema_version(self, conn) -> int:
@@ -790,7 +812,7 @@ class WorkflowsDatabase:
                 f"ALTER COLUMN {ident('payload_json')} TYPE JSONB USING {ident('payload_json')}::jsonb",
                 connection=conn,
             )
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Add GIN index on JSONB payloads
@@ -800,7 +822,7 @@ class WorkflowsDatabase:
                 f"ON {ident('workflow_events')} USING GIN ({ident('payload_json')})",
                 connection=conn,
             )
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Recreate FK constraints to cascade on run delete
@@ -810,7 +832,7 @@ class WorkflowsDatabase:
                     f"ALTER TABLE {ident(table)} DROP CONSTRAINT IF EXISTS {ident(f'{table}_run_id_fkey')}",
                     connection=conn,
                 )
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 backend.execute(
@@ -818,7 +840,7 @@ class WorkflowsDatabase:
                     f"FOREIGN KEY ({ident('run_id')}) REFERENCES {ident('workflow_runs')}({ident('run_id')}) ON DELETE CASCADE",
                     connection=conn,
                 )
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Partial indexes for hot statuses
@@ -831,7 +853,7 @@ class WorkflowsDatabase:
                 f"CREATE INDEX IF NOT EXISTS {ident('idx_runs_status_queued')} ON {ident('workflow_runs')}({ident('status')}) WHERE {ident('status')} = 'queued'",
                 connection=conn,
             )
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             pass
         # Dead-letter queue table for webhooks
         backend.execute(
@@ -860,14 +882,14 @@ class WorkflowsDatabase:
                 f"CREATE INDEX IF NOT EXISTS {ident('idx_runs_status_succeeded')} ON {ident('workflow_runs')}({ident('status')}) WHERE {ident('status')} = 'succeeded'",
                 connection=conn,
             )
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             backend.execute(
                 f"CREATE INDEX IF NOT EXISTS {ident('idx_runs_status_failed')} ON {ident('workflow_runs')}({ident('status')}) WHERE {ident('status')} = 'failed'",
                 connection=conn,
             )
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             pass
 
     def _backend_migrate_to_v5(self, conn) -> None:
@@ -896,7 +918,7 @@ class WorkflowsDatabase:
                 f"AND (s.{ident('tenant_id')} IS NULL OR s.{ident('tenant_id')} = '')",
                 connection=conn,
             )
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             pass
 
     def _backend_migrate_to_v6(self, conn) -> None:
@@ -911,7 +933,7 @@ class WorkflowsDatabase:
                 f"{ident('idempotency_key')}, {ident('created_at')})",
                 connection=conn,
             )
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             pass
 
     def _initialize_schema_backend(self) -> None:
@@ -943,7 +965,7 @@ class WorkflowsDatabase:
         except BackendDatabaseError as exc:
             logger.error("Failed to initialise workflows schema on backend: %s", exc)
             raise
-        except Exception as exc:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS as exc:
             logger.error("Unexpected error while initialising workflows schema: %s", exc)
             raise
 
@@ -1066,7 +1088,7 @@ class WorkflowsDatabase:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status_queued ON workflow_runs(status) WHERE status = 'queued'")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status_succeeded ON workflow_runs(status) WHERE status = 'succeeded'")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status_failed ON workflow_runs(status) WHERE status = 'failed'")
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             pass
         cur.execute("CREATE INDEX IF NOT EXISTS idx_events_run_seq ON workflow_events(run_id, event_seq)")
         # Ensure uniqueness of per-run event sequence
@@ -1117,7 +1139,7 @@ class WorkflowsDatabase:
             try:
                 cur.execute(alter)
                 self._conn.commit()
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Backfill step-run tenant_id from workflow_runs when possible
@@ -1132,7 +1154,7 @@ class WorkflowsDatabase:
                 """
             )
             self._conn.commit()
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Artifacts table (v0.2)
@@ -1194,7 +1216,7 @@ class WorkflowsDatabase:
         if getattr(self, "_sqlite_pool", None):
             try:
                 return self._sqlite_pool.pop() if self._sqlite_pool else self._conn
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 return self._conn
         return self._conn
 
@@ -1202,10 +1224,10 @@ class WorkflowsDatabase:
         if getattr(self, "_sqlite_pool", None) and conn is not self._conn:
             try:
                 self._sqlite_pool.append(conn)
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 try:
                     conn.close()
-                except Exception:
+                except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                     pass
     def create_definition(
         self,
@@ -1479,7 +1501,7 @@ class WorkflowsDatabase:
             row = self._row_from_result(result)
             try:
                 return int(row[0]) if row is not None else 0
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 return int((row.get("c") if row else 0) or 0)
 
         cur = self._conn.cursor()
@@ -1488,10 +1510,10 @@ class WorkflowsDatabase:
             return 0
         try:
             return int(row[0])
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             try:
                 return int(row.get("c") or 0)  # type: ignore[attr-defined]
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 return 0
 
     def count_runs_for_tenant_window(
@@ -1514,7 +1536,7 @@ class WorkflowsDatabase:
             row = self._row_from_result(result)
             try:
                 return int(row[0]) if row is not None else 0
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 return int((row.get("c") if row else 0) or 0)
 
         cur = self._conn.cursor()
@@ -1523,10 +1545,10 @@ class WorkflowsDatabase:
             return 0
         try:
             return int(row[0])
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             try:
                 return int(row.get("c") or 0)  # type: ignore[attr-defined]
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 return 0
 
     def update_run_status(
@@ -1589,7 +1611,7 @@ class WorkflowsDatabase:
         try:
             from loguru import logger as _logger
             _logger.debug(f"WorkflowsDB: run {run_id} -> status={status}")
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             pass
 
     # ---------- Run control ----------
@@ -1660,7 +1682,7 @@ class WorkflowsDatabase:
                     )
                     r = self._row_from_result(inc)
                     next_seq = int(r["next_seq"]) if r else 1
-                except Exception:
+                except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                     # Fallback to aggregate
                     seq_result = self._execute_backend(
                         "SELECT COALESCE(MAX(event_seq), 0) AS max_seq FROM workflow_events WHERE run_id = ?",
@@ -1715,7 +1737,7 @@ class WorkflowsDatabase:
                     "UPDATE workflow_event_counters SET next_seq = ? WHERE run_id = ?",
                     (next_seq, run_id),
                 )
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             # Fallback to aggregate scan if counters table missing
             row = cur.execute(
                 "SELECT COALESCE(MAX(event_seq), 0) as max_seq FROM workflow_events WHERE run_id = ?",
@@ -1786,7 +1808,7 @@ class WorkflowsDatabase:
             data = self._row_to_dict(r)
             try:
                 data["payload_json"] = json.loads(data.get("payload_json") or "{}")
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 pass
             out.append(data)
         return out
@@ -1980,7 +2002,7 @@ class WorkflowsDatabase:
                 if val is None:
                     return None
                 return int(val)
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 return None
 
         def _as_float(val: Any) -> float | None:
@@ -1988,7 +2010,7 @@ class WorkflowsDatabase:
                 if val is None:
                     return None
                 return float(val)
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 return None
 
         for row in rows:
@@ -1998,7 +2020,7 @@ class WorkflowsDatabase:
                     raw = row.get("outputs_json")
                 else:
                     raw = row[0] if row else None
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 raw = None
             if raw is None:
                 continue
@@ -2053,7 +2075,7 @@ class WorkflowsDatabase:
             from datetime import timedelta
             cutoff = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(hours=ttl_hours)
             cutoff_iso = cutoff.isoformat()
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             cutoff_iso = None
         params = (tenant_id, user_id, idempotency_key)
         query = "SELECT * FROM workflow_runs WHERE tenant_id = ? AND user_id = ? AND idempotency_key = ?"
@@ -2112,7 +2134,7 @@ class WorkflowsDatabase:
         try:
             from loguru import logger as _logger
             _logger.debug(f"WorkflowsDB: heartbeat step_run_id={step_run_id}")
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             pass
 
     def find_orphan_step_runs(self, cutoff_iso: str) -> list[dict[str, Any]]:
@@ -2260,9 +2282,9 @@ class WorkflowsDatabase:
                         else:
                             # Hide encrypted content when key not available
                             md = {"_encrypted": True}
-                    except Exception:
+                    except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                         md = {"_encrypted": True}
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 pass
             data["metadata_json"] = md
             out.append(data)
@@ -2293,10 +2315,10 @@ class WorkflowsDatabase:
                         md = dec
                     else:
                         md = {"_encrypted": True}
-                except Exception:
+                except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                     md = {"_encrypted": True}
             data["metadata_json"] = md
-        except Exception:
+        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
             pass
         return data
 
@@ -2440,7 +2462,7 @@ class WorkflowsDatabase:
                     "last_error": r[7],
                     "created_at": r[8],
                 })
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 # Attempt dict row style access (when using row_factory)
                 out.append({
                     "id": r.get("id"),
@@ -2534,7 +2556,7 @@ class WorkflowsDatabase:
                     "last_error": r[7],
                     "created_at": r[8],
                 })
-            except Exception:
+            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                 out.append({
                     "id": r.get("id"),
                     "tenant_id": r.get("tenant_id"),

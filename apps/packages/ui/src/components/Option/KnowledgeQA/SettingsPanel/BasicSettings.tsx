@@ -3,6 +3,7 @@
  */
 
 import React from "react"
+import { Tooltip } from "antd"
 import { HelpCircle } from "lucide-react"
 import { useKnowledgeQA } from "../KnowledgeQAProvider"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
@@ -11,6 +12,9 @@ import { cn } from "@/lib/utils"
 export function BasicSettings() {
   const { settings, updateSetting } = useKnowledgeQA()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
+  const webFallbackHelpId = React.useId()
+  const webFallbackHelpText =
+    "Requires a configured web search provider on the server (e.g., DuckDuckGo/Brave/Bing/Google/Tavily)."
 
   return (
     <div className="space-y-6">
@@ -83,11 +87,19 @@ export function BasicSettings() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <label id="web-fallback-label" className="text-sm font-medium">Web Search Fallback</label>
-            <HelpCircle
-              className="w-4 h-4 text-text-muted"
-              title="Requires a configured web search provider on the server (e.g., DuckDuckGo/Brave/Bing/Google/Tavily)."
-              aria-label="Web search requires a configured server provider"
-            />
+            <Tooltip title={webFallbackHelpText}>
+              <button
+                type="button"
+                aria-label="Web search fallback requirements"
+                aria-describedby={webFallbackHelpId}
+                className="inline-flex items-center"
+              >
+                <HelpCircle className="h-4 w-4 text-text-muted" aria-hidden="true" />
+              </button>
+            </Tooltip>
+            <span id={webFallbackHelpId} className="sr-only">
+              {webFallbackHelpText}
+            </span>
           </div>
           <button
             role="switch"

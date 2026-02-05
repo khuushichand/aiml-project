@@ -16,6 +16,7 @@
 #
 # 3rd-Party Imports
 import asyncio
+import builtins
 import hashlib
 import ipaddress
 import json
@@ -71,6 +72,29 @@ from tldw_Server_API.app.core.Web_Scraping.scraper_router import ScraperRouter
 from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
     build_browser_headers,
     pick_ua_profile,
+)
+
+_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    builtins.TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    DefusedXmlException,
 )
 
 #
@@ -136,7 +160,7 @@ def _js_required(html: str, headers: dict[str, Any], url: Optional[str] = None) 
         if url:
             try:
                 domain = urlparse(url).netloc.lower()
-            except Exception:
+            except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
                 domain = ""
         text = html.lower()
         if not text.strip():
@@ -200,7 +224,7 @@ def _js_required(html: str, headers: dict[str, Any], url: Optional[str] = None) 
                 return True
             if script_count >= 15 and visible_len < 2500:
                 return True
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         return False
     return False
 
@@ -217,7 +241,7 @@ def _resp_get(resp: Any, key: str, default: Any = None) -> Any:
         # Mapping-like via __getitem__
         try:
             return resp[key]  # type: ignore[index]
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             pass
         # Direct attribute
         v = getattr(resp, key, None)
@@ -227,7 +251,7 @@ def _resp_get(resp: Any, key: str, default: Any = None) -> Any:
         data = getattr(resp, "data", None)
         if isinstance(data, dict):
             return data.get(key, default)
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         return default
     return default
 
@@ -274,7 +298,7 @@ def is_allowed_by_robots(url: str, user_agent: str, *, timeout: float = 5.0) -> 
         rp = RobotFileParser()
         rp.parse(str(text).splitlines())
         return bool(rp.can_fetch(user_agent, url))
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         # On any error, allow by default to avoid false negatives
         return True
 
@@ -300,7 +324,7 @@ async def is_allowed_by_robots_async(url: str, user_agent: str, *, timeout: floa
         rp = RobotFileParser()
         rp.parse(str(text).splitlines())
         return bool(rp.can_fetch(user_agent, url))
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         return True
 
 
@@ -364,7 +388,7 @@ def get_page_title(url: str) -> str:
         else: #debug code for problem in suceeded request but non 200 code
             logging.error(f"Failed to fetch {url}, status code: {resp.get('status')}")
             return "Untitled"
-    except Exception as e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error fetching page title: {e}")
         log_counter("page_title_extracted", labels={"success": "false"})
         return "Untitled"
@@ -479,7 +503,7 @@ def get_extraction_cache_stats() -> dict[str, int]:
         from tldw_Server_API.app.core.Watchlists import fetchers as _fetchers
 
         stats.update(_fetchers.get_selector_cache_stats())
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         pass
     return stats
 
@@ -499,7 +523,7 @@ def clear_extraction_caches() -> None:
         from tldw_Server_API.app.core.Watchlists import fetchers as _fetchers
 
         _fetchers.clear_selector_caches()
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         pass
 
 
@@ -507,7 +531,7 @@ def _schema_cache_key(html_text: str, url: str, schema_rules: dict[str, Any]) ->
     html_hash = hashlib.sha1(html_text.encode("utf-8", errors="ignore")).hexdigest()
     try:
         rules_repr = json.dumps(schema_rules, sort_keys=True, ensure_ascii=True)
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         rules_repr = str(schema_rules)
     raw = f"{url}|{rules_repr}|{html_hash}"
     return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
@@ -539,7 +563,7 @@ def _cluster_cache_get(key: str) -> Optional[list[float]]:
                     "extraction_cluster_cache_total",
                     labels={"cache": "embedding", "result": "miss"},
                 )
-            except Exception:
+            except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
                 pass
             return None
         _CLUSTER_EMBED_CACHE.move_to_end(key)
@@ -548,7 +572,7 @@ def _cluster_cache_get(key: str) -> Optional[list[float]]:
             "extraction_cluster_cache_total",
             labels={"cache": "embedding", "result": "hit"},
         )
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         pass
     return value
 
@@ -590,7 +614,7 @@ def _normalize_strategy_order(
 def _trace_entry(strategy: str, status: str, reason: str, detail: Optional[str] = None) -> dict[str, Any]:
     try:
         log_counter("extraction_strategy_total", labels={"strategy": strategy, "status": status})
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         pass
     entry = {"strategy": strategy, "status": status, "reason": reason}
     if detail:
@@ -610,7 +634,7 @@ def _record_strategy_metrics(
             duration_s,
             labels={"strategy": strategy, "status": status},
         )
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         pass
     if status != "success" or not result:
         return
@@ -622,7 +646,7 @@ def _record_strategy_metrics(
                 len(content.encode("utf-8", errors="ignore")),
                 labels={"strategy": strategy},
             )
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             pass
 
 
@@ -870,7 +894,7 @@ def extract_regex_entities(
             if label in {"ipv4", "ipv6"}:
                 try:
                     ipaddress.ip_address(value)
-                except Exception:
+                except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
                     continue
             if label == "credit_card":
                 if not _luhn_check(value):
@@ -1126,7 +1150,7 @@ def extract_jsonld_entities(html_text: str, url: str) -> dict[str, Any]:
             objects = _decode_all_json(payload)
             if not objects:
                 objects = [json.loads(payload)]
-        except Exception as exc:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
             errors.append(f"jsonld_parse_failed: {exc}")
             continue
         for obj in objects:
@@ -1310,7 +1334,7 @@ def _cluster_assignments_hierarchical(
         return [0]
     try:
         from sklearn.cluster import AgglomerativeClustering  # type: ignore
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         return None
     distance_threshold = max(0.0, 1.0 - similarity_threshold)
     size = len(vectors)
@@ -1474,7 +1498,7 @@ def extract_cluster_entities(
 
     try:
         increment_counter("extraction_cluster_total", labels={"status": "started"})
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         pass
 
     blocks = _extract_cluster_blocks(
@@ -1487,7 +1511,7 @@ def extract_cluster_entities(
         result["cluster_error"] = "cluster_no_blocks"
         try:
             increment_counter("extraction_cluster_total", labels={"status": "no_blocks"})
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             pass
         return result
 
@@ -1523,7 +1547,7 @@ def extract_cluster_entities(
         result["cluster_error"] = "cluster_no_clusters"
         try:
             increment_counter("extraction_cluster_total", labels={"status": "no_clusters"})
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             pass
         return result
 
@@ -1539,7 +1563,7 @@ def extract_cluster_entities(
         result["cluster_error"] = "cluster_empty_content"
         try:
             increment_counter("extraction_cluster_total", labels={"status": "empty"})
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             pass
         return result
 
@@ -1568,7 +1592,7 @@ def extract_cluster_entities(
     result["extraction_successful"] = True
     try:
         increment_counter("extraction_cluster_total", labels={"status": "success"})
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         pass
     return result
 
@@ -1578,7 +1602,7 @@ def _coerce_positive_int(value: Any) -> Optional[int]:
         return None
     try:
         parsed = int(value)
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         return None
     return parsed if parsed > 0 else None
 
@@ -1588,7 +1612,7 @@ def _coerce_non_negative_float(value: Any, default: float = 0.0) -> float:
         return default
     try:
         parsed = float(value)
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         return default
     return parsed if parsed >= 0.0 else default
 
@@ -1629,7 +1653,7 @@ def _run_with_retries(
     while True:
         try:
             return func(), None, attempts
-        except Exception as exc:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
             if attempts >= max_retries:
                 return None, exc, attempts
             delay_s = (base_delay_ms / 1000.0) * (2 ** attempts)
@@ -1641,7 +1665,7 @@ def _run_with_retries(
                     "extraction_retry_total",
                     labels={"strategy": strategy, "attempt": str(attempts)},
                 )
-            except Exception:
+            except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
                 pass
             if delay_s > 0.0:
                 time.sleep(delay_s)
@@ -1829,7 +1853,7 @@ def _decode_all_json(payload: str) -> list[Any]:
             start = brace
         try:
             obj, end = decoder.raw_decode(payload, start)
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             idx = start + 1
             continue
         objects.append(obj)
@@ -1847,7 +1871,7 @@ def _parse_llm_json(text: str, *, strict: bool) -> tuple[Optional[Any], dict[str
             obj = json.loads(payload)
             meta["objects"] = [obj]
             return obj, meta
-        except Exception as exc:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
             meta["error"] = f"strict_json_failed: {exc}"
             return None, meta
     candidates = _extract_json_candidates(payload)
@@ -1856,7 +1880,7 @@ def _parse_llm_json(text: str, *, strict: bool) -> tuple[Optional[Any], dict[str
         if not objs:
             try:
                 obj = json.loads(candidate)
-            except Exception:
+            except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
                 continue
             objs = [obj]
         if objs:
@@ -1874,14 +1898,14 @@ def _resolve_llm_provider(settings: dict[str, Any]) -> tuple[str, Optional[dict[
 
             app_config = ensure_app_config(None)
             provider = str(app_config.get("RAG_DEFAULT_LLM_PROVIDER") or "").strip().lower()
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             provider = ""
     if app_config is None:
         try:
             from tldw_Server_API.app.core.LLM_Calls.adapter_utils import ensure_app_config
 
             app_config = ensure_app_config(None)
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             app_config = None
     return provider, app_config
 
@@ -2003,7 +2027,7 @@ def generate_schema_rules_from_llm(
                 response_format=response_format,
                 app_config=app_config,
             )
-    except Exception as exc:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
         result["error"] = f"schema_llm_call_failed: {exc}"
         return result
 
@@ -2034,7 +2058,7 @@ def generate_schema_rules_from_llm(
         from tldw_Server_API.app.core.Watchlists.fetchers import validate_selector_rules
 
         validation = validate_selector_rules(schema_obj, html_text=html_text)
-    except Exception as exc:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
         validation = {"errors": [{"key": "validation", "error": str(exc)}], "warnings": []}
 
     result["schema_rules"] = schema_obj
@@ -2097,7 +2121,7 @@ def generate_regex_pattern_from_llm(
                 response_format=response_format,
                 app_config=app_config,
             )
-    except Exception as exc:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
         result["error"] = f"regex_llm_call_failed: {exc}"
         return result
 
@@ -2127,7 +2151,7 @@ def generate_regex_pattern_from_llm(
 
     try:
         compiled = re.compile(pattern, flags)
-    except Exception as exc:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
         result["error"] = f"regex_llm_invalid_pattern: {exc}"
         return result
 
@@ -2135,7 +2159,7 @@ def generate_regex_pattern_from_llm(
     if match:
         try:
             matched_value = match.group(group_idx) if group_idx is not None else match.group(0)
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             matched_value = match.group(0)
         result["sample_match"] = matched_value
         result["sample_span"] = [match.start(), match.end()]
@@ -2330,7 +2354,7 @@ def extract_llm_entities(
 
             app_config = ensure_app_config(None)
             provider = str(app_config.get("RAG_DEFAULT_LLM_PROVIDER") or "").strip().lower()
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             provider = ""
     if not provider:
         result["llm_error"] = "llm_provider_missing"
@@ -2341,7 +2365,7 @@ def extract_llm_entities(
             from tldw_Server_API.app.core.LLM_Calls.adapter_utils import ensure_app_config
 
             app_config = ensure_app_config(None)
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             app_config = None
 
     text = _extract_text_for_llm(html_text)
@@ -2409,7 +2433,7 @@ def extract_llm_entities(
                     response_format=response_format,
                     app_config=app_config,
                 )
-        except Exception as exc:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
             llm_errors.append(f"llm_call_failed: {exc}")
             continue
 
@@ -2511,7 +2535,7 @@ def extract_article_with_pipeline(
                         extract_schema_fields,
                         validate_selector_rules,
                     )
-                except Exception as exc:
+                except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
                     trace.append(_trace_entry(strategy, "failed", "schema_import_error", str(exc)))
                     _record_strategy_metrics(strategy, "failed", time.perf_counter() - start)
                     continue
@@ -2721,7 +2745,7 @@ async def scrape_article(url: str, custom_cookies: Optional[list[dict[str, Any]]
                 "extraction_successful": False,
                 "error": f"Egress denied: {getattr(pol, 'reason', 'blocked')}"
             }
-    except Exception as _e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as _e:
         logging.error(f"Egress policy evaluation failed: {_e}")
         return {
             "url": url,
@@ -2745,7 +2769,7 @@ async def scrape_article(url: str, custom_cookies: Optional[list[dict[str, Any]]
             respect_robots_default = respect_robots_default.strip().lower() in {"1", "true", "yes", "on"}
         router = ScraperRouter(rules, ua_mode=ua_mode, default_respect_robots=bool(respect_robots_default))
         plan = router.resolve(url)
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         # Safe default plan
         class _P:  # minimal stand-in
             backend = "auto"
@@ -2794,7 +2818,7 @@ async def scrape_article(url: str, custom_cookies: Optional[list[dict[str, Any]]
 
         try:
             timeout_s = float(ws_cfg.get("web_scraper_preflight_timeout_s", 0) or 0)
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             timeout_s = 0.0
 
         try:
@@ -2813,7 +2837,7 @@ async def scrape_article(url: str, custom_cookies: Optional[list[dict[str, Any]]
                 preflight_analysis = await task
         except asyncio.TimeoutError:
             logging.debug(f"Preflight analysis timed out for {url}")
-        except Exception as exc:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
             logging.debug(f"Preflight analysis failed for {url}: {exc}")
 
     if preflight_analysis and isinstance(preflight_analysis, dict):
@@ -2859,7 +2883,7 @@ async def scrape_article(url: str, custom_cookies: Optional[list[dict[str, Any]]
             try:
                 parsed = urlparse(url)
                 increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
-            except Exception:
+            except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
                 increment_counter("scrape_blocked_by_robots_total", labels={})
             return _attach_preflight({
                 "url": url,
@@ -2892,7 +2916,7 @@ async def scrape_article(url: str, custom_cookies: Optional[list[dict[str, Any]]
                         proxies=getattr(plan, "proxies", None) or None,
                     )
                     backend_used = "curl"
-                except Exception as exc:
+                except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
                     logging.debug(f"curl backend failed; falling back to httpx: {exc}")
                     resp = await asyncio.to_thread(
                         http_fetch,
@@ -2954,7 +2978,7 @@ async def scrape_article(url: str, custom_cookies: Optional[list[dict[str, Any]]
                     return _attach_preflight(article_data)
             # No extractable content
             increment_counter("scrape_fetch_total", labels={"backend": backend_used, "outcome": "no_extract"})
-        except Exception as _e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as _e:
             logging.debug(f"Lightweight fetch path failed or yielded no extractable content: {_e}")
             increment_counter("scrape_fetch_total", labels={"backend": backend_choice, "outcome": "error"})
             increment_counter("scrape_playwright_fallback_total", labels={"reason": "error"})
@@ -3019,7 +3043,7 @@ async def scrape_article(url: str, custom_cookies: Optional[list[dict[str, Any]]
                         try:
                             from tldw_Server_API.app.core.config import config
                             stealth_wait_ms = config.get("STEALTH_WAIT_MS", 5000)
-                        except Exception as e:
+                        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(f"Falling back to default STEALTH_WAIT_MS; error={e}")
                             stealth_wait_ms = 5000
                         await page.wait_for_timeout(stealth_wait_ms)  # configurable delay
@@ -3040,7 +3064,7 @@ async def scrape_article(url: str, custom_cookies: Optional[list[dict[str, Any]]
                 # Return the scraped HTML
                 return content
 
-            except Exception as e:
+            except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
                 logging.error(f"Error fetching HTML from {url} on attempt {attempt + 1}: {e}")
                 increment_counter("scrape_fetch_total", labels={"backend": "playwright", "outcome": "error"})
 
@@ -3098,7 +3122,7 @@ def scrape_article_blocking(url: str, custom_cookies: Optional[list[dict[str, An
             pol = evaluate_url_policy(url)
             if not getattr(pol, 'allowed', False):
                 return {"url": url, "title": "N/A", "author": "N/A", "date": "N/A", "content": "", "extraction_successful": False, "error": f"Egress denied: {getattr(pol, 'reason', 'blocked')}"}
-        except Exception as _e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as _e:
             return {"url": url, "title": "N/A", "author": "N/A", "date": "N/A", "content": "", "extraction_successful": False, "error": f"Egress policy evaluation failed: {_e}"}
 
         headers = {"User-Agent": web_scraping_user_agent}
@@ -3118,7 +3142,7 @@ def scrape_article_blocking(url: str, custom_cookies: Optional[list[dict[str, An
                 content = _resp_get(resp, "content", b"")
                 try:
                     text = content.decode("utf-8") if isinstance(content, (bytes, bytearray)) else str(content)
-                except Exception:
+                except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
                     text = ""
         finally:
             close = getattr(resp, "close", None)
@@ -3133,7 +3157,7 @@ def scrape_article_blocking(url: str, custom_cookies: Optional[list[dict[str, An
         if article_data.get("extraction_successful"):
             article_data["content"] = convert_html_to_markdown(article_data["content"])
         return article_data
-    except Exception as e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Blocking scrape failed for {url}: {e}")
         return {"url": url, "title": "N/A", "author": "N/A", "date": "N/A", "content": "", "extraction_successful": False}
 
@@ -3162,7 +3186,7 @@ async def scrape_and_summarize_multiple(
     # block scraping when the limiter cannot be constructed.
     try:
         rate_limiter = RateLimiter()
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         rate_limiter = None
 
     # Create a tqdm progress bar
@@ -3175,7 +3199,7 @@ async def scrape_and_summarize_multiple(
             if rate_limiter is not None:
                 try:
                     await rate_limiter.acquire()
-                except Exception:
+                except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
                     pass
             # Scrape the article
             article = await scrape_article(url, custom_cookies=custom_cookies)
@@ -3218,7 +3242,7 @@ async def scrape_and_summarize_multiple(
                 errors.append(error_message)
                 logging.error(error_message)
                 log_counter("article_scraped", labels={"success": "false", "url": url})
-        except Exception as e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
             log_counter("article_processing_error", labels={"url": url})
             error_message = f"Error processing URL {i + 1} ({url}): {str(e)}"
             errors.append(error_message)
@@ -3275,7 +3299,7 @@ async def async_scrape_and_no_summarize_then_ingest(url, keywords, custom_articl
         # When displaying content, we might want to strip metadata
         display_content = ContentMetadataHandler.strip_metadata(content)
         return f"Title: {title}\nAuthor: {author}\nIngestion Result: {ingestion_result}\n\nArticle Contents: {display_content}"
-    except Exception as e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
         log_counter("article_processing_error", labels={"url": url})
         logging.error(f"Error processing URL {url}: {str(e)}")
         return f"Failed to process URL {url}: {str(e)}"
@@ -3378,7 +3402,7 @@ async def scrape_entire_site(base_url: str) -> list[dict]:
     # Step 1: Collect internal links from the site (async, with rate limiting)
     try:
         rate = RateLimiter(max_requests_per_second=1.5, max_requests_per_minute=60, max_requests_per_hour=1000)
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         rate = None
     links = await async_collect_internal_links(base_url, rate_limiter=rate)
     log_histogram("internal_links_collected", len(links), labels={"base_url": base_url})
@@ -3452,7 +3476,7 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
                 else:
                     logging.error(f"Egress denied for sitemap: {getattr(pol, 'reason', 'blocked')}")
                     return []
-        except Exception as _e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as _e:
             if _allow_in_tests:
                 logging.warning(f"Egress policy evaluation failed in test mode; proceeding: {_e}")
             else:
@@ -3461,7 +3485,7 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
 
         try:
             resp = http_fetch(method="GET", url=sitemap_url, timeout=10)
-        except Exception as fetch_err:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as fetch_err:
             logging.error(f"Sitemap fetch failed via http_fetch: {fetch_err}")
             return []
         try:
@@ -3474,7 +3498,7 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
                 content = _resp_get(resp, "content", b"")
                 try:
                     text = content.decode("utf-8") if isinstance(content, (bytes, bytearray)) else str(content)
-                except Exception:
+                except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
                     text = ""
         finally:
             close = getattr(resp, "close", None)
@@ -3495,7 +3519,7 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
             if article:
                 results.append(article)
         return results
-    except Exception as e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error fetching sitemap: {e}")
         return []
 
@@ -3517,7 +3541,7 @@ def collect_internal_links(base_url: str) -> set:
         if not getattr(pol, 'allowed', False):
             logging.error(f"Egress denied for base URL: {getattr(pol, 'reason', 'blocked')}")
             return visited
-    except Exception as _e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as _e:
         logging.error(f"Egress policy evaluation failed: {_e}")
         return visited
 
@@ -3541,7 +3565,7 @@ def collect_internal_links(base_url: str) -> set:
                         to_visit.add(full_url)
 
             visited.add(current_url)
-        except Exception as e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Error visiting {current_url}: {e}")
             continue
 
@@ -3590,7 +3614,7 @@ async def async_collect_internal_links(base_url: str,
                 text = resp.text
             finally:
                 await _close_resp(resp)
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             continue
 
         visited.add(current_url)
@@ -3601,7 +3625,7 @@ async def async_collect_internal_links(base_url: str,
                 if urlparse(full_url).netloc == urlparse(base_url).netloc:
                     if full_url not in visited:
                         to_visit.add(full_url)
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             continue
 
     return visited
@@ -3825,7 +3849,7 @@ def load_bookmarks(file_path: str) -> dict[str, Union[str, list[str]]]:
             with open(file_path, encoding='utf-8') as f:
                 html_content = f.read()
             return parse_firefox_bookmarks(html_content)
-        except Exception as e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Failed to parse HTML bookmarks: {e}")
             raise ValueError(f"Failed to parse HTML bookmarks: {e}")
     else:
@@ -3894,7 +3918,7 @@ def parse_csv_urls(file_path: str) -> dict[str, Union[str, list[str]]]:
     except pd.errors.EmptyDataError:
         logging.error("The CSV file is empty")
         return {}
-    except Exception as e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error parsing CSV file: {str(e)}")
         return {}
 
@@ -4177,7 +4201,7 @@ async def recursive_scrape(
 
                             await page.close()
 
-                    except Exception as e:
+                    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
                         logging.error(f"Error scraping {current_url}: {str(e)}")
 
                     # Save progress periodically (e.g., every 10 pages)
@@ -4216,7 +4240,7 @@ async def scrape_article_async(context, url: str) -> dict[str, Any]:
             'content': content,
             'extraction_successful': True
         }
-    except Exception as e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error scraping article {url}: {str(e)}")
         return {
             'url': url,
@@ -4243,7 +4267,7 @@ def scrape_article_sync(url: str) -> dict[str, Any]:
                 'content': content,
                 'extraction_successful': True
             }
-        except Exception as e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Error scraping article {url}: {str(e)}")
             return {
                 'url': url,
@@ -4283,7 +4307,7 @@ async def scrape_with_retry(url: str, max_retries: int = 3, retry_delay: float =
             else:
                 logging.error(f"Failed to scrape {url} after {max_retries} attempts.")
                 return None
-        except Exception as e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Error scraping {url}: {str(e)}")
             return None
 
@@ -4337,7 +4361,7 @@ def convert_json_to_markdown(json_str: str) -> str:
         return "# Error\n\nInvalid JSON string provided."
     except KeyError as e:
         return f"# Error\n\nMissing key in JSON data: {str(e)}"
-    except Exception as e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
         return f"# Error\n\nAn unexpected error occurred: {str(e)}"
 
 #

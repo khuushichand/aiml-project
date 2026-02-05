@@ -346,17 +346,12 @@ def main() -> None:
         help="Show what would be migrated without making changes"
     )
     parser.add_argument(
-        "--backup",
-        action="store_true",
-        default=True,
-        help="Create backups before migration (default: True)"
-    )
-    parser.add_argument(
         "--no-backup",
         dest="backup",
         action="store_false",
-        help="Skip creating backups"
+        help="Skip creating backups (backups are created by default)"
     )
+    parser.set_defaults(backup=True)
     parser.add_argument(
         "--config-dir",
         type=str,

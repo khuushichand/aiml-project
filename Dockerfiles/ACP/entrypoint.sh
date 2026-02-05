@@ -2,7 +2,6 @@
 set -euo pipefail
 
 USER_NAME="${ACP_SSH_USER:-acp}"
-WORKSPACE_ROOT="${ACP_WORKSPACE_ROOT:-/workspace}"
 
 if ! id -u "${USER_NAME}" >/dev/null 2>&1; then
   useradd -m -s /bin/bash "${USER_NAME}"

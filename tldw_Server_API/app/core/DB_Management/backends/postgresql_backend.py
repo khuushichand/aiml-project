@@ -43,12 +43,31 @@ try:
     from psycopg.rows import dict_row  # type: ignore
     try:
         import psycopg_pool  # type: ignore
-    except Exception:  # pool is optional
+    except ImportError:  # pool is optional
         psycopg_pool = None  # type: ignore
     PSYCOPG2_AVAILABLE = True  # Legacy name used by tests to simulate missing driver
-except Exception:
+except ImportError:
     PSYCOPG2_AVAILABLE = False
     logger.warning("psycopg (v3) not available. PostgreSQL backend will not work.")
+
+_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    DatabaseError,
+)
 
 
 _WRITE_COMMANDS = {
@@ -124,7 +143,7 @@ class PostgreSQLConnectionPool(ConnectionPool):
                     # Ensure JSON is parsed into Python objects consistently
                     configure=lambda conn: setattr(conn, 'row_factory', dict_row),
                 )
-            except Exception:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                 # Fallback to defaults if parameters unsupported
                 self._pool = psycopg_pool.ConnectionPool(self._dsn)
         else:
@@ -146,7 +165,7 @@ class PostgreSQLConnectionPool(ConnectionPool):
                 conn.row_factory = dict_row
             try:
                 self._apply_scope_settings(conn)
-            except Exception as scope_exc:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as scope_exc:
                 logger.debug(f"Scope config failed for pooled connection: {scope_exc}")
             return conn
         # Fallback minimal pool
@@ -154,7 +173,7 @@ class PostgreSQLConnectionPool(ConnectionPool):
             conn = self._free.pop()
             try:
                 self._apply_scope_settings(conn)
-            except Exception as scope_exc:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as scope_exc:
                 logger.debug(f"Scope config failed for pooled connection: {scope_exc}")
             return conn
         if len(self._connections) < self._max:
@@ -162,14 +181,14 @@ class PostgreSQLConnectionPool(ConnectionPool):
             self._connections.append(conn)
             try:
                 self._apply_scope_settings(conn)
-            except Exception as scope_exc:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as scope_exc:
                 logger.debug(f"Scope config failed for new connection: {scope_exc}")
             return conn
         # As a last resort, create a new connection (no hard block)
         conn = self._new_connection()
         try:
             self._apply_scope_settings(conn)
-        except Exception as scope_exc:
+        except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as scope_exc:
             logger.debug(f"Scope config failed for fallback connection: {scope_exc}")
         return conn
 
@@ -177,17 +196,17 @@ class PostgreSQLConnectionPool(ConnectionPool):
         if self._closed or connection is None:
             try:
                 connection.close()
-            except Exception:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                 pass
             return
         if self._use_psycopg_pool:
             # Always return via putconn
             try:
                 self._pool.putconn(connection)
-            except Exception:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                 try:
                     connection.close()
-                except Exception:
+                except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                     pass
             return
         # Minimal pool: store for reuse up to capacity; else close
@@ -196,7 +215,7 @@ class PostgreSQLConnectionPool(ConnectionPool):
         else:
             try:
                 connection.close()
-            except Exception:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                 pass
 
     @contextmanager
@@ -212,13 +231,13 @@ class PostgreSQLConnectionPool(ConnectionPool):
         if self._use_psycopg_pool:
             try:
                 self._pool.close()
-            except Exception:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                 pass
             return
         for conn in self._connections:
             try:
                 conn.close()
-            except Exception:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                 pass
         self._connections.clear()
         self._free.clear()
@@ -261,7 +280,7 @@ class PostgreSQLBackend(DatabaseBackend):
         try:
             if connection is not None:
                 self._apply_scope_settings(connection)
-        except Exception as exc:
+        except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"apply_scope: unable to apply scope settings: {exc}")
 
     def _apply_scope_settings(self, connection: Any) -> None:
@@ -272,7 +291,7 @@ class PostgreSQLBackend(DatabaseBackend):
         """
         try:
             scope = get_scope()
-        except Exception:
+        except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
             scope = None
 
         user_id = ""
@@ -285,17 +304,17 @@ class PostgreSQLBackend(DatabaseBackend):
             if scope.user_id is not None:
                 try:
                     user_id = str(int(scope.user_id))
-                except Exception:
+                except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                     user_id = str(scope.user_id)
             if scope.org_ids:
                 try:
                     org_ids = ",".join(str(int(oid)) for oid in scope.org_ids if oid is not None)
-                except Exception:
+                except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                     org_ids = ",".join(str(oid) for oid in scope.org_ids if oid is not None)
             if scope.team_ids:
                 try:
                     team_ids = ",".join(str(int(tid)) for tid in scope.team_ids if tid is not None)
-                except Exception:
+                except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                     team_ids = ",".join(str(tid) for tid in scope.team_ids if tid is not None)
             if scope.is_admin:
                 is_admin = "1"
@@ -330,17 +349,17 @@ class PostgreSQLBackend(DatabaseBackend):
                 escaped_role = session_role.replace('"', '""')
                 try:
                     cur.execute(f'SET SESSION AUTHORIZATION "{escaped_role}"')
-                except Exception:
+                except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                     cur.execute(f'SET ROLE "{escaped_role}"')
             else:
                 try:
                     cur.execute("RESET SESSION AUTHORIZATION")
-                except Exception:
+                except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                     cur.execute("RESET ROLE")
 
             try:
                 cur.execute("SET row_security = on")
-            except Exception:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                 pass
 
             for sql_stmt, params in statements:
@@ -359,27 +378,27 @@ class PostgreSQLBackend(DatabaseBackend):
                     escaped_role = session_role.replace('"', '""')
                     try:
                         connection.execute(f'SET SESSION AUTHORIZATION "{escaped_role}"')
-                    except Exception:
+                    except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                         connection.execute(f'SET ROLE "{escaped_role}"')
                 else:
                     try:
                         connection.execute("RESET SESSION AUTHORIZATION")
-                    except Exception:
+                    except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                         connection.execute("RESET ROLE")
                 try:
                     connection.execute("SET row_security = on")
-                except Exception:
+                except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                     pass
                 for sql_stmt, params in statements:
                     try:
                         connection.execute(sql_stmt, params)
-                    except Exception as cfg_exc:
+                    except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as cfg_exc:
                         logger.debug(f"Unable to apply scope settings via execute: {cfg_exc}")
-        except Exception:
+        except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
             # If we failed (e.g., transaction aborted), rollback and try once more
             try:
                 connection.rollback()
-            except Exception as rollback_exc:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as rollback_exc:
                 logger.debug("Rollback while configuring scope failed: %s", rollback_exc)
             try:
                 if cursor_factory:
@@ -390,23 +409,23 @@ class PostgreSQLBackend(DatabaseBackend):
                         escaped_role = session_role.replace('"', '""')
                         try:
                             connection.execute(f'SET SESSION AUTHORIZATION "{escaped_role}"')
-                        except Exception:
+                        except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                             connection.execute(f'SET ROLE "{escaped_role}"')
                     else:
                         try:
                             connection.execute("RESET SESSION AUTHORIZATION")
-                        except Exception:
+                        except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                             connection.execute("RESET ROLE")
                     try:
                         connection.execute("SET row_security = on")
-                    except Exception:
+                    except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                         pass
                     for sql_stmt, params in statements:
                         try:
                             connection.execute(sql_stmt, params)
-                        except Exception as cfg_exc:
+                        except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as cfg_exc:
                             logger.debug(f"Unable to apply scope settings via execute (after rollback): {cfg_exc}")
-            except Exception as final_exc:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as final_exc:
                 logger.debug(f"Failed to configure session scope settings: {final_exc}")
 
     def _tx_depth(self, connection: Any) -> int:
@@ -646,7 +665,7 @@ class PostgreSQLBackend(DatabaseBackend):
         conn.row_factory = dict_row
         try:
             self._apply_scope_settings(conn)
-        except Exception as scope_exc:
+        except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as scope_exc:
             logger.debug(f"Scope config failed for direct connection: {scope_exc}")
         return conn
 
@@ -679,16 +698,16 @@ class PostgreSQLBackend(DatabaseBackend):
             if is_outermost:
                 try:
                     conn.commit()
-                except Exception as e:
+                except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as e:
                     # Surface commit failures consistently
                     logger.error(f"Transaction commit failed: {e}")
                     raise
-        except Exception as e:
+        except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as e:
             # Roll back only when we're at the outermost depth for this connection.
             try:
                 if self._tx_depth(conn) == 1:
                     conn.rollback()
-            except Exception:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                 # Swallow rollback errors to avoid masking the original
                 pass
             logger.error(f"Transaction failed: {e}")
@@ -783,7 +802,7 @@ class PostgreSQLBackend(DatabaseBackend):
                     # Close implicit read-only transaction to avoid idle-in-transaction sessions.
                     try:
                         conn.rollback()
-                    except Exception as rollback_exc:  # noqa: BLE001
+                    except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as rollback_exc:  # noqa: BLE001
                         logger.debug(f"Rollback after read-only execute() failed: {rollback_exc}")
 
             execution_time = time.time() - start_time
@@ -801,11 +820,11 @@ class PostgreSQLBackend(DatabaseBackend):
                 execution_time=execution_time
             )
 
-        except Exception as e:
+        except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as e:
             if not external_conn:
                 try:
                     conn.rollback()
-                except Exception as rollback_exc:  # noqa: BLE001
+                except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as rollback_exc:  # noqa: BLE001
                     logger.debug(f"Rollback after failed execute() also failed: {rollback_exc}")
             logger.error(f"Query execution failed: {e}")
             raise DatabaseError(f"PostgreSQL error: {e}")
@@ -853,7 +872,7 @@ class PostgreSQLBackend(DatabaseBackend):
                     # Close implicit read-only transaction to avoid idle-in-transaction sessions.
                     try:
                         conn.rollback()
-                    except Exception as rollback_exc:  # noqa: BLE001
+                    except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as rollback_exc:  # noqa: BLE001
                         logger.debug(f"Rollback after read-only execute_many() failed: {rollback_exc}")
 
             execution_time = time.time() - start_time
@@ -866,11 +885,11 @@ class PostgreSQLBackend(DatabaseBackend):
                 execution_time=execution_time
             )
 
-        except Exception as e:
+        except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as e:
             if not external_conn:
                 try:
                     conn.rollback()
-                except Exception as rollback_exc:  # noqa: BLE001
+                except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as rollback_exc:  # noqa: BLE001
                     logger.debug(f"Rollback after failed execute_many() also failed: {rollback_exc}")
             logger.error(f"Batch execution failed: {e}")
             raise DatabaseError(f"PostgreSQL error: {e}")
@@ -898,7 +917,7 @@ class PostgreSQLBackend(DatabaseBackend):
                     cursor.execute(statement)
             if not external_conn:
                 conn.commit()
-        except Exception as e:
+        except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as e:
             if not external_conn:
                 conn.rollback()
             logger.error(f"Schema creation failed: {e}")
@@ -1027,13 +1046,13 @@ class PostgreSQLBackend(DatabaseBackend):
                     "source_table": source_table,
                     "fts_column": fts_column,
                 }
-            except Exception:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                 pass
 
             if not external_conn:
                 conn.commit()
 
-        except Exception as e:
+        except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as e:
             if not external_conn:
                 conn.rollback()
             logger.error(f"FTS setup failed: {e}")
@@ -1140,11 +1159,11 @@ class PostgreSQLBackend(DatabaseBackend):
             )
             if not external_conn:
                 conn.commit()
-        except Exception as exc:
+        except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as exc:
             try:
                 if not external_conn:
                     conn.rollback()
-            except Exception:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                 pass
             logger.error(f"Failed to ensure FTS synonyms support: {exc}")
             raise DatabaseError(f"Failed to ensure FTS synonyms support: {exc}") from exc
@@ -1189,13 +1208,13 @@ class PostgreSQLBackend(DatabaseBackend):
             old_autocommit = getattr(conn, 'autocommit', False)
             try:
                 conn.autocommit = True
-            except Exception:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                 pass
             cursor = conn.cursor()
             cursor.execute("VACUUM ANALYZE")
             try:
                 conn.autocommit = old_autocommit
-            except Exception:
+            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                 pass
         finally:
             if not external_conn:

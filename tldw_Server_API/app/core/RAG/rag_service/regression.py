@@ -24,6 +24,8 @@ from typing import Any, Optional
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from .quality_gating import GatingConfig, MetricCategory
+
 # Restrict baseline IDs to safe characters for filenames.
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
@@ -65,6 +67,7 @@ class RegressionResult(BaseModel):
         delta_percent: Percentage change relative to baseline.
         threshold: Degradation threshold used.
         regressed: Whether the metric has regressed beyond threshold.
+        category: Stable or unstable metric category (quality gating).
     """
 
     model_config = {"frozen": True}
@@ -76,6 +79,10 @@ class RegressionResult(BaseModel):
     delta_percent: float
     threshold: float
     regressed: bool
+    category: MetricCategory = Field(
+        default=MetricCategory.STABLE,
+        description="Metric category (stable/unstable) from quality gating",
+    )
 
 
 class RegressionReport(BaseModel):
@@ -85,7 +92,8 @@ class RegressionReport(BaseModel):
         baseline_id: The baseline compared against.
         timestamp: When this report was generated.
         results: Per-metric regression results.
-        has_regression: Whether any metric regressed.
+        has_regression: Whether any stable metric regressed.
+        has_warnings: Whether any unstable metric regressed (warning only).
         summary: Human-readable summary.
     """
 
@@ -95,6 +103,10 @@ class RegressionReport(BaseModel):
     timestamp: str
     results: list[RegressionResult]
     has_regression: bool
+    has_warnings: bool = Field(
+        default=False,
+        description="Whether any unstable metrics regressed (warning only)",
+    )
     summary: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -103,6 +115,7 @@ class RegressionReport(BaseModel):
             "baseline_id": self.baseline_id,
             "timestamp": self.timestamp,
             "has_regression": self.has_regression,
+            "has_warnings": self.has_warnings,
             "summary": self.summary,
             "results": [
                 {
@@ -113,6 +126,7 @@ class RegressionReport(BaseModel):
                     "delta_percent": r.delta_percent,
                     "threshold": r.threshold,
                     "regressed": r.regressed,
+                    "category": r.category.value,
                 }
                 for r in self.results
             ],
@@ -151,6 +165,8 @@ class RegressionDetector:
         baseline_dir: Optional[Path | str] = None,
         default_threshold: float = 0.05,
         lower_is_better: Optional[set[str]] = None,
+        gating_config: Optional[GatingConfig] = None,
+        use_quality_gating: bool = True,
     ) -> None:
         """Initialize RegressionDetector.
 
@@ -165,6 +181,8 @@ class RegressionDetector:
         self._dir_ensured = False
         self.default_threshold = default_threshold
         self.lower_is_better = lower_is_better or {"hallucination", "latency_p99_ms"}
+        self.use_quality_gating = use_quality_gating
+        self.gating_config = gating_config
 
     def _ensure_dir(self) -> None:
         """Create the baseline directory on first disk access."""
@@ -253,8 +271,18 @@ class RegressionDetector:
             )
 
         thresholds = thresholds or {}
+        gating_config: Optional[GatingConfig]
+        if self.use_quality_gating:
+            gating_config = self.gating_config or GatingConfig()
+        else:
+            gating_config = None
+
+        lower_is_better = set(self.lower_is_better)
+        if gating_config:
+            lower_is_better.update(gating_config.lower_is_better)
         results: list[RegressionResult] = []
         has_regression = False
+        has_warnings = False
 
         for name, current_value in current_metrics.items():
             if name not in baseline.metrics:
@@ -266,9 +294,16 @@ class RegressionDetector:
             # Calculate delta
             delta = current_value - baseline_value
 
+            if gating_config and name in gating_config.unstable:
+                category = MetricCategory.UNSTABLE
+            elif gating_config and name in gating_config.stable:
+                category = MetricCategory.STABLE
+            else:
+                category = MetricCategory.STABLE
+
             # For "lower is better" metrics, a positive delta is bad
             # For "higher is better" metrics, a negative delta is bad
-            if name in self.lower_is_better:
+            if name in lower_is_better:
                 # Higher current = worse
                 regressed = delta > abs(baseline_value * threshold) if baseline_value != 0 else delta > 0
             else:
@@ -292,16 +327,38 @@ class RegressionDetector:
                     delta_percent=delta_percent,
                     threshold=threshold,
                     regressed=regressed,
+                    category=category,
                 )
             )
 
             if regressed:
-                has_regression = True
+                if category == MetricCategory.UNSTABLE:
+                    has_warnings = True
+                else:
+                    has_regression = True
 
         # Build summary
         if has_regression:
-            regressed_names = [r.metric_name for r in results if r.regressed]
-            summary = f"Regression detected in: {', '.join(regressed_names)}"
+            regressed_names = [
+                r.metric_name for r in results
+                if r.regressed and r.category == MetricCategory.STABLE
+            ]
+            summary = f"Regression detected in stable metrics: {', '.join(regressed_names)}"
+            if has_warnings:
+                warn_names = [
+                    r.metric_name for r in results
+                    if r.regressed and r.category == MetricCategory.UNSTABLE
+                ]
+                summary += f". Warnings in unstable metrics: {', '.join(warn_names)}"
+        elif has_warnings:
+            warn_names = [
+                r.metric_name for r in results
+                if r.regressed and r.category == MetricCategory.UNSTABLE
+            ]
+            summary = (
+                "Regression detected in unstable metrics (warning only): "
+                + ", ".join(warn_names)
+            )
         elif not results:
             summary = "No comparable metrics found between current and baseline."
         else:
@@ -312,6 +369,7 @@ class RegressionDetector:
             timestamp=datetime.now(timezone.utc).isoformat(),
             results=results,
             has_regression=has_regression,
+            has_warnings=has_warnings,
             summary=summary,
         )
 

@@ -11,6 +11,7 @@ import { generateID } from "@/db/dexie/helpers"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { useStoreMessageOption } from "@/store/option"
 import type { Character } from "@/types/character"
+import { ChatGreetingPicker } from "@/components/Common/ChatGreetingPicker"
 import {
   EDIT_MESSAGE_EVENT,
   type TimelineActionDetail
@@ -225,6 +226,13 @@ export const SidePanelBody = ({
         className={`relative flex w-full flex-col items-center ${topPaddingClass} pb-4`}
       >
         {messages.length === 0 && <EmptySidePanel inputRef={inputRef} />}
+        <ChatGreetingPicker
+          selectedCharacter={selectedCharacter}
+          messages={messages}
+          historyId={historyId}
+          serverChatId={serverChatId}
+          className="mb-4"
+        />
         <div style={{ height: rowVirtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
           {rowVirtualizer.getVirtualItems().map((vr) => {
             const index = vr.index

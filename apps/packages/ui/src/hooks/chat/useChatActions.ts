@@ -57,6 +57,7 @@ import { getServerCapabilities } from "@/services/tldw/server-capabilities"
 import { generateTitle } from "@/services/title"
 import { trackCompareMetric } from "@/utils/compare-metrics"
 import { MAX_COMPARE_MODELS } from "@/hooks/chat/compare-constants"
+import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
 import type { Character } from "@/types/character"
 import type {
   Knowledge,
@@ -65,6 +66,7 @@ import type {
 } from "@/store/option"
 import type { ChatModelSettings } from "@/store/model"
 import type { SaveMessageData } from "@/types/chat-modes"
+import { isGreetingMessageType } from "@/utils/character-greetings"
 
 type ChatModelSettingsStore = ChatModelSettings & {
   setSystemPrompt?: (prompt: string) => void
@@ -244,6 +246,11 @@ export const useChatActions = ({
   invalidateServerChatHistory,
   selectedCharacter
 }: UseChatActionsOptions) => {
+  const { settings: chatSettings } = useChatSettingsRecord({
+    historyId,
+    serverChatId
+  })
+  const greetingEnabled = chatSettings?.greetingEnabled ?? true
   const messagesRef = React.useRef(messages)
 
   React.useEffect(() => {
@@ -924,13 +931,22 @@ export const useChatActions = ({
     return messageModel === modelId
   }
 
-  const buildHistoryFromMessages = (items: Message[]): ChatHistory =>
-    items.map((message) => ({
-      role: message.isBot ? "assistant" : "user",
-      content: message.message,
-      image: message.images?.[0],
-      messageType: message.messageType
-    }))
+  const buildHistoryFromMessages = React.useCallback(
+    (items: Message[]): ChatHistory =>
+      items
+        .filter((message) =>
+          greetingEnabled
+            ? true
+            : !isGreetingMessageType(message.messageType)
+        )
+        .map((message) => ({
+          role: message.isBot ? "assistant" : "user",
+          content: message.message,
+          image: message.images?.[0],
+          messageType: message.messageType
+        })),
+    [greetingEnabled]
+  )
 
   const buildHistoryForModel = (
     items: Message[],
@@ -961,10 +977,14 @@ export const useChatActions = ({
     return lastThreadMessage?.id || getCompareUserMessageId(items, clusterId)
   }
 
-  const refreshHistoryFromMessages = () => {
+  const refreshHistoryFromMessages = React.useCallback(() => {
     const next = buildHistoryFromMessages(messagesRef.current)
     setHistory(next)
-  }
+  }, [buildHistoryFromMessages, setHistory])
+
+  React.useEffect(() => {
+    refreshHistoryFromMessages()
+  }, [greetingEnabled, refreshHistoryFromMessages])
 
   const getCompareBranchMessageIds = (
     items: Message[],

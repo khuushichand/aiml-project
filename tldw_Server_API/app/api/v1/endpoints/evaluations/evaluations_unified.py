@@ -61,6 +61,29 @@ from tldw_Server_API.app.core.Evaluations.webhook_identity import webhook_user_i
 from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent, WebhookManager
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 
+# Non-critical exceptions for defensive guards and best-effort flows
+_EVALS_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    HTTPException,
+)
+
 # Create router
 router = APIRouter(prefix="/evaluations", tags=["evaluations"])
 
@@ -96,7 +119,7 @@ def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
                 if current_conn and current_conn != _override_db:
                     mgr = WebhookManager(db_path=_override_db)
                     _webhook_managers[user_id] = mgr
-            except Exception:
+            except _EVALS_NONCRITICAL_EXCEPTIONS:
                 pass
         if mgr is None:
             db_path = _override_db or str(DatabasePaths.get_evaluations_db_path(user_id))
@@ -135,7 +158,7 @@ async def _get_admin_principal_if_needed(
         try:
             overrides = getattr(request.app, "dependency_overrides", {}) or {}
             dep = overrides.get(get_auth_principal, get_auth_principal)
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             dep = get_auth_principal
         result = dep(request)
         try:
@@ -143,7 +166,7 @@ async def _get_admin_principal_if_needed(
 
             if _inspect.isawaitable(result):
                 result = await result
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             result = await get_auth_principal(request)
         return result
     return None
@@ -263,7 +286,7 @@ async def admin_cleanup_idempotency(
         else:
             try:
                 candidate_ids.add(int(_DP.get_single_user_id()))
-            except Exception:
+            except _EVALS_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 base = _Path(_DP.get_user_base_directory(_DP.get_single_user_id())).parent
@@ -272,9 +295,9 @@ async def admin_cleanup_idempotency(
                         if entry.is_dir():
                             try:
                                 candidate_ids.add(int(entry.name))
-                            except Exception:
+                            except _EVALS_NONCRITICAL_EXCEPTIONS:
                                 continue
-            except Exception:
+            except _EVALS_NONCRITICAL_EXCEPTIONS:
                 pass
 
         for uid in sorted(candidate_ids):
@@ -286,13 +309,13 @@ async def admin_cleanup_idempotency(
                 deleted = db.cleanup_idempotency_keys(ttl_hours=int(ttl_hours))
                 deleted_total += int(deleted)
                 details.append({"user_id": uid, "deleted": int(deleted)})
-            except Exception:
+            except _EVALS_NONCRITICAL_EXCEPTIONS:
                 continue
 
         return {"deleted_total": deleted_total, "details": details}
     except HTTPException:
         raise
-    except Exception as e:
+    except _EVALS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Admin idempotency cleanup failed: {e}")
         raise HTTPException(status_code=500, detail="Idempotency cleanup failed")
 
@@ -315,7 +338,7 @@ def _estimate_tokens_from_texts(*texts: Optional[str], provider: Optional[str] =
         if isinstance(model, str) and model:
             try:
                 enc = tiktoken.encoding_for_model(model)
-            except Exception:
+            except _EVALS_NONCRITICAL_EXCEPTIONS:
                 enc = None
 
         # Heuristic for modern OpenAI models when model hint exists
@@ -324,21 +347,21 @@ def _estimate_tokens_from_texts(*texts: Optional[str], provider: Optional[str] =
             try:
                 if ("gpt-4o" in m) or ("gpt-4.1" in m) or m.startswith("o1"):
                     enc = tiktoken.get_encoding("o200k_base")
-            except Exception:
+            except _EVALS_NONCRITICAL_EXCEPTIONS:
                 enc = None
 
         # Provider fallback (OpenAI -> cl100k_base)
         if enc is None and isinstance(provider, str) and provider.lower() == "openai":
             try:
                 enc = tiktoken.get_encoding("cl100k_base")
-            except Exception:
+            except _EVALS_NONCRITICAL_EXCEPTIONS:
                 enc = None
 
         # Final default
         if enc is None:
             try:
                 enc = tiktoken.get_encoding("cl100k_base")
-            except Exception:
+            except _EVALS_NONCRITICAL_EXCEPTIONS:
                 enc = None
 
         if enc is not None:
@@ -347,7 +370,7 @@ def _estimate_tokens_from_texts(*texts: Optional[str], provider: Optional[str] =
                 if isinstance(t, str) and t:
                     total += len(enc.encode(t))
             return total
-    except Exception:
+    except _EVALS_NONCRITICAL_EXCEPTIONS:
         pass
 
     # Fallback: character-based approximation
@@ -415,7 +438,7 @@ async def stream_embeddings_abtest_events(
             payload = {"type": "status", "status": status}
             try:
                 payload["stats"] = _json.loads(stats) if stats else {}
-            except Exception:
+            except _EVALS_NONCRITICAL_EXCEPTIONS:
                 payload["stats"] = {}
 
             if payload != last_payload:
@@ -437,11 +460,11 @@ async def stream_embeddings_abtest_events(
             if not producer.done():
                 try:
                     producer.cancel()
-                except Exception:
+                except _EVALS_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     await _aio.gather(producer, return_exceptions=True)
-                except Exception:
+                except _EVALS_NONCRITICAL_EXCEPTIONS:
                     pass
             raise
         else:
@@ -449,7 +472,7 @@ async def stream_embeddings_abtest_events(
             if not producer.done():
                 try:
                     await _aio.gather(producer, return_exceptions=True)
-                except Exception:
+                except _EVALS_NONCRITICAL_EXCEPTIONS:
                     pass
 
     headers = {
@@ -478,7 +501,7 @@ async def delete_embeddings_abtest(
             if prior:
                 logger.info(f"A/B test delete idempotent hit: {test_id}")
                 return Response(content=json.dumps({"status": "deleted", "test_id": test_id}), media_type='application/json', headers={"X-Idempotent-Replay": "true", "Idempotency-Key": idempotency_key})
-    except Exception:
+    except _EVALS_NONCRITICAL_EXCEPTIONS:
         pass
 
     try:
@@ -492,14 +515,14 @@ async def delete_embeddings_abtest(
             created_by=user_ctx,
         )
         logger.info(f"A/B test deleted: {test_id} by {user_ctx}")
-    except Exception as exc:
+    except _EVALS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"A/B test cleanup failed for {test_id}: {exc}")
         raise HTTPException(status_code=500, detail="Failed to delete A/B test")
     log_evaluation_deleted(user_id=str(current_user.id), eval_id=test_id)
     try:
         if idempotency_key:
             svc.db.record_idempotency("emb_abtest_delete", idempotency_key, test_id, user_ctx)
-    except Exception:
+    except _EVALS_NONCRITICAL_EXCEPTIONS:
         pass
     return {"status": "deleted", "test_id": test_id}
 
@@ -533,7 +556,7 @@ async def export_embeddings_abtest(
             return value
         try:
             parsed = json.loads(value)
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             return default
         return parsed if isinstance(parsed, (list, dict)) else default
 
@@ -568,7 +591,7 @@ async def export_embeddings_abtest(
         try:
             if idempotency_key:
                 svc.db.record_idempotency("emb_abtest_export_json", idempotency_key, f"{test_id}:json", user_ctx)
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
         log_evaluation_exported(
             user_id=str(current_user.id),
@@ -592,7 +615,7 @@ async def export_embeddings_abtest(
     try:
         if idempotency_key:
             svc.db.record_idempotency("emb_abtest_export_csv", idempotency_key, f"{test_id}:csv", user_ctx)
-    except Exception:
+    except _EVALS_NONCRITICAL_EXCEPTIONS:
         pass
     log_evaluation_exported(
         user_id=str(current_user.id),
@@ -650,7 +673,7 @@ async def get_rate_limit_status(
             reset_at=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         )
 
-    except Exception as e:
+    except _EVALS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to get rate limit status: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -680,7 +703,7 @@ async def health_check():
         svc = get_unified_evaluation_service_for_user(uid)
         health = await svc.health_check()
         return HealthCheckResponse(**health)
-    except Exception as e:
+    except _EVALS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Health check failed: {e}")
         return HealthCheckResponse(
             status="unhealthy",
@@ -730,7 +753,7 @@ async def get_metrics(request: Request):
         # Return JSON format
         return metrics_summary
 
-    except Exception as e:
+    except _EVALS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to get metrics: {e}")
         # Do not expose internal error, return generic error
         return {"error": "Metrics are currently unavailable"}
@@ -822,7 +845,7 @@ async def evaluate_geval(
             usage = result.get("usage") if isinstance(result, dict) else None
             if usage and isinstance(usage, dict):
                 await limiter.record_actual_usage(user_id, "evals:geval", int(usage.get("total_tokens", 0)), float(usage.get("cost", 0.0) or 0.0))
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Format response - accept either numeric or structured metric dicts
@@ -918,13 +941,13 @@ async def evaluate_geval(
         try:
             if response is not None:
                 await _apply_rate_limit_headers(limiter, user_id, response, meta)
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
         return resp_payload
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _EVALS_NONCRITICAL_EXCEPTIONS as e:
         # Log with stack trace for diagnostics
         logger.exception(f"G-Eval evaluation failed: {e}")
         # In TEST_MODE, surface a slightly more verbose message to aid debugging
@@ -933,7 +956,7 @@ async def evaluate_geval(
             import os as _os
             if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
                 _detail = _detail + f" (debug: {str(e)})"
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1027,7 +1050,7 @@ async def evaluate_rag(
             usage = result.get("usage") if isinstance(result, dict) else None
             if usage and isinstance(usage, dict):
                 await limiter.record_actual_usage(user_id, "evals:rag", int(usage.get("total_tokens", 0)), float(usage.get("cost", 0.0) or 0.0))
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Extract and format metrics from results
@@ -1095,13 +1118,13 @@ async def evaluate_rag(
         try:
             if response is not None:
                 await _apply_rate_limit_headers(limiter, user_id, response, meta)
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
         return resp_payload
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _EVALS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"RAG evaluation failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1194,7 +1217,7 @@ async def evaluate_response_quality(
             usage = result.get("usage") if isinstance(result, dict) else None
             if usage and isinstance(usage, dict):
                 await limiter.record_actual_usage(user_id, "evals:response_quality", int(usage.get("total_tokens", 0)), float(usage.get("cost", 0.0) or 0.0))
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Convert metrics to proper EvaluationMetric structure
@@ -1261,13 +1284,13 @@ async def evaluate_response_quality(
         try:
             if response is not None:
                 await _apply_rate_limit_headers(limiter, user_id, response, meta)
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
         return resp_payload
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _EVALS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Response quality evaluation failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1336,11 +1359,11 @@ async def evaluate_propositions_endpoint(
         try:
             if response is not None:
                 await _apply_rate_limit_headers(limiter, user_id, response, meta)
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
         return resp_payload
 
-    except Exception as e:
+    except _EVALS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Proposition evaluation failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1667,7 +1690,7 @@ async def batch_evaluate(
                         "results": result.get("results", {})
                     })
 
-                except Exception as e:
+                except _EVALS_NONCRITICAL_EXCEPTIONS as e:
                     results.append({
                         "evaluation_id": None,
                         "status": "failed",
@@ -1692,11 +1715,11 @@ async def batch_evaluate(
         try:
             if response is not None:
                 await _apply_rate_limit_headers(limiter, user_id, response, meta)
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
         return resp_payload
 
-    except Exception as e:
+    except _EVALS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Batch evaluation failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1734,7 +1757,7 @@ async def evaluate_ocr_endpoint(
                     texts.append(it.extracted_text)
                 if getattr(it, "ground_truth_text", None):
                     texts.append(it.ground_truth_text)
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
         tokens_est = _estimate_tokens_from_texts("\n".join(texts))
         allowed, meta = await limiter.check_rate_limit(user_id, endpoint="evals:ocr", is_batch=False, tokens_requested=tokens_est, estimated_cost=0.0)
@@ -1754,16 +1777,16 @@ async def evaluate_ocr_endpoint(
             usage = result.get("usage") if isinstance(result, dict) else None
             if usage and isinstance(usage, dict):
                 await limiter.record_actual_usage(user_id, "evals:ocr", int(usage.get("total_tokens", 0)), float(usage.get("cost", 0.0) or 0.0))
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
         # Apply headers
         try:
             if response is not None:
                 await _apply_rate_limit_headers(limiter, user_id, response, meta)
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
         return OCREvaluationResponse(**result)
-    except Exception as e:
+    except _EVALS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"OCR evaluation endpoint failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1801,7 +1824,7 @@ async def evaluate_ocr_pdf_endpoint(
                 s = getattr(f, "size", None)
                 if isinstance(s, int):
                     size_est += s
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
         tokens_est = max(0, size_est // 4)
         allowed, meta = await limiter.check_rate_limit(user_id, endpoint="evals:ocr_pdf", is_batch=False, tokens_requested=tokens_est, estimated_cost=0.0)
@@ -1880,17 +1903,17 @@ async def evaluate_ocr_pdf_endpoint(
             usage = result.get("usage") if isinstance(result, dict) else None
             if usage and isinstance(usage, dict):
                 await limiter.record_actual_usage(user_id, "evals:ocr", int(usage.get("total_tokens", 0)), float(usage.get("cost", 0.0) or 0.0))
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             if response is not None:
                 await _apply_rate_limit_headers(limiter, user_id, response, meta)
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
         return OCREvaluationResponse(**result)
     except HTTPException:
         raise
-    except Exception as e:
+    except _EVALS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"OCR PDF evaluation endpoint failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1978,7 +2001,7 @@ async def get_evaluation_history(
             }
         )
 
-    except Exception as e:
+    except _EVALS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to retrieve evaluation history: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1998,10 +2021,10 @@ def _promote_static_routes(_router: APIRouter) -> None:
                 if path in {suffix, prefixed} and isinstance(route, APIRoute):
                     _router.routes.insert(0, _router.routes.pop(idx))
                     break
-    except Exception as exc:  # Safety: never fail import due to ordering tweak
+    except _EVALS_NONCRITICAL_EXCEPTIONS as exc:  # Safety: never fail import due to ordering tweak
         try:
             logger.debug(f"Failed to promote evaluation routes: {exc}")
-        except Exception:
+        except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
 
 

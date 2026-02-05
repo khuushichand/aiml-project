@@ -8,6 +8,7 @@ import json
 import math
 import random
 import socket
+import sqlite3
 import ssl
 import threading
 import time
@@ -48,6 +49,33 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 from tldw_Server_API.app.core.exceptions import EgressPolicyError, RetryExhaustedError
 from tldw_Server_API.app.core.Setup import setup_manager
+
+_CLAIMS_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    csv.Error,
+    json.JSONDecodeError,
+    socket.timeout,
+    ssl.SSLError,
+    sqlite3.Error,
+    HTTPException,
+    EgressPolicyError,
+    RetryExhaustedError,
+)
 
 _ROLE_HIERARCHY = {
     "owner": 4,
@@ -96,12 +124,12 @@ def _normalize_search_row(row: dict[str, Any]) -> dict[str, Any]:
     try:
         cluster_id = normalized.get("claim_cluster_id")
         normalized["claim_cluster_id"] = int(cluster_id) if cluster_id is not None else None
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         normalized["claim_cluster_id"] = None
     try:
         score = normalized.get("relevance_score")
         normalized["relevance_score"] = float(score) if score is not None else None
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         normalized["relevance_score"] = None
     return normalized
 
@@ -116,7 +144,7 @@ def _parse_email_recipients(raw_value: str | None) -> list[str]:
         payload = json.loads(text)
         if isinstance(payload, list):
             return [str(v).strip() for v in payload if str(v).strip()]
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         pass
     return [item.strip() for item in text.split(",") if item.strip()]
 
@@ -129,7 +157,7 @@ def _normalize_channels(raw_value: Any | None) -> dict[str, bool]:
         if raw_value:
             try:
                 data = json.loads(str(raw_value))
-            except Exception:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                 data = {}
     return {
         "slack": bool(data.get("slack")),
@@ -157,7 +185,7 @@ def _normalize_review_rule(row: dict[str, Any]) -> dict[str, Any]:
     raw = normalized.get("predicate_json")
     try:
         normalized["predicate_json"] = json.loads(raw) if raw else {}
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         normalized["predicate_json"] = {}
     return normalized
 
@@ -167,7 +195,7 @@ def _normalize_notification_row(row: dict[str, Any]) -> dict[str, Any]:
     raw = normalized.get("payload_json")
     try:
         normalized["payload"] = json.loads(raw) if raw else {}
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         normalized["payload"] = {}
     normalized.pop("payload_json", None)
     return normalized
@@ -178,7 +206,7 @@ def _normalize_monitoring_event_row(row: dict[str, Any]) -> dict[str, Any]:
     raw = normalized.get("payload_json")
     try:
         payload = json.loads(raw) if raw else {}
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         payload = {}
     normalized["payload"] = payload
     normalized.pop("payload_json", None)
@@ -196,9 +224,9 @@ def _normalize_review_extractor_metrics_row(row: dict[str, Any]) -> dict[str, An
                 for key, value in parsed.items():
                     try:
                         reason_payload[str(key)] = int(value)
-                    except Exception:
+                    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                         continue
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             reason_payload = {}
     normalized["reason_code_counts"] = reason_payload
     normalized.pop("reason_code_counts_json", None)
@@ -227,7 +255,7 @@ def _filter_monitoring_events_by_payload(
 def _get_watchlists_db(user_id: str) -> WatchlistsDatabase | None:
     try:
         return WatchlistsDatabase.for_user(user_id=int(user_id))
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -237,7 +265,7 @@ def _load_watchlist_cluster_counts(user_id: str, cluster_ids: list[int] | None =
         return {}
     try:
         return watch_db.list_watchlist_cluster_counts(cluster_ids=cluster_ids)
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return {}
 
 
@@ -250,11 +278,11 @@ def _extract_request_metadata(request: Any) -> tuple[str | None, str | None]:
     try:
         if request.client:
             action_ip = request.client.host
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         action_ip = None
     try:
         action_user_agent = request.headers.get("user-agent")
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         action_user_agent = None
     return action_ip, action_user_agent
 
@@ -276,7 +304,7 @@ def _resolve_corrected_claim_span(
     try:
         media_id = int(claim_row.get("media_id") or 0)
         chunk_index = int(claim_row.get("chunk_index") or 0)
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return (None, None)
     if media_id <= 0:
         return (None, None)
@@ -296,7 +324,7 @@ def _resolve_corrected_claim_span(
             offset = int(start_char)
             span_start += offset
             span_end += offset
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             pass
     return (span_start, span_end)
 
@@ -312,7 +340,7 @@ def _enqueue_claim_rebuild_if_needed(*, media_id: int, db_path: str) -> None:
     try:
         svc = get_claims_rebuild_service()
         svc.submit(media_id=int(media_id), db_path=str(db_path))
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         pass
 
 
@@ -322,7 +350,7 @@ def _format_ratio(value: float | None) -> str:
         return "n/a"
     try:
         return f"{float(value) * 100:.2f}%"
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return "n/a"
 
 
@@ -407,12 +435,12 @@ def _record_webhook_event(
             client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
             db_path=db_path,
         )
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return
     try:
         try:
             db.initialize_db()
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             pass
         payload = {
             "channel": channel,
@@ -431,12 +459,12 @@ def _record_webhook_event(
             severity="info" if status == "success" else "warning",
             payload_json=json.dumps(payload),
         )
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         pass
     finally:
         try:
             db.close_connection()
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             pass
 
 
@@ -451,7 +479,7 @@ def _deliver_claims_alert_webhook(
 ) -> None:
     try:
         from tldw_Server_API.app.core.http_client import RetryPolicy, create_client, fetch
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return
     backoff_schedule = [5, 15, 45, 120, 300]
     max_attempts = 5
@@ -516,7 +544,7 @@ def _deliver_claims_alert_webhook(
                 status_code=status_code,
                 alert_id=alert_id,
             )
-        except Exception as exc:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS as exc:
             reason = _classify_webhook_exception(exc)
             duration = time.time() - start_ts
             logger.warning(
@@ -541,7 +569,7 @@ def _deliver_claims_alert_webhook(
 def _claims_monitoring_system_user_id() -> int:
     try:
         return int(settings.get("CLAIMS_MONITORING_SYSTEM_USER_ID", 0))
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return 0
 
 
@@ -551,7 +579,7 @@ def _parse_iso_timestamp(value: str | None) -> float | None:
     try:
         normalized = str(value).replace("Z", "+00:00")
         return datetime.fromisoformat(normalized).timestamp()
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -560,7 +588,7 @@ def _format_utc_timestamp(value: float | None) -> str | None:
         return None
     try:
         return datetime.fromtimestamp(float(value), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -616,13 +644,13 @@ def _load_persisted_rebuild_health() -> dict[str, Any]:
     try:
         try:
             db.initialize_db()
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             pass
         return db.get_claims_monitoring_health(str(user_id))
     finally:
         try:
             db.close_connection()
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             pass
 
 
@@ -695,7 +723,7 @@ async def _send_claims_alert_email_digest(
                 text_body=text_body,
             )
             deliveries.append(bool(ok))
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             deliveries.append(False)
     return any(deliveries)
 
@@ -736,11 +764,11 @@ async def send_claims_alert_email_digest_for_scheduler(
 
     try:
         interval_val = int(interval_sec or settings.get("CLAIMS_ALERT_EMAIL_DIGEST_INTERVAL_SEC", 86400))
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         interval_val = 86400
     try:
         limit_val = int(max_events or settings.get("CLAIMS_ALERT_EMAIL_DIGEST_MAX_EVENTS", 500))
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         limit_val = 500
     limit_val = max(1, min(5000, limit_val))
 
@@ -783,7 +811,7 @@ async def send_claims_alert_email_digest_for_scheduler(
         try:
             if alert_id is not None:
                 config_row = config_by_id.get(int(alert_id))
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             config_row = None
 
         channels = _normalize_channels(
@@ -804,7 +832,7 @@ async def send_claims_alert_email_digest_for_scheduler(
         if alert_id is not None:
             try:
                 names[int(alert_id)] = config_row.get("name") if config_row else alert_name
-            except Exception:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                 names[int(alert_id)] = alert_name
         else:
             names[-1] = alert_name
@@ -850,7 +878,7 @@ async def send_claims_alert_email_digest_for_scheduler(
             for event in events:
                 try:
                     undelivered_ids.append(int(event.get("id")))
-                except Exception:
+                except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                     continue
             record_claims_alert_email_delivery(status="success", latency_s=duration)
         else:
@@ -885,7 +913,7 @@ def _refresh_claim_embedding(
             ChromaDBManager,
             create_embeddings_batch,
         )
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return
     embedding_config = dict(settings.get("EMBEDDING_CONFIG") or {})
     user_db_base_dir = settings.get("USER_DB_BASE_DIR")
@@ -897,22 +925,22 @@ def _refresh_claim_embedding(
             "embedding_config": embedding_config,
         }
         manager = ChromaDBManager(user_id=str(user_id), user_embedding_config=user_embedding_config)
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return
     collection_name = f"claims_for_{user_id}"
     try:
         collection = manager.get_or_create_collection(collection_name)
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return
 
     old_id = claim_embedding_id(media_id, chunk_index, old_text)
     new_id = claim_embedding_id(media_id, chunk_index, new_text)
     try:
         collection.delete(ids=[old_id])
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         try:
             collection.delete(where={"media_id": str(media_id), "claim_text": str(old_text)})
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             pass
 
     model_id = (
@@ -926,7 +954,7 @@ def _refresh_claim_embedding(
             user_app_config=user_embedding_config,
             model_id_override=model_id,
         )
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return
 
     metadata = {
@@ -943,7 +971,7 @@ def _refresh_claim_embedding(
             ids=[new_id],
             metadatas=[metadata],
         )
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return
 
 
@@ -993,7 +1021,7 @@ async def _ensure_claim_edit_access(
         try:
             if owner_user_id is not None and int(owner_user_id) == int(principal.user_id):
                 return
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             pass
         if media_client_id is not None and str(media_client_id) == str(principal.user_id):
             return
@@ -1044,12 +1072,12 @@ def _can_review_claim(principal: AuthPrincipal, claim_row: dict[str, Any]) -> bo
         try:
             if int(reviewer_id) == int(principal.user_id):
                 return True
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             pass
     if review_group:
         try:
             return str(review_group) in [str(r) for r in (principal.roles or [])]
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             return False
     return False
 
@@ -1118,7 +1146,7 @@ async def _fetch_claims_provider_usage_async(
     if owner_user_id:
         try:
             user_id_val = int(owner_user_id)
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             user_id_val = None
 
     if pg:
@@ -1201,7 +1229,7 @@ async def _fetch_claims_provider_usage_async(
         if latency_ms is not None:
             try:
                 bucket["latencies"].append(float(latency_ms))
-            except Exception:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                 pass
     out: list[dict[str, Any]] = []
     for bucket in grouped.values():
@@ -1223,7 +1251,7 @@ def _fetch_claims_provider_usage(owner_user_id: str | None) -> list[dict[str, An
         return asyncio.run(_fetch_claims_provider_usage_async(owner_user_id))
     except RuntimeError:
         return []
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return []
 
 
@@ -1242,7 +1270,7 @@ def _build_review_latency_stats(db: MediaDatabase) -> dict[str, float | None]:
     if avg_row:
         try:
             avg_latency_sec = float(avg_row[0]) if avg_row[0] is not None else None
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             avg_latency_sec = None
 
     total_rows = db.execute_query(
@@ -1275,7 +1303,7 @@ def _build_review_latency_stats(db: MediaDatabase) -> dict[str, float | None]:
         if row:
             try:
                 p95_latency = float(row[0]) if row[0] is not None else None
-            except Exception:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                 p95_latency = None
     return {
         "avg_review_latency_sec": avg_latency_sec,
@@ -1354,7 +1382,7 @@ def _build_review_status_trends(db: MediaDatabase, window_days: int) -> dict[str
         status_key = str(status_val or "unknown")
         try:
             count_int = int(count_val) if count_val is not None else 0
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             count_int = 0
         if day_str not in counts_by_day:
             counts_by_day[day_str] = {}
@@ -1516,7 +1544,7 @@ def _build_claims_analytics(db: MediaDatabase, owner_user_id: str | None, window
 def _compute_unsupported_ratios(window_sec: int, baseline_sec: int) -> dict[str, float | None]:
     try:
         from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return {"window_ratio": None, "baseline_ratio": None}
 
     reg = get_metrics_registry()
@@ -1529,7 +1557,7 @@ def _compute_unsupported_ratios(window_sec: int, baseline_sec: int) -> dict[str,
             try:
                 if float(sample.timestamp) >= since_ts:
                     total += float(sample.value)
-            except Exception:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                 continue
         return total
 
@@ -1579,7 +1607,7 @@ def _resolve_media_db(
         if override_db is not None:
             try:
                 override_db.close_connection()
-            except Exception:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                 pass
 
 
@@ -1897,7 +1925,7 @@ def update_claims_settings(
     if payload.get("persist"):
         try:
             setup_manager.update_config({"Claims": updates})
-        except Exception as exc:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return _claims_settings_snapshot()
@@ -1989,7 +2017,7 @@ def list_claims_alerts(
         target_user_id = str(int(user_id))
     try:
         db.migrate_legacy_claims_monitoring_alerts(target_user_id)
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         pass
     rows = db.list_claims_monitoring_alerts(target_user_id)
     return [_normalize_alert_row(dict(r)) for r in rows]
@@ -2011,7 +2039,7 @@ def create_claims_alert(
         target_user_id = str(int(user_id))
     try:
         db.migrate_legacy_claims_monitoring_alerts(target_user_id)
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         pass
     name = payload.get("name")
     alert_type = payload.get("alert_type")
@@ -2059,7 +2087,7 @@ def update_claims_alert(
     _ensure_claims_admin(principal)
     try:
         db.migrate_legacy_claims_monitoring_alerts(str(current_user.id))
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         pass
     existing = db.get_claims_monitoring_alert(int(config_id))
     if not existing:
@@ -2118,7 +2146,7 @@ def delete_claims_alert(
     _ensure_claims_admin(principal)
     try:
         db.migrate_legacy_claims_monitoring_alerts(str(current_user.id))
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         pass
     existing = db.get_claims_monitoring_alert(int(config_id))
     if not existing:
@@ -2177,7 +2205,7 @@ def _evaluate_claims_alerts_for_user(
     monitoring_enabled = bool(settings.get("CLAIMS_MONITORING_ENABLED", False))
     try:
         db.migrate_legacy_claims_monitoring_alerts(target_user_id)
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         pass
     ratios = _compute_unsupported_ratios(window_sec, baseline_sec)
     configs = db.list_claims_monitoring_alerts(target_user_id)
@@ -2194,7 +2222,7 @@ def _evaluate_claims_alerts_for_user(
             threshold = settings.get("CLAIMS_ALERT_THRESHOLD_DEFAULT", 0.2)
         try:
             threshold_val = float(threshold)
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             threshold_val = 0.2
         drift_threshold_val = None
         drift_threshold = cfg.get("baseline_ratio")
@@ -2203,7 +2231,7 @@ def _evaluate_claims_alerts_for_user(
         if drift_threshold is not None:
             try:
                 drift_threshold_val = float(drift_threshold)
-            except Exception:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                 drift_threshold_val = None
         window_ratio = ratios.get("window_ratio")
         baseline_ratio = ratios.get("baseline_ratio")
@@ -2266,20 +2294,20 @@ def claims_rebuild_status(*, rebuild_service: Any = None) -> dict[str, Any]:
         svc = rebuild_service or get_claims_rebuild_service()
         try:
             stats = svc.get_stats()
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             stats = {}
         try:
             qlen = svc.get_queue_length()
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             qlen = 0
         try:
             workers = svc.get_worker_count()
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             workers = None
         return {"status": "ok", "stats": stats, "queue_length": qlen, "workers": workers}
     except HTTPException:
         raise
-    except Exception as exc:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -2288,7 +2316,7 @@ def claims_rebuild_health(principal: AuthPrincipal, *, summary: bool = False) ->
     persisted: dict[str, Any] = {}
     try:
         persisted = _load_persisted_rebuild_health()
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         persisted = {}
     if summary:
         if persisted:
@@ -2453,7 +2481,7 @@ async def review_claim(
             if created_at_raw:
                 created_at = datetime.fromisoformat(str(created_at_raw).replace("Z", "+00:00"))
                 latency_s = (datetime.utcnow().replace(tzinfo=created_at.tzinfo) - created_at).total_seconds()
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             latency_s = None
         record_claims_review_metrics(processed=1, latency_s=latency_s)
         if new_status in {"flagged", "reassigned"} and new_status != current_status:
@@ -2507,7 +2535,7 @@ async def review_claim(
                         owner_user_id=str(owner_user_id),
                         notification_ids=[int(notif_id)],
                     )
-            except Exception as exc:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Failed to emit claims review notification: %s", exc)
         return _normalize_claim_row(dict(updated))
 
@@ -2593,7 +2621,7 @@ def bulk_review_claims(
                 if desired_status in {"flagged", "reassigned"} and desired_status != current_status:
                     try:
                         rebuild_media_ids.add(int(claim_row.get("media_id") or 0))
-                    except Exception:
+                    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                         pass
 
         if updated_ids:
@@ -2632,7 +2660,7 @@ def bulk_review_claims(
                         owner_user_id=str(owner_user_id),
                         notification_ids=[int(notif_id)],
                     )
-            except Exception as exc:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Failed to emit claims bulk review notification: %s", exc)
         return {
             "updated": updated_ids,
@@ -2755,7 +2783,7 @@ def claims_dashboard_analytics(
     }
     try:
         payload["rebuild_health"] = claims_rebuild_health(principal, summary=True)
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         payload["rebuild_health"] = None
     try:
         metrics_user_id = owner_user_id or str(settings.get("SINGLE_USER_FIXED_ID", "1"))
@@ -2770,11 +2798,11 @@ def claims_dashboard_analytics(
         payload["review_extractor_metrics"] = [
             _normalize_review_extractor_metrics_row(row) for row in metrics_rows
         ]
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         payload["review_extractor_metrics"] = []
     try:
         payload["provider_usage"] = _fetch_claims_provider_usage(owner_user_id)
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         payload["provider_usage"] = []
     return payload
 
@@ -2784,7 +2812,7 @@ def _parse_iso_date(value: str | None) -> date | None:
         return None
     try:
         return datetime.fromisoformat(str(value)).date()
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -2806,7 +2834,7 @@ def aggregate_claims_review_extractor_metrics_daily(
             lookback_val = int(
                 lookback_days if lookback_days is not None else settings.get("CLAIMS_REVIEW_METRICS_LOOKBACK_DAYS", 2)
             )
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             lookback_val = 2
         lookback_val = max(1, lookback_val)
         today = datetime.utcnow().date()
@@ -2892,7 +2920,7 @@ def aggregate_claims_review_extractor_metrics_daily(
             version_val = row[2]
             reason_val = row[3]
             count_val = row[4]
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             continue
         if reason_val is None:
             continue
@@ -2918,7 +2946,7 @@ def aggregate_claims_review_extractor_metrics_daily(
             flagged_count = row[6]
             reassigned_count = row[7]
             edited_count = row[8]
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             continue
         day_str = day_val.isoformat() if hasattr(day_val, "isoformat") else str(day_val)
         extractor_key = str(extractor_val or "unknown")
@@ -3012,7 +3040,7 @@ def export_claims_analytics(
     if retention_val > 0:
         try:
             db.cleanup_claims_analytics_exports(user_id=target_user_id, retention_hours=retention_val)
-        except Exception as exc:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Claims analytics export cleanup failed: %s", exc)
 
     events = db.list_claims_monitoring_events(
@@ -3031,11 +3059,11 @@ def export_claims_analytics(
     total = len(filtered_events)
     try:
         limit = int(pagination.get("limit", 1000))
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         limit = 1000
     try:
         offset = int(pagination.get("offset", 0))
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         offset = 0
     limit = max(1, min(10000, limit))
     offset = max(0, offset)
@@ -3139,13 +3167,13 @@ def list_claims_analytics_exports(
         if raw_filters:
             try:
                 filters = json.loads(raw_filters)
-            except Exception:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                 filters = None
         raw_pagination = row.get("pagination_json")
         if raw_pagination:
             try:
                 pagination = json.loads(raw_pagination)
-            except Exception:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                 pagination = None
         exports.append(
             {
@@ -3189,7 +3217,7 @@ def get_claims_analytics_export(
         raw = row.get("payload_json") or "{}"
         try:
             payload = json.loads(raw)
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             payload = {}
     return {
         "export_id": row.get("export_id"),
@@ -3232,7 +3260,7 @@ def list_claim_clusters(
         for cluster in clusters:
             try:
                 cluster_id = int(cluster.get("id"))
-            except Exception:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                 continue
             cluster["watchlist_count"] = int(counts.get(cluster_id, 0))
     if watchlisted is not None:
@@ -3280,7 +3308,7 @@ def rebuild_claim_clusters(
         finally:
             try:
                 override_db.close_connection()
-            except Exception:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                 pass
 
     if cluster_method == "exact":
@@ -3296,7 +3324,7 @@ def rebuild_claim_clusters(
     try:
         watchlist_result = _evaluate_watchlist_cluster_notifications(db, target_user_id)
         result["watchlist_notifications"] = watchlist_result
-    except Exception:
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         pass
     return result
 
@@ -3313,7 +3341,7 @@ def _evaluate_watchlist_cluster_notifications(db: MediaDatabase, user_id: str) -
         try:
             cluster_id = int(row.get("cluster_id"))
             job_id = int(row.get("job_id"))
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             continue
         subscriptions.setdefault(cluster_id, []).append(job_id)
     cluster_ids = list(subscriptions.keys())
@@ -3324,7 +3352,7 @@ def _evaluate_watchlist_cluster_notifications(db: MediaDatabase, user_id: str) -
     if counts:
         try:
             db.update_claim_clusters_watchlist_counts(counts)
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             pass
     inserted = record_watchlist_cluster_notifications(
         db=db,
@@ -3592,7 +3620,7 @@ def list_claims_by_media(
             )
             row = cur.fetchone()
             total = int(row[0]) if row else 0
-        except Exception:
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
             total = offset + len(claims)
         next_off: int | None = None
         if offset + len(claims) < total:
@@ -3753,15 +3781,15 @@ def rebuild_all_media(
         for r in rows:
             try:
                 mids.append(int(r["id"]))
-            except Exception:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                 try:
                     mids.append(int(r[0]))
-                except Exception:
+                except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                     try:
                         if isinstance(r, dict):
                             first_val = next(iter(r.values()))
                             mids.append(int(first_val))
-                    except Exception:
+                    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                         continue
         for mid in mids:
             svc.submit(media_id=mid, db_path=db_path)
@@ -3770,7 +3798,7 @@ def rebuild_all_media(
         if override_db is not None:
             try:
                 override_db.close_connection()
-            except Exception:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                 pass
 
 
@@ -3795,6 +3823,6 @@ def rebuild_claims_fts(
         if override_db is not None:
             try:
                 override_db.close_connection()
-            except Exception:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                 pass
     return {"status": "ok", "indexed": count}

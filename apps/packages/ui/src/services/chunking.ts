@@ -210,6 +210,80 @@ export interface PdfProcessOptions {
   ocr_prompt_preset?: string
 }
 
+const PROCESS_PDF_ALLOWED_CHUNKING_KEYS = [
+  "method",
+  "max_size",
+  "overlap",
+  "adaptive",
+  "multi_level",
+  "language",
+  "custom_chapter_pattern",
+  "template_name",
+  "proposition_engine",
+  "proposition_aggressiveness",
+  "proposition_min_proposition_length",
+  "proposition_prompt_profile"
+] as const
+
+const PROCESS_PDF_ALLOWED_PDF_KEYS = [
+  "pdf_parsing_engine",
+  "enable_ocr",
+  "ocr_backend",
+  "ocr_lang",
+  "ocr_dpi",
+  "ocr_mode",
+  "ocr_min_page_text_chars",
+  "ocr_output_format",
+  "ocr_prompt_preset"
+] as const
+
+const listProvidedKeys = (value?: unknown): string[] => {
+  if (!value || typeof value !== "object") return []
+  const record = value as Record<string, unknown>
+  return Object.entries(record)
+    .filter(([, entry]) => entry != null)
+    .map(([key]) => key)
+}
+
+const validateProcessPdfOptions = (
+  options?: ChunkingOptions,
+  pdfOptions?: PdfProcessOptions
+): void => {
+  const allowedChunking = new Set<string>(PROCESS_PDF_ALLOWED_CHUNKING_KEYS)
+  const allowedPdf = new Set<string>(PROCESS_PDF_ALLOWED_PDF_KEYS)
+
+  const unsupportedChunking = listProvidedKeys(options).filter(
+    (key) => !allowedChunking.has(key)
+  )
+  const unsupportedPdf = listProvidedKeys(pdfOptions).filter(
+    (key) => !allowedPdf.has(key)
+  )
+
+  if (unsupportedChunking.length === 0 && unsupportedPdf.length === 0) {
+    return
+  }
+
+  const messages: string[] = []
+  if (unsupportedChunking.length > 0) {
+    messages.push(
+      `Unsupported chunking options for /media/process-pdfs: ${unsupportedChunking.join(", ")}.`
+    )
+  }
+  if (unsupportedPdf.length > 0) {
+    messages.push(
+      `Unsupported PDF options for /media/process-pdfs: ${unsupportedPdf.join(", ")}.`
+    )
+  }
+  messages.push(
+    `Supported chunking options: ${PROCESS_PDF_ALLOWED_CHUNKING_KEYS.join(", ")}.`
+  )
+  messages.push(
+    `Supported PDF options: ${PROCESS_PDF_ALLOWED_PDF_KEYS.join(", ")}.`
+  )
+
+  throw new Error(messages.join(" "))
+}
+
 /**
  * Get available chunking methods and capabilities
  */
@@ -311,6 +385,8 @@ export async function processPdfForChunking(
   options?: ChunkingOptions,
   pdfOptions?: PdfProcessOptions
 ): Promise<ProcessPdfsResponse> {
+  validateProcessPdfOptions(options, pdfOptions)
+
   const fields: Record<string, string | boolean | number> = {
     perform_chunking: true
   }
@@ -326,6 +402,18 @@ export async function processPdfForChunking(
   }
   if (options?.template_name) {
     fields.chunking_template_name = options.template_name
+  }
+  if (options?.proposition_engine) {
+    fields.proposition_engine = options.proposition_engine
+  }
+  if (options?.proposition_aggressiveness != null) {
+    fields.proposition_aggressiveness = options.proposition_aggressiveness
+  }
+  if (options?.proposition_min_proposition_length != null) {
+    fields.proposition_min_proposition_length = options.proposition_min_proposition_length
+  }
+  if (options?.proposition_prompt_profile) {
+    fields.proposition_prompt_profile = options.proposition_prompt_profile
   }
 
   if (pdfOptions?.pdf_parsing_engine) {

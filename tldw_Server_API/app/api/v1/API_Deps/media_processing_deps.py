@@ -343,6 +343,10 @@ async def get_process_pdfs_form(
     use_adaptive_chunking: bool = Form(False),
     use_multi_level_chunking: bool = Form(False),
     chunk_language: str | None = Form(None),
+    proposition_engine: str | None = Form(None),
+    proposition_aggressiveness: int | None = Form(None),
+    proposition_min_proposition_length: int | None = Form(None),
+    proposition_prompt_profile: str | None = Form(None),
 ) -> ProcessPDFsForm:
     """
     Dependency that parses multipart/form-data into a ProcessPDFsForm.
@@ -378,6 +382,10 @@ async def get_process_pdfs_form(
             use_adaptive_chunking=use_adaptive_chunking,
             use_multi_level_chunking=use_multi_level_chunking,
             chunk_language=chunk_language,
+            proposition_engine=proposition_engine,
+            proposition_aggressiveness=proposition_aggressiveness,
+            proposition_min_proposition_length=proposition_min_proposition_length,
+            proposition_prompt_profile=proposition_prompt_profile,
         )
     except ValidationError as exc:
         _raise_422(exc)

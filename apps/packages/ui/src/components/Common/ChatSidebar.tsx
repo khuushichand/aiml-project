@@ -439,6 +439,7 @@ export function ChatSidebar({
               <NotesDockButton
                 appearance="ghost"
                 className="shrink-0"
+                tooltipPlacement="top"
                 ariaLabel={t("option:notesDock.tooltipSidebar", "Open Notes Dock")}
               />
               <QuickChatHelperButton

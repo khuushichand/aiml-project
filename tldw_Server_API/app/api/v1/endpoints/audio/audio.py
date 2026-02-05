@@ -18,7 +18,7 @@ from . import (
     audio_voices,
 )
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import check_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 
 router = APIRouter(
     tags=["Audio"],

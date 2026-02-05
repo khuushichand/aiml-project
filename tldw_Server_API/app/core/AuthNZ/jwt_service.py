@@ -21,6 +21,23 @@ from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
 )
 from tldw_Server_API.app.core.AuthNZ.exceptions import ConfigurationError, InvalidTokenError, TokenExpiredError
 
+_JWT_SERVICE_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    JWTError,
+    JWTClaimsError,
+    ExpiredSignatureError,
+    ConfigurationError,
+    InvalidTokenError,
+    TokenExpiredError,
+)
+
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
@@ -87,7 +104,7 @@ class JWTService:
                         self._encode_key = derived.hex()
                         self._decode_key = self._encode_key
                         logger.debug("JWTService: using derived single-user surrogate key for HS algorithms")
-                    except Exception:
+                    except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS:
                         raise ConfigurationError("JWT_SECRET_KEY", "JWT secret key not configured for HS algorithms")
                 else:
                     raise ConfigurationError("JWT_SECRET_KEY", "JWT secret key not configured for HS algorithms")
@@ -170,7 +187,7 @@ class JWTService:
                 logger.debug(f"Created access token for user {username} (ID: {user_id})")
             return token
 
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create access token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
 
@@ -225,7 +242,7 @@ class JWTService:
                 logger.debug(f"Created refresh token for user {username} (ID: {user_id})")
             return token
 
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create refresh token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
 
@@ -281,7 +298,7 @@ class JWTService:
             else:
                 logger.debug(f"Created magic link token for {email}")
             return token
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create magic link token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
 
@@ -364,7 +381,7 @@ class JWTService:
             logger.warning(f"JWT verification error: {e}")
             raise InvalidTokenError(f"Invalid token: {e}")
 
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error verifying token: {e}")
             raise InvalidTokenError(f"Token verification failed: {e}")
 
@@ -447,7 +464,7 @@ class JWTService:
             logger.warning(f"JWT verification error: {e}")
             raise InvalidTokenError(f"Invalid token: {e}")
 
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error verifying token: {e}")
             raise InvalidTokenError(f"Token verification failed: {e}")
 
@@ -611,7 +628,7 @@ class JWTService:
                 f"Created virtual access token scope={payload.get('scope')} user={username} ttl={ttl_minutes}m"
             )
             return token
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create virtual access token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
 
@@ -620,7 +637,7 @@ class JWTService:
         hashes: list[str] = []
         try:
             key_candidates = derive_hmac_key_candidates(self.settings)
-        except Exception:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS:
             key_candidates = [derive_hmac_key(self.settings)]
         for key in key_candidates:
             digest = hmac.new(key, token.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -681,7 +698,7 @@ class JWTService:
         hashes: list[str] = []
         try:
             key_candidates = derive_hmac_key_candidates(self.settings)
-        except Exception:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS:
             key_candidates = [derive_hmac_key(self.settings)]
         for key in key_candidates:
             salt = hmac.new(key, b"password-reset-token-salt", hashlib.sha256).digest()
@@ -727,7 +744,7 @@ class JWTService:
                     "ensure token is verified separately for authorization"
                 )
             return jti
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"extract_jti failed to decode token: {e}")
             return None
 
@@ -772,7 +789,7 @@ class JWTService:
                 logger.info(f"Created password reset token for user {user_id}")
             return token
 
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create password reset token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
 
@@ -816,7 +833,7 @@ class JWTService:
                 logger.info(f"Created email verification token for user {user_id}")
             return token
 
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create email verification token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
 
@@ -858,7 +875,7 @@ class JWTService:
             logger.info(f"Created service account token for {service_name}")
             return token
 
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create service account token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
 
@@ -907,7 +924,7 @@ class JWTService:
                     raise InvalidTokenError("Token has been revoked")
         except InvalidTokenError:
             raise
-        except Exception as _guard_e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _guard_e:
             logger.debug(f"Refresh helper blacklist guard skipped: {_guard_e}")
 
         # Extract user information
@@ -922,13 +939,13 @@ class JWTService:
             roles = []
             try:
                 roles = user_db.get_user_roles(user_id)
-            except Exception:
+            except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS:
                 # Fallback to full user fetch if roles accessor differs
                 user = user_db.get_user(user_id=user_id)
                 roles = (user or {}).get("roles", []) if isinstance(user, dict) else []
             if roles:
                 role = "admin" if "admin" in roles else roles[0]
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"JWTService: failed to fetch user role on refresh; using fallback: {e}")
 
         # Create new access token
@@ -968,7 +985,7 @@ class JWTService:
                                 bl = _get_bl()
                                 try:
                                     bl.hint_blacklisted(old_jti, exp_dt)
-                                except Exception as _hint_e:
+                                except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _hint_e:
                                     logger.debug(f"Refresh rotation: hint cache failed: {_hint_e}")
                                 loop.create_task(
                                     bl.revoke_token(
@@ -981,13 +998,13 @@ class JWTService:
                                         ip_address=None,
                                     )
                                 )
-                            except Exception as _sched_e:
+                            except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _sched_e:
                                 logger.debug(f"Refresh rotation: failed to schedule blacklist task: {_sched_e}")
                         else:
                             bl = _get_bl()
                             try:
                                 bl.hint_blacklisted(old_jti, exp_dt)
-                            except Exception as _hint_e:
+                            except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _hint_e:
                                 logger.debug(f"Refresh rotation: hint cache failed: {_hint_e}")
                             # Run async revoke in a temporary loop
                             _asyncio.run(
@@ -1001,9 +1018,9 @@ class JWTService:
                                     ip_address=None,
                                 )
                             )
-                except Exception as _e:
+                except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _e:
                     logger.debug(f"Refresh rotation: best-effort blacklist failed: {_e}")
-        except Exception as _rot_err:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _rot_err:
             logger.debug(f"Refresh rotation not applied: {_rot_err}")
 
         if self.settings.PII_REDACT_LOGS:
@@ -1035,12 +1052,12 @@ class JWTService:
             roles = []
             try:
                 roles = user_db.get_user_roles(user_id)
-            except Exception:
+            except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS:
                 user = user_db.get_user(user_id=user_id)
                 roles = (user or {}).get("roles", []) if isinstance(user, dict) else []
             if roles:
                 role = "admin" if "admin" in roles else roles[0]
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"JWTService: failed to fetch user role on refresh (async); using fallback: {e}")
 
         # Create new access token
@@ -1071,7 +1088,7 @@ class JWTService:
                         bl = _get_bl()
                         try:
                             bl.hint_blacklisted(old_jti, exp_dt)
-                        except Exception as _hint_e:
+                        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _hint_e:
                             logger.debug(f"Refresh rotation: hint cache failed: {_hint_e}")
                         await bl.revoke_token(
                             jti=old_jti,
@@ -1082,9 +1099,9 @@ class JWTService:
                             revoked_by=None,
                             ip_address=None,
                         )
-                except Exception as _e:
+                except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _e:
                     logger.debug(f"Refresh rotation: best-effort blacklist failed (async): {_e}")
-        except Exception as _rot_err:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _rot_err:
             logger.debug(f"Refresh rotation not applied (async): {_rot_err}")
 
         if self.settings.PII_REDACT_LOGS:

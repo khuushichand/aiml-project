@@ -72,6 +72,28 @@ from tldw_Server_API.app.core.Writing.note_title import TitleGenOptions, generat
 #
 # Functions:
 
+_NOTES_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    HTTPException,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
+
 router = APIRouter()
 
 # --- Title options helper -----------------------------------------------------
@@ -85,19 +107,19 @@ def _field_supplied(model_obj: Any, field_name: str) -> bool:
         s = getattr(model_obj, "model_fields_set", None)
         if isinstance(s, set):
             return field_name in s
-    except Exception:
+    except _NOTES_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         s = getattr(model_obj, "__fields_set__", None)  # pydantic v1
         if isinstance(s, set):
             return field_name in s
-    except Exception:
+    except _NOTES_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat as _dump
         data = _dump(model_obj, exclude_unset=True)
         return field_name in (data or {})
-    except Exception:
+    except _NOTES_NONCRITICAL_EXCEPTIONS:
         return False
 
 
@@ -123,13 +145,13 @@ def _build_title_opts(note_in: Any) -> TitleGenOptions:
     try:
         raw_len = getattr(note_in, "title_max_len", None)
         max_len_val = int(raw_len) if raw_len is not None else 250
-    except Exception:
+    except _NOTES_NONCRITICAL_EXCEPTIONS:
         max_len_val = 250
     try:
         max_bound = int(core_settings.get("NOTES_TITLE_MAX_LEN", 1000))
         if max_bound <= 0:
             max_bound = 1000
-    except Exception:
+    except _NOTES_NONCRITICAL_EXCEPTIONS:
         max_bound = 1000
     min_bound = 10
     # Clamp to API schema max for titles (NoteBase.title max_length=255).
@@ -147,7 +169,7 @@ def _build_title_opts(note_in: Any) -> TitleGenOptions:
     opts.max_len = max_len_val
     try:
         opts.language = getattr(note_in, "language", None)
-    except Exception:
+    except _NOTES_NONCRITICAL_EXCEPTIONS:
         opts.language = None
     return opts
 
@@ -228,7 +250,7 @@ def _attach_keywords_bulk(db: CharactersRAGDB, notes_data: list[dict[str, Any]])
         return notes_data
     try:
         kw_map = db.get_keywords_for_notes(note_ids)
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Bulk keyword lookup failed: {e}")
         return notes_data
     for nd in notes_data:
@@ -244,7 +266,7 @@ def _attach_keywords_inline(db: CharactersRAGDB, note_dict: dict[str, Any]) -> d
     try:
         if note_dict and note_dict.get('id'):
             note_dict['keywords'] = db.get_keywords_for_note(note_id=note_dict['id'])
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Failed to attach keywords to note {note_dict.get('id')}: {e}")
     return note_dict
 
@@ -298,7 +320,7 @@ def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: list[str]) 
 
     try:
         existing_rows = db.get_keywords_for_note(note_id=note_id)
-    except Exception as err:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as err:
         logger.warning(f"Keyword sync lookup failed for note {note_id}: {err}")
         existing_rows = []
 
@@ -319,7 +341,7 @@ def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: list[str]) 
             continue
         try:
             db.unlink_note_from_keyword(note_id=note_id, keyword_id=int(kw_id))
-        except Exception as err:
+        except _NOTES_NONCRITICAL_EXCEPTIONS as err:
             logger.warning(f"Keyword unlink failed for note {note_id}, keyword {kw_id}: {err}")
 
     for key, text in desired.items():
@@ -329,7 +351,7 @@ def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: list[str]) 
             kw_row = _get_or_create_keyword_row(db, text)
             if kw_row and kw_row.get("id") is not None:
                 db.link_note_to_keyword(note_id=note_id, keyword_id=int(kw_row["id"]))
-        except Exception as err:
+        except _NOTES_NONCRITICAL_EXCEPTIONS as err:
             logger.warning(f"Keyword attach failed for '{text}' on note {note_id}: {err}")
 
 
@@ -436,7 +458,7 @@ async def notes_health() -> dict[str, Any]:
                     f.write("ok")
                 os.remove(test_path)
                 writable = True
-            except Exception:
+            except _NOTES_NONCRITICAL_EXCEPTIONS:
                 writable = False
 
         storage_info.update(
@@ -450,7 +472,7 @@ async def notes_health() -> dict[str, Any]:
 
         if not exists or not writable:
             health["status"] = "degraded"
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         health["status"] = "unhealthy"
         health["error"] = str(e)
         if base_dir:
@@ -478,7 +500,7 @@ async def create_note(
         # Centralized rate limit for notes.create
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.create")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -502,7 +524,7 @@ async def create_note(
                         note_in.content,
                         options=opts,
                     )
-                except Exception as gen_err:
+                except _NOTES_NONCRITICAL_EXCEPTIONS as gen_err:
                     logger.warning(f"Auto-title generation failed, falling back: {gen_err}")
                     # Fallback to safe timestamped title
                     effective_title = await asyncio.to_thread(generate_note_title, note_in.content)
@@ -549,7 +571,7 @@ async def create_note(
                     scope_id=str(uid) if uid else None,
                     source_id=src_id,
                 )
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Handle optional keywords: create if needed and link to this note
@@ -562,10 +584,10 @@ async def create_note(
                         kw_row = _get_or_create_keyword_row(db, kw)
                         if kw_row and kw_row.get('id') is not None:
                             db.link_note_to_keyword(note_id=note_id, keyword_id=int(kw_row['id']))
-                    except Exception as kw_err:
+                    except _NOTES_NONCRITICAL_EXCEPTIONS as kw_err:
                         # Log but do not fail the note creation if a single keyword fails
                         logger.warning(f"Keyword attach failed for '{kw}' on note {note_id}: {kw_err}")
-        except Exception as kw_outer_err:
+        except _NOTES_NONCRITICAL_EXCEPTIONS as kw_outer_err:
             logger.warning(f"Keyword processing encountered an issue for note {note_id}: {kw_outer_err}")
 
         created_note_data = db.get_note_by_id(note_id=note_id)
@@ -579,7 +601,7 @@ async def create_note(
 
         logger.info(f"Note '{note_id}' created successfully for user (DB client_id: {db.client_id}).")
         return created_note_data  # Pydantic will convert dict to NoteResponse (including keywords)
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "note")
 
 
@@ -603,7 +625,7 @@ async def list_notes(
         # Rate limit: notes.list
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.list")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -615,13 +637,13 @@ async def list_notes(
         if include_keywords:
             try:
                 _attach_keywords_bulk(db, notes_data)
-            except Exception as outer_err:
+            except _NOTES_NONCRITICAL_EXCEPTIONS as outer_err:
                 logger.warning(f"Attaching keywords for notes list failed: {outer_err}")
         # Lightweight total count
         total = None
         try:
             total = db.count_notes()
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             total = None
         # Back-compat aliases for list consumers
         return {
@@ -633,7 +655,7 @@ async def list_notes(
             "offset": offset,
             "total": total,
         }
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "notes list")
 
 
@@ -663,7 +685,7 @@ async def search_notes_endpoint(  # Renamed to avoid conflict with imported sear
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.search")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -689,10 +711,10 @@ async def search_notes_endpoint(  # Renamed to avoid conflict with imported sear
         if include_keywords:
             try:
                 _attach_keywords_bulk(db, notes_data)
-            except Exception as outer_err:
+            except _NOTES_NONCRITICAL_EXCEPTIONS as outer_err:
                 logger.warning(f"Attaching keywords for notes search failed: {outer_err}")
         return notes_data
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "notes search")
 
 
@@ -717,7 +739,7 @@ async def export_notes(
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.export")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -731,13 +753,13 @@ async def export_notes(
             notes_data = db.search_notes(search_term=q, limit=limit, offset=offset)
             try:
                 total = db.count_notes_matching(q)
-            except Exception:
+            except _NOTES_NONCRITICAL_EXCEPTIONS:
                 total = None
         else:
             notes_data = db.list_notes(limit=limit, offset=offset)
             try:
                 total = db.count_notes()
-            except Exception:
+            except _NOTES_NONCRITICAL_EXCEPTIONS:
                 total = None
         for nd in notes_data:
             if isinstance(nd, dict):
@@ -757,7 +779,7 @@ async def export_notes(
             "offset": offset,
             "exported_at": __import__("datetime").datetime.utcnow().isoformat()
         }
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "notes export")
 
 
@@ -781,7 +803,7 @@ async def export_notes_csv(
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.export")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -798,7 +820,7 @@ async def export_notes_csv(
         if include_keywords:
             _attach_keywords_bulk(db, notes_data)
         return _notes_csv_response(notes_data, include_keywords)
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "notes export (csv)")
 
 
@@ -819,7 +841,7 @@ async def export_notes_post(
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.export")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -841,7 +863,7 @@ async def export_notes_post(
                 if include_keywords:
                     nd["keywords"] = []
                 results.append(nd)
-            except Exception as fetch_err:
+            except _NOTES_NONCRITICAL_EXCEPTIONS as fetch_err:
                 logger.debug(f"Skipping note ID '{nid}' during export: {fetch_err}")
                 continue
 
@@ -858,7 +880,7 @@ async def export_notes_post(
         }
     except HTTPException:
         raise
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "notes export (POST)")
 
 
@@ -879,7 +901,7 @@ async def export_notes_post_csv(
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.export")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -897,7 +919,7 @@ async def export_notes_post_csv(
                 if include_keywords:
                     nd["keywords"] = []
                 results.append(nd)
-            except Exception as fetch_err:
+            except _NOTES_NONCRITICAL_EXCEPTIONS as fetch_err:
                 logger.debug(f"Skipping note ID '{nid}' during CSV export: {fetch_err}")
                 continue
 
@@ -907,7 +929,7 @@ async def export_notes_post_csv(
         return _notes_csv_response(results, include_keywords)
     except HTTPException:
         raise
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "notes export (POST csv)")
 
 
@@ -929,14 +951,14 @@ async def get_note(
     try:  # Added try block here to catch DB errors during fetch
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.get")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="Rate limit exceeded for notes.get",
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
         note_data = db.get_note_by_id(note_id=note_id)
-    except Exception as e:  # Catch DB errors from get_note_by_id
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:  # Catch DB errors from get_note_by_id
         handle_db_errors(e, "note")  # This will reraise appropriately
 
     if not note_data:
@@ -949,7 +971,7 @@ async def get_note(
     try:
         kw_rows = db.get_keywords_for_note(note_id=note_id)
         note_data['keywords'] = kw_rows
-    except Exception as kw_fetch_err:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as kw_fetch_err:
         logger.warning(f"Fetching keywords for note {note_id} failed: {kw_fetch_err}")
     return note_data
 
@@ -1009,7 +1031,7 @@ async def update_note(
         # Rate limit: notes.update
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.update")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1071,7 +1093,7 @@ async def update_note(
                     scope_id=str(uid) if uid else None,
                     source_id=src_id,
                 )
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             pass
         if update_data:
             success = db.update_note(
@@ -1093,7 +1115,7 @@ async def update_note(
         logger.info(
             f"Note '{note_id}' updated successfully for user (DB client_id: {db.client_id}) to version {updated_note_data['version']}.")
         return updated_note_data
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "note")
 
 
@@ -1168,7 +1190,7 @@ async def patch_note(
         # Rate limit: notes.update
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.update")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1215,7 +1237,7 @@ async def patch_note(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found after update.")
         updated_note_data = _attach_keywords_inline(db, updated_note_data)
         return updated_note_data
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "note")
 
 
@@ -1242,7 +1264,7 @@ async def delete_note(
         # Rate limit: notes.delete
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.delete")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1259,7 +1281,7 @@ async def delete_note(
         logger.info(
             f"Note '{note_id}' soft-deleted successfully (or was already deleted) for user (DB client_id: {db.client_id}).")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "note")
 
 
@@ -1291,7 +1313,7 @@ async def restore_note(
         # Rate limit: notes.restore
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.restore")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1343,7 +1365,7 @@ async def restore_note(
             deleted=bool(restored_note.get('deleted', False)),
             keywords=keyword_responses
         )
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "note")
 
 
@@ -1364,7 +1386,7 @@ async def suggest_note_title(
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.title.suggest")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1376,7 +1398,7 @@ async def suggest_note_title(
         return TitleSuggestResponse(title=title)
     except HTTPException:
         raise
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "title suggestion")
 
 @router.post(
@@ -1398,7 +1420,7 @@ async def bulk_create_notes(
     # Enforce centralized per-request rate limit (notes.bulk_create)
     try:
         allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.bulk_create")
-    except Exception:
+    except _NOTES_NONCRITICAL_EXCEPTIONS:
         allowed, meta = True, {}
     if not allowed:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1418,7 +1440,7 @@ async def bulk_create_notes(
                             item.content,
                             options=opts,
                         )
-                    except Exception as gen_err:
+                    except _NOTES_NONCRITICAL_EXCEPTIONS as gen_err:
                         logger.warning(f"[Bulk] Auto-title generation failed, falling back: {gen_err}")
                         effective_title = await asyncio.to_thread(generate_note_title, item.content)
                 else:
@@ -1463,7 +1485,7 @@ async def bulk_create_notes(
                         scope_id=str(uid) if uid else None,
                         source_id=src_id,
                     )
-            except Exception:
+            except _NOTES_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Attach keywords if provided
@@ -1475,9 +1497,9 @@ async def bulk_create_notes(
                             kw_row = _get_or_create_keyword_row(db, kw)
                             if kw_row and kw_row.get('id') is not None:
                                 db.link_note_to_keyword(note_id=note_id, keyword_id=int(kw_row['id']))
-                        except Exception as kw_err:
+                        except _NOTES_NONCRITICAL_EXCEPTIONS as kw_err:
                             logger.warning(f"[Bulk] Keyword attach failed for '{kw}' on note {note_id}: {kw_err}")
-            except Exception as kw_outer_err:
+            except _NOTES_NONCRITICAL_EXCEPTIONS as kw_outer_err:
                 logger.warning(f"[Bulk] Keyword processing issue for note {note_id}: {kw_outer_err}")
 
             nd = db.get_note_by_id(note_id=note_id)
@@ -1486,7 +1508,7 @@ async def bulk_create_notes(
             nd = _attach_keywords_inline(db, nd)
             results.append(NoteBulkCreateItemResult(success=True, note=nd))
             created += 1
-        except Exception as e:
+        except _NOTES_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Bulk note create failed for title='{getattr(item, 'title', '')}': {e}")
             results.append(NoteBulkCreateItemResult(success=False, error=str(e)))
             failed += 1
@@ -1513,7 +1535,7 @@ async def create_keyword(
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.create")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1532,7 +1554,7 @@ async def create_keyword(
                                 detail="Keyword created but could not be retrieved.")
         logger.info(f"Keyword '{keyword_id}' created successfully for user (DB client_id: {db.client_id}).")
         return created_keyword_data
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "keyword")
 
 
@@ -1554,14 +1576,14 @@ async def get_keyword(
     try: # Added try block
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.get")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="Rate limit exceeded for keywords.get",
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
         keyword_data = db.get_keyword_by_id(keyword_id=keyword_id)
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "keyword")
         return
 
@@ -1589,7 +1611,7 @@ async def get_keyword_by_text(
         logger.debug(f"User (DB client_id: {db.client_id}) fetching keyword by text: '{keyword_text}'")
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.get")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1599,7 +1621,7 @@ async def get_keyword_by_text(
         if not keyword_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Keyword not found")
         return keyword_data
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "keyword")
 
 
@@ -1620,7 +1642,7 @@ async def list_keywords_endpoint(  # Renamed to avoid conflict
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.list")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1629,7 +1651,7 @@ async def list_keywords_endpoint(  # Renamed to avoid conflict
         logger.debug(f"User (DB client_id: {db.client_id}) listing keywords: limit={limit}, offset={offset}")
         keywords_data = db.list_keywords(limit=limit, offset=offset)
         return keywords_data
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "keywords list")
 
 
@@ -1655,7 +1677,7 @@ async def delete_keyword(
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.delete")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1672,7 +1694,7 @@ async def delete_keyword(
         logger.info(
             f"Keyword '{keyword_id}' soft-deleted successfully (or was already deleted) for user (DB client_id: {db.client_id}).")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "keyword")
 
 
@@ -1693,7 +1715,7 @@ async def search_keywords_endpoint(  # Renamed
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.search")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1702,7 +1724,7 @@ async def search_keywords_endpoint(  # Renamed
         logger.debug(f"User (DB client_id: {db.client_id}) searching keywords: query='{query}', limit={limit}")
         keywords_data = db.search_keywords(search_term=query, limit=limit)
         return keywords_data
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "keywords search")
 
 
@@ -1725,7 +1747,7 @@ async def link_note_to_keyword_endpoint(
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.link_keyword")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1746,7 +1768,7 @@ async def link_note_to_keyword_endpoint(
         return NoteKeywordLinkResponse(success=True, message=msg)  # True even if already exists
     except HTTPException:
         raise
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "note-keyword link")
 
 
@@ -1767,7 +1789,7 @@ async def unlink_note_from_keyword_endpoint(
     try:
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.unlink_keyword")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1777,7 +1799,7 @@ async def unlink_note_from_keyword_endpoint(
         success = db.unlink_note_from_keyword(note_id=note_id, keyword_id=keyword_id)
         msg = "Note unlinked from keyword successfully." if success else "Link not found or no action taken."
         return NoteKeywordLinkResponse(success=success, message=msg)
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "note-keyword unlink")
 
 
@@ -1799,7 +1821,7 @@ async def get_keywords_for_note_endpoint(
         logger.debug(f"User (DB client_id: {db.client_id}) fetching keywords for note '{note_id}'")
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.keywords.list")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1813,7 +1835,7 @@ async def get_keywords_for_note_endpoint(
         return KeywordsForNoteResponse(note_id=note_id, keywords=keywords_list)
     except HTTPException:
         raise
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "keywords for note")
 
 
@@ -1837,7 +1859,7 @@ async def get_notes_for_keyword_endpoint(
         logger.debug(f"User (DB client_id: {db.client_id}) fetching notes for keyword '{keyword_id}'")
         try:
             allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.notes.list")
-        except Exception:
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
             allowed, meta = True, {}
         if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1852,7 +1874,7 @@ async def get_notes_for_keyword_endpoint(
         return NotesForKeywordResponse(keyword_id=keyword_id, notes=notes_list)
     except HTTPException:
         raise
-    except Exception as e:
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "notes for keyword")
 
 #

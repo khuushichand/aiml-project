@@ -21,6 +21,25 @@ from ..network_policy import (
 )
 from ..streams import get_hub
 
+_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    subprocess.SubprocessError,
+)
+
 
 def docker_available() -> bool:
     # Prefer explicit override for CI/tests; otherwise probe PATH
@@ -49,7 +68,7 @@ class DockerRunner:
             out = subprocess.check_output(["docker", "version", "--format", "{{.Server.Version}}"], text=True, timeout=2).strip()
             if out:
                 return out
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             out = subprocess.check_output(["docker", "--version"], text=True, timeout=2).strip()
@@ -59,7 +78,7 @@ class DockerRunner:
                 if tok.lower() == "version" and i + 1 < len(parts):
                     return parts[i + 1].rstrip(",")
             return out
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             return None
 
     # Track active containers per run for cancellation
@@ -82,13 +101,13 @@ class DockerRunner:
         try:
             try:
                 grace = int(getattr(app_settings, "SANDBOX_CANCEL_GRACE_SECONDS", 3))
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 grace = 3
 
             # Send SIGTERM first
             try:
                 subprocess.run(["docker", "kill", "--signal", "TERM", cid], check=False)
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Wait up to grace seconds for container to stop
@@ -102,13 +121,13 @@ class DockerRunner:
             if cls._is_container_running(cid):
                 try:
                     subprocess.run(["docker", "kill", cid], check=False)
-                except Exception:
+                except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
 
             # Remove container
             try:
                 subprocess.run(["docker", "rm", "-f", cid], check=False)
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
         finally:
             with cls._active_lock:
@@ -121,14 +140,14 @@ class DockerRunner:
             try:
                 # Use centralized helper to remove iptables rules by label
                 delete_rules_by_label(label)
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
             if net:
                 try:
                     subprocess.run(["docker", "network", "rm", net], check=False)
-                except Exception:
+                except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
         # Do not publish WS end here; service layer will publish to avoid duplicates
         return True
@@ -138,7 +157,7 @@ class DockerRunner:
         try:
             out = subprocess.check_output(["docker", "inspect", "-f", "{{.State.Running}}", cid], text=True, stderr=subprocess.DEVNULL).strip().lower()
             return out == "true"
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             return False
 
     def start_run(self, run_id: str, spec: RunSpec, session_workspace: str | None = None) -> RunStatus:
@@ -149,12 +168,12 @@ class DockerRunner:
             try:
                 get_hub().publish_event(run_id, "start", {"ts": now.isoformat()})
                 get_hub().publish_event(run_id, "end", {"exit_code": 0})
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
             # Collect basic usage from hub
             try:
                 log_bytes_total = int(get_hub().get_log_bytes(run_id))
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 log_bytes_total = 0
             usage = {
                 "cpu_time_sec": 0,
@@ -180,7 +199,7 @@ class DockerRunner:
         # Startup timeout budget
         try:
             startup_budget = int(spec.startup_timeout_sec) if spec.startup_timeout_sec else int(getattr(app_settings, "SANDBOX_DEFAULT_STARTUP_TIMEOUT_SEC", 20))
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             startup_budget = 20
         deadline = datetime.utcnow() + timedelta(seconds=max(1, startup_budget))
 
@@ -204,7 +223,7 @@ class DockerRunner:
                             ti.mtime = int(st.st_mtime)
                             with open(fpath, "rb") as rf:
                                 tf.addfile(ti, rf)
-                        except Exception as e:
+                        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(f"Skipping workspace file {rel}: {e}")
             for (path, data) in (spec.files_inline or []):
                 safe_path = path.lstrip("/\\").replace("..", "_")
@@ -219,7 +238,7 @@ class DockerRunner:
         # Keep STDIN open for interactive runs
         try:
             interactive = bool(getattr(spec, "interactive", None))
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             interactive = False
         if interactive:
             cmd += ["-i"]
@@ -238,7 +257,7 @@ class DockerRunner:
                     egress_net_name = f"tldw_sbx_{run_id[:12]}"
                     subprocess.run(["docker", "network", "create", egress_net_name], check=False)
                     cmd += ["--network", egress_net_name]
-                except Exception as e:
+                except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"egress allowlist: network create failed, falling back to default bridge: {e}")
             elif enforced and not granular:
                 logger.info("Sandbox Docker egress allowlist (coarse): applying network=none")
@@ -251,7 +270,7 @@ class DockerRunner:
         # Resources
         try:
             pids_limit = int(getattr(app_settings, "SANDBOX_PIDS_LIMIT", 256))
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pids_limit = 256
         cmd += ["--pids-limit", str(pids_limit)]
         if spec.cpu:
@@ -264,7 +283,7 @@ class DockerRunner:
         try:
             if getattr(spec, "read_only_root", None) is not None:
                 read_only_root = bool(spec.read_only_root)
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             read_only_root = True
         if read_only_root:
             cmd += ["--read-only"]
@@ -282,7 +301,7 @@ class DockerRunner:
                     default_seccomp = os.path.join(project_root, "tldw_Server_API", "Config_Files", "sandbox", "seccomp_default.json")
                     if os.path.exists(default_seccomp):
                         seccomp = default_seccomp
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 seccomp = None
         security_opts: list[str] = []
         if seccomp:
@@ -295,11 +314,11 @@ class DockerRunner:
         # Ulimits (soft=hard)
         try:
             ul_nofile = int(getattr(app_settings, "SANDBOX_ULIMIT_NOFILE", 1024))
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             ul_nofile = 1024
         try:
             ul_nproc = int(getattr(app_settings, "SANDBOX_ULIMIT_NPROC", 512))
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             ul_nproc = 512
         # Always disable core dumps by default
         cmd += [
@@ -343,14 +362,14 @@ class DockerRunner:
         # Optional port mappings
         try:
             port_mappings = list(getattr(spec, "port_mappings", []) or [])
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             port_mappings = []
         for mapping in port_mappings:
             try:
                 host_ip = str(mapping.get("host_ip") or "127.0.0.1")
                 host_port = int(mapping.get("host_port"))
                 container_port = int(mapping.get("container_port"))
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 continue
             cmd += ["-p", f"{host_ip}:{host_port}:{container_port}"]
 
@@ -372,7 +391,7 @@ class DockerRunner:
         max_log = None
         try:
             max_log = int(getattr(app_settings, "SANDBOX_MAX_LOG_BYTES", 10 * 1024 * 1024))
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             max_log = 10 * 1024 * 1024
 
         try:
@@ -420,7 +439,7 @@ class DockerRunner:
             with DockerRunner._egress_lock:
                 DockerRunner._egress_net[run_id] = egress_net_name
                 DockerRunner._egress_label[run_id] = egress_label
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Step 2: copy session workspace and inline files using docker cp
@@ -444,20 +463,20 @@ class DockerRunner:
                 finally:
                     try:
                         shutil.rmtree(staging, ignore_errors=True)
-                    except Exception:
+                    except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                         pass
         except subprocess.TimeoutExpired:
             # Cleanup container
             try:
                 subprocess.check_call(["docker", "rm", "-f", cid])
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
             finished = datetime.utcnow()
             hub.publish_event(run_id, "end", {"exit_code": None, "reason": "startup_timeout"})
             # Attempt a best-effort CPU usage readback from cgroup before removal
             try:
                 cpu_sec_cp = self._read_cgroup_cpu_time_sec_by_cid(cid)
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 cpu_sec_cp = None
             usage = {
                 "cpu_time_sec": int(max(0, (cpu_sec_cp or 0))),
@@ -479,7 +498,7 @@ class DockerRunner:
             # Cleanup container
             try:
                 subprocess.check_call(["docker", "rm", "-f", cid])
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
             raise RuntimeError(f"docker cp failed: {e}")
 
@@ -493,7 +512,7 @@ class DockerRunner:
             # Even if start timed out, try to read any cgroup CPU used (should be minimal)
             try:
                 cpu_sec = self._read_cgroup_cpu_time_sec_by_cid(cid)
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 cpu_sec = None
             usage = {
                 "cpu_time_sec": int(max(0, cpu_sec or 0)),
@@ -505,7 +524,7 @@ class DockerRunner:
             # Remove after collecting stats
             try:
                 subprocess.check_call(["docker", "rm", "-f", cid])
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
             return RunStatus(
                 id="",
@@ -519,7 +538,7 @@ class DockerRunner:
         except subprocess.CalledProcessError as e:
             try:
                 subprocess.check_call(["docker", "rm", "-f", cid])
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
             raise RuntimeError(f"docker start failed: {e}")
 
@@ -537,12 +556,12 @@ class DockerRunner:
                         if v and v.get("IPAddress"):
                             container_ip = v.get("IPAddress")
                             break
-            except Exception as e:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"egress allowlist: docker inspect for IP failed: {e}")
             # Resolve allowlist with wildcard/suffix support and apply atomically
             try:
                 raw = os.getenv("SANDBOX_EGRESS_ALLOWLIST") or getattr(app_settings, "SANDBOX_EGRESS_ALLOWLIST", "")
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 raw = ""
             allow_targets: list[str] = expand_allowlist_to_targets(raw)
             try:
@@ -550,13 +569,13 @@ class DockerRunner:
                     apply_egress_rules_atomic(container_ip, allow_targets, egress_label)
                 else:
                     logger.debug("egress allowlist: no container IP found; skipping iptables application")
-            except Exception as e:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"egress allowlist: iptables apply failed: {e}")
 
         # Publish start event
         try:
             hub.publish_event(run_id, "start", {"ts": started.isoformat()})
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Baseline CPU usage and resolved cgroup file after container start (best-effort)
@@ -569,7 +588,7 @@ class DockerRunner:
                 baseline_cpu_sec = self._read_cpu_file_to_seconds(baseline_cgroup_file)
             else:
                 baseline_cpu_sec = self._read_cgroup_cpu_time_sec_by_cid(cid)
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             baseline_cpu_sec = None
 
         # Stream logs via docker logs -f
@@ -591,7 +610,7 @@ class DockerRunner:
                             log_bytes_local += len(data2)
                     if p.poll() is not None and not (p.stdout and p.stdout.peek() or p.stderr and p.stderr.peek()):
                         break
-            except Exception as _:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS as _:
                 return
 
         tlog = threading.Thread(target=_pump_logs, daemon=True)
@@ -641,11 +660,11 @@ class DockerRunner:
                                         proc = subprocess.Popen([
                                             "docker", "exec", "-i", cid, "sh", "-lc", "cat - > /proc/1/fd/0"
                                         ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                                    except Exception:
+                                    except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                                         break
                                 else:
                                     break
-                        except Exception:
+                        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                             # On any unexpected error, exit the pump loop
                             break
                 finally:
@@ -654,14 +673,14 @@ class DockerRunner:
                             try:
                                 if proc.stdin:
                                     proc.stdin.close()
-                            except Exception:
+                            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                                 pass
                             # Best-effort terminate; proc should exit when stdin closes
                             try:
                                 proc.terminate()
-                            except Exception:
+                            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                                 pass
-                    except Exception:
+                    except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                         pass
 
             stdin_thread = threading.Thread(target=_pump_stdin, daemon=True)
@@ -673,7 +692,7 @@ class DockerRunner:
             waited = subprocess.run(["docker", "wait", cid], capture_output=True, text=True, timeout=timeout_sec)
             try:
                 exit_code = int(waited.stdout.strip()) if waited.stdout.strip() else 1
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 exit_code = waited.returncode if waited.returncode is not None else 1
         except subprocess.TimeoutExpired:
             # Take a last CPU snapshot while the container is still running, before SIGKILL
@@ -683,13 +702,13 @@ class DockerRunner:
                     prekill_cpu = self._read_cpu_file_to_seconds(baseline_cgroup_file)
                 else:
                     prekill_cpu = self._read_cgroup_cpu_time_sec_by_cid(cid)
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 prekill_cpu = None
 
             # Kill, compute stats, then remove
             try:
                 subprocess.check_call(["docker", "kill", cid])
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
             exit_code = None
             finished = datetime.utcnow()
@@ -702,7 +721,7 @@ class DockerRunner:
                         final_cpu = self._read_cpu_file_to_seconds(baseline_cgroup_file)
                     else:
                         final_cpu = self._read_cgroup_cpu_time_sec_by_cid(cid)
-                except Exception:
+                except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                     final_cpu = None
             if baseline_cpu_sec is not None and final_cpu is not None:
                 cpu_time_val = max(0, int(final_cpu - baseline_cpu_sec))
@@ -717,7 +736,7 @@ class DockerRunner:
             }
             try:
                 subprocess.check_call(["docker", "rm", "-f", cid])
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
             return RunStatus(
                 id="",
@@ -732,13 +751,13 @@ class DockerRunner:
         # Join logs thread
         try:
             tlog.join(timeout=1)
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
         # Ensure stdin thread is finished as well
         if stdin_thread is not None:
             try:
                 stdin_thread.join(timeout=0.5)
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
 
         finished = datetime.utcnow()
@@ -748,7 +767,7 @@ class DockerRunner:
             out = subprocess.check_output(["docker", "image", "inspect", image, "--format", "{{.Id}}"], text=True).strip()
             if out:
                 image_digest = out
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             image_digest = None
         # Step 4: Collect artifacts via docker cp of workspace and filter by glob allowlist
         artifacts_map: dict[str, bytes] = {}
@@ -769,14 +788,14 @@ class DockerRunner:
                                     with open(os.path.join(host_ws, rel), "rb") as rf:
                                         data = rf.read()
                                     artifacts_map[rel_posix] = data
-                                except Exception as e:
+                                except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                                     logger.debug(f"Skip artifact {rel}: {e}")
                 finally:
                     try:
                         shutil.rmtree(host_ws, ignore_errors=True)
-                    except Exception:
+                    except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                         pass
-        except Exception as e:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Artifact collection failed: {e}")
 
         phase = RunPhase.completed if exit_code == 0 else RunPhase.failed
@@ -785,13 +804,13 @@ class DockerRunner:
         # Compute resource usage (best-effort) before removing container
         try:
             total_log = int(get_hub().get_log_bytes(run_id))
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             total_log = int(log_bytes_local)
         art_bytes = 0
         try:
             if artifacts_map:
                 art_bytes = sum(len(v) for v in artifacts_map.values())
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             art_bytes = 0
         # CPU time: prefer cgroup delta when baseline available; reuse persisted cgroup file if present
         try:
@@ -799,7 +818,7 @@ class DockerRunner:
                 final_cpu2 = self._read_cpu_file_to_seconds(baseline_cgroup_file)
             else:
                 final_cpu2 = self._read_cgroup_cpu_time_sec_by_cid(cid)
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             final_cpu2 = None
         if baseline_cpu_sec is not None and final_cpu2 is not None:
             cpu_time = max(0, int(final_cpu2 - baseline_cpu_sec))
@@ -819,7 +838,7 @@ class DockerRunner:
         # Remove container after collecting stats
         try:
             subprocess.check_call(["docker", "rm", "-f", cid])
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
         # Cleanup per-run network and iptables rules
         try:
@@ -827,15 +846,15 @@ class DockerRunner:
                 # Delete iptables rules matching our label
                 try:
                     delete_rules_by_label(egress_label)
-                except Exception:
+                except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
                 # Remove dedicated network if we created one
                 if egress_net_name:
                     try:
                         subprocess.run(["docker", "network", "rm", egress_net_name], check=False)
-                    except Exception:
+                    except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                         pass
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             # Best-effort cleanup; ignore failures
             pass
         return RunStatus(
@@ -861,7 +880,7 @@ class DockerRunner:
             pid_out = subprocess.check_output(["docker", "inspect", cid, "--format", "{{.State.Pid}}"], text=True, timeout=3).strip()
             pid = int(pid_out)
             return DockerRunner._read_cgroup_cpu_time_sec_by_pid(pid)
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             return None
 
     @staticmethod
@@ -879,7 +898,7 @@ class DockerRunner:
                         subsystems = parts[1]
                         path = parts[2]
                         cgroups[subsystems] = path
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             return None
         # cgroup v1
         path_v1 = None
@@ -893,7 +912,7 @@ class DockerRunner:
                 with open(cg_file) as f:
                     ns = int(f.read().strip())
                     return int(ns / 1_000_000_000)
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
         # cgroup v2
         path_v2 = cgroups.get("") or cgroups.get("0") or None
@@ -911,7 +930,7 @@ class DockerRunner:
                         if ln.startswith("usage_usec "):
                             usec = int(ln.split()[1])
                             return int(usec / 1_000_000)
-            except Exception:
+            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
         return None
 
@@ -921,7 +940,7 @@ class DockerRunner:
             pid_out = subprocess.check_output(["docker", "inspect", cid, "--format", "{{.State.Pid}}"], text=True, timeout=3).strip()
             pid = int(pid_out)
             return DockerRunner._read_cgroup_mem_peak_mb_by_pid(pid)
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             return None
 
     @staticmethod
@@ -935,7 +954,7 @@ class DockerRunner:
         try:
             with open(f"/proc/{pid}/cgroup") as f:
                 lines = f.read().splitlines()
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             return None
         subs: dict[str, str] = {}
         for ln in lines:
@@ -952,7 +971,7 @@ class DockerRunner:
                     with open(fp) as f:
                         val = int(f.read().strip())
                         return int(val / (1024 * 1024))
-                except Exception:
+                except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                     continue
         # Try v1 memory cgroup
         mem_key = None
@@ -968,7 +987,7 @@ class DockerRunner:
                     with open(fp) as f:
                         val = int(f.read().strip())
                         return int(val / (1024 * 1024))
-                except Exception:
+                except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                     continue
         return None
 
@@ -983,7 +1002,7 @@ class DockerRunner:
             pid_out = subprocess.check_output(["docker", "inspect", cid, "--format", "{{.State.Pid}}"], text=True, timeout=3).strip()
             pid = int(pid_out)
             return DockerRunner._resolve_cgroup_cpu_file_by_pid(pid)
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             return None
 
     @staticmethod
@@ -1001,7 +1020,7 @@ class DockerRunner:
                         subsystems = parts[1]
                         path = parts[2]
                         cgroups[subsystems] = path
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             return None
 
         # cgroup v1: cpuacct
@@ -1048,7 +1067,7 @@ class DockerRunner:
                         if ln.startswith("usage_usec "):
                             usec = int(ln.split()[1])
                             return int(usec / 1_000_000)
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             return None
         return None
 
@@ -1075,7 +1094,7 @@ class DockerRunner:
             if unit_l.endswith("b"):
                 return int(num / (1024 * 1024))
             return int(num)
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             return 0
 
     @staticmethod
@@ -1129,7 +1148,7 @@ class DockerRunner:
                     with open(cg_file) as f:
                         ns = int(f.read().strip())
                         return int(ns / 1_000_000_000)
-                except Exception:
+                except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
             # cgroup v2 unified
             path_v2 = cgroups.get("") or cgroups.get("0") or None
@@ -1148,9 +1167,9 @@ class DockerRunner:
                             if ln.startswith("usage_usec "):
                                 usec = int(ln.split()[1])
                                 return int(usec / 1_000_000)
-                except Exception:
+                except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
         # Fallback: approximate from an instantaneous CPU percentage
         try:
@@ -1159,5 +1178,5 @@ class DockerRunner:
             pct = float(out.strip().rstrip("% ") or "0")
             wall = max(0.0, (finished - started).total_seconds())
             return int((pct / 100.0) * wall)
-        except Exception:
+        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             return 0

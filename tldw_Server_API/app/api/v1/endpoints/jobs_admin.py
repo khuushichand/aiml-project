@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 #
 try:
     from pydantic import field_validator  # Pydantic v2
-except Exception:  # Fallback to v1 naming
+except ImportError:  # Fallback to v1 naming
     from pydantic import validator as field_validator  # type: ignore
 
 import asyncio
@@ -27,6 +27,28 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+
+_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    _json.JSONDecodeError,
+    HTTPException,
+)
 
 router = APIRouter(
     dependencies=[Depends(require_roles("admin"))],
@@ -74,7 +96,7 @@ def _enforce_domain_scope(user: dict, domain: str | None) -> None:
         # Be robust to user being a Pydantic model or dict
         try:
             uid_val = getattr(user, "id", None)
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             uid_val = None
         if uid_val is None and isinstance(user, dict):
             uid_val = user.get("id")
@@ -92,7 +114,7 @@ def _enforce_domain_scope(user: dict, domain: str | None) -> None:
                 raise HTTPException(status_code=403, detail="Domain filter required for allowlisted admin")
     except HTTPException:
         raise
-    except Exception as _rbac_exc:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as _rbac_exc:
         # Fail-closed in forced mode (tests), otherwise fail-open to avoid lockout
         if _is_truthy(os.getenv("JOBS_RBAC_FORCE")):
             raise HTTPException(status_code=403, detail="RBAC enforcement error")
@@ -146,7 +168,7 @@ def _set_pg_rls_for_user(user: dict, domain: str | None) -> None:
         from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
         uid = str(user.get("id") or "")
         _JM.set_rls_context(is_admin=True, domain_allowlist=str(domain) if domain else None, owner_user_id=uid)
-    except Exception:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
         pass
 
 
@@ -167,7 +189,7 @@ class PruneRequest(BaseModel):
         allowed = {"queued", "processing", "completed", "failed", "cancelled"}
         try:
             items = list(v) if isinstance(v, (list, tuple)) else [v]
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             raise ValueError("statuses must be a list of strings")
         out = []
         for item in items:
@@ -252,7 +274,7 @@ async def prune_jobs_endpoint(
         # Pre-parse raw JSON to enforce RBAC before model validation to avoid 422s
         try:
             raw_body = await request.json()
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             raw_body = {}
         # Enforce domain-scoped RBAC (403) even if request body is incomplete.
         # When JOBS_DOMAIN_RBAC_PRINCIPAL is enabled, drive enforcement from
@@ -265,7 +287,7 @@ async def prune_jobs_endpoint(
             require_confirm_env = str(os.getenv("JOBS_REQUIRE_CONFIRM", "")).lower() in {"1", "true", "yes", "y", "on"}
             try:
                 older = int((raw_body or {}).get("older_than_days") or 0)
-            except Exception:
+            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                 older = 0
             # Require confirmation when explicitly enabled (except in TEST_MODE),
             # or when pruning with immediate threshold (older_than_days <= 0)
@@ -296,7 +318,7 @@ async def prune_jobs_endpoint(
                 os.getenv("JOBS_UPDATE_GAUGES_ON_PRUNE", "")
             ).lower() in {"1","true","yes","y","on"}:
                 jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             pass
         # Best-effort audit logging for admin prune action
         try:
@@ -321,14 +343,14 @@ async def prune_jobs_endpoint(
                     "dry_run": req.dry_run,
                 },
             )
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             # Never fail prune due to audit logging issues
             pass
         return PruneResponse(deleted=deleted)
     except HTTPException:
         # Preserve intended HTTP errors (e.g., RBAC 403)
         raise
-    except Exception as e:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=500, detail=f"Prune failed: {e}")
 
 
@@ -734,7 +756,7 @@ async def list_job_events(
                     attrs = r.get("attrs_json")
                     try:
                         attrs_obj = _json.loads(attrs) if isinstance(attrs, str) else (attrs or {})
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         attrs_obj = {}
                     events.append(JobEvent(
                         id=int(r.get("id")), job_id=(r.get("job_id")), domain=r.get("domain"), queue=r.get("queue"), job_type=r.get("job_type"),
@@ -744,18 +766,18 @@ async def list_job_events(
                     attrs_val = r[6]
                     try:
                         attrs_obj = _json.loads(attrs_val) if isinstance(attrs_val, str) else (attrs_val or {})
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         attrs_obj = {}
                     events.append(JobEvent(
                         id=int(r[0]), job_id=(r[1]), domain=r[2], queue=r[3], job_type=r[4], event_type=str(r[5]), attrs=attrs_obj, owner_user_id=r[7], request_id=r[8], trace_id=r[9], created_at=str(r[10])
                     ))
-            except Exception:
+            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                 continue
         return events
     finally:
         try:
             conn.close()
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             pass
 
 
@@ -802,17 +824,17 @@ async def stream_job_events(
                 labels=["component", "endpoint"],
             )
         )
-    except Exception:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
         _reg = get_metrics_registry()
 
     # In test mode, bound the stream duration to avoid teardown hangs in CI/sandbox
     try:
         _test_mode = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}
-    except Exception:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
         _test_mode = False
     try:
         _max_s = float(os.getenv("JOBS_SSE_TEST_MAX_SECONDS", "1.0")) if _test_mode else None
-    except Exception:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
         _max_s = 1.0 if _test_mode else None
 
     stream = SSEStream(
@@ -827,14 +849,14 @@ async def stream_job_events(
         # Initial small event to prompt client streaming
         try:
             await stream.send_event("ping", {})
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             pass
         while True:
             # Terminate promptly if the stream has been closed (e.g., max_duration or client done)
             try:
                 if getattr(stream, "_closed", False):
                     break
-            except Exception:
+            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                 pass
             conn = jm._connect()
             try:
@@ -880,7 +902,7 @@ async def stream_job_events(
                             attrs = r[2]
                         try:
                             attrs_obj = _json.loads(attrs) if isinstance(attrs, str) else (attrs or {})
-                        except Exception:
+                        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                             attrs_obj = {}
                         # Preserve SSE id line for clients using Last-Event-ID
                         await stream.send_event("job", {"event": et, "attrs": attrs_obj}, event_id=str(eid))
@@ -890,20 +912,20 @@ async def stream_job_events(
                                 float(_time.time()),
                                 {"component": "jobs", "endpoint": "jobs_events_sse"},
                             )
-                        except Exception:
+                        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                             pass
                         nonlocal_after_id = eid
                 # If no rows, rely on heartbeat to keep connection alive
                 await asyncio.sleep(poll_interval)
             except (asyncio.CancelledError, GeneratorExit):
                 break
-            except Exception:
+            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                 # Swallow transient errors and continue after a short delay; heartbeat covers liveness
                 await asyncio.sleep(poll_interval)
             finally:
                 try:
                     conn.close()
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
 
     async def _gen():
@@ -916,11 +938,11 @@ async def stream_job_events(
             if not prod_task.done():
                 try:
                     prod_task.cancel()
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     await prod_task
-                except (asyncio.CancelledError, Exception):
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
             raise
         else:
@@ -928,20 +950,20 @@ async def stream_job_events(
             if not prod_task.done():
                 try:
                     await prod_task
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
         finally:
             # Ensure producer task never leaks on unexpected exceptions
             if not prod_task.done():
                 try:
                     prod_task.cancel()
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     await prod_task
                 except asyncio.CancelledError:
                     pass
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     # Swallow any cleanup-time errors to avoid propagating
                     pass
 
@@ -1004,7 +1026,7 @@ async def ttl_sweep_endpoint(
         # Pre-parse raw to enforce RBAC and confirm header before validation
         try:
             raw = await request.json()
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             raw = {}
         raw_domain = (raw or {}).get("domain")
         domain_val = str(raw_domain or "").strip() or None
@@ -1035,7 +1057,7 @@ async def ttl_sweep_endpoint(
             from datetime import datetime
             from datetime import timezone as _tz
             ref_now = datetime.now(tz=_tz.utc)
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             ref_now = None
         # Diagnostics before executing
         try:
@@ -1043,7 +1065,7 @@ async def ttl_sweep_endpoint(
                 "TTL sweep request: action=%s domain=%s queue=%s job_type=%s age=%s runtime=%s backend=%s ref_now=%s",
                 req.action, req.domain, req.queue, req.job_type, req.age_seconds, req.runtime_seconds, (backend or "sqlite"), str(ref_now) if ref_now else ""
             )
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             pass
         affected = jm.apply_ttl_policies(
             age_seconds=req.age_seconds,
@@ -1058,7 +1080,7 @@ async def ttl_sweep_endpoint(
         try:
             if req.domain and req.queue and req.job_type:
                 jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             pass
         # Diagnostics after executing
         try:
@@ -1066,12 +1088,12 @@ async def ttl_sweep_endpoint(
                 "TTL sweep result: affected=%s action=%s domain=%s queue=%s job_type=%s",
                 int(affected), req.action, req.domain, req.queue, req.job_type
             )
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             pass
         return TTLSweepResponse(affected=int(affected))
     except HTTPException:
         raise
-    except Exception as e:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=500, detail=f"TTL sweep failed: {e}")
 
 
@@ -1151,7 +1173,7 @@ async def integrity_sweep_endpoint(
         return IntegritySweepResponse(**stats)
     except HTTPException:
         raise
-    except Exception as e:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=500, detail=f"Integrity sweep failed: {e}")
 
 
@@ -1197,7 +1219,7 @@ async def get_jobs_stats(
         return [QueueStatsResponse(**s) for s in stats]
     except HTTPException:
         raise
-    except Exception as e:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=500, detail=f"Stats failed: {e}")
 
 
@@ -1262,7 +1284,7 @@ async def get_archive_meta(
     finally:
         try:
             conn.close()
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             pass
 
 
@@ -1352,7 +1374,7 @@ async def list_jobs_endpoint(
         return items
     except HTTPException:
         raise
-    except Exception as e:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=500, detail=f"List failed: {e}")
 
 
@@ -1410,12 +1432,12 @@ async def stale_processing_endpoint(
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                 logger.opt(exception=True).debug("Failed to close connection in list_stale_groups")
         return out
     except HTTPException:
         raise
-    except Exception as e:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=500, detail=f"Stale groups failed: {e}")
 
 
@@ -1563,17 +1585,17 @@ async def batch_cancel_endpoint(
                                     "UPDATE job_counters SET processing_count = GREATEST(processing_count - %s, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
                                     (c, d, q, jt),
                                 )
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         conn.commit()
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         # If fully scoped, refresh gauges
                         if req.domain and req.queue and req.job_type:
                             jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
                     return BatchCancelResponse(affected=int(affected))
             else:
@@ -1638,27 +1660,27 @@ async def batch_cancel_endpoint(
                                 "UPDATE job_counters SET processing_count = CASE WHEN (processing_count - ?) < 0 THEN 0 ELSE processing_count - ? END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
                                 (int(c), int(c), d, q, jt),
                             )
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
                 # Ensure changes are persisted for subsequent reads
                 try:
                     conn.commit()
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     if req.domain and req.queue and req.job_type:
                         jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
                 return BatchCancelResponse(affected=int(affected))
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                 pass
     except HTTPException:
         raise
-    except Exception as e:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=500, detail=f"Batch cancel failed: {e}")
 
 
@@ -1737,16 +1759,16 @@ async def batch_reschedule_endpoint(
                                     "UPDATE job_counters SET ready_count = GREATEST(ready_count - %s, 0), scheduled_count = job_counters.scheduled_count + %s, updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
                                     (c, c, d, q, jt),
                                 )
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         conn.commit()
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         if req.domain and req.queue and req.job_type:
                             jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
                     return BatchRescheduleResponse(affected=int(cur.rowcount or 0))
             else:
@@ -1784,26 +1806,26 @@ async def batch_reschedule_endpoint(
                                 ),
                                 (int(c), int(c), int(c), d, q, jt),
                             )
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     conn.commit()
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     if req.domain and req.queue and req.job_type:
                         jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
                 return BatchRescheduleResponse(affected=int(affected))
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                 pass
     except HTTPException:
         raise
-    except Exception as e:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=500, detail=f"Batch reschedule failed: {e}")
 
 
@@ -1948,13 +1970,13 @@ async def batch_requeue_quarantined_endpoint(
                                         ),
                                         (d, q, jt, c, c),
                                     )
-                        except Exception:
+                        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             # Refresh gauges for the scope (best-effort)
                             if req.domain and req.queue and req.job_type:
                                 jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-                        except Exception:
+                        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                             pass
                         return BatchRequeueQuarantinedResponse(affected=affected)
             else:
@@ -1995,20 +2017,20 @@ async def batch_requeue_quarantined_endpoint(
                                     ),
                                     (d, q, jt, int(c), int(c), int(c), int(c)),
                                 )
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         if req.domain and req.queue and req.job_type:
                             jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
                     return BatchRequeueQuarantinedResponse(affected=affected2)
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                 pass
     except HTTPException:
         raise
-    except Exception as e:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=500, detail=f"Batch requeue quarantined failed: {e}")

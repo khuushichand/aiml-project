@@ -50,6 +50,19 @@ from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_
 from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
 from tldw_Server_API.app.core.MCP_unified.server import _is_authnz_access_token
 
+_MCP_UNIFIED_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    ipaddress.AddressValueError,
+    ipaddress.NetmaskValueError,
+)
+
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
 
@@ -121,7 +134,7 @@ def _extract_api_key_permissions(info: Optional[dict[str, Any]]) -> list[str]:
         return []
     try:
         from tldw_Server_API.app.core.AuthNZ.api_key_manager import normalize_scope
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         return []
 
     raw_scopes = info.get("scopes")
@@ -130,7 +143,7 @@ def _extract_api_key_permissions(info: Optional[dict[str, Any]]) -> list[str]:
 
     try:
         scopes = normalize_scope(raw_scopes)
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         scopes = set()
 
     return sorted(scopes) if scopes else []
@@ -152,7 +165,7 @@ def _should_use_single_user_api_key_compat() -> bool:
         return False
     try:
         return is_single_user_profile_mode()
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
             "MCP unified: single-user profile detection failed; defaulting compat shim to False",
             extra={"auth_method": "single_user_compat_shim"},
@@ -167,7 +180,7 @@ def _get_client_ip(request: Optional[Request]) -> Optional[str]:
         return None
     try:
         return resolve_client_ip(request, get_settings())
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug("Failed to extract client IP", exc_info=True)
     return None
 
@@ -221,7 +234,7 @@ async def get_current_user(
                     permissions=list(getattr(user, "permissions", []) or []),
                     token_type="access",
                 )
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
             "AuthNZ JWT verification raised an exception",
             extra={"auth_method": "authnz_jwt"},
@@ -248,7 +261,7 @@ async def get_current_user(
         if not authnz_token_failed and credentials and credentials.credentials:
             jwt_manager = get_jwt_manager()
             return jwt_manager.verify_token(credentials.credentials)
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
             "MCP token verification failed; falling back to API key",
             extra={"auth_method": "mcp_jwt"},
@@ -275,7 +288,7 @@ async def get_current_user(
                         # in clear dev/test contexts (debug or explicit env/pytest).
                         try:
                             cfg = get_config()
-                        except Exception:
+                        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
                             cfg = None
                         env = (
                             os.getenv("ENVIRONMENT")
@@ -292,7 +305,7 @@ async def get_current_user(
 
                             if "pytest" in _sys.modules:
                                 is_dev_ctx = True
-                        except Exception:
+                        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
                             pass
                         if env in {"dev", "development", "test", "ci"}:
                             is_dev_ctx = True
@@ -324,7 +337,7 @@ async def get_current_user(
                             permissions=perms,
                             token_type="access",
                         )
-            except Exception:
+            except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 # Fall through to multi-user API key validation
                 logger.debug(
                     "Single-user API key check failed, falling through to multi-user validation",
@@ -342,7 +355,7 @@ async def get_current_user(
                 try:
                     if request is not None:
                         request.state.mcp_api_key_info = info
-                except Exception:
+                except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
                     logger.debug(
                         "MCP unified: failed to attach API key info to request state",
                         extra={"auth_method": "api_key"},
@@ -355,7 +368,7 @@ async def get_current_user(
                     permissions=_extract_api_key_permissions(info),
                     token_type="access",
                 )
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
             "API key check failed in MCP unified get_current_user",
             extra={"auth_method": "api_key"},
@@ -382,7 +395,7 @@ async def get_mcp_auth_context(
     try:
         if request is not None:
             api_key_info = getattr(request.state, "mcp_api_key_info", None)
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
             "MCP unified: failed to read API key info from request state",
             exc_info=True,
@@ -419,7 +432,7 @@ async def _attach_api_key_metadata(
             api_mgr = await get_api_key_manager()
             client_ip = _get_client_ip(http_request)
             api_key_info = await api_mgr.validate_api_key(auth.raw_api_key, ip_address=client_ip)
-        except Exception:
+        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
             if log_on_error:
                 logger.debug(
                     "MCP unified {} API key metadata attach failed",
@@ -442,7 +455,7 @@ async def _attach_api_key_metadata(
             if scopes:
                 metadata["api_key_scopes"] = sorted(scopes)
                 metadata["auth_via"] = "api_key"
-        except Exception:
+        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
             logger.debug(
                 "MCP unified {} API key scope normalization failed",
                 log_prefix,
@@ -462,7 +475,7 @@ def _attach_rg_ingress_metadata(metadata: dict[str, Any], http_request: Optional
         if policy_id:
             metadata["rg_ingress_enforced"] = True
             metadata["rg_policy_id"] = str(policy_id)
-    except Exception as exc:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "Failed to read rg_policy_id from request state",
             error=str(exc),
@@ -580,7 +593,7 @@ async def mcp_request(
             cfg = _json.loads(decoded)
             if isinstance(cfg, dict):
                 safe_config = cfg
-        except Exception as e:
+        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Failed to parse safe config: {e}")
 
     # Session lifecycle: if initialize and no session id provided, generate one and return header
@@ -590,7 +603,7 @@ async def mcp_request(
             mcp_session_id = _uuid.uuid4().hex
             if response is not None:
                 response.headers["mcp-session-id"] = mcp_session_id
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug("Failed to generate session ID for initialize request", exc_info=True)
 
     if auth.user:
@@ -620,7 +633,7 @@ async def mcp_request(
                 tname = (request.params or {}).get("name") if isinstance(request.params, dict) else None
                 if tname:
                     hint = f"Permission denied. Ask an admin to grant tools.execute:{tname} or tools.execute:* to your role (Admin → Access Control)."
-        except Exception:
+        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
             hint = None
         raise HTTPException(status_code=403, detail={
             "message": resp_obj.error.message or "Insufficient permissions",
@@ -673,7 +686,7 @@ async def mcp_request_batch(
             cfg = _json.loads(decoded)
             if isinstance(cfg, dict):
                 safe_config = cfg
-        except Exception as e:
+        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Batch failed to parse safe config: {e}")
 
     # If any initialize request is present and no session id was provided, generate one.
@@ -683,7 +696,7 @@ async def mcp_request_batch(
             mcp_session_id = _uuid.uuid4().hex
             if response is not None:
                 response.headers["mcp-session-id"] = mcp_session_id
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug("Failed to generate session ID for batch initialize", exc_info=True)
 
     # Build metadata for batch processing
@@ -894,18 +907,18 @@ async def list_tool_catalogs(
     if metadata.get("org_id") is not None:
         try:
             org_ids.add(int(metadata["org_id"]))
-        except Exception:
+        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
             pass
     if metadata.get("team_id") is not None:
         try:
             team_ids.add(int(metadata["team_id"]))
-        except Exception:
+        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
             pass
 
     if user and not admin_all:
         try:
             uid = int(user.sub)
-        except Exception:
+        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
             uid = None
         if uid is not None:
             try:
@@ -914,9 +927,9 @@ async def list_tool_catalogs(
                     try:
                         org_id = int(m.get("org_id"))
                         org_ids.add(org_id)
-                    except Exception:
+                    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
                         continue
-            except Exception as exc:
+            except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"MCP tool catalogs: org membership lookup failed: {exc}")
 
             try:
@@ -930,7 +943,7 @@ async def list_tool_catalogs(
                         try:
                             team_id_val = row["team_id"] if isinstance(row, dict) else row[0]
                             team_ids.add(int(team_id_val))
-                        except Exception:
+                        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
                             continue
                 else:
                     cur = await db.execute(
@@ -941,9 +954,9 @@ async def list_tool_catalogs(
                     for row in rows or []:
                         try:
                             team_ids.add(int(row[0]))
-                        except Exception:
+                        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
                             continue
-            except Exception as exc:
+            except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"MCP tool catalogs: team membership lookup failed: {exc}")
 
     scope_norm = scope.strip().lower()
@@ -967,7 +980,7 @@ async def list_tool_catalogs(
                     "updated_at": r[7],
                 }
                 results.append(ToolCatalogResponse(**data))
-            except Exception:
+            except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 continue
 
     if admin_all:
@@ -1152,14 +1165,14 @@ async def execute_tool(
                 first = content[0]
                 if isinstance(first, dict) and first.get("type") == "text" and isinstance(first.get("text"), str):
                     display_result = first.get("text")
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         display_result = result_payload
 
     served_by = None
     try:
         if isinstance(result_payload, dict):
             served_by = result_payload.get("module")
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         served_by = None
 
     return ToolExecutionResponse(
@@ -1448,7 +1461,7 @@ async def refresh_token(
                 if rt.token == refresh_token and not rt.revoked:
                     resolved_token_id = tid
                     break
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         resolved_token_id = token_id
 
     if not resolved_token_id:
@@ -1458,7 +1471,7 @@ async def refresh_token(
         new_access, new_refresh, new_tid = jwt_manager.rotate_refresh_token(refresh_token, resolved_token_id)
     except HTTPException:
         raise
-    except Exception as e:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Refresh token rotation failed: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to refresh token")
 

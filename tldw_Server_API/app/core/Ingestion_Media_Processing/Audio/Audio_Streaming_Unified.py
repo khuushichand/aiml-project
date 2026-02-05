@@ -47,10 +47,33 @@ from .Audio_Transcription_Nemo import (
 )
 from .model_utils import normalize_model_and_variant
 
+_AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    NameError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    WebSocketDisconnect,
+)
+
 # Expose config loader for tests to monkeypatch at module scope
 try:  # pragma: no cover - import may fail in minimal test environments
     from tldw_Server_API.app.core.config import load_comprehensive_config as load_comprehensive_config  # type: ignore
-except Exception:  # pragma: no cover
+except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
     def load_comprehensive_config():  # type: ignore
         return None
 
@@ -61,7 +84,7 @@ def _safe_temp_subdir(raw: Optional[str]) -> Optional[Path]:
         return None
     try:
         raw_str = str(raw).strip()
-    except Exception:
+    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
         return None
     if not raw_str:
         return None
@@ -93,7 +116,7 @@ try:  # pragma: no cover - import availability varies in test contexts
     from .Audio_Transcription_Lib import (
         get_whisper_model as get_whisper_model,  # type: ignore
     )
-except Exception:  # Fallback when whisper deps are unavailable; tests may monkeypatch this
+except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # Fallback when whisper deps are unavailable; tests may monkeypatch this
     get_whisper_model = None  # type: ignore[assignment]
 
     def _resample_audio_if_needed(audio, sample_rate, target_sr=16000):  # type: ignore
@@ -103,12 +126,12 @@ except Exception:  # Fallback when whisper deps are unavailable; tests may monke
 
 try:  # Optional torch/torchaudio/Nemo imports for Parakeet RNNT streaming
     import torch  # type: ignore
-except Exception:  # pragma: no cover
+except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
     torch = None  # type: ignore
 
 try:  # pragma: no cover
     import torchaudio  # type: ignore
-except Exception:  # pragma: no cover
+except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
     torchaudio = None  # type: ignore
 
 try:  # pragma: no cover
@@ -119,7 +142,7 @@ try:  # pragma: no cover
         ContextSize,
         StreamingBatchedAudioBuffer,
     )
-except Exception:  # pragma: no cover
+except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
     nemo_asr = None  # type: ignore
     RNNTDecodingConfig = None  # type: ignore
     batched_hyps_to_hypotheses = None  # type: ignore
@@ -130,7 +153,7 @@ try:  # pragma: no cover - available whenever Audio_Transcription_Lib imports
     from .Audio_Transcription_Lib import (
         is_transcription_error_message as _is_transcription_error_message,  # type: ignore
     )
-except Exception:  # pragma: no cover - degrade gracefully in minimal envs/tests
+except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - degrade gracefully in minimal envs/tests
     def _is_transcription_error_message(_: str) -> bool:  # type: ignore[override]
         return False
 
@@ -138,7 +161,7 @@ from .Audio_Streaming_Insights import LiveInsightSettings, LiveMeetingInsights
 
 try:
     from .Diarization_Lib import DiarizationError, DiarizationService
-except Exception:  # pragma: no cover - optional dependency probing
+except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - optional dependency probing
     DiarizationService = None  # type: ignore
 
     class DiarizationError(Exception):  # type: ignore
@@ -204,13 +227,13 @@ try:  # pragma: no cover - optional integration path
             except RuntimeError:
                 # Re-raise variant unavailability to be caught by higher-level handler
                 raise
-            except Exception:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 # If validation fails unexpectedly, defer to runtime; do not block initialization
                 # The streaming path will still handle decode failures gracefully.
                 pass
             try:
                 decode_fn = getattr(self._core, 'decode_fn', None)
-            except Exception:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 decode_fn = None
             if decode_fn is None:
                 raise RuntimeError(f"parakeet_variant_unavailable: {self._uconf.model_variant}")
@@ -251,10 +274,10 @@ try:  # pragma: no cover - optional integration path
             """
             try:
                 self._core.reset()  # type: ignore
-            except Exception:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 pass
 
-except Exception:  # pragma: no cover - keep unified path working when core module absent
+except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - keep unified path working when core module absent
     _ParakeetCoreAdapter = None  # type: ignore
 
 
@@ -335,13 +358,13 @@ class SileroTurnDetector:
                 try:
                     raw_backend = cfg.get("Diarization", "vad_backend", fallback=backend)
                     backend = str(raw_backend or "").strip().lower() or backend
-                except Exception:
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                     backend = "silero_hub"
                 try:
                     onnx_model_path = cfg.get("Diarization", "onnx_model_path", fallback=None)
-                except Exception:
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                     onnx_model_path = None
-        except Exception:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
             backend = "silero_hub"
 
         self._backend = backend
@@ -350,7 +373,7 @@ class SileroTurnDetector:
         if self._backend == "onnx_silero":
             try:
                 import onnxruntime  # type: ignore
-            except Exception as err:  # pragma: no cover - optional dependency
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as err:  # pragma: no cover - optional dependency
                 self.unavailable_reason = f"onnxruntime_not_available: {err}"
                 logger.warning(f"ONNX Silero VAD unavailable (onnxruntime missing); continuing without auto-commit: {err}")
                 return
@@ -374,7 +397,7 @@ class SileroTurnDetector:
                 self.available = True
                 logger.info(f"Streaming ONNX Silero VAD initialized from {model_path}")
                 return
-            except Exception as err:  # pragma: no cover - defensive
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as err:  # pragma: no cover - defensive
                 self.unavailable_reason = f"onnx_session_error: {err}"
                 logger.warning(f"ONNX Silero VAD failed to initialize; continuing without auto-commit: {err}")
                 self.available = False
@@ -385,7 +408,7 @@ class SileroTurnDetector:
         try:
             try:
                 from .VAD_Lib import _lazy_import_silero_vad  # type: ignore
-            except Exception:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 _lazy_import_silero_vad = None  # type: ignore
 
             if _lazy_import_silero_vad is None:
@@ -411,7 +434,7 @@ class SileroTurnDetector:
                 speech_pad_ms=30,
             )
             self.available = True
-        except Exception as err:  # pragma: no cover - defensive; exercised in fail-open tests
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as err:  # pragma: no cover - defensive; exercised in fail-open tests
             self.unavailable_reason = str(err)
             logger.warning(f"Silero VAD failed to initialize; continuing without auto-commit: {err}")
             self.available = False
@@ -436,9 +459,9 @@ class SileroTurnDetector:
                 if probs:
                     try:
                         return max(float(p) for p in probs) >= self._vad_threshold
-                    except Exception:
+                    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                         return True
-        except Exception:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
             return False
         return False
 
@@ -480,7 +503,7 @@ class SileroTurnDetector:
                 if probs.size == 0:
                     return False
                 speech_detected = bool(float(probs.max()) >= self._vad_threshold)
-            except Exception as err:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as err:
                 logger.warning(f"ONNX Silero VAD failed during observe; disabling auto-commit: {err}")
                 self.available = False
                 self.unavailable_reason = str(err)
@@ -498,18 +521,18 @@ class SileroTurnDetector:
                 if torch is not None:
                     try:
                         audio_in = torch.from_numpy(audio_np)  # type: ignore
-                    except Exception:
+                    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                         audio_in = audio_np
                 vad_result = self._iterator(audio_in, return_seconds=False)
                 speech_detected = self._saw_speech(vad_result)
-            except Exception as err:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as err:
                 logger.warning(f"Silero VAD failed during observe; disabling auto-commit: {err}")
                 self.available = False
                 self.unavailable_reason = str(err)
                 try:
                     if hasattr(self._iterator, "reset_states"):
                         self._iterator.reset_states()
-                except Exception:
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                     pass
                 return False
 
@@ -537,7 +560,7 @@ class SileroTurnDetector:
             try:
                 if hasattr(self._iterator, "reset_states"):
                     self._iterator.reset_states()
-            except Exception:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 pass
             return True
 
@@ -657,7 +680,7 @@ class StreamingDiarizer:
             self._service = service
             self.available = True
             return True
-        except Exception as exc:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Streaming diarizer unavailable: {exc}")
             self.available = False
             self._service = None
@@ -715,14 +738,14 @@ class StreamingDiarizer:
             logger.error(f"Streaming diarizer failed: {err}")
             self.available = False
             return {}
-        except Exception as exc:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
             logger.exception("Streaming diarizer unexpected error: {}", exc)
             return {}
         finally:
             if tmp_path:
                 try:
                     Path(tmp_path).unlink(missing_ok=True)
-                except Exception:
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                     pass
 
     def _combined_audio(self) -> np.ndarray:
@@ -749,7 +772,7 @@ class StreamingDiarizer:
         try:
             import soundfile as sf  # type: ignore
             sf.write(str(tmp_path), audio_np, self.sample_rate)
-        except Exception as sf_err:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as sf_err:
             logger.warning(f"soundfile unavailable for temp WAV write: {sf_err}; falling back")
             # Try scipy
             try:
@@ -758,7 +781,7 @@ class StreamingDiarizer:
                 pcm16 = np.clip(audio_np, -1.0, 1.0)
                 pcm16 = (pcm16 * 32767.0).astype(np.int16)
                 wavfile.write(str(tmp_path), self.sample_rate, pcm16)
-            except Exception as scipy_err:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as scipy_err:
                 logger.warning(f"scipy.io.wavfile write failed: {scipy_err}; using wave module")
                 # Fallback to wave module (int16 PCM)
                 import wave
@@ -808,7 +831,7 @@ class StreamingDiarizer:
                 sf.write(str(self._persist_path), audio_np, self.sample_rate)
                 self._persist_method = "soundfile"
                 return str(self._persist_path)
-            except Exception as sf_err:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as sf_err:
                 logger.warning(f"soundfile unavailable for persistence: {sf_err}; falling back")
                 try:
                     from scipy.io import wavfile  # type: ignore
@@ -817,7 +840,7 @@ class StreamingDiarizer:
                     wavfile.write(str(self._persist_path), self.sample_rate, pcm16)
                     self._persist_method = "scipy"
                     return str(self._persist_path)
-                except Exception as scipy_err:
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as scipy_err:
                     logger.warning(f"scipy.io.wavfile persistence failed: {scipy_err}; using wave module")
                     try:
                         import wave
@@ -830,13 +853,13 @@ class StreamingDiarizer:
                             wf.writeframes(pcm16.tobytes())
                         self._persist_method = "wave"
                         return str(self._persist_path)
-                    except Exception as wave_err:
+                    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as wave_err:
                         logger.warning(f"wave module persistence failed: {wave_err}")
                         self._persist_method = None
                         # Disable further attempts to persist for this session
                         self.store_audio = False
                         return None
-        except Exception as persist_err:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as persist_err:
             logger.error(f"Audio persistence failed: {persist_err}")
             self._persist_method = None
             # Disable further attempts to persist for this session
@@ -859,6 +882,12 @@ class QuotaExceeded(Exception):
     def __init__(self, quota: str):
         super().__init__(quota)
         self.quota = quota
+
+
+_AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS = _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS + (
+    DiarizationError,
+    QuotaExceeded,
+)
 
 
 class BaseStreamingTranscriber(ABC):
@@ -970,7 +999,7 @@ def _strip_parakeet_eou_token(text: str) -> str:
     if not isinstance(text, str):
         try:
             text = str(text)
-        except Exception:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
             return ""
     return text.replace("<EOU>", "").strip()
 
@@ -1009,7 +1038,7 @@ class _ParakeetRNNTStreamer:
         # frozen below. We only tune thread count for performance.
         try:
             torch.set_num_threads(max(1, torch.get_num_threads() or 1))
-        except Exception:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
             pass
 
         self.model = (
@@ -1020,14 +1049,14 @@ class _ParakeetRNNTStreamer:
         for p in self.model.parameters():
             try:
                 p.requires_grad_(False)
-            except Exception:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 pass
 
         try:
             if hasattr(self.model, "preprocessor") and hasattr(self.model.preprocessor, "featurizer"):
                 self.model.preprocessor.featurizer.dither = 0.0
                 self.model.preprocessor.featurizer.pad_to = 0
-        except Exception:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
             pass
 
         dec_cfg = RNNTDecodingConfig(
@@ -1038,7 +1067,7 @@ class _ParakeetRNNTStreamer:
         try:
             dec_cfg.greedy.loop_labels = True
             dec_cfg.greedy.preserve_alignments = False
-        except Exception:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
             pass
         self.model.change_decoding_strategy(dec_cfg)
         self._decoding_computer = self.model.decoding.decoding.decoding_computer
@@ -1102,18 +1131,18 @@ class _ParakeetRNNTStreamer:
                     self._resampler_cache[cache_key] = torchaudio.transforms.Resample(
                         orig_freq=in_sr, new_freq=self.sample_rate
                     )
-                except Exception:
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                     self._resampler_cache[cache_key] = None
             resampler = self._resampler_cache.get(cache_key)
             if resampler is not None:
                 try:
                     y = resampler(torch.from_numpy(x))
                     return y.numpy().astype(np.float32, copy=False)
-                except Exception:
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                     pass
         try:
             return _resample_audio_if_needed(x, in_sr, target_sr=self.sample_rate)
-        except Exception:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
             # Naive linear fallback
             ratio = float(self.sample_rate) / float(in_sr)
             new_len = max(1, round(len(x) * ratio))
@@ -1209,7 +1238,7 @@ class _ParakeetRNNTStreamer:
         for h in outs:
             try:
                 h.text = self.model.tokenizer.ids_to_text(h.y_sequence.tolist())
-            except Exception:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 pass
         if not outs:
             return ""
@@ -1298,7 +1327,7 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                             batch_size=1,
                         )
                         logger.info("Initialized Parakeet RNNT streaming backend")
-                    except Exception as rnnt_err:
+                    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as rnnt_err:
                         logger.warning(
                             f"Parakeet RNNT streaming unavailable, using legacy chunking: {rnnt_err}"
                         )
@@ -1335,7 +1364,7 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
         if streamer is not None:
             try:
                 streamer.reset()
-            except Exception:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 # Fail open: RNNT will rebuild state on next push if needed.
                 pass
         # Clear RNNT-specific tracking so partial/final comparisons start fresh
@@ -1365,7 +1394,7 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
         if self._rnnt_streamer is not None:
             try:
                 full_text = self._rnnt_streamer.push(audio_np, self.config.sample_rate)
-            except Exception as rnnt_err:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as rnnt_err:
                 logger.warning(f"Parakeet RNNT streaming failed, falling back to legacy chunking: {rnnt_err}")
                 self._rnnt_streamer = None
                 full_text = ""
@@ -1374,7 +1403,7 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                 try:
                     from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
                     full_text = postprocess_text_if_enabled(full_text)
-                except Exception:
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                     pass
 
             if (
@@ -1453,7 +1482,7 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                     try:
                         from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
                         text = postprocess_text_if_enabled(text)
-                    except Exception:
+                    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                         pass
                     metadata = self._prepare_partial_metadata(buffer_duration)
                     result = {
@@ -1497,7 +1526,7 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                     try:
                         from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
                         text = postprocess_text_if_enabled(text)
-                    except Exception:
+                    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                         pass
                     self.transcription_history.append(text)
                     chunk_duration = float(len(audio_chunk)) / float(self.config.sample_rate or 1)
@@ -1582,7 +1611,7 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
                     try:
                         from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
                         text = postprocess_text_if_enabled(text)
-                    except Exception:
+                    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                         pass
                     # Detect language if auto-detection is enabled
                     detected_language = self.config.language
@@ -1628,7 +1657,7 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
                     try:
                         from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
                         text = postprocess_text_if_enabled(text)
-                    except Exception:
+                    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                         pass
                     # Detect language if auto-detection is enabled
                     detected_language = self.config.language
@@ -1695,7 +1724,7 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
             # speech_to_text path.
             try:
                 from .Audio_Transcription_Lib import WHISPER_COMPUTE_TYPE_OVERRIDE as _ct_override  # type: ignore
-            except Exception:  # pragma: no cover - defensive; falls back to device-based default
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive; falls back to device-based default
                 _ct_override = ""  # type: ignore
 
             if _ct_override and str(_ct_override).strip().lower() != "auto":
@@ -1730,7 +1759,7 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
                 if _init_prompt:
                     self.transcribe_options['initial_prompt'] = _init_prompt
                     logger.info("Applied custom vocabulary initial_prompt for Whisper streaming")
-            except Exception as _cv_err:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as _cv_err:
                 logger.debug(f"Whisper streaming initial_prompt skipped: {_cv_err}")
 
             # Whisper works better with longer audio chunks
@@ -1740,7 +1769,7 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
         except ImportError as e:
             logger.error(f"Failed to import Whisper dependencies: {e}")
             raise RuntimeError("Whisper dependencies not available")
-        except Exception as e:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to initialize Whisper model: {e}")
             raise
 
@@ -1850,7 +1879,7 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
             try:
                 from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
                 text = postprocess_text_if_enabled(text)
-            except Exception:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 pass
 
             if self.config.auto_detect_language and hasattr(info, 'language'):
@@ -1858,7 +1887,7 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
 
             return text
 
-        except Exception as e:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error during Whisper transcription: {e}")
             return ""
 
@@ -1887,7 +1916,7 @@ class Qwen3ASRStreamingTranscriber(BaseStreamingTranscriber):
         try:
             from tldw_Server_API.app.core.config import get_stt_config
             stt_cfg = get_stt_config() or {}
-        except Exception:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
             stt_cfg = {}
 
         self._vllm_base_url = str(stt_cfg.get("qwen3_asr_vllm_base_url", "")).strip()
@@ -2035,7 +2064,7 @@ class Qwen3ASRStreamingTranscriber(BaseStreamingTranscriber):
             try:
                 import soundfile as sf
                 sf.write(str(tmp_path), audio_np, self.config.sample_rate)
-            except Exception:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 # Fallback to wave module
                 import wave
                 pcm16 = np.clip(audio_np, -1.0, 1.0)
@@ -2066,7 +2095,7 @@ class Qwen3ASRStreamingTranscriber(BaseStreamingTranscriber):
             # Clean up temp file
             try:
                 tmp_path.unlink(missing_ok=True)
-            except Exception:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 pass
 
             text = str(result.get("text", "")).strip()
@@ -2075,12 +2104,12 @@ class Qwen3ASRStreamingTranscriber(BaseStreamingTranscriber):
             try:
                 from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
                 text = postprocess_text_if_enabled(text)
-            except Exception:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 pass
 
             return text
 
-        except Exception as exc:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"Qwen3-ASR vLLM transcription failed: {exc}")
             return ""
 
@@ -2161,7 +2190,7 @@ def _clamp_float(value: Any, default: float, min_value: float, max_value: float)
     """Clamp a float-like value to the provided bounds with a safe fallback."""
     try:
         return max(min_value, min(max_value, float(value)))
-    except Exception:
+    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
         return default
 
 
@@ -2169,7 +2198,7 @@ def _clamp_int(value: Any, default: int, min_value: int, max_value: int) -> int:
     """Clamp an int-like value to the provided bounds with a safe fallback."""
     try:
         return int(max(min_value, min(max_value, int(value))))
-    except Exception:
+    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
         return default
 
 
@@ -2197,7 +2226,7 @@ async def handle_unified_websocket(
     try:
         _raw_idle = os.getenv("AUDIO_WS_IDLE_TIMEOUT_S") or os.getenv("STREAM_IDLE_TIMEOUT_S")
         _idle_timeout = float(_raw_idle) if _raw_idle else None
-    except Exception:
+    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
         _idle_timeout = None
 
     stream = WebSocketStream(
@@ -2294,7 +2323,7 @@ async def handle_unified_websocket(
                 # "transcribe" when not provided.
                 try:
                     raw_task = str(config_data.get("task", config.task or "transcribe")).strip().lower()
-                except Exception:
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                     raw_task = "transcribe"
                 config.task = raw_task if raw_task in {"transcribe", "translate"} else "transcribe"
                 config.parakeet_use_rnnt_streamer = config_data.get("parakeet_use_rnnt_streamer", config.parakeet_use_rnnt_streamer)
@@ -2320,7 +2349,7 @@ async def handle_unified_websocket(
                 if insights_payload is not None:
                     try:
                         insights_settings = LiveInsightSettings.from_client_payload(insights_payload)
-                    except Exception as insight_err:
+                    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as insight_err:
                         logger.error(f"Failed to parse live insights config: {insight_err}")
                         insights_settings = LiveInsightSettings(enabled=False)
                 elif config_data.get("insights_enabled") is True and insights_settings is None:
@@ -2384,7 +2413,7 @@ async def handle_unified_websocket(
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse config message as JSON: {e}")
             logger.warning("Using default configuration due to JSON parse error")
-        except Exception as e:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as e:
             logger.exception("Unexpected error receiving config message: {}", e)
             logger.warning("Using default configuration due to error")
 
@@ -2418,7 +2447,7 @@ async def handle_unified_websocket(
                         f"Silero VAD unavailable ({turn_detector.unavailable_reason}); continuing without auto-commit"
                     )
                     turn_detector = None
-        except Exception as e:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as e:
             error_msg = f"Failed to initialize {config.model} model: {str(e)}"
             logger.exception(error_msg)
             # Emit structured warning about model/variant unavailability before fallback attempts
@@ -2434,7 +2463,7 @@ async def handle_unified_websocket(
                         "error": str(e),
                     },
                 })
-            except Exception:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Check if fallback to Whisper is enabled in config (module-level alias for test monkeypatching)
@@ -2460,7 +2489,7 @@ async def handle_unified_websocket(
                         "To disable, add [STT-Settings].streaming_fallback_to_whisper=false to config.txt."
                     )
                 logger.info(f"Streaming fallback to Whisper enabled: {fallback_enabled}")
-            except Exception as config_error:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as config_error:
                 logger.warning(
                     "Could not read streaming_fallback_to_whisper from config; "
                     "defaulting to Whisper fallback enabled. "
@@ -2487,7 +2516,7 @@ async def handle_unified_websocket(
                         "original_model": original_model,
                         "active_model": "whisper"
                     })
-                except Exception as fallback_error:
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as fallback_error:
                     logger.error(f"Fallback to Whisper also failed: {fallback_error}")
                     # Send standardized error and close with mapped code (1011)
                     await stream.error(
@@ -2552,7 +2581,7 @@ async def handle_unified_websocket(
                             "num_speakers": config.diarization_num_speakers,
                         },
                     })
-            except Exception as diar_err:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as diar_err:
                 logger.exception("Failed to initialize streaming diarizer: {}", diar_err)
                 await stream.send_json({
                     "type": "warning",
@@ -2573,7 +2602,7 @@ async def handle_unified_websocket(
                     "state": "insights_enabled",
                     "insights": insights_engine.describe()
                 })
-            except Exception as insight_err:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as insight_err:
                 logger.exception("Failed to initialize live insights engine: {}", insight_err)
                 await stream.send_json({
                     "type": "warning",
@@ -2622,12 +2651,12 @@ async def handle_unified_websocket(
                     max(0.0, _final_emit_at - _commit_received_at),
                     labels={"model": str(_model), "variant": str(_variant), "endpoint": "audio_unified_ws"},
                 )
-            except Exception:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 pass
             if insights_engine:
                 try:
                     await insights_engine.on_commit(full_transcript)
-                except Exception as insight_err:
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as insight_err:
                     logger.exception("Live insights final summary failed: {}", insight_err)
             if diarizer:
                 try:
@@ -2674,9 +2703,9 @@ async def handle_unified_websocket(
                                     "state": "diarization_persist_disabled",
                                     "persistence_method": _method,
                                 })
-                    except Exception:
+                    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                         pass
-                except Exception as diar_err:
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as diar_err:
                     logger.exception("Diarization finalize failed: {}", diar_err)
 
         # Process messages
@@ -2685,7 +2714,7 @@ async def handle_unified_websocket(
                 message = await websocket.receive_text()
                 try:
                     stream.mark_activity()
-                except Exception:
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                     pass
                 data = json.loads(message)
 
@@ -2708,14 +2737,14 @@ async def handle_unified_websocket(
                         try:
                             from tldw_Server_API.app.core.Usage.audio_quota import bytes_to_seconds as _bytes_to_seconds
                             seconds = _bytes_to_seconds(len(audio_bytes), int(config.sample_rate or 16000))
-                        except Exception:
+                        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                             seconds = float(len(audio_bytes)) / float(4 * max(1, int(config.sample_rate or 16000)))
                         await on_audio_seconds(seconds, int(config.sample_rate or 16000))
                     # Optional heartbeat to refresh stream TTL when using Redis counters
                     if on_heartbeat is not None:
                         try:
                             await on_heartbeat()
-                        except Exception:
+                        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                             pass
 
                     # Process audio chunk
@@ -2757,14 +2786,14 @@ async def handle_unified_websocket(
                                         result.setdefault("speaker_id", speaker_info["speaker_id"])
                                     if speaker_info.get("speaker_label"):
                                         result.setdefault("speaker_label", speaker_info["speaker_label"])
-                            except Exception as diar_err:
+                            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as diar_err:
                                 logger.exception("Diarization update failed: {}", diar_err)
 
                         await stream.send_json(result)
                         if insights_engine and result.get("is_final"):
                             try:
                                 await insights_engine.on_transcript(result)
-                            except Exception as insight_err:
+                            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as insight_err:
                                 logger.exception("Live insights failed to ingest segment: {}", insight_err)
                     if auto_commit_triggered:
                         await _emit_full_transcript(
@@ -2781,12 +2810,12 @@ async def handle_unified_websocket(
                     if insights_engine:
                         try:
                             await insights_engine.reset()
-                        except Exception as insight_err:
+                        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as insight_err:
                             logger.exception("Live insights reset failed: {}", insight_err)
                     if diarizer:
                         try:
                             await diarizer.reset()
-                        except Exception as diar_err:
+                        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as diar_err:
                             logger.exception("Diarization reset failed: {}", diar_err)
                     await stream.send_json({
                         "type": "status",
@@ -2797,7 +2826,7 @@ async def handle_unified_websocket(
                     # Stop transcription with standardized done frame
                     try:
                         await stream.done()
-                    except Exception:
+                    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                         pass
                     break
 
@@ -2808,10 +2837,10 @@ async def handle_unified_websocket(
                 _quota = getattr(qe, "quota", "daily_minutes")
                 try:
                     await stream.error("quota_exceeded", "Streaming transcription quota exceeded", data={"quota": _quota})
-                except Exception:
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
                     pass
                 return
-            except Exception as e:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as e:
                 if isinstance(e, WebSocketDisconnect):
                     # Let disconnect bubble to the outer handler for graceful shutdown
                     raise
@@ -2822,11 +2851,11 @@ async def handle_unified_websocket(
         await stream.error("idle_timeout", "Configuration timeout")
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected by client")
-    except Exception as e:
+    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"WebSocket handler error: {e}")
         try:
             await stream.error("internal_error", f"Server error: {str(e)}")
-        except Exception as send_err:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as send_err:
             logger.debug(f"Failed to send error frame on websocket: error={send_err}")
     finally:
         # Clean up
@@ -2835,16 +2864,16 @@ async def handle_unified_websocket(
         if insights_engine:
             try:
                 await insights_engine.close()
-            except Exception as insight_err:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as insight_err:
                 logger.error(f"Failed to close live insights engine: {insight_err}")
         if diarizer:
             try:
                 await diarizer.close()
-            except Exception as diar_err:
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as diar_err:
                 logger.error(f"Failed to close diarizer: {diar_err}")
         try:
             await stream.stop()
-        except Exception:
+        except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
             pass
 
 

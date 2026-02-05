@@ -32,6 +32,9 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     replace_placeholders,
     retrieve_message_details,
 )
+from tldw_Server_API.app.core.Character_Chat.modules.character_prompt_presets import (
+    build_character_system_prompt,
+)
 
 # Rate limiting
 from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import get_character_rate_limiter
@@ -454,14 +457,11 @@ async def get_chat_messages(
                         include_deleted=include_deleted,
                     )
                     if not has_system_in_db:
-                        system_prompt_parts = [
-                            f"You are {character_name}.",
-                            _replace_text(character.get('description', '')),
-                            _replace_text(character.get('personality', '')),
-                            _replace_text(character.get('scenario', '')),
-                            _replace_text(character.get('system_prompt', '')),
-                        ]
-                        system_prompt = '\n'.join(part for part in system_prompt_parts if part)
+                        system_prompt = build_character_system_prompt(
+                            character,
+                            character_name,
+                            user_name,
+                        )
                         formatted_messages.append({
                             "role": "system",
                             "content": system_prompt.strip()

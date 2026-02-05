@@ -161,6 +161,12 @@ export interface ServerChatMessage {
   version?: number
 }
 
+export type ChatSettingsResponse = {
+  conversation_id: string
+  settings: Record<string, unknown>
+  last_modified: string
+}
+
 type PromptPayload = {
   name?: string
   title?: string
@@ -2163,6 +2169,27 @@ export class TldwApiClient {
     return this.normalizeChatSummary(res)
   }
 
+  async getChatSettings(chat_id: string | number): Promise<ChatSettingsResponse> {
+    const cid = String(chat_id)
+    return await bgRequest<ChatSettingsResponse>({
+      path: `/api/v1/chats/${cid}/settings`,
+      method: "GET"
+    })
+  }
+
+  async updateChatSettings(
+    chat_id: string | number,
+    settings: Record<string, unknown>
+  ): Promise<ChatSettingsResponse> {
+    const cid = String(chat_id)
+    return await bgRequest<ChatSettingsResponse>({
+      path: `/api/v1/chats/${cid}/settings`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: { settings }
+    })
+  }
+
   async updateChat(
     chat_id: string | number,
     payload: Record<string, any>,
@@ -3143,6 +3170,66 @@ export class TldwApiClient {
       throw new Error("TTS returned an invalid audio buffer.")
     }
     return normalized
+  }
+
+  async createTtsJob(payload: {
+    input: string
+    model?: string
+    voice?: string
+    response_format?: string
+    speed?: number
+    lang_code?: string
+    normalization_options?: Record<string, any>
+    extra_params?: Record<string, any>
+  }): Promise<{ job_id: number; status: string }> {
+    return await bgRequest<{ job_id: number; status: string }>({
+      path: "/api/v1/audio/speech/jobs",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async getTtsJobArtifacts(jobId: number): Promise<{
+    job_id: number
+    artifacts: Array<{
+      output_id: number
+      format: string
+      type: string
+      title: string
+      download_url: string
+      metadata?: Record<string, any>
+    }>
+  }> {
+    const id = encodeURIComponent(String(jobId))
+    return await bgRequest({
+      path: `/api/v1/audio/speech/jobs/${id}/artifacts`,
+      method: "GET"
+    })
+  }
+
+  async *streamAudioJobProgress(
+    jobId: number,
+    options?: { signal?: AbortSignal; afterId?: number; streamIdleTimeoutMs?: number }
+  ): AsyncGenerator<any> {
+    const id = encodeURIComponent(String(jobId))
+    const query = options?.afterId
+      ? `?after_id=${encodeURIComponent(String(options.afterId))}`
+      : ""
+    const path = `/api/v1/audio/jobs/${id}/progress/stream${query}` as const
+    for await (const line of bgStream({
+      path,
+      method: "GET",
+      headers: { Accept: "text/event-stream" },
+      abortSignal: options?.signal,
+      streamIdleTimeoutMs: options?.streamIdleTimeoutMs
+    })) {
+      try {
+        yield JSON.parse(line as string)
+      } catch {
+        yield { event: "raw", data: line }
+      }
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────

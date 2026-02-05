@@ -32,10 +32,10 @@ import {
 } from "@/services/rag/unified-rag"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
+import { KNOWLEDGE_QA_KEYWORD } from "./constants"
 
 const LOCAL_THREAD_PREFIX = "local-"
 const DEFAULT_CHARACTER_NAME = "Helpful AI Assistant"
-const KNOWLEDGE_QA_KEYWORD = "__knowledge_QA__"
 const KNOWLEDGE_QA_SETTINGS_OVERRIDES: Partial<RagSettings> = {
   enable_web_fallback: true,
   parent_context_size: 100,
@@ -122,7 +122,7 @@ function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
       return { ...state, threads: action.payload }
     case "ADD_THREAD":
       return { ...state, threads: [action.payload, ...state.threads] }
-    case "SET_PRESET":
+    case "SET_PRESET": {
       const presetSettings =
         action.payload === "custom"
           ? state.settings
@@ -139,6 +139,7 @@ function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
                 enable_web_fallback: state.settings.enable_web_fallback,
               },
       }
+    }
     case "SET_SETTINGS":
       return { ...state, settings: action.payload, preset: "custom" }
     case "UPDATE_SETTING":
@@ -289,7 +290,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         source: "knowledge_qa",
       })
 
-      const threadId = response?.id || response?.chat_id
+      const threadId = response?.id
       if (!threadId) {
         throw new Error("Chat creation returned no ID")
       }
@@ -310,12 +311,14 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           console.warn("Failed to fetch conversation version for tagging:", error)
         }
       }
+      const normalizedState: "in-progress" | "resolved" =
+        response?.state === "resolved" ? "resolved" : "in-progress"
       const newThread: KnowledgeQAThread = {
         id: threadId,
         title: response?.title || resolvedTitle || "New Knowledge QA Thread",
         createdAt: new Date().toISOString(),
         lastModifiedAt: new Date().toISOString(),
-        state: response?.state || "in-progress",
+        state: normalizedState,
         messageCount: 0,
         source: "knowledge_qa",
       }
@@ -353,7 +356,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         if (!id) return null
         return {
           id,
-          timestamp: response?.timestamp ? String(response.timestamp) : undefined,
+          timestamp: response?.created_at ? String(response.created_at) : undefined,
         }
       } catch (error) {
         console.warn("Failed to persist chat message:", error)
@@ -377,6 +380,19 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
             }),
           }
         )
+        if (!response.ok) {
+          let errorDetails: string | unknown = ""
+          try {
+            errorDetails = await response.text()
+          } catch (textError) {
+            errorDetails = textError
+          }
+          console.error("Failed to persist RAG context:", {
+            status: response.status,
+            error: errorDetails,
+          })
+          return false
+        }
         const result = await response.json()
         return result?.success ?? false
       } catch (error) {
@@ -765,7 +781,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         console.error("Failed to delete history item:", error)
       }
     },
-    [message, state.searchHistory, tldwClient]
+    [message, state.searchHistory]
   )
 
   const setSettingsPanelOpen = useCallback((open: boolean) => {

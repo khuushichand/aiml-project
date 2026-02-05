@@ -223,6 +223,7 @@ export const NotesDockPanel: React.FC = () => {
   const fetchNotesList = useCallback(
     async (query: string) => {
       if (editorDisabled) {
+        setLoadingList(false)
         setNotesList([])
         return
       }
@@ -312,7 +313,7 @@ export const NotesDockPanel: React.FC = () => {
       const payload: Record<string, unknown> = {
         title: note.title.trim() || "Untitled Note",
         content: note.content,
-        keywords: note.keywords.length > 0 ? note.keywords : undefined
+        keywords: note.keywords ?? []
       }
 
       let saved: NoteListItem

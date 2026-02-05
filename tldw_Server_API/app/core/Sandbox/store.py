@@ -15,6 +15,26 @@ from tldw_Server_API.app.core.config import settings as app_settings
 
 from .models import RunPhase, RunStatus, RuntimeType
 
+_SANDBOX_STORE_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    sqlite3.Error,
+)
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -153,7 +173,7 @@ class InMemoryStore(SandboxStore):
     def _fp(self, body: dict[str, Any]) -> str:
         try:
             canon = json.dumps(body, sort_keys=True, separators=(",", ":"))
-        except Exception:
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
             canon = str(body)
         import hashlib
         return hashlib.sha256(canon.encode("utf-8")).hexdigest()
@@ -161,7 +181,7 @@ class InMemoryStore(SandboxStore):
     def _user_key(self, user_id: Any) -> str:
         try:
             return str(user_id)
-        except Exception:
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
             return ""
 
     def _gc_idem(self) -> int:
@@ -252,14 +272,14 @@ class InMemoryStore(SandboxStore):
                         dt_from = datetime.fromisoformat(started_at_from)
                         if not (sa and sa >= dt_from):
                             continue
-                    except Exception:
+                    except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                         pass
                 if started_at_to:
                     try:
                         dt_to = datetime.fromisoformat(started_at_to)
                         if not (sa and sa <= dt_to):
                             continue
-                    except Exception:
+                    except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                         pass
                 rows.append({
                     "id": st.id,
@@ -328,7 +348,7 @@ class InMemoryStore(SandboxStore):
                         dt_from = datetime.fromisoformat(created_at_from)
                         if ts < dt_from.timestamp():
                             continue
-                    except Exception:
+                    except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                         pass
                 if created_at_to:
                     try:
@@ -336,7 +356,7 @@ class InMemoryStore(SandboxStore):
                         dt_to = datetime.fromisoformat(created_at_to)
                         if ts > dt_to.timestamp():
                             continue
-                    except Exception:
+                    except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                         pass
                 from datetime import datetime, timezone
                 rows.append({
@@ -392,7 +412,7 @@ class InMemoryStore(SandboxStore):
                     try:
                         if st.resource_usage and isinstance(st.resource_usage.get("log_bytes"), int):
                             log_bytes += int(st.resource_usage.get("log_bytes") or 0)
-                    except Exception:
+                    except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                         continue
                 art_bytes = int(self._user_bytes.get(uid, 0))
                 items.append({
@@ -418,7 +438,7 @@ class SQLiteStore(SandboxStore):
         if not db_path:
             try:
                 proj = getattr(app_settings, "PROJECT_ROOT", ".")
-            except Exception:
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                 proj = "."
             db_path = str(Path(str(proj)) / "tmp_dir" / "sandbox" / "meta" / "sandbox_store.db")
         self.db_path = db_path
@@ -545,7 +565,7 @@ class SQLiteStore(SandboxStore):
         """
         try:
             canon = json.dumps(body, sort_keys=True, separators=(",", ":"))
-        except Exception:
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
             canon = str(body)
         import hashlib
         return hashlib.sha256(canon.encode("utf-8")).hexdigest()
@@ -553,13 +573,13 @@ class SQLiteStore(SandboxStore):
     def _user_key(self, user_id: Any) -> str:
         try:
             return str(user_id)
-        except Exception:
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
             return ""
 
     def _gc_idem(self, con: sqlite3.Connection) -> int:
         try:
             ttl = max(1, int(self.idem_ttl_sec))
-        except Exception:
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
             ttl = 600
         cutoff = time.time() - ttl
         cur = con.execute("SELECT COUNT(*) FROM sandbox_idempotency WHERE created_at < ?", (cutoff,))
@@ -584,12 +604,12 @@ class SQLiteStore(SandboxStore):
             if row["fingerprint"] == fp_new:
                 try:
                     return json.loads(row["response_body"]) if row["response_body"] else None
-                except Exception:
+                except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                     return None
             # include key and created_at (epoch seconds) from the row for richer error details upstream
             try:
                 ct = float(row["created_at"]) if row["created_at"] is not None else None
-            except Exception:
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                 ct = None
             raise IdempotencyConflict(row["object_id"], key=key, created_at=ct)
 
@@ -610,7 +630,7 @@ class SQLiteStore(SandboxStore):
                         time.time(),
                     ),
                 )
-            except Exception as e:
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"idempotency store failed: {e}")
 
     def gc_idempotency(self) -> int:
@@ -618,7 +638,7 @@ class SQLiteStore(SandboxStore):
         with self._lock, self._conn() as con:
             try:
                 return self._gc_idem(con)
-            except Exception:
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                 return 0
 
     def put_run(self, user_id: Any, st: RunStatus) -> None:
@@ -673,7 +693,7 @@ class SQLiteStore(SandboxStore):
                 ru = None
                 try:
                     ru = json.loads(row["resource_usage"]) if row["resource_usage"] else None
-                except Exception:
+                except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                     ru = None
                 st = RunStatus(
                     id=row["id"],
@@ -691,7 +711,7 @@ class SQLiteStore(SandboxStore):
                     resource_usage=ru,
                 )
                 return st
-            except Exception:
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                 return None
 
     def update_run(self, st: RunStatus) -> None:
@@ -851,7 +871,7 @@ class SQLiteStore(SandboxStore):
                 try:
                     from datetime import datetime, timezone
                     iso_ct = datetime.fromtimestamp(float(row["created_at"]), tz=timezone.utc).isoformat()
-                except Exception:
+                except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                     iso_ct = None
                 items.append({
                     "endpoint": row["endpoint"],
@@ -929,7 +949,7 @@ class SQLiteStore(SandboxStore):
                     ru = _json.loads(row["resource_usage"]) if row["resource_usage"] else None
                     if ru and isinstance(ru.get("log_bytes"), int):
                         rs["log_bytes"] += int(ru.get("log_bytes") or 0)
-                except Exception:
+                except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                     pass
             # Build items
             users = set(art.keys()) | set(agg.keys())
@@ -967,7 +987,7 @@ class PostgresStore(SandboxStore):
         try:
             import psycopg  # noqa: F401
             from psycopg.rows import dict_row  # noqa: F401
-        except Exception as e:  # pragma: no cover
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover
             raise RuntimeError("psycopg is required for PostgresStore") from e
         self._init_db()
 
@@ -1033,7 +1053,7 @@ class PostgresStore(SandboxStore):
                     if cur.fetchone():
                         return
                     cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
-                except Exception:
+                except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                     logger.debug(f"Postgres migration: could not add {table}.{col}")
 
             _ensure_column("sandbox_runs", "resource_usage", "JSONB")
@@ -1042,7 +1062,7 @@ class PostgresStore(SandboxStore):
     def _fp(self, body: dict[str, Any]) -> str:
         try:
             canon = json.dumps(body, sort_keys=True, separators=(",", ":"))
-        except Exception:
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
             canon = str(body)
         import hashlib
         return hashlib.sha256(canon.encode("utf-8")).hexdigest()
@@ -1050,7 +1070,7 @@ class PostgresStore(SandboxStore):
     def _user_key(self, user_id: Any) -> str:
         try:
             return str(user_id)
-        except Exception:
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
             return ""
 
     def check_idempotency(self, endpoint: str, user_id: Any, key: str | None, body: dict[str, Any]) -> dict[str, Any] | None:
@@ -1060,12 +1080,12 @@ class PostgresStore(SandboxStore):
             # TTL GC
             try:
                 ttl = max(1, int(self.idem_ttl_sec))
-            except Exception:
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                 ttl = 600
             cutoff = time.time() - ttl
             try:
                 cur.execute("DELETE FROM sandbox_idempotency WHERE created_at < %s", (cutoff,))
-            except Exception:
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                 pass
             cur.execute(
                 """
@@ -1082,13 +1102,13 @@ class PostgresStore(SandboxStore):
             if row.get("fingerprint") == fp_new:
                 try:
                     return row.get("response_body")
-                except Exception:
+                except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                     return None
             # Conflict: include created_at epoch seconds
             ct = None
             try:
                 ct = float(row.get("created_at")) if row.get("created_at") is not None else None
-            except Exception:
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                 ct = None
             raise IdempotencyConflict(row.get("object_id") or "", key=key, created_at=ct)
 
@@ -1114,7 +1134,7 @@ class PostgresStore(SandboxStore):
                             time.time(),
                         ),
                     )
-                except Exception as e:
+                except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"idempotency store failed (pg): {e}")
 
     def put_run(self, user_id: Any, st: RunStatus) -> None:
@@ -1169,7 +1189,7 @@ class PostgresStore(SandboxStore):
                     ru = row.get("resource_usage") if row.get("resource_usage") else None
                     if isinstance(ru, str):
                         ru = json.loads(ru)
-                except Exception:
+                except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                     ru = None
                 st = RunStatus(
                     id=row.get("id"),
@@ -1187,7 +1207,7 @@ class PostgresStore(SandboxStore):
                 st.message = row.get("message")
                 st.resource_usage = ru if isinstance(ru, dict) else None
                 return st
-            except Exception as e:
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"pg get_run parse error: {e}")
                 return None
 
@@ -1211,7 +1231,7 @@ class PostgresStore(SandboxStore):
                 return 0
             try:
                 return int(row.get("artifact_bytes") or 0)
-            except Exception:
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                 return 0
 
     def increment_user_artifact_bytes(self, user_id: str, delta: int) -> None:
@@ -1316,7 +1336,7 @@ class PostgresStore(SandboxStore):
             row = cur.fetchone()
             try:
                 return int(list(row.values())[0]) if row else 0
-            except Exception:
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                 return 0
 
     def list_idempotency(
@@ -1362,7 +1382,7 @@ class PostgresStore(SandboxStore):
                 try:
                     if row.get("created_at") is not None:
                         iso_ct = datetime.fromtimestamp(float(row.get("created_at")), tz=timezone.utc).isoformat()
-                except Exception:
+                except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                     iso_ct = None
                 items.append({
                     "endpoint": row.get("endpoint"),
@@ -1406,7 +1426,7 @@ class PostgresStore(SandboxStore):
             row = cur.fetchone()
             try:
                 return int(list(row.values())[0]) if row else 0
-            except Exception:
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                 return 0
 
     def list_usage(
@@ -1437,7 +1457,7 @@ class PostgresStore(SandboxStore):
                         ru = json.loads(ru)
                     if ru and isinstance(ru.get("log_bytes"), int):
                         rs["log_bytes"] += int(ru.get("log_bytes") or 0)
-                except Exception:
+                except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                     pass
             users = set(usage_rows.keys()) | set(agg.keys())
             items: list[dict] = []
@@ -1464,13 +1484,13 @@ def _resolve_pg_dsn() -> str | None:
     # Prefer explicit SANDBOX_STORE_PG_DSN, then env, then DATABASE_URL
     try:
         dsn = getattr(app_settings, "SANDBOX_STORE_PG_DSN", None)
-    except Exception:
+    except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
         dsn = None
     dsn = dsn or os.getenv("SANDBOX_STORE_PG_DSN") or os.getenv("SANDBOX_PG_DSN")
     if not dsn:
         try:
             dsn = getattr(app_settings, "DATABASE_URL", None)
-        except Exception:
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
             dsn = None
     if not dsn:
         return None
@@ -1485,7 +1505,7 @@ def get_store() -> SandboxStore:
     backend = None
     try:
         backend = str(getattr(app_settings, "SANDBOX_STORE_BACKEND", "memory")).strip().lower()
-    except Exception:
+    except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
         backend = "memory"
     if backend == "memory":
         ttl = int(getattr(app_settings, "SANDBOX_IDEMPOTENCY_TTL_SEC", 600))
@@ -1496,7 +1516,7 @@ def get_store() -> SandboxStore:
         if dsn:
             try:
                 return PostgresStore(dsn=dsn, idem_ttl_sec=ttl)
-            except Exception as e:
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Cluster store requested but unavailable ({e}); falling back to SQLite store")
         else:
             logger.warning("Cluster store requested but SANDBOX_STORE_PG_DSN/DATABASE_URL not set; falling back to SQLite store")
@@ -1504,7 +1524,7 @@ def get_store() -> SandboxStore:
     ttl = int(getattr(app_settings, "SANDBOX_IDEMPOTENCY_TTL_SEC", 600))
     try:
         db_path = getattr(app_settings, "SANDBOX_STORE_DB_PATH", None)
-    except Exception:
+    except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
         db_path = None
     return SQLiteStore(db_path=db_path, idem_ttl_sec=ttl)
 
@@ -1516,14 +1536,14 @@ def get_store_mode() -> str:
     """
     try:
         backend = str(getattr(app_settings, "SANDBOX_STORE_BACKEND", "memory")).strip().lower()
-    except Exception:
+    except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
         backend = "memory"
     if backend == "cluster":
         dsn = _resolve_pg_dsn()
         try:
             import psycopg  # noqa: F401
             deps_ok = True
-        except Exception:
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
             deps_ok = False
         if dsn and deps_ok:
             return "cluster"

@@ -6,6 +6,24 @@ semantics. This module does not connect to Postgres directly; callers should
 apply this DDL using their own connection or via a future Postgres JobManager.
 """
 
+_JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+)
+
 JOBS_POSTGRES_DDL = """
 CREATE TABLE IF NOT EXISTS jobs (
   id SERIAL PRIMARY KEY,
@@ -163,7 +181,7 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
     """
     try:
         import psycopg
-    except Exception as e:  # pragma: no cover - environment dependent
+    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover - environment dependent
         raise RuntimeError("psycopg is required for PostgreSQL Jobs backend. Install extras 'db_postgres'.") from e
 
     from .pg_util import negotiate_pg_dsn
@@ -233,9 +251,9 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
                     f.execute("ALTER TABLE jobs_archive ADD COLUMN IF NOT EXISTS payload_compressed BYTEA")
                     f.execute("ALTER TABLE jobs_archive ADD COLUMN IF NOT EXISTS result_compressed BYTEA")
                     f.execute("ALTER TABLE jobs_archive ADD COLUMN IF NOT EXISTS batch_group TEXT")
-                except Exception:
+                except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                     pass
-        except Exception:
+        except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
             # Best-effort; if the DB already has these or lacks permissions, continue
             pass
         # Create hot-path indexes concurrently (outside transaction) when possible
@@ -249,7 +267,7 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
                     # Optional partial index to speed common hot-path queries
                     try:
                         k.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_jobs_hot ON jobs(domain, queue, job_type, priority, available_at, created_at) WHERE status IN ('queued','processing')")
-                    except Exception:
+                    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                         pass
                     # Acquisition ordering index: priority ASC (lower number = higher priority),
                     # then available/created, then id; queued only. The ORDER BY in queries
@@ -258,21 +276,21 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
                         k.execute(
                             "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_jobs_acquire_order ON jobs (priority, COALESCE(available_at, created_at), id) WHERE status = 'queued'"
                         )
-                    except Exception:
+                    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                         # Older PG versions or permission issues: non-fatal
                         pass
-        except Exception:
+        except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
             # Best-effort; not fatal
             pass
         # Ensure job_events exists (idempotent helper) for deployments created before inlined DDL
         try:
             ensure_job_events_pg(db_url)
-        except Exception:
+        except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
             pass
         # Ensure job_counters exists for counters-enabled deployments
         try:
             ensure_job_counters_pg(db_url)
-        except Exception:
+        except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
             pass
         # Optional: enable RLS on core tables when requested via env.
         try:
@@ -283,40 +301,40 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
                 with psycopg.connect(_dsn, autocommit=True) as _c_rls, _c_rls.cursor() as _p:
                     try:
                         _p.execute("ALTER TABLE jobs ENABLE ROW LEVEL SECURITY")
-                    except Exception:
+                    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         _p.execute("ALTER TABLE job_events ENABLE ROW LEVEL SECURITY")
-                    except Exception:
+                    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         _p.execute("ALTER TABLE job_counters ENABLE ROW LEVEL SECURITY")
-                    except Exception:
+                    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         _p.execute("ALTER TABLE job_queue_controls ENABLE ROW LEVEL SECURITY")
-                    except Exception:
+                    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         _p.execute("ALTER TABLE job_attachments ENABLE ROW LEVEL SECURITY")
-                    except Exception:
+                    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         _p.execute("ALTER TABLE job_sla_policies ENABLE ROW LEVEL SECURITY")
-                    except Exception:
+                    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         _p.execute("ALTER TABLE job_dependencies ENABLE ROW LEVEL SECURITY")
-                    except Exception:
+                    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         _p.execute("ALTER TABLE jobs_archive ENABLE ROW LEVEL SECURITY")
-                    except Exception:
+                    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                         pass
-        except Exception:
+        except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
             # Ignore in environments without permissions or when tables don't exist yet
             pass
-    except Exception as e:
+    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as e:
         # Attempt to create database if it doesn't exist, then retry
         msg = str(e)
         if "does not exist" in msg and "database" in msg:
@@ -332,7 +350,7 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
                     with conn3.cursor() as cur3:
                         cur3.execute(JOBS_POSTGRES_DDL)
                     conn3.commit()
-            except Exception as e2:
+            except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as e2:
                 raise RuntimeError(f"Failed to ensure Jobs schema in Postgres: {e2}") from e2
         else:
             # Re-raise with context for other errors
@@ -343,9 +361,9 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
         if str(_os_rls.getenv("JOBS_PG_RLS_ENABLE", "")).lower() in {"1","true","yes","y","on"}:
             try:
                 ensure_jobs_rls_policies_pg(db_url)
-            except Exception:
+            except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                 pass
-    except Exception:
+    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         pass
     return db_url
 
@@ -353,7 +371,7 @@ def ensure_job_events_pg(db_url: str) -> None:
     """Ensure the job_events table and indexes exist in Postgres."""
     try:
         import psycopg
-    except Exception:
+    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         return
     from .pg_util import negotiate_pg_dsn
     _dsn = negotiate_pg_dsn(db_url)
@@ -380,9 +398,9 @@ def ensure_job_events_pg(db_url: str) -> None:
             try:
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_job_events_id ON job_events(id)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id)")
-            except Exception:
+            except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                 pass
-    except Exception:
+    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         return
 
 
@@ -394,7 +412,7 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
     """
     try:
         import psycopg  # type: ignore
-    except Exception:
+    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         return
     import os
     import re as _re
@@ -419,22 +437,22 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                         current_user = (user_row[0] if user_row else None) or None
                         if current_user and _re.match(r"^[A-Za-z0-9_]+$", str(current_user)):
                             cur.execute(f"GRANT {role} TO {current_user}")
-                    except Exception:
+                    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                         pass
                     cur.execute(f"GRANT USAGE ON SCHEMA {schema_name} TO {role}")
                     cur.execute(
                         f"GRANT SELECT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {schema_name} TO {role}"
                     )
-                except Exception:
+                except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                     pass
             def _enable_rls(table: str) -> None:
                 try:
                     cur.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
-                except Exception:
+                except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     cur.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
-                except Exception:
+                except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                     pass
 
             # Enable and enforce RLS on all Jobs tables
@@ -504,7 +522,7 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                         )
                         """
                 )
-            except Exception:
+            except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                 pass
             # job_counters policies (domain only, with admin bypass)
             try:
@@ -530,7 +548,7 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                         )
                         """
                 )
-            except Exception:
+            except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                 pass
             # job_queue_controls policies (domain only, with admin bypass)
             try:
@@ -556,7 +574,7 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                         )
                         """
                 )
-            except Exception:
+            except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                 pass
             # job_attachments policies (join to jobs for domain/owner)
             try:
@@ -588,7 +606,7 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                         )
                         """
                 )
-            except Exception:
+            except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                 pass
             # job_dependencies policies (join to jobs for domain/owner)
             try:
@@ -620,7 +638,7 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                         )
                         """
                 )
-            except Exception:
+            except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                 pass
             # job_sla_policies policies (domain only)
             try:
@@ -646,7 +664,7 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                         )
                         """
                 )
-            except Exception:
+            except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                 pass
             # jobs_archive policies (domain + owner, with admin bypass)
             try:
@@ -674,7 +692,7 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                         )
                         """
                 )
-            except Exception:
+            except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                 pass
             if debug:
                 try:
@@ -692,13 +710,13 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                     )
                     rows = cur.fetchall()
                     print(f"[jobs-rls-debug] policies={rows}")
-                except Exception:
+                except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                     pass
-    except Exception:
+    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         if debug:
             try:
                 print("[jobs-rls-debug] failed to apply RLS policies")
-            except Exception:
+            except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                 pass
         return
 
@@ -707,13 +725,13 @@ def ensure_job_counters_pg(db_url: str) -> None:
     """Ensure per-queue counters table exists in PG."""
     try:
         import psycopg
-    except Exception:
+    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         return
     # Normalize DSN to include timeouts and libpq options, similar to other helpers
     try:
         from .pg_util import normalize_pg_dsn
         _dsn = normalize_pg_dsn(db_url)
-    except Exception:
+    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         _dsn = db_url
     try:
         with psycopg.connect(_dsn, autocommit=True) as conn:
@@ -735,7 +753,7 @@ def ensure_job_counters_pg(db_url: str) -> None:
                 )
                 try:
                     cur.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_job_counters_domain_queue ON job_counters(domain, queue)")
-                except Exception:
+                except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                     pass
-    except Exception:
+    except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         return

@@ -21,6 +21,13 @@ from tldw_Server_API.app.core.Audio.tts_service import (
 from tldw_Server_API.app.core.Storage.generated_file_helpers import (
     save_and_register_tts_audio,
 )
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    get_usage_event_logger,
+)
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    check_rate_limit,
+)
+from tldw_Server_API.app.api.v1.endpoints.audio import audio_tts
 from tldw_Server_API.app.core.Usage.audio_quota import (
     add_daily_minutes,
     can_start_job,
@@ -50,3 +57,19 @@ def __getattr__(name: str) -> _Any:
 def __dir__() -> list[str]:
     mod = _load_audio_module()
     return sorted(set(globals().keys()) | set(dir(mod)))
+
+
+def _resolve_tts_byok(*args, **kwargs):
+    return _load_audio_module()._resolve_tts_byok(*args, **kwargs)
+
+
+_EXPLICIT_REEXPORTS = {
+    "create_speech": audio_tts.create_speech,
+    "get_tts_service": audio_tts.get_tts_service,
+    "check_rate_limit": check_rate_limit,
+    "get_usage_event_logger": get_usage_event_logger,
+    "save_and_register_tts_audio": save_and_register_tts_audio,
+    "_resolve_tts_byok": _resolve_tts_byok,
+}
+
+globals().update(_EXPLICIT_REEXPORTS)

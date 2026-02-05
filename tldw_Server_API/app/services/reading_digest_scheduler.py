@@ -31,6 +31,17 @@ from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDat
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 
+_READING_DIGEST_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+)
+
 
 class _ReadingDigestScheduler:
     def __init__(self) -> None:
@@ -51,7 +62,7 @@ class _ReadingDigestScheduler:
             await self._load_all()
             try:
                 interval = int(os.getenv("READING_DIGEST_SCHEDULER_RESCAN_SEC", "600") or 600)
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 interval = 600
 
             async def _rescan_loop() -> None:
@@ -61,7 +72,7 @@ class _ReadingDigestScheduler:
                         await self._rescan_once()
                     except asyncio.CancelledError:
                         break
-                    except Exception as exc:
+                    except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as exc:
                         logger.debug(f"Reading digest scheduler rescan error: {exc}")
 
             self._rescan_task = asyncio.create_task(_rescan_loop(), name="reading_digest_scheduler_rescan")
@@ -73,7 +84,7 @@ class _ReadingDigestScheduler:
             try:
                 if self._aps:
                     self._aps.shutdown(wait=False)
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 pass
             self._aps = None
             try:
@@ -83,7 +94,7 @@ class _ReadingDigestScheduler:
                         await self._rescan_task
                     except asyncio.CancelledError:
                         pass
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 pass
             self._rescan_task = None
             self._started = False
@@ -101,7 +112,7 @@ class _ReadingDigestScheduler:
             try:
                 db = self._get_db(uid)
                 rows, _total = db.list_reading_digest_schedules(tenant_id="default", limit=1000, offset=0)
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 rows = []
             for s in rows:
                 if s.enabled:
@@ -119,7 +130,7 @@ class _ReadingDigestScheduler:
             try:
                 db = self._get_db(uid)
                 rows, _total = db.list_reading_digest_schedules(tenant_id="default", limit=1000, offset=0)
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 rows = []
             for s in rows:
                 if s.enabled:
@@ -130,9 +141,9 @@ class _ReadingDigestScheduler:
             for jid in list(current_ids - desired):
                 try:
                     self._aps.remove_job(jid)
-                except Exception:
+                except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                     pass
-        except Exception:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
             pass
 
     def _enumerate_user_ids(self) -> set[int]:
@@ -143,13 +154,13 @@ class _ReadingDigestScheduler:
                 if p.is_dir():
                     try:
                         user_ids.add(int(p.name))
-                    except Exception:
+                    except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                         continue
-        except Exception as exc:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Reading digest scheduler: failed to enumerate user dirs: {exc}")
         try:
             user_ids.add(int(core_settings.get("SINGLE_USER_FIXED_ID", 1)))
-        except Exception:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
             pass
         return user_ids
 
@@ -159,12 +170,12 @@ class _ReadingDigestScheduler:
         try:
             try:
                 self._aps.remove_job(schedule.id)
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 pass
             tz = schedule.timezone or os.getenv("READING_DIGEST_SCHEDULER_TZ", "UTC")
             try:
                 trigger = CronTrigger.from_crontab(schedule.cron, timezone=tz)
-            except Exception as exc:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning("Reading digest scheduler invalid cron for %s: %s", schedule.id, exc)
                 return
             effective_uid = user_id if user_id is not None else int(schedule.user_id)
@@ -182,9 +193,9 @@ class _ReadingDigestScheduler:
                 nxt = trigger.get_next_fire_time(None, now)
                 next_iso = nxt.isoformat() if nxt else None
                 self._get_db(effective_uid).set_reading_digest_history(schedule.id, next_run_at=next_iso)
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 pass
-        except Exception as exc:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning("Reading digest scheduler failed to add job %s: %s", schedule.id, exc)
 
     async def _run_schedule(self, schedule_id: str, user_id: int | None = None) -> None:
@@ -194,13 +205,13 @@ class _ReadingDigestScheduler:
             db = self._get_db(int(user_id))
             try:
                 schedule = db.get_reading_digest_schedule(schedule_id)
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 schedule = None
         if schedule is None:
             try:
                 db = self._get_db(int(core_settings.get("SINGLE_USER_FIXED_ID", 1)))
                 schedule = db.get_reading_digest_schedule(schedule_id)
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 schedule = None
         if not schedule or not schedule.enabled:
             return
@@ -208,7 +219,7 @@ class _ReadingDigestScheduler:
         try:
             tz = schedule.timezone or os.getenv("READING_DIGEST_SCHEDULER_TZ", "UTC")
             trigger = CronTrigger.from_crontab(schedule.cron, timezone=tz)
-        except Exception as exc:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning("Reading digest scheduler invalid cron for %s: %s", schedule_id, exc)
             return
 
@@ -220,7 +231,7 @@ class _ReadingDigestScheduler:
                 scheduled_dt = datetime.fromisoformat(expected_next_raw)
                 if scheduled_dt.tzinfo is None:
                     scheduled_dt = scheduled_dt.replace(tzinfo=trigger.timezone)
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 scheduled_dt = None
         if scheduled_dt is None:
             scheduled_dt = trigger.get_next_fire_time(None, now)
@@ -241,7 +252,7 @@ class _ReadingDigestScheduler:
                 last_status="pending",
                 disallow_statuses=("pending", "queued", "running"),
             )
-        except Exception as exc:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Reading digest scheduler claim failed for %s: %s", schedule_id, exc)
         if not claimed:
             logger.info("Reading digest schedule already claimed: schedule_id=%s", schedule_id)
@@ -249,12 +260,12 @@ class _ReadingDigestScheduler:
 
         try:
             latest = db.get_reading_digest_schedule(schedule_id)
-        except Exception:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
             latest = None
         if not latest or not latest.enabled:
             try:
                 db.set_reading_digest_history(schedule_id, last_status="skipped_disabled")
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 pass
             return
         schedule = latest
@@ -270,10 +281,10 @@ class _ReadingDigestScheduler:
                             last_status="skipped_offline",
                             next_run_at=next_iso,
                         )
-                    except Exception:
+                    except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                         db.set_reading_digest_history(schedule_id, last_status="skipped_offline")
                     return
-        except Exception as exc:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Reading digest presence gating failed for %s: %s", schedule_id, exc)
 
         payload = {
@@ -294,13 +305,13 @@ class _ReadingDigestScheduler:
             logger.info("Reading digest schedule queued: schedule_id=%s job_id=%s", schedule_id, job.get("id"))
             try:
                 db.set_reading_digest_history(schedule_id, last_status="queued")
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 pass
-        except Exception as exc:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning("Reading digest schedule enqueue failed: %s", exc)
             try:
                 db.set_reading_digest_history(schedule_id, last_status="error")
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 pass
 
     # CRUD wrappers
@@ -354,7 +365,7 @@ class _ReadingDigestScheduler:
             try:
                 if self._aps:
                     self._aps.remove_job(schedule_id)
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 pass
         return True
 
@@ -365,7 +376,7 @@ class _ReadingDigestScheduler:
         try:
             if self._aps:
                 self._aps.remove_job(schedule_id)
-        except Exception:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
             pass
         db = self._get_db(int(schedule.user_id))
         return db.delete_reading_digest_schedule(schedule_id)
@@ -376,7 +387,7 @@ class _ReadingDigestScheduler:
             try:
                 db = self._get_db(uid)
                 return db.get_reading_digest_schedule(schedule_id)
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 continue
         return None
 
@@ -385,7 +396,7 @@ class _ReadingDigestScheduler:
             db = self._get_db(int(user_id))
             rows, _total = db.list_reading_digest_schedules(tenant_id=tenant_id, limit=limit, offset=offset)
             return rows
-        except Exception:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
             return []
 
 
@@ -423,9 +434,9 @@ async def stop_reading_digest_scheduler(task: asyncio.Task | None) -> None:
                 await task
             except asyncio.CancelledError:
                 pass
-    except Exception:
+    except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         await get_reading_digest_scheduler().stop()
-    except Exception:
+    except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
         pass

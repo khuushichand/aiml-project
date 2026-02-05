@@ -69,6 +69,31 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resol
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram, timeit
 from tldw_Server_API.app.core.Utils.Utils import logging, sanitize_filename
 
+_AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    subprocess.SubprocessError,
+    DiarizationError,
+    CancelCheckError,
+    TranscriptionCancelled,
+)
+
 #
 #######################################################################################################################
 # Constants
@@ -89,7 +114,7 @@ def _stt_cache_config():
     """
     try:
         return get_stt_config()
-    except Exception:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
         logging.debug("Failed to load STT cache config, using empty dict")
         return {}
 
@@ -109,14 +134,14 @@ PERSIST_TRANSCRIPTS_DEFAULT = not (_to_bool(_cfg_disable) or _env_disable)
 def _coerce_int(val):
     try:
         return int(val)
-    except Exception:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
         return None
 
 
 def _coerce_float(val):
     try:
         return float(val)
-    except Exception:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -187,7 +212,7 @@ def _resample_audio_if_needed(audio: np.ndarray, sample_rate: int, target_sr: in
     try:
         import librosa
         return librosa.resample(audio, orig_sr=sample_rate, target_sr=target_sr).astype(np.float32, copy=False)
-    except Exception as e:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
         logging.debug(f"Falling back to naive resample: {e}")
         ratio = float(target_sr) / float(sample_rate)
         new_len = max(1, int(round(len(audio) * ratio)))
@@ -225,7 +250,7 @@ def _default_transcript_cache_root() -> Path:
     root = Path(tempfile.gettempdir())
     try:
         return root.resolve(strict=False)
-    except Exception as exc:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as exc:
         logging.debug(f"Failed to resolve temp dir for transcript cache: {exc}")
         return root
 
@@ -533,7 +558,7 @@ def prune_transcript_cache(
         return
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
-    except Exception:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
         return
 
     files = sorted(
@@ -549,7 +574,7 @@ def prune_transcript_cache(
     def _unlink(path: Path):
         try:
             path.unlink(missing_ok=True)  # type: ignore[arg-type]
-        except Exception:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
             pass
 
     # Age-based pruning
@@ -829,7 +854,7 @@ def perform_transcription(
 
                         registry = get_stt_provider_registry()
                         provider, _, variant = registry.resolve_provider_for_model(transcription_model or "")
-                    except Exception as exc:
+                    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as exc:
                         logging.warning(f"Unable to resolve STT provider for multitalk diarization: {exc}")
 
                     if provider != "parakeet":
@@ -875,7 +900,7 @@ def perform_transcription(
                                 return audio_file_path, final_segments
 
                             logging.warning("NeMo multitalk diarization returned no segments; falling back.")
-                        except Exception as exc:
+                        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as exc:
                             logging.error(f"NeMo multitalk diarization failed: {exc}")
 
                 if diarize:
@@ -934,7 +959,7 @@ def perform_transcription(
                             transcription_segments[0]['Text'] = "[Note: Speaker diarization failed] " + transcription_segments[0].get('Text', '')
                         return audio_file_path, transcription_segments
 
-                    except Exception as e:
+                    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
                         logging.error(f"Unexpected error during diarization: {e}", exc_info=True)
                         return audio_file_path, transcription_segments
 
@@ -989,7 +1014,7 @@ def perform_transcription(
                 _assert_no_symlink(segments_json_path, label="Transcript cache file")
                 with open(segments_json_path, "w", encoding="utf-8") as f:
                     json.dump({"segments": segments}, f, ensure_ascii=False, indent=2)
-            except Exception as cache_err:
+            except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as cache_err:
                 logging.debug(f"Failed to persist transcript cache artifact: {cache_err}")
 
             logging.info(f"Successfully generated/loaded transcription for {audio_file_path}")
@@ -997,7 +1022,7 @@ def perform_transcription(
 
     except TranscriptionCancelled:
         raise
-    except Exception as e:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
         # Catch-all for unexpected errors during the process
         logging.error(f"Unexpected error in perform_transcription for {video_path}: {e}", exc_info=True)
         # If conversion succeeded, return path, else None. Always return None for segments on error.
@@ -1071,7 +1096,7 @@ def re_generate_transcription(
     except RuntimeError as e:
         logging.error(f"RuntimeError during re_generate_transcription for {audio_file_path}: {e}")
         return audio_file_path, None  # Return path but None segments on error
-    except Exception as e:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Unexpected error during re_generate_transcription for {audio_file_path}: {e}", exc_info=True)
         return audio_file_path, None  # Return path but None segments on error
 
@@ -1209,7 +1234,7 @@ class PartialTranscriptionThread(threading.Thread):
                         )
 
                         provider = get_stt_provider_registry().get_default_provider_name()
-                    except Exception:
+                    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
                         # Defensive fallback in case the registry cannot be
                         # imported in a constrained environment.
                         config = loaded_config_data or load_and_log_configs()
@@ -1239,7 +1264,7 @@ class PartialTranscriptionThread(threading.Thread):
 
                     with self.lock:
                         self.partial_text_state["text"] = partial_text
-                except Exception as e:
+                except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
                     self.exception_encountered = e
                     logging.error(f"Partial transcription error: {e}")
 
@@ -1294,7 +1319,7 @@ def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate
     # Load STT settings safely; fall back to sane defaults if missing/malformed.
     try:
         stt_cfg = get_stt_config()
-    except Exception:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
         stt_cfg = {}
 
     if not transcription_provider:
@@ -1306,7 +1331,7 @@ def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate
         logging.info("Transcribing using Qwen2Audio")
         try:
             return transcribe_with_qwen2audio(audio_data, sample_rate)
-        except Exception as e:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Qwen2Audio transcription failed: {e}", exc_info=True)
             return f"[Transcription error] Qwen2Audio transcription failed: {e}"
 
@@ -1323,7 +1348,7 @@ def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate
         except ImportError as e:
             logging.error(f"Failed to import Nemo transcription module: {e}")
             return "Nemo transcription module not available. Please check installation."
-        except Exception as e:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Parakeet transcription failed: {e}")
             return f"Parakeet transcription error: {str(e)}"
 
@@ -1337,7 +1362,7 @@ def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate
         except ImportError as e:
             logging.error(f"Failed to import Nemo transcription module: {e}")
             return "Nemo transcription module not available. Please check installation."
-        except Exception as e:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Canary transcription failed: {e}")
             return f"Canary transcription error: {str(e)}"
 
@@ -1361,7 +1386,7 @@ def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate
         except ImportError as e:
             logging.error(f"Failed to import external provider module: {e}")
             return "External provider module not available. Please check installation."
-        except Exception as e:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"External provider transcription failed: {e}")
             return f"External provider transcription error: {str(e)}"
 
@@ -1466,7 +1491,7 @@ def strip_whisper_metadata_header(segments):
             first["Text"] = "\n".join(lines[2:])
 
         return segments
-    except Exception:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
         # Never fail the caller because of header stripping
         return segments
 
@@ -1498,14 +1523,14 @@ def to_normalized_stt_artifact(
                 seg_list = maybe
         elif isinstance(segments, list):
             seg_list = segments
-    except Exception:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
         seg_list = []
 
     duration_ms: Optional[int] = None
     if duration_seconds is not None:
         try:
             duration_ms = round(max(float(duration_seconds), 0.0) * 1000)
-        except Exception:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
             duration_ms = None
 
     return {
@@ -1531,7 +1556,7 @@ def _valid_whisper_model_sizes_for_jobs() -> set:
     """
     try:
         return set(getattr(WhisperModel, "valid_model_sizes", []))
-    except Exception:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
         # If WhisperModel is unavailable, fall back to empty set so that
         # model mapping simply treats all inputs as aliases.
         return set()
@@ -1605,7 +1630,7 @@ def _normalize_hotwords(hotwords: Optional[Sequence[str] | str]) -> Optional[lis
                 if isinstance(parsed, list):
                     out = [str(x).strip() for x in parsed if str(x).strip()]
                     return out or None
-            except Exception:
+            except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
                 pass
         out = [part.strip() for part in raw.split(",") if part.strip()]
         return out or None
@@ -1712,7 +1737,7 @@ def run_stt_batch_via_registry(
             usage = artifact.setdefault("usage", {})
             if usage.get("duration_ms") is None:
                 usage["duration_ms"] = duration_ms
-        except Exception as e:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.debug(f"Failed to set duration_ms in artifact: {e}")
 
     return artifact
@@ -2135,7 +2160,7 @@ class WhisperModel(OriginalWhisperModel):
                  raise ValueError(f"The model identifier '{resolved_identifier}' is invalid or could not be loaded/downloaded. Check the name/path and ensure it's accessible.") from e
             else:
                  raise ValueError(f"Error initializing model '{resolved_identifier}': {e}") from e
-        except Exception as e:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
              # Catch other unexpected errors
              logging.error(f"An unexpected error occurred during faster_whisper.WhisperModel initialization with '{resolved_identifier}': {e}", exc_info=True)
              raise RuntimeError(f"Unexpected error loading model: {resolved_identifier} - {e}") from e
@@ -2359,7 +2384,7 @@ def parse_transcription_model(model_name: str) -> tuple:
             # Use config default when no variant is specified.
             try:
                 stt_cfg = get_stt_config()
-            except Exception:
+            except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
                 stt_cfg = {}
             variant = str(stt_cfg.get("nemo_model_variant", "standard")).strip().lower()
             if variant not in {"standard", "onnx", "mlx", "cuda"}:
@@ -2380,7 +2405,7 @@ def parse_transcription_model(model_name: str) -> tuple:
         if model_lower in {"vibevoice", "vibevoice-asr", "vibevoice_asr"}:
             try:
                 stt_cfg = get_stt_config() or {}
-            except Exception:
+            except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
                 stt_cfg = {}
             model_id = str(stt_cfg.get("vibevoice_model_id", "microsoft/VibeVoice-ASR")).strip()
             return ("vibevoice", model_id or "microsoft/VibeVoice-ASR", None)
@@ -2391,7 +2416,7 @@ def parse_transcription_model(model_name: str) -> tuple:
         # Get config path and derive the appropriate model path based on size
         try:
             stt_cfg = get_stt_config() or {}
-        except Exception:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
             stt_cfg = {}
         base_path = str(stt_cfg.get("qwen3_asr_model_path", "./models/qwen3_asr/1.7B")).strip()
         if not base_path:
@@ -2615,7 +2640,7 @@ def speech_to_text_parakeet(
         try:
             import librosa
             audio_duration = librosa.get_duration(path=audio_file_path)
-        except Exception:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
             audio_duration = None
             logging.warning("Could not determine audio duration")
 
@@ -2661,7 +2686,7 @@ def speech_to_text_parakeet(
                             merge_algo = stt_cfg.get("buffered_merge_algo", "middle")
                             try:
                                 MergeAlgorithm(merge_algo)
-                            except Exception:
+                            except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
                                 merge_algo = "middle"
 
                             total_buffer = None
@@ -2716,7 +2741,7 @@ def speech_to_text_parakeet(
         # Convert to segment format with sentence-level segmentation
         return create_segments_from_text(text, audio_duration, segmentation="sentence")
 
-    except Exception as e:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Parakeet transcription failed: {e}")
         raise RuntimeError(f"Parakeet transcription error: {str(e)}") from e
 
@@ -2765,7 +2790,7 @@ def speech_to_text_canary(
         # Convert to segment format with sentence-level segmentation
         return create_segments_from_text(text, audio_duration, segmentation="sentence")
 
-    except Exception as e:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Canary transcription failed: {e}")
         raise RuntimeError(f"Canary transcription error: {str(e)}") from e
 
@@ -2810,7 +2835,7 @@ def speech_to_text_qwen2audio(
         # Convert to segment format with sentence-level segmentation
         return create_segments_from_text(text, audio_duration, segmentation="sentence")
 
-    except Exception as e:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Qwen2Audio transcription failed: {e}")
         raise RuntimeError(f"Qwen2Audio transcription error: {str(e)}") from e
 
@@ -2982,7 +3007,7 @@ def speech_to_text(
             if return_language:
                 return segments_parakeet, selected_source_lang
             return segments_parakeet
-        except Exception as e:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Parakeet transcription failed, falling back to whisper: {e}")
             provider = "whisper"
             model = "distil-whisper-large-v3"  # Default fallback model
@@ -3002,7 +3027,7 @@ def speech_to_text(
             if return_language:
                 return segments_canary, selected_source_lang
             return segments_canary
-        except Exception as e:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Canary transcription failed, falling back to whisper: {e}")
             provider = "whisper"
             model = "distil-whisper-large-v3"
@@ -3022,7 +3047,7 @@ def speech_to_text(
             if return_language:
                 return segments_qwen, selected_source_lang
             return segments_qwen
-        except Exception as e:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Qwen2Audio transcription failed, falling back to whisper: {e}")
             provider = "whisper"
             model = "distil-whisper-large-v3"
@@ -3056,7 +3081,7 @@ def speech_to_text(
             if return_language:
                 return segments_qwen3, language_qwen3
             return segments_qwen3
-        except Exception as e:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Qwen3-ASR transcription failed, falling back to whisper: {e}")
             provider = "whisper"
             model = "distil-whisper-large-v3"
@@ -3090,7 +3115,7 @@ def speech_to_text(
             if return_language:
                 return segments_vibe, language_vibe
             return segments_vibe
-        except Exception as e:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"VibeVoice-ASR transcription failed, falling back to whisper: {e}")
             provider = "whisper"
             model = "distil-whisper-large-v3"
@@ -3141,7 +3166,7 @@ def speech_to_text(
                         combined_prompt = f"{_init_prompt}\n{combined_prompt}"
                     else:
                         combined_prompt = _init_prompt
-        except Exception as _cv_err:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as _cv_err:
             logging.debug(f"Custom vocab initial_prompt injection skipped: {_cv_err}")
 
         if combined_prompt:
@@ -3184,13 +3209,13 @@ def speech_to_text(
                         })
                     if words_list:
                         chunk["words"] = words_list
-                except Exception:
+                except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
                     pass
             logging.debug(f"Segment: {chunk}")
             try:
                 from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
                 chunk["Text"] = postprocess_text_if_enabled(chunk["Text"]) or chunk["Text"]
-            except Exception:
+            except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
                 pass
             segments.append(chunk)
             logging.debug(f"Segment: [{chunk['start_seconds']:.2f}-{chunk['end_seconds']:.2f}] {chunk['Text'][:100]}...")
@@ -3227,7 +3252,7 @@ def speech_to_text(
                     _assert_no_symlink(prettified_out_file, label="Transcript cache file")
                     with open(prettified_out_file, "w", encoding="utf-8") as f:
                         json.dump(payload, f, ensure_ascii=False, indent=2)
-                except Exception as prettify_err:
+                except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as prettify_err:
                     logging.debug(f"Failed to write prettified transcription file: {prettify_err}")
 
                 prune_transcript_cache(
@@ -3237,7 +3262,7 @@ def speech_to_text(
                     max_total_mb=cache_max_total_mb if cache_max_total_mb is not None else CACHE_MAX_TOTAL_MB,
                     max_files_per_source=cache_max_files_per_source if cache_max_files_per_source is not None else CACHE_MAX_FILES_PER_SOURCE,
                 )
-            except Exception as persist_err:
+            except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as persist_err:
                 logging.warning(f"Could not persist transcription segments to cache: {persist_err}")
 
         gc.collect() # Suggest garbage collection
@@ -3247,7 +3272,7 @@ def speech_to_text(
 
     except TranscriptionCancelled:
         raise
-    except Exception as e:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"speech-to-text: Error transcribing audio {file_path_label}: {e}", exc_info=True)
         log_counter(
             "speech_to_text_error",
@@ -3284,7 +3309,7 @@ def _check_cancel(cancel_check: Optional[Callable[[], bool]], *, label: str) -> 
             if loop is not None and loop.is_running():
                 try:
                     should_cancel.close()
-                except Exception:
+                except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
                     pass
                 raise CancelCheckError(
                     "_check_cancel received an awaitable cancel_check in the cancel_check handling branch "
@@ -3298,7 +3323,7 @@ def _check_cancel(cancel_check: Optional[Callable[[], bool]], *, label: str) -> 
         raise
     except CancelCheckError:
         raise
-    except Exception as exc:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as exc:
         logging.error(f"cancel_check failed during {label}: {exc}", exc_info=True)
         raise CancelCheckError(f"cancel_check failed during {label}: {exc}") from exc
 
@@ -3330,7 +3355,7 @@ def _find_ffmpeg() -> str:
             if ffmpeg_exe.exists():
                 logging.debug(f"Found ffmpeg at project Bin path: {ffmpeg_exe}")
                 return str(ffmpeg_exe)
-        except Exception:
+        except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
             pass
 
     # 2. Check environment variable (useful for Docker/server setups)
@@ -3346,7 +3371,7 @@ def _find_ffmpeg() -> str:
         if candidate.exists():
             logging.debug(f"Found ffmpeg at project Bin path: {candidate}")
             return str(candidate)
-    except Exception:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
         pass
 
     # 4. Check PATH using shutil.which (cross-platform)
@@ -3449,7 +3474,7 @@ def validate_audio_file(file_path: str, *, base_dir: Optional[Path] = None) -> t
 
     except subprocess.TimeoutExpired:
         return False, "File validation timed out (possible corrupt file)"
-    except Exception as e:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
         logging.warning(f"Audio validation error: {e}")
         # Don't fail completely if validation has issues; allow FFmpeg-based
         # conversion/transcription to attempt processing and surface any errors.
@@ -3526,7 +3551,7 @@ def convert_to_wav(
     # If overwrite is True, choose a different output filename to prevent FFmpeg in-place editing.
     try:
         same_path = out_path.resolve() == input_path.resolve()
-    except Exception:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
         same_path = str(out_path) == str(input_path)
     if same_path:
         if not overwrite:
@@ -3638,7 +3663,7 @@ def convert_to_wav(
                     except subprocess.TimeoutExpired:
                         logging.error("Format detection timed out")
                         raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
-                    except Exception as e:
+                    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
                         logging.error(f"Error during format detection: {e}")
                         raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
                 else:
@@ -3702,7 +3727,7 @@ def convert_to_wav(
             if proc.poll() is None:
                 try:
                     proc.terminate()
-                except Exception as exc:
+                except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as exc:
                     logging.debug(f"Failed to terminate ffmpeg process in {label}: {exc}")
 
     try:
@@ -3773,7 +3798,7 @@ def convert_to_wav(
          # Re-raise ConversionError explicitly to ensure it's caught
          log_counter("convert_to_wav_error", labels={"file_path": video_file_path, "error": "ffmpeg_failed"})
          raise
-    except Exception as e:
+    except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
         # Catch other potential errors like permissions, etc.
         error_msg = f"Unexpected error during ffmpeg execution for '{input_path.name}': {e}"
         logging.error(error_msg, exc_info=True)

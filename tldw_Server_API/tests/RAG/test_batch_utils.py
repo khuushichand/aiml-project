@@ -65,10 +65,26 @@ class TestBatchResult:
         """Default BatchResult should have empty lists and zeroed counters."""
         result = BatchResult()
         assert result.results == []
+        assert result.results_by_index == {}
         assert result.errors == []
         assert result.total == 0
         assert result.completed == 0
         assert result.cancelled is False
+
+    def test_ordered_results_with_errors_prefers_index_map(self):
+        """ordered_results_with_errors should use results_by_index when provided."""
+        err = ValueError("boom")
+        result = BatchResult(
+            results=[],
+            results_by_index={0: "a", 2: "c"},
+            errors=[(1, err)],
+            total=3,
+            completed=2,
+        )
+        ordered = result.ordered_results_with_errors(default=None)
+        assert ordered[0] == "a"
+        assert isinstance(ordered[1], ValueError)
+        assert ordered[2] == "c"
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +107,7 @@ class TestRunBatch:
         result = await run_batch(items, double, max_concurrency=3)
 
         assert result.results == [20, 40, 60, 80, 100]
+        assert result.results_by_index == {0: 20, 1: 40, 2: 60, 3: 80, 4: 100}
         assert result.total == 5
         assert result.completed == 5
         assert result.cancelled is False
@@ -110,6 +127,7 @@ class TestRunBatch:
 
         # Successful results: items at indices 0, 2, 4 (values 1, 3, 5)
         assert result.results == [1, 3, 5]
+        assert result.results_by_index == {0: 1, 2: 3, 4: 5}
         assert result.completed == 3
         assert result.total == 5
         assert result.cancelled is False
@@ -155,6 +173,7 @@ class TestRunBatch:
         result = await run_batch([], should_not_be_called)
 
         assert result.results == []
+        assert result.results_by_index == {}
         assert result.errors == []
         assert result.total == 0
         assert result.completed == 0
@@ -173,6 +192,7 @@ class TestRunBatch:
         result = await run_batch(items, record_order, max_concurrency=1)
 
         assert result.results == [0, 1, 2, 3, 4]
+        assert result.results_by_index == {0: 0, 1: 1, 2: 2, 3: 3, 4: 4}
         assert result.completed == 5
         # With concurrency=1, items should execute in order
         assert execution_order == [0, 1, 2, 3, 4]
@@ -260,6 +280,7 @@ class TestRunBatchIndexed:
         result = await run_batch_indexed(items, track, max_concurrency=1)
 
         assert result.results == ["0:a", "1:b", "2:c"]
+        assert result.results_by_index == {0: "0:a", 1: "1:b", 2: "2:c"}
         assert result.completed == 3
         assert result.total == 3
         assert result.has_errors is False
@@ -279,6 +300,7 @@ class TestRunBatchIndexed:
         )
 
         assert result.results == [1000, 3000]  # indices 0 and 2 succeed
+        assert result.results_by_index == {0: 1000, 2: 3000}
         assert result.completed == 2
         assert result.total == 4
         error_indices = sorted(idx for idx, _ in result.errors)
@@ -293,6 +315,7 @@ class TestRunBatchIndexed:
         assert result.total == 0
         assert result.completed == 0
         assert result.results == []
+        assert result.results_by_index == {}
         assert result.errors == []
 
     async def test_indexed_fail_fast(self):

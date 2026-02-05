@@ -38,6 +38,17 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 # import logging
 # logging.basicConfig(level=logging.INFO)
 
+_UPLOAD_SINK_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+)
+
 
 class FileValidationError(Exception):
     """Custom exception for critical validation/setup errors."""
@@ -373,7 +384,7 @@ class FileValidator:
                     self._python_magic_mime = _python_magic.Magic(mime=True)
                 self.python_magic_available = True
                 logging.info("python-magic is available and will be used for MIME detection fallback.")
-            except Exception as e:
+            except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS as e:
                 self._python_magic_mime = None
                 self.python_magic_available = False
                 logging.warning(f"Failed to initialize python-magic fallback: {e}")
@@ -387,7 +398,7 @@ class FileValidator:
         # Allow environments to opt into fail-open on YARA scanner errors
         try:
             self._yara_fail_open = bool(media_config.get('yara_fail_open', False))
-        except Exception:
+        except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
             self._yara_fail_open = False
         if self.yara_available and yara_rules_path:
             self._initialize_yara_scanner(yara_rules_path)
@@ -416,7 +427,7 @@ class FileValidator:
             rules = yara.compile(filepath=rules_path)
             logging.info(f"Yara rules compiled successfully from {rules_path}.")
             return rules
-        except Exception as e:
+        except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"An unexpected error occurred during Yara rule compilation from {rules_path}: {e}")
         return None
 
@@ -437,7 +448,7 @@ class FileValidator:
                 logging.warning(f"Yara rule(s) matched for file: {file_path}. Matches: {match_details}")
                 return False, match_details
             return True, []
-        except Exception as e:
+        except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS as e:
             if getattr(self, '_yara_fail_open', False):
                 logging.warning(f"Yara scanning error for {file_path}: {e}. Treating as pass due to configuration.")
                 return True, []
@@ -590,7 +601,7 @@ class FileValidator:
                 if detected_mime_type:
                     detected_mime_type = detected_mime_type.strip()
                     mime_detection_source = "magic"
-            except Exception as e:  # Catch other errors during MIME detection
+            except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS as e:  # Catch other errors during MIME detection
                 logging.warning(
                     "MIME magic detection failed for '%s': %s. Falling back to extension guesses.",
                     _original_filename,
@@ -604,7 +615,7 @@ class FileValidator:
                 if detected_mime_type:
                     detected_mime_type = str(detected_mime_type).strip()
                     mime_detection_source = "python-magic"
-            except Exception as e:
+            except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS as e:
                 logging.warning(
                     "python-magic MIME detection failed for '%s': %s. Falling back to extension guesses.",
                     _original_filename,
@@ -796,7 +807,7 @@ class FileValidator:
                                         f"Archive member exceeds per-file size cap: {member_filename} ({member.file_size} bytes)"
                                     )
                                     continue
-                            except Exception:
+                            except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
                                 pass
 
                             extracted_count += 1
@@ -811,7 +822,7 @@ class FileValidator:
                                     logging.warning(f"Encrypted ZIP member detected and rejected: {member_filename}")
                                     issues.append(f"Archive contains encrypted member: {member_filename}")
                                     continue
-                            except Exception:
+                            except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
                                 # If flag_bits is absent or unexpected, continue with other checks
                                 pass
 
@@ -876,7 +887,7 @@ class FileValidator:
                                             f"Invalid nested archive in '{archive_path_obj.name}': '{member.filename}'"
                                         )
                                         issues.extend([f"    - {issue}" for issue in nested_validation.issues])
-                            except Exception as extract_err:
+                            except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS as extract_err:
                                 issues.append(
                                     f"Error extracting/validating internal file '{member.filename}': {extract_err}")
                                 logging.error(f"Error extracting internal file '{member.filename}': {extract_err}",
@@ -926,7 +937,7 @@ class FileValidator:
                                             f"Archive member exceeds per-file size cap: {member.name} ({member.size} bytes)"
                                         )
                                         continue
-                                except Exception:
+                                except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 intended_path = (extract_dir / member_filename).resolve()
                                 if not str(intended_path).startswith(str(extract_dir.resolve())):
@@ -987,7 +998,7 @@ class FileValidator:
                                                 f"Invalid nested archive in '{archive_path_obj.name}': '{member.name}'"
                                             )
                                             issues.extend([f"    - {issue}" for issue in nested_validation.issues])
-                                except Exception as extract_err:
+                                except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS as extract_err:
                                     issues.append(
                                         f"Error extracting/validating internal file '{member.name}': {extract_err}")
                                     logging.error(f"Error extracting internal file '{member.name}': {extract_err}", exc_info=True)
@@ -1002,7 +1013,7 @@ class FileValidator:
 
         except zipfile.BadZipFile:
             issues.append(f"Archive '{archive_path_obj.name}' is corrupted or not a valid ZIP file.")
-        except Exception as e:
+        except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS as e:
             issues.append(f"Error processing archive '{archive_path_obj.name}': {e}")
             logging.error(f"Error processing archive {archive_path_obj.name}: {e}", exc_info=True)
 
@@ -1025,22 +1036,22 @@ class FileValidator:
                     for t in soup.find_all(tag_name):
                         try:
                             t.decompose()
-                        except Exception:
+                        except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
                             try:
                                 t.extract()
-                            except Exception:
+                            except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
                                 pass
                 # Remove HTML comments which may contain scripts
                 for c in soup.find_all(string=lambda s: isinstance(s, Comment)):
                     try:
                         c.extract()
-                    except Exception:
+                    except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
                         pass
                 preprocessed = str(soup)
-            except Exception:
+            except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
                 try:
                     preprocessed = _drop_html_blocks(preprocessed, HTML_DANGEROUS_TAGS)
-                except Exception:
+                except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
                     preprocessed = html_content
 
             import bleach  # type: ignore
@@ -1068,21 +1079,21 @@ class FileValidator:
                         rel_set.update({'noopener', 'noreferrer'})
                         a['rel'] = ' '.join(sorted(rel_set))
                 cleaned_html = str(soup2)
-            except Exception:
+            except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
                 # If BeautifulSoup is unavailable, keep cleaned_html as-is.
                 pass
             logging.info("HTML content sanitized with bleach (scripts/styles removed).")
             return cleaned_html
-        except Exception as e:
+        except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS as e:
             logging.warning(f"Bleach not available or failed ({e}); falling back to tag stripping.")
             try:
                 # Prefer the preprocessed (script/style/comments removed) content if available
                 try:
                     _pre = preprocessed  # type: ignore[name-defined]
-                except Exception:
+                except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
                     _pre = html_content
                 return _strip_html_tags(_pre, HTML_DANGEROUS_TAGS)
-            except Exception:
+            except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
                 # As a last resort, return the original content
                 return html_content
 
@@ -1090,13 +1101,13 @@ class FileValidator:
         # Guarded XML parse using defusedxml; optionally strip comments/PIs.
         try:
             from defusedxml import ElementTree as DET  # type: ignore
-        except Exception:
+        except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
             logging.warning("defusedxml not available; returning original XML content.")
             return xml_content
 
         try:
             root = DET.fromstring(xml_content.encode('utf-8', errors='ignore'))
-        except Exception as e:
+        except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS as e:
             raise FileValidationError(f"Invalid XML content: {e}")
 
         # Optionally strip comments and processing instructions
@@ -1116,14 +1127,14 @@ class FileValidator:
                             continue
                         _strip(elem)
                 _strip(root)
-        except Exception:
+        except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
             pass
 
         try:
             cleaned = DET.tostring(root, encoding='unicode')
             logging.info("XML content sanitized with defusedxml.")
             return cleaned
-        except Exception:
+        except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
             return xml_content
 
 
@@ -1183,7 +1194,7 @@ def process_and_validate_file(
                 if sanitized and sanitized != text:
                     p_file_path.write_text(sanitized, encoding='utf-8')
                     logging.info(f"Sanitized {media_type_key.upper()} file content: {_original_filename}")
-            except Exception as e:
+            except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS as e:
                 logging.warning(f"Sanitization failed for {_original_filename}: {e}")
 
     return validation_result

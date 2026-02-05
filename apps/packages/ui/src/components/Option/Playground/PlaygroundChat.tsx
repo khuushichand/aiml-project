@@ -17,6 +17,7 @@ import { tldwModels } from "@/services/tldw"
 import { applyVariantToMessage } from "@/utils/message-variants"
 import type { Character } from "@/types/character"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
+import { ChatGreetingPicker } from "@/components/Common/ChatGreetingPicker"
 
 type TimelineBlock =
   | { kind: "single"; index: number }
@@ -338,6 +339,13 @@ export const PlaygroundChat = () => {
             <PlaygroundEmpty />
           </div>
         )}
+        <ChatGreetingPicker
+          selectedCharacter={selectedCharacter}
+          messages={messages}
+          historyId={historyId}
+          serverChatId={serverChatId}
+          className="mb-6 mt-4"
+        />
         {blocks.map((block, blockIndex) => {
           if (block.kind === "single") {
             const message = messages[block.index]

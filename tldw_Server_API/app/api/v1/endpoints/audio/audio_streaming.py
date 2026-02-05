@@ -61,6 +61,33 @@ from tldw_Server_API.app.core.Streaming import speech_chat_service
 from tldw_Server_API.app.core.TTS.realtime_session import RealtimeSessionConfig
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 
+_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    IndexError,
+    KeyError,
+    LookupError,
+    NameError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    configparser.Error,
+    json.JSONDecodeError,
+    HTTPException,
+    WebSocketDisconnect,
+    QuotaExceeded,
+    *EXPECTED_DB_EXC,
+    *EXPECTED_REDIS_EXC,
+)
+
 router = APIRouter(
     tags=["Audio"],
     responses={
@@ -75,14 +102,14 @@ def _audio_shim_attr(name: str):
     try:
         if name in getattr(audio_shim, "__dict__", {}):
             return getattr(audio_shim, name)
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_mod
 
         if hasattr(audio_mod, name):
             return getattr(audio_mod, name)
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         pass
     if not hasattr(audio_shim, name):
         raise NameError(name)
@@ -92,14 +119,14 @@ def _audio_shim_attr(name: str):
 def _shim_asyncio():
     try:
         return _audio_shim_attr("asyncio")
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         return asyncio
 
 
 async def _shim_audio_ws_authenticate(*args, **kwargs):
     try:
         fn = _audio_shim_attr("_audio_ws_authenticate")
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         fn = _audio_ws_authenticate
     return await fn(*args, **kwargs)
 
@@ -107,7 +134,7 @@ async def _shim_audio_ws_authenticate(*args, **kwargs):
 def _shim_get_metrics_registry():
     try:
         fn = _audio_shim_attr("get_metrics_registry")
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         fn = get_metrics_registry
     return fn()
 
@@ -115,7 +142,7 @@ def _shim_get_metrics_registry():
 def _shim_get_api_keys():
     try:
         fn = _audio_shim_attr("get_api_keys")
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         fn = get_api_keys
     return fn()
 
@@ -123,7 +150,7 @@ def _shim_get_api_keys():
 async def _shim_chat_api_call_async(**kwargs):
     try:
         fn = _audio_shim_attr("chat_api_call_async")
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         fn = chat_api_call_async
     return await fn(**kwargs)
 
@@ -131,21 +158,21 @@ async def _shim_chat_api_call_async(**kwargs):
 def _shim_transcriber_cls():
     try:
         return _audio_shim_attr("UnifiedStreamingTranscriber")
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         return UnifiedStreamingTranscriber
 
 
 def _shim_silero_cls():
     try:
         return _audio_shim_attr("SileroTurnDetector")
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         return SileroTurnDetector
 
 
 async def _shim_get_tts_service():
     try:
         fn = _audio_shim_attr("get_tts_service")
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         fn = get_tts_service
     return await fn()
 
@@ -243,7 +270,7 @@ async def audio_chat_turn(
                 "input_audio_format": request_data.input_audio_format,
             },
         )
-    except Exception as e:  # noqa: BLE001
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as e:  # noqa: BLE001
         logger.debug(f"usage_log audio.chat failed: error={e}; request_id={rid}")
 
     acquired_stream = False
@@ -271,11 +298,11 @@ async def audio_chat_turn(
             if acquired_stream:
                 try:
                     await _finish_stream(user_id_for_usage)
-                except Exception as e:
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"_finish_stream failed (audio chat): {e}")
     except HTTPException:
         raise
-    except Exception as e:  # noqa: BLE001
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as e:  # noqa: BLE001
         logger.error(f"Speech chat turn failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -319,7 +346,7 @@ async def websocket_transcribe(
             labels={"component": "audio", "endpoint": "audio_unified_ws"},
         )
         await _outer_stream.start()
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         _outer_stream = None
     if _outer_stream is None:
         class _BareStream:
@@ -333,17 +360,17 @@ async def websocket_transcribe(
                         state = getattr(self.ws, "application_state", None)
                         if state is not None and str(state).upper().endswith("CONNECTED"):
                             already_accepted = True
-                    except Exception:
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                         already_accepted = False
                     if hasattr(self.ws, "accept") and not already_accepted:
                         await self.ws.accept()
-                except Exception as exc:  # noqa: BLE001
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                     logger.debug(f"_BareStream.start failed: {exc}")
 
             async def send_json(self, payload: dict[str, Any]) -> None:
                 try:
                     await self.ws.send_json(payload)
-                except Exception as exc:
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"_BareStream.send_json failed: {exc}")
 
             async def error(self, code: str, message: str, *, data: Optional[dict[str, Any]] = None) -> None:
@@ -372,11 +399,11 @@ async def websocket_transcribe(
             or (websocket.query_params.get("request_id") if hasattr(websocket, "query_params") else None)
             or str(uuid4())
         )
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         request_id = str(uuid4())
     try:
         logger.info(f"Audio WS connected: request_id={request_id}")
-    except Exception as exc:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"Audio WS connection logging failed: {exc}")
 
     # Ops toggle for standardized close code on quota/rate limits (4003 → 1008)
@@ -407,7 +434,7 @@ async def websocket_transcribe(
             if cfg.has_section("STT-Settings"):
                 # Nemo model variant (standard|onnx|mlx)
                 default_variant = cfg.get("STT-Settings", "nemo_model_variant", fallback="standard").strip().lower()
-        except Exception as e:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Could not read STT-Settings from config: {e}")
 
         # If Nemo toolkit is unavailable in this environment, prefer Whisper
@@ -419,7 +446,7 @@ async def websocket_transcribe(
             )
 
             nemo_ok = _is_nemo_available()
-        except Exception:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
             nemo_ok = False
         if not nemo_ok:
             default_model = "whisper"
@@ -518,13 +545,13 @@ async def websocket_transcribe(
                         "audio_failopen_minutes_total", value=float(minutes_chunk), labels={"reason": "db_check"}
                     )
                     increment_counter("audio_failopen_events_total", labels={"reason": "db_check"})
-                except Exception as m_err:
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                     logger.debug(f"metrics increment failed (audio_failopen_db_check): error={m_err}")
                 deducted = True
                 if failopen_remaining <= 0:
                     try:
                         increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_check"})
-                    except Exception as m_err:
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                         logger.debug(f"metrics increment failed (audio_failopen_cap_db_check): error={m_err}")
                     raise _QuotaExceeded("daily_minutes") from None
             if not allow:
@@ -552,12 +579,12 @@ async def websocket_transcribe(
                             labels={"reason": "db_record"},
                         )
                         increment_counter("audio_failopen_events_total", labels={"reason": "db_record"})
-                    except Exception as m_err:
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                         logger.debug(f"metrics increment failed (audio_failopen_db_record): error={m_err}")
                     if failopen_remaining <= 0:
                         try:
                             increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_record"})
-                        except Exception as m_err:
+                        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                             logger.debug(f"metrics increment failed (audio_failopen_cap_db_record): error={m_err}")
                         raise _QuotaExceeded("daily_minutes") from None
 
@@ -592,11 +619,11 @@ async def websocket_transcribe(
                             "message": "Streaming transcription quota exceeded (daily minutes)",
                         }
                     )
-            except Exception as send_exc:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
                 logger.debug(f"WebSocket send_json quota error failed: error={send_exc}")
             try:
                 await websocket.close(code=_policy_close_code(), reason="quota_exceeded")
-            except Exception as close_exc:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as close_exc:
                 logger.debug(f"WebSocket close (quota case) failed: error={close_exc}")
         finally:
             if acquired_stream:
@@ -610,7 +637,7 @@ async def websocket_transcribe(
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
-    except Exception as e:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"WebSocket error: {e}")
         # Best-effort: map quota exception variants to structured error
         try:
@@ -632,35 +659,35 @@ async def websocket_transcribe(
                 finally:
                     try:
                         await websocket.close(code=_policy_close_code(), reason="quota_exceeded")
-                    except Exception as e:
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"WebSocket close after quota exceeded failed: error={e}")
                         try:
                             increment_counter(
                                 "app_warning_events_total",
                                 labels={"component": "audio", "event": "ws_close_quota_failed"},
                             )
-                        except Exception as m_err:
+                        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                             logger.debug(f"metrics increment failed (audio ws_close_quota_failed): error={m_err}")
             else:
                 # Let inner handler's error payload (if any) be the authoritative one.
                 # Avoid sending a duplicate generic error frame that could race the client.
                 pass
-        except Exception as e:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Streaming transcription outer handler swallowed error: {e}")
             try:
                 increment_counter(
                     "app_warning_events_total", labels={"component": "audio", "event": "stream_outer_handler_error"}
                 )
-            except Exception as m_err:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                 logger.debug(f"metrics increment failed (audio stream_outer_handler_error): error={m_err}")
     finally:
         try:
             await websocket.close()
-        except Exception as e:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"WebSocket close failed: error={e}")
             try:
                 increment_counter("app_warning_events_total", labels={"component": "audio", "event": "ws_close_failed"})
-            except Exception as m_err:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                 logger.debug(f"metrics increment failed (audio ws_close_failed): error={m_err}")
 
 
@@ -685,7 +712,7 @@ async def websocket_audio_chat_stream(
     try:
         _raw_idle = os.getenv("AUDIO_WS_IDLE_TIMEOUT_S") or os.getenv("STREAM_IDLE_TIMEOUT_S")
         _idle_timeout = float(_raw_idle) if _raw_idle else None
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         _idle_timeout = None
 
     aio = _shim_asyncio()
@@ -706,7 +733,7 @@ async def websocket_audio_chat_stream(
             labels={"component": "audio", "endpoint": "audio_chat_ws"},
         )
         await _outer_stream.start()
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         _outer_stream = None
 
     try:
@@ -717,11 +744,11 @@ async def websocket_audio_chat_stream(
             or (websocket.query_params.get("request_id") if hasattr(websocket, "query_params") else None)
             or str(uuid4())
         )
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         request_id = str(uuid4())
     try:
         logger.info(f"Audio chat WS connected: request_id={request_id}")
-    except Exception as exc:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"Audio chat WS connection logging failed: {exc}")
 
     reg = _shim_get_metrics_registry()
@@ -767,7 +794,7 @@ async def websocket_audio_chat_stream(
                 await websocket.close(code=_policy_close_code())
                 return
             acquired_stream = True
-        except Exception:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
             if _outer_stream:
                 await _outer_stream.send_json(
                     {
@@ -810,13 +837,13 @@ async def websocket_audio_chat_stream(
                         "audio_failopen_minutes_total", value=float(minutes_chunk), labels={"reason": "db_check"}
                     )
                     increment_counter("audio_failopen_events_total", labels={"reason": "db_check"})
-                except Exception as m_err:  # noqa: BLE001
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:  # noqa: BLE001
                     logger.debug(f"metrics increment failed (audio_chat_failopen_db_check): error={m_err}")
                 deducted = True
                 if failopen_remaining <= 0:
                     try:
                         increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_check"})
-                    except Exception as m_err:  # noqa: BLE001
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:  # noqa: BLE001
                         logger.debug(
                             f"metrics increment failed (audio_chat_failopen_cap_db_check): error={m_err}"
                         )
@@ -843,12 +870,12 @@ async def websocket_audio_chat_stream(
                             labels={"reason": "db_record"},
                         )
                         increment_counter("audio_failopen_events_total", labels={"reason": "db_record"})
-                    except Exception as m_err:
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                         logger.debug(f"metrics increment failed (audio_chat_failopen_db_record): error={m_err}")
                     if failopen_remaining <= 0:
                         try:
                             increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_record"})
-                        except Exception as m_err:
+                        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                             logger.debug(
                                 f"metrics increment failed (audio_chat_failopen_cap_db_record): error={m_err}"
                             )
@@ -857,14 +884,14 @@ async def websocket_audio_chat_stream(
         async def _on_heartbeat() -> None:
             try:
                 await _heartbeat_stream(user_id_for_usage)  # type: ignore[arg-type]
-            except Exception as _hb_e:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as _hb_e:
                 logger.debug(f"Heartbeat failed for user_id={user_id_for_usage}: {_hb_e}")
 
         # Parse initial config
         try:
             raw_cfg = await wait_for(websocket.receive_text(), timeout=15.0)
             cfg_data = json.loads(raw_cfg)
-        except Exception as exc:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
             if _outer_stream:
                 await _outer_stream.send_json(
                     _ws_error_payload(
@@ -908,11 +935,11 @@ async def websocket_audio_chat_stream(
             if "min_partial_duration" in stt_cfg:
                 try:
                     config.min_partial_duration = max(0.0, float(stt_cfg.get("min_partial_duration")))
-                except Exception as exc:  # noqa: BLE001
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                     logger.debug(f"Invalid min_partial_duration value in audio chat config: {exc}")
             if "language" in stt_cfg:
                 config.language = stt_cfg.get("language")
-        except Exception as cfg_exc:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as cfg_exc:
             logger.debug(f"Failed to parse streaming STT config: {cfg_exc}")
 
         llm_provider = (llm_cfg.get("provider") or llm_cfg.get("api_provider") or DEFAULT_LLM_PROVIDER).lower()
@@ -925,7 +952,7 @@ async def websocket_audio_chat_stream(
         try:
             tts_speed_raw = tts_cfg.get("speed", 1.0)
             tts_speed = float(tts_speed_raw)
-        except Exception:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
             tts_speed = 1.0
         response_format = tts_cfg.get("format") or tts_cfg.get("response_format") or "pcm"
         tts_model = tts_cfg.get("model", "kokoro")
@@ -938,7 +965,7 @@ async def websocket_audio_chat_stream(
             TranscriberCls = _shim_transcriber_cls()
             transcriber = TranscriberCls(config)
             transcriber.initialize()
-        except Exception as exc:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"Streaming transcriber init failed: {exc}", exc_info=True)
             if _outer_stream:
                 data_payload = {
@@ -971,7 +998,7 @@ async def websocket_audio_chat_stream(
                     await _outer_stream.send_json(payload)
                 else:
                     await websocket.send_json(payload)
-            except Exception as send_exc:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
                 logger.debug(f"audio.chat.stream VAD warning send failed: {send_exc}")
 
         if config.enable_vad:
@@ -992,7 +1019,7 @@ async def websocket_audio_chat_stream(
                         turn_detector.unavailable_reason,
                     )
                     turn_detector = None
-            except Exception as vad_exc:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as vad_exc:
                 logger.debug(f"VAD init failed: {vad_exc}")
                 turn_detector = None
 
@@ -1000,19 +1027,19 @@ async def websocket_audio_chat_stream(
         if session_id:
             try:
                 chat_history.append({"role": "system", "content": f"session:{session_id}"})
-            except Exception:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                 chat_history = []
 
         def _action_hint() -> Optional[str]:
             try:
                 if metadata and isinstance(metadata, dict) and metadata.get("action"):
                     return str(metadata.get("action"))
-            except Exception as exc:  # noqa: BLE001
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(f"Failed to read action hint from metadata: {exc}")
             try:
                 if llm_extra_params and isinstance(llm_extra_params, dict) and llm_extra_params.get("action"):
                     return str(llm_extra_params.get("action"))
-            except Exception as exc:  # noqa: BLE001
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(f"Failed to read action hint from llm_extra_params: {exc}")
             return None
 
@@ -1022,7 +1049,7 @@ async def websocket_audio_chat_stream(
                 return None
             try:
                 enabled = getattr(speech_chat_service, "_actions_enabled", lambda: False)()
-            except Exception:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                 enabled = False
             if not enabled:
                 return None
@@ -1030,7 +1057,7 @@ async def websocket_audio_chat_stream(
             user_obj = SimpleNamespace(id=user_id_for_usage)
             try:
                 return await speech_chat_service._execute_action(action_name, transcript_text, user_obj)
-            except Exception as exc:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Streaming action execution failed: action={action_name}, error={exc}")
                 payload = {
                     "action": action_name,
@@ -1139,7 +1166,7 @@ async def websocket_audio_chat_stream(
                             )
                     else:
                         llm_stream = stream_candidate
-            except Exception as exc:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error(f"LLM stream failed: {exc}", exc_info=True)
                 if _outer_stream:
                     await _outer_stream.send_json(
@@ -1163,7 +1190,7 @@ async def websocket_audio_chat_stream(
                         if isinstance(raw_line, (bytes, bytearray))
                         else str(raw_line)
                     )
-                except Exception:
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                     continue
                 if not line_str:
                     continue
@@ -1177,7 +1204,7 @@ async def websocket_audio_chat_stream(
                     payload_str = payload_str[len("data:") :].strip()
                 try:
                     payload = json.loads(payload_str)
-                except Exception:
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                     continue
                 if "error" in payload:
                     if _outer_stream:
@@ -1222,7 +1249,7 @@ async def websocket_audio_chat_stream(
                 chat_history = chat_history[-CHAT_HISTORY_MAX_MESSAGES:]
             try:
                 await byok_resolution.touch_last_used()
-            except Exception as exc:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to update BYOK last_used timestamp for LLM: {exc}")
             return assistant_text, finish_reason, usage_payload
 
@@ -1271,7 +1298,7 @@ async def websocket_audio_chat_stream(
                             "voice": tts_voice,
                         }
                     )
-                except Exception as send_exc:
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
                     logger.debug(f"audio.chat.stream tts_start send failed: error={send_exc}")
 
             try:
@@ -1287,7 +1314,7 @@ async def websocket_audio_chat_stream(
                                     error_type="tts_error",
                                 )
                             )
-                        except Exception as send_exc:
+                        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
                             logger.debug(
                                 f"audio.chat.stream producer error frame send failed: error={send_exc}"
                             )
@@ -1309,7 +1336,7 @@ async def websocket_audio_chat_stream(
                 if _outer_stream:
                     try:
                         await _outer_stream.send_json({"type": "tts_done"})
-                    except Exception as send_exc:
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
                         logger.debug(
                             f"audio.chat.stream tts_done frame send failed: error={send_exc}"
                         )
@@ -1344,7 +1371,7 @@ async def websocket_audio_chat_stream(
                             "endpoint": "audio.chat.stream",
                         },
                     )
-                except Exception as exc:  # noqa: BLE001
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                     logger.debug(
                         "metrics observe failed "
                         "(stt_final_latency_seconds, endpoint=audio.chat.stream): %s",
@@ -1365,7 +1392,7 @@ async def websocket_audio_chat_stream(
                 if action_result:
                     try:
                         chat_history.append({"role": "tool", "content": json.dumps(action_result)})
-                    except Exception as exc:  # noqa: BLE001
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                         logger.debug(f"Failed to append action_result to chat_history: {exc}")
                     if _outer_stream:
                         await _outer_stream.send_json({"type": "action_result", **action_result})
@@ -1373,7 +1400,7 @@ async def websocket_audio_chat_stream(
             finally:
                 try:
                     transcriber.reset()
-                except Exception as exc:  # noqa: BLE001
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                     logger.debug(f"audio.chat.stream transcriber.reset() failed in finalize_turn: {exc}")
                 processing_turn = False
 
@@ -1383,11 +1410,11 @@ async def websocket_audio_chat_stream(
                 try:
                     if _outer_stream:
                         _outer_stream.mark_activity()
-                except Exception as exc:  # noqa: BLE001
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                     logger.debug(f"audio.chat.stream outer_stream.mark_activity failed: {exc}")
                 try:
                     data = json.loads(raw_msg)
-                except Exception:
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                     if _outer_stream:
                         await _outer_stream.send_json(
                             {"type": "error", "error_type": "bad_request", "message": "Invalid JSON"}
@@ -1399,7 +1426,7 @@ async def websocket_audio_chat_stream(
                     audio_base64 = data.get("data", "")
                     try:
                         audio_bytes = base64.b64decode(audio_base64)
-                    except Exception:
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                         if _outer_stream:
                             await _outer_stream.send_json(
                                 {
@@ -1423,7 +1450,7 @@ async def websocket_audio_chat_stream(
 
                     try:
                         seconds = _bytes_to_seconds(len(audio_bytes), int(config.sample_rate or 16000))
-                    except Exception:
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                         seconds = float(len(audio_bytes)) / float(
                             4 * max(1, int(config.sample_rate or 16000))
                         )
@@ -1440,13 +1467,13 @@ async def websocket_audio_chat_stream(
                                         "message": "Streaming quota exceeded",
                                     }
                                 )
-                            except Exception as send_exc:
+                            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
                                 logger.debug(
                                     f"WebSocket send_json quota error failed (audio.chat.stream): error={send_exc}"
                                 )
                         try:
                             await websocket.close(code=_policy_close_code(), reason="quota_exceeded")
-                        except Exception as close_exc:
+                        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as close_exc:
                             logger.debug(
                                 f"WebSocket close (quota case) failed (audio.chat.stream): error={close_exc}"
                             )
@@ -1454,7 +1481,7 @@ async def websocket_audio_chat_stream(
 
                     try:
                         await _on_heartbeat()
-                    except Exception as hb_exc:
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as hb_exc:
                         logger.debug(f"audio.chat.stream heartbeat failed: error={hb_exc}")
 
                     result = await transcriber.process_audio_chunk(audio_bytes)
@@ -1476,7 +1503,7 @@ async def websocket_audio_chat_stream(
                 elif msg_type == "reset":
                     try:
                         transcriber.reset()
-                    except Exception as exc:  # noqa: BLE001
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                         logger.debug(f"audio.chat.stream transcriber.reset() failed on reset message: {exc}")
                     if _outer_stream:
                         await _outer_stream.send_json({"type": "status", "state": "reset"})
@@ -1492,7 +1519,7 @@ async def websocket_audio_chat_stream(
 
         except WebSocketDisconnect:
             logger.info("Audio chat WS disconnected")
-        except Exception as exc:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"Audio chat WS error: {exc}", exc_info=True)
             try:
                 if _outer_stream:
@@ -1504,13 +1531,13 @@ async def websocket_audio_chat_stream(
                             error_type="internal_error",
                         )
                     )
-            except Exception as send_exc:  # noqa: BLE001
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:  # noqa: BLE001
                 logger.debug(f"audio.chat.stream failed to send internal_error frame: {send_exc}")
     finally:
         if acquired_stream:
             try:
                 await _finish_stream(user_id_for_usage)
-            except Exception as exc:  # noqa: BLE001
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(
                     f"Failed to release streaming quota slot (audio.chat.stream): "
                     f"user_id={user_id_for_usage}, error={exc}"
@@ -1518,11 +1545,11 @@ async def websocket_audio_chat_stream(
         try:
             if _outer_stream:
                 await _outer_stream.stop()
-        except Exception as exc:  # noqa: BLE001
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
             logger.debug(f"audio.chat.stream outer_stream.stop failed: {exc}")
         try:
             await websocket.close()
-        except Exception as exc:  # noqa: BLE001
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
             logger.debug(f"audio.chat.stream websocket close failed in cleanup: {exc}")
 
 
@@ -1543,7 +1570,7 @@ async def websocket_tts(
     try:
         _raw_idle = os.getenv("AUDIO_WS_IDLE_TIMEOUT_S") or os.getenv("STREAM_IDLE_TIMEOUT_S")
         _idle_timeout = float(_raw_idle) if _raw_idle else None
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         _idle_timeout = None
 
     aio = _shim_asyncio()
@@ -1563,7 +1590,7 @@ async def websocket_tts(
             labels={"component": "audio", "endpoint": "audio_tts_ws"},
         )
         await _outer_stream.start()
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         _outer_stream = None
 
     # Correlate via request id
@@ -1575,11 +1602,11 @@ async def websocket_tts(
             or (websocket.query_params.get("request_id") if hasattr(websocket, "query_params") else None)
             or str(uuid4())
         )
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         request_id = str(uuid4())
     try:
         logger.info(f"TTS WS connected: request_id={request_id}")
-    except Exception as exc:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"TTS WS connection logging failed: {exc}")
 
     def _policy_close_code() -> int:
@@ -1619,7 +1646,7 @@ async def websocket_tts(
                 await websocket.close(code=_policy_close_code())
                 return
             acquired_stream = True
-        except Exception:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
             if _outer_stream:
                 await _outer_stream.send_json(
                     {"type": "error", "message": "Unable to evaluate audio stream quota or concurrency"}
@@ -1631,7 +1658,7 @@ async def websocket_tts(
         try:
             prompt_message = await wait_for(websocket.receive_text(), timeout=10.0)
             prompt_data = json.loads(prompt_message)
-        except Exception as exc:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
             if _outer_stream:
                 try:
                     data_payload = {"request_id": request_id}
@@ -1643,7 +1670,7 @@ async def websocket_tts(
                         "Prompt frame required",
                         data=data_payload if data_payload else None,
                     )
-                except Exception as send_exc:
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
                     logger.debug(f"TTS WS error frame send failed: {send_exc}")
             await websocket.close(code=4400)
             return
@@ -1672,7 +1699,7 @@ async def websocket_tts(
 
         try:
             speed_val = float(prompt_data.get("speed", 1.0))
-        except Exception:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
             speed_val = 1.0
 
         extra_params = prompt_data.get("extra_params")
@@ -1734,10 +1761,10 @@ async def websocket_tts(
         try:
             if _outer_stream:
                 await _outer_stream.done()
-        except Exception as outer_exc:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as outer_exc:
             try:
                 await websocket.close()
-            except Exception as close_exc:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as close_exc:
                 logger.debug(
                     f"audio.stream.tts websocket close failed after _outer_stream.done error: "
                     f"outer_error={outer_exc}, close_error={close_exc}"
@@ -1767,7 +1794,7 @@ async def websocket_tts_realtime(
     try:
         _raw_idle = os.getenv("AUDIO_WS_IDLE_TIMEOUT_S") or os.getenv("STREAM_IDLE_TIMEOUT_S")
         _idle_timeout = float(_raw_idle) if _raw_idle else None
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         _idle_timeout = None
 
     aio = _shim_asyncio()
@@ -1788,7 +1815,7 @@ async def websocket_tts_realtime(
             labels={"component": "audio", "endpoint": "audio_tts_realtime_ws"},
         )
         await _outer_stream.start()
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         _outer_stream = None
 
     try:
@@ -1799,7 +1826,7 @@ async def websocket_tts_realtime(
             or (websocket.query_params.get("request_id") if hasattr(websocket, "query_params") else None)
             or str(uuid4())
         )
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         request_id = str(uuid4())
 
     def _policy_close_code() -> int:
@@ -1821,7 +1848,7 @@ async def websocket_tts_realtime(
 
             limits = ProviderLimits.get_limits(str(provider_name).lower()) if provider_name else ProviderLimits.get_limits("default")
             return set(limits.get("valid_formats", {"pcm", "wav", "mp3"}))
-        except Exception:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
             return {"pcm", "wav", "mp3", "opus", "flac"}
 
     async def _send_error(code: str, message: str, *, close: bool = False, close_code: Optional[int] = None) -> None:
@@ -1847,11 +1874,11 @@ async def websocket_tts_realtime(
             else:
                 try:
                     close_code = _outer_stream._map_close_code(code) if _outer_stream else 1011
-                except Exception:
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                     close_code = 1011
         try:
             await websocket.close(code=close_code)
-        except Exception:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
             pass
 
     auth_ok, jwt_user_id = await _shim_audio_ws_authenticate(
@@ -1878,13 +1905,13 @@ async def websocket_tts_realtime(
     def _coerce_float(val: Any, default: float) -> float:
         try:
             return float(val)
-        except Exception:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
             return default
 
     def _coerce_int(val: Any, default: int) -> int:
         try:
             return int(val)
-        except Exception:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
             return default
 
     try:
@@ -1895,7 +1922,7 @@ async def websocket_tts_realtime(
                 await websocket.close(code=_policy_close_code())
                 return
             acquired_stream = True
-        except Exception:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
             await _send_error("quota_error", "Unable to evaluate audio stream quota or concurrency", close=False)
             await websocket.close(code=_policy_close_code())
             return
@@ -1904,7 +1931,7 @@ async def websocket_tts_realtime(
         try:
             raw_msg = await wait_for(websocket.receive_text(), timeout=10.0)
             first = json.loads(raw_msg)
-        except Exception as exc:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"TTS realtime WS initial frame parse failed: {exc}")
             await _send_error("bad_request", "Initial config or text frame required", close=False)
             await websocket.close(code=4400)
@@ -1977,7 +2004,7 @@ async def websocket_tts_realtime(
                 )
                 try:
                     await session.finish()
-                except Exception:
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                     pass
                 return
 
@@ -2001,7 +2028,7 @@ async def websocket_tts_realtime(
                     await websocket.send_bytes(chunk)
                     if _outer_stream:
                         _outer_stream.mark_activity()
-            except Exception as exc:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"TTS realtime audio sender failed: {exc}")
 
         sender_task = create_task(_audio_sender())
@@ -2038,7 +2065,7 @@ async def websocket_tts_realtime(
 
             try:
                 data = json.loads(raw_msg)
-            except Exception:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                 await _send_error("bad_request", "Invalid JSON frame", close=False)
                 await websocket.close(code=4400)
                 return
@@ -2084,23 +2111,23 @@ async def websocket_tts_realtime(
             done_sent = True
     except WebSocketDisconnect:
         logger.info("TTS realtime WS disconnected")
-    except Exception as exc:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"TTS realtime WS error: {exc}", exc_info=True)
         try:
             await _send_error("internal_error", "Internal error", close=True)
-        except Exception:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
             pass
     finally:
         if session is not None:
             try:
                 await session.finish()
-            except Exception:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                 pass
         if sender_task and not sender_task.done():
             sender_task.cancel()
             try:
                 await sender_task
-            except Exception:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                 pass
         if acquired_stream:
             try:
@@ -2113,10 +2140,10 @@ async def websocket_tts_realtime(
         try:
             if _outer_stream and not done_sent and not error_sent:
                 await _outer_stream.done()
-        except Exception as outer_exc:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as outer_exc:
             try:
                 await websocket.close()
-            except Exception as close_exc:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as close_exc:
                 logger.debug(
                     "audio.stream.tts.realtime websocket close failed after _outer_stream.done error: "
                     f"outer_error={outer_exc}, close_error={close_exc}"
@@ -2179,7 +2206,7 @@ async def streaming_status():
             },
         }
 
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         logger.error("Error checking streaming status", exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2328,7 +2355,7 @@ async def test_streaming():
             "test_result": result if result else "Buffer accumulating",
         }
 
-    except Exception:
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         logger.error("Streaming test failed", exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

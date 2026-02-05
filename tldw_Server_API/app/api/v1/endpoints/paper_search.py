@@ -13,6 +13,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
 
+try:
+    import httpx
+except ImportError:
+    httpx = None
+
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
+
 from tldw_Server_API.app.api.v1.API_Deps.backpressure import guard_backpressure_and_quota
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
@@ -81,6 +91,26 @@ _PROVIDER_ERROR_DETAIL = "Upstream provider request failed"
 _PROVIDER_UNEXPECTED_DETAIL = "Unexpected provider error"
 _PROVIDER_NOT_CONFIGURED_DETAIL = "Upstream provider not configured"
 
+_HTTPX_ERROR = getattr(httpx, "HTTPError", None) if httpx is not None else None
+_AIOHTTP_ERROR = getattr(aiohttp, "ClientError", None) if aiohttp is not None else None
+_OPTIONAL_HTTP_EXCEPTIONS = tuple(
+    exc for exc in (_HTTPX_ERROR, _AIOHTTP_ERROR) if exc is not None
+)
+
+_PAPER_SEARCH_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    json.JSONDecodeError,
+    re.error,
+    asyncio.TimeoutError,
+) + _OPTIONAL_HTTP_EXCEPTIONS
+
 
 def _raise_http_error_from_exception(
     exc: Exception,
@@ -135,7 +165,7 @@ async def _download_pdf_bytes(
                         disp = str((_resp.headers or {}).get("Content-Disposition") or "").lower()
                         if (".pdf" not in disp) and not (isinstance(getattr(_resp, "content", b""), (bytes, bytearray)) and (getattr(_resp, "content", b"") or b"").startswith(b"%PDF")):
                             raise HTTPException(status_code=415, detail="Expected PDF content")
-                    except Exception:
+                    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
                         # If header inspection fails, fall through to content check below
                         pass
                 data_b = getattr(_resp, "content", b"") or b""
@@ -144,7 +174,7 @@ async def _download_pdf_bytes(
                 return bytes(data_b)
     except HTTPException:
         raise
-    except Exception:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
         # Fallback to standard async client path below
         pass
 
@@ -158,7 +188,7 @@ async def _download_pdf_bytes(
         finally:
             try:
                 await r.aclose()
-            except Exception:
+            except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
                 pass
         if ctype:
             is_pdf = ("application/pdf" in ctype) or ctype.endswith("/pdf")
@@ -166,7 +196,7 @@ async def _download_pdf_bytes(
                 raise HTTPException(status_code=415, detail=f"Expected application/pdf; got {ctype}")
             if not is_pdf:
                 logger.warning(f"PDF download content-type not 'application/pdf': {ctype}; continuing")
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         # Preflight may fail; log and proceed to GET download
         logger.debug(f"Preflight GET Range failed for {url}: {e}")
 
@@ -184,7 +214,7 @@ async def _download_pdf_bytes(
         try:
             if dest_path.exists():
                 os.unlink(dest_path)
-        except Exception:
+        except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
             pass
 
 
@@ -214,7 +244,7 @@ async def paper_search_arxiv(
             start_index,
             search_params.results_per_page,
         )
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected arXiv search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -275,7 +305,7 @@ async def paper_search_biorxiv(
             raise HTTPException(status_code=500, detail="BioRxiv search failed to return data.")
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected BioRxiv search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -333,7 +363,7 @@ async def paper_search_medrxiv_by_doi(
         return BioRxivPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected MedRxiv DOI error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -461,7 +491,7 @@ async def pmc_oai_identify():
         return PMCOAIIdentifyResponse(info=info)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected PMC OAI Identify error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -491,7 +521,7 @@ async def pmc_oai_list_sets(resumptionToken: Optional[str] = Query(None)):
         ], resumption_token=next_token)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected PMC OAI ListSets error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -528,7 +558,7 @@ async def pmc_oai_list_identifiers(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected PMC OAI ListIdentifiers error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -565,7 +595,7 @@ async def pmc_oai_list_records(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected PMC OAI ListRecords error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -590,7 +620,7 @@ async def pmc_oai_get_record(identifier: str = Query(...), metadataPrefix: str =
         return PMCOAIRecord(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected PMC OAI GetRecord error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -617,7 +647,7 @@ async def pmc_oa_identify():
         return PMCOAIdentifyResponse(info=info)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected PMC OA Identify error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -665,7 +695,7 @@ async def pmc_oa_query(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected PMC OA query error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -701,7 +731,7 @@ async def pmc_oa_fetch_pdf(pmcid: str = Query(..., description="PMCID numeric or
         return resp
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected PMC OA fetch-pdf error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -798,7 +828,7 @@ async def pmc_oa_ingest_pdf(
                 oai_item, oai_err = await loop.run_in_executor(None, PMC_OAI.pmc_oai_get_record, oai_id, "oai_dc")
                 if not oai_err and oai_item and isinstance(oai_item.get("metadata"), dict):
                     enriched_oai = oai_item["metadata"]
-            except Exception as _oai_ex:
+            except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as _oai_ex:
                 logger.warning(f"OAI-PMH enrichment failed: {_oai_ex}")
 
         # 4) Persist to DB
@@ -820,7 +850,7 @@ async def pmc_oa_ingest_pdf(
                 import json
                 enrich_txt = json.dumps({"oai_dc": enriched_oai}, ensure_ascii=False, indent=2)
                 analysis_for_db = (analysis_for_db + "\n\nOAI Metadata:\n" + enrich_txt) if analysis_for_db else ("OAI Metadata:\n" + enrich_txt)
-            except Exception:
+            except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
                 pass
         extracted_keywords = metadata_for_db.get('keywords') or result.get('keywords') or []
         combined_keywords = set(kw_list or [])
@@ -838,7 +868,7 @@ async def pmc_oa_ingest_pdf(
                     try:
                         import json as _json
                         safe_metadata_json = _json.dumps({"oai_dc": enriched_oai}, ensure_ascii=False)
-                    except Exception:
+                    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
                         safe_metadata_json = None
                 # Build plaintext chunks for chunk-level FTS if chunking enabled
                 chunks_for_sql = None
@@ -872,7 +902,7 @@ async def pmc_oa_ingest_pdf(
                                 'chunk_type': _ctype,
                                 'metadata': _small,
                             })
-                except Exception:
+                except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
                     chunks_for_sql = None
 
                 db_id, media_uuid, db_msg = await loop.run_in_executor(
@@ -897,7 +927,7 @@ async def pmc_oa_ingest_pdf(
                         chunks=chunks_for_sql,
                     )
                 )
-            except Exception as e:
+            except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"DB persistence failed for PMCID {pmcid}: {e}", exc_info=True)
                 db_msg = f"DB error: {e}"
 
@@ -912,7 +942,7 @@ async def pmc_oa_ingest_pdf(
         }
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected PMC OA ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -925,7 +955,7 @@ def _http_session():
     client = _create_http_client(timeout=30)
     try:
         client.headers.update({"Accept-Encoding": "gzip, deflate"})
-    except Exception:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
         pass
     return client
 
@@ -973,7 +1003,7 @@ async def arxiv_ingest(
                 parsed = Arxiv.parse_arxiv_feed(xml_text.encode("utf-8"))
                 if parsed:
                     meta = parsed[0]
-            except Exception:
+            except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
                 meta = {}
         pdf_url = Arxiv.fetch_arxiv_pdf_url(arxiv_id)
         if not pdf_url:
@@ -1057,7 +1087,7 @@ async def arxiv_ingest(
                         'chunk_type': _ctype,
                         'metadata': _small,
                     })
-        except Exception:
+        except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
             chunks_for_sql = None
 
         media_id, media_uuid, msg = await loop.run_in_executor(
@@ -1081,7 +1111,7 @@ async def arxiv_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         _raise_http_error_from_exception(
             e,
             not_found_detail="arXiv PDF returned 404",
@@ -1204,7 +1234,7 @@ async def eartharxiv_ingest(
                         'chunk_type': _ctype,
                         'metadata': _small,
                     })
-        except Exception:
+        except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
             chunks_for_sql = None
 
         media_id, media_uuid, msg = await loop.run_in_executor(
@@ -1228,7 +1258,7 @@ async def eartharxiv_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         _raise_http_error_from_exception(
             e,
             not_found_detail="EarthArXiv PDF returned 404",
@@ -1362,7 +1392,7 @@ async def pubmed_ingest(
                         'chunk_type': _ctype,
                         'metadata': _small,
                     })
-        except Exception:
+        except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
             chunks_for_sql = None
 
         media_id, media_uuid, msg = await loop.run_in_executor(
@@ -1386,7 +1416,7 @@ async def pubmed_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"PubMed ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="PubMed ingest failed") from e
 
@@ -1499,7 +1529,7 @@ async def s2_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Semantic Scholar ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Semantic Scholar ingest failed") from e
 
@@ -1536,7 +1566,7 @@ async def paper_search_biorxiv_by_doi(
         return BioRxivPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected BioRxiv DOI error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -1584,7 +1614,7 @@ async def paper_search_semantic_scholar(
             raise HTTPException(status_code=500, detail="Semantic Scholar search returned invalid data.")
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected Semantic Scholar search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -1658,7 +1688,7 @@ async def paper_search_biorxiv_pubs(
             raise HTTPException(status_code=500, detail="BioRxiv pubs search failed to return data.")
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected BioRxiv pubs search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -1729,7 +1759,7 @@ async def paper_search_pubmed(
             raise HTTPException(status_code=500, detail="PubMed search failed to return data.")
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected PubMed search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -1782,7 +1812,7 @@ async def paper_search_biorxiv_pubs_by_doi(
         return BioRxivPublishedRecord(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected BioRxiv pubs by-doi error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -1840,7 +1870,7 @@ async def paper_search_biorxiv_publisher(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected BioRxiv publisher search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -1892,7 +1922,7 @@ async def paper_search_biorxiv_pub(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected BioRxiv pub search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -1950,7 +1980,7 @@ async def paper_search_biorxiv_funder(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected BioRxiv funder search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -1977,7 +2007,7 @@ async def paper_search_biorxiv_summary(
         return BioRxivSummaryResponse(query_echo={"interval": search_params.interval}, items=items)  # type: ignore[arg-type]
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected BioRxiv summary error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -2004,7 +2034,7 @@ async def paper_search_biorxiv_usage(
         return BioRxivUsageResponse(query_echo={"interval": search_params.interval}, items=items)  # type: ignore[arg-type]
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected BioRxiv usage error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -2315,7 +2345,7 @@ async def repec_by_handle(handle: str = Query(..., min_length=8)):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected RePEc by-handle error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -2337,7 +2367,7 @@ async def repec_citations(handle: str = Query(..., min_length=8)):
         return RepecCitationsResponse(**data)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected RePEc/CitEc citations error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -2386,7 +2416,7 @@ async def paper_search_ieee(search_params: IEEESearchRequestForm = Depends()):
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected IEEE search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -2408,7 +2438,7 @@ async def paper_search_ieee_by_doi(params: DOIRequestForm = Depends()):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected IEEE by-doi error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -2430,7 +2460,7 @@ async def paper_search_ieee_by_id(article_number: str = Query(...)):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected IEEE by-id error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -2477,7 +2507,7 @@ async def paper_search_springer(search_params: SimpleVenueSearchForm = Depends()
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected Springer search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -2499,7 +2529,7 @@ async def paper_search_springer_by_doi(params: DOIRequestForm = Depends()):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected Springer by-doi error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -2553,7 +2583,7 @@ async def paper_search_scopus(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected Scopus search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -2575,7 +2605,7 @@ async def paper_search_scopus_by_doi(params: DOIRequestForm = Depends()):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected Scopus by-doi error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -2624,7 +2654,7 @@ async def paper_search_acm(search_params: SimpleVenueSearchForm = Depends()):
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected ACM search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -2646,7 +2676,7 @@ async def paper_search_acm_by_doi(params: DOIRequestForm = Depends()):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected ACM by-doi error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -2694,7 +2724,7 @@ async def paper_search_wiley(search_params: SimpleVenueSearchForm = Depends()):
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected Wiley search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -2716,7 +2746,7 @@ async def paper_search_wiley_by_doi(params: DOIRequestForm = Depends()):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected Wiley by-doi error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -2809,7 +2839,7 @@ async def ingest_by_doi(
                 content_for_db = result.get("text") or None
             analysis_for_db = result.get("analysis") or None
             meta = result.get("metadata") or {}
-        except Exception:
+        except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
             pass
 
         title_for_db = title or meta.get("title") or doi
@@ -2847,7 +2877,7 @@ async def ingest_by_doi(
                         'chunk_type': _ctype,
                         'metadata': _small,
                     })
-        except Exception:
+        except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
             chunks_for_sql = None
 
         media_id, media_uuid, msg = await loop.run_in_executor(
@@ -2871,7 +2901,7 @@ async def ingest_by_doi(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid, "source_pdf": pdf_url}
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         _raise_http_error_from_exception(
             e,
             not_found_detail="Unpaywall PDF returned 404",
@@ -2970,7 +3000,7 @@ async def ingest_batch(
                                 'chunk_type': _ctype,
                                 'metadata': _small,
                             })
-                except Exception:
+                except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
                     chunks_for_sql = None
                 import json as _json
                 smj = _json.dumps({"provider": "batch", "doi": doi, "pdf_url": pdf_url, "pmcid": pmcid, "arxiv_id": arxiv_id}, ensure_ascii=False)
@@ -3074,7 +3104,7 @@ async def ingest_batch(
                                 'chunk_type': _ctype,
                                 'metadata': _small,
                             })
-                except Exception:
+                except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
                     chunks_for_sql = None
                 import json as _json
                 smj = _json.dumps({"provider": "batch", "pmcid": pmcid_norm}, ensure_ascii=False)
@@ -3104,7 +3134,7 @@ async def ingest_batch(
                 xml_text = None
                 try:
                     xml_text = Arxiv.fetch_arxiv_xml(arxiv_id) or ""
-                except Exception:
+                except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
                     xml_text = None
                 meta = {}
                 if xml_text:
@@ -3112,12 +3142,12 @@ async def ingest_batch(
                         parsed = Arxiv.parse_arxiv_feed(xml_text.encode("utf-8"))
                         if parsed:
                             meta = parsed[0]
-                    except Exception:
+                    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
                         meta = {}
                 pdf_guess = None
                 try:
                     pdf_guess = Arxiv.fetch_arxiv_pdf_url(arxiv_id)
-                except Exception:
+                except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
                     pdf_guess = None
                 if not pdf_guess:
                     pdf_guess = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
@@ -3183,7 +3213,7 @@ async def ingest_batch(
                                 'chunk_type': _ctype,
                                 'metadata': _small,
                             })
-                except Exception:
+                except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
                     chunks_for_sql = None
                 import json as _json
                 smj = _json.dumps({"provider": "batch", "arxiv_id": arxiv_id, "pdf_url": pdf_guess}, ensure_ascii=False)
@@ -3266,7 +3296,7 @@ async def ingest_batch(
                 else:
                     content_for_db = result.get("text") or None
                 analysis_for_db = result.get("analysis") or None
-            except Exception:
+            except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
                 pass
             title_for_db = title or doi or (pdf_url.split('/')[-1] if pdf_url else "Document")
             author_for_db = author or None
@@ -3289,7 +3319,7 @@ async def ingest_batch(
                 )
             )
             return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=True, media_id=media_id, media_uuid=media_uuid)
-        except Exception as e:
+        except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Batch ingest error for doi={doi} pmcid={pmcid} arxiv={arxiv_id} pdf={pdf_url}: {e}", exc_info=True)
             return IngestBatchResultItem(
                 doi=doi,
@@ -3362,7 +3392,7 @@ async def chemrxiv_items(search: ChemRxivSearchRequestForm = Depends()):
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected ChemRxiv search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -3384,7 +3414,7 @@ async def chemrxiv_item_by_id(itemId: str = Query(..., min_length=3)):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected ChemRxiv by-id error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -3406,7 +3436,7 @@ async def chemrxiv_item_by_doi(doi: str = Query(..., min_length=3)):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected ChemRxiv by-doi error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -3555,7 +3585,7 @@ async def earthrxiv_search(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected EarthArXiv search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -3577,7 +3607,7 @@ async def earthrxiv_by_id(osf_id: str = Query(..., min_length=3)):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected EarthArXiv by-id error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -3599,7 +3629,7 @@ async def earthrxiv_by_doi(doi: str = Query(..., min_length=3)):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected EarthArXiv by-doi error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -3643,7 +3673,7 @@ async def osf_search(search: OSFSearchRequestForm = Depends()):
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected OSF search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -3665,7 +3695,7 @@ async def osf_by_id(osf_id: str = Query(..., min_length=3)):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected OSF by-id error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -3687,7 +3717,7 @@ async def osf_by_doi(doi: str = Query(..., min_length=3)):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected OSF by-doi error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -3777,7 +3807,7 @@ async def osf_ingest(
         smj = None
         try:
             smj = _json.dumps(sm, ensure_ascii=False)
-        except Exception:
+        except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
             smj = None
 
         # Optional chunk capture for SQL
@@ -3812,7 +3842,7 @@ async def osf_ingest(
                         'chunk_type': _ctype,
                         'metadata': _small,
                     })
-        except Exception:
+        except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
             chunks_for_sql = None
 
         # Persist
@@ -3837,7 +3867,7 @@ async def osf_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         _raise_http_error_from_exception(e)
         logger.error(f"OSF ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="OSF ingest failed") from e
@@ -3925,7 +3955,7 @@ async def zenodo_search(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected Zenodo search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -3947,7 +3977,7 @@ async def zenodo_by_id(record_id: str = Query(..., min_length=1)):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected Zenodo by-id error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -3969,7 +3999,7 @@ async def zenodo_by_doi(doi: str = Query(..., min_length=3)):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected Zenodo by-doi error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -4141,7 +4171,7 @@ async def zenodo_ingest(
                         'chunk_type': _ctype,
                         'metadata': _small,
                     })
-        except Exception:
+        except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
             chunks_for_sql = None
 
         media_id, media_uuid, msg = await loop.run_in_executor(
@@ -4165,7 +4195,7 @@ async def zenodo_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         _raise_http_error_from_exception(e)
         logger.error(f"Zenodo ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Zenodo ingest failed") from e
@@ -4205,7 +4235,7 @@ async def figshare_search(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected Figshare search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -4227,7 +4257,7 @@ async def figshare_by_id(article_id: str = Query(..., min_length=1)):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected Figshare by-id error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -4249,7 +4279,7 @@ async def figshare_by_doi(doi: str = Query(..., min_length=3)):
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected Figshare by-doi error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -4409,7 +4439,7 @@ async def figshare_ingest(
                         'chunk_type': _ctype,
                         'metadata': _small,
                     })
-        except Exception:
+        except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
             chunks_for_sql = None
 
         media_id, media_uuid, msg = await loop.run_in_executor(
@@ -4433,7 +4463,7 @@ async def figshare_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         _raise_http_error_from_exception(e)
         logger.error(f"Figshare ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Figshare ingest failed") from e
@@ -4564,7 +4594,7 @@ async def figshare_ingest_by_doi(
                         'chunk_type': _ctype,
                         'metadata': _small,
                     })
-        except Exception:
+        except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
             chunks_for_sql = None
 
         media_id, media_uuid, msg = await loop.run_in_executor(
@@ -4588,7 +4618,7 @@ async def figshare_ingest_by_doi(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         _raise_http_error_from_exception(e)
         logger.error(f"Figshare ingest-by-doi error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Figshare ingest-by-doi failed") from e
@@ -4630,7 +4660,7 @@ async def hal_search(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected HAL search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -4686,7 +4716,7 @@ async def hal_by_id(docid: str = Query(..., min_length=1), scope: Optional[str] 
         return GenericPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected HAL by-id error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -4808,7 +4838,7 @@ async def hal_ingest(
                         'chunk_type': _ctype,
                         'metadata': _small,
                     })
-        except Exception:
+        except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
             chunks_for_sql = None
 
         media_id, media_uuid, msg = await loop.run_in_executor(
@@ -4832,7 +4862,7 @@ async def hal_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         _raise_http_error_from_exception(e)
         logger.error(f"HAL ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="HAL ingest failed") from e
@@ -4965,7 +4995,7 @@ async def vixra_ingest(
                         'chunk_type': _ctype,
                         'metadata': _small,
                     })
-        except Exception:
+        except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
             chunks_for_sql = None
 
         media_id, media_uuid, msg = await loop.run_in_executor(
@@ -4989,7 +5019,7 @@ async def vixra_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         _raise_http_error_from_exception(e)
         logger.error(f"viXra ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="viXra ingest failed") from e
@@ -5023,7 +5053,7 @@ async def vixra_search(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected viXra search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -5049,7 +5079,7 @@ async def paper_search_arxiv_by_id(
         return ArxivPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected arXiv by-id error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -5086,7 +5116,7 @@ async def paper_search_semantic_scholar_by_id(
         return SemanticScholarPaper(**data)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected Semantic Scholar by-id error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
@@ -5120,6 +5150,6 @@ async def paper_search_pubmed_by_id(
         return PubMedPaper(**item)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected PubMed by-id error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e

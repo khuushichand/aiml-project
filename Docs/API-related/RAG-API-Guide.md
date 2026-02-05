@@ -26,6 +26,8 @@ OpenAPI tags: `rag-unified`, `rag-health`
 ### Available Endpoints
 - `POST /search`              - Unified RAG search (all features via params)
 - `POST /search/stream`       - Streaming answer chunks (NDJSON)
+- `POST /batch`               - Batch multiple queries concurrently
+- `POST /batch/resume/{id}`   - Resume an interrupted batch run
 - `GET  /simple`              - Simple search (query param)
 - `GET  /advanced`            - Advanced search with common flags
 - `GET  /capabilities`        - Pipeline capabilities and defaults
@@ -119,6 +121,51 @@ const response = await fetch('http://localhost:8000/api/v1/rag/search', {
 });
 
 const data = await response.json();
+```
+
+### 1a. Batch Search - `POST /batch`
+
+Run multiple queries concurrently with shared parameters. When `enable_checkpoint=true`, the server emits a `checkpoint_id` and saves per-query progress so you can resume later.
+
+Request (subset):
+```typescript
+interface UnifiedBatchRequest {
+  queries: string[];                 // Required, 1-100
+  max_concurrent?: number;           // Default: 5
+  enable_checkpoint?: boolean;       // Default: false
+  // ...all other UnifiedRAGRequest fields apply to every query
+}
+```
+
+Response (excerpt):
+```typescript
+interface UnifiedBatchResponse {
+  results: UnifiedRAGResponse[];
+  total_queries: number;
+  successful: number;
+  failed: number;
+  total_time: number;
+  checkpoint_id?: string;           // Present when enable_checkpoint=true
+}
+```
+
+Resume:
+```bash
+curl -X POST http://localhost:8000/api/v1/rag/batch/resume/{checkpoint_id} \
+  -H "X-API-KEY: your-api-key"
+```
+
+Example:
+```bash
+curl -X POST http://localhost:8000/api/v1/rag/batch \
+  -H "X-API-KEY: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "queries": ["What is RAG?", "Explain vector search"],
+    "max_concurrent": 5,
+    "enable_checkpoint": true,
+    "enable_generation": true
+  }'
 ```
 
 ### 2. Advanced Search - `GET /advanced`

@@ -170,12 +170,13 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
         }
 
         // Set up location change handler
-        rendition.on("relocated", (location: Location) => {
+        rendition.on("relocated", (location: any) => {
           if (!mounted) return
 
-          const cfi = location.start.cfi
+          const cfi = location?.start?.cfi
+          if (!cfi) return
           const percentage = book.locations.percentageFromCfi(cfi) || 0
-          const locationIndex = book.locations.locationFromCfi(cfi) || 0
+          const locationIndex = Number(book.locations.locationFromCfi(cfi) ?? 0)
 
           setCurrentCfi(cfi)
           setCurrentPercentage(percentage * 100)
@@ -185,8 +186,8 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
           let chapterTitle: string | undefined
           let chapterIndex: number | undefined
 
-          const spine = book.spine
-          const chapter = spine.get(location.start.href)
+          const spine = book.spine as any
+          const chapter = spine?.get?.(location?.start?.href)
           if (chapter) {
             chapterIndex = chapter.index
           }
@@ -194,7 +195,7 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
           // Find chapter title from TOC
           const findTocItem = (items: NavItem[]): NavItem | undefined => {
             for (const item of items) {
-              if (item.href && location.start.href.includes(item.href.split("#")[0])) {
+              if (item.href && location?.start?.href?.includes(item.href.split("#")[0])) {
                 return item
               }
               if (item.subitems) {
@@ -266,8 +267,9 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
         rendition.themes.select(initialTheme)
 
         setIsLoading(false)
-        onLoadSuccess?.({
-          chapterCount: book.spine.length,
+          const spineCount = (book.spine as any)?.length ?? 0
+          onLoadSuccess?.({
+          chapterCount: spineCount,
           toc: navigation.toc
         })
       } catch (err) {
@@ -475,7 +477,7 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
     newRendition.themes.select(epubTheme)
 
     // Display at previous location
-    const targetCfi = currentCfiFromStore || (currentLocation?.start?.cfi)
+    const targetCfi = currentCfiFromStore || ((currentLocation as any)?.start?.cfi)
     if (targetCfi) {
       newRendition.display(targetCfi)
     } else {
@@ -483,10 +485,11 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
     }
 
     // Re-setup event handlers
-    newRendition.on("relocated", (location: Location) => {
-      const cfi = location.start.cfi
+    newRendition.on("relocated", (location: any) => {
+      const cfi = location?.start?.cfi
+      if (!cfi) return
       const percentage = book.locations.percentageFromCfi(cfi) || 0
-      const locationIndex = book.locations.locationFromCfi(cfi) || 0
+      const locationIndex = Number(book.locations.locationFromCfi(cfi) ?? 0)
 
       useDocumentWorkspaceStore.getState().setCurrentCfi(cfi)
       useDocumentWorkspaceStore.getState().setCurrentPercentage(percentage * 100)

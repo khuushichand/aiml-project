@@ -30,6 +30,7 @@ class BatchResult:
 
     Attributes:
         results: Successfully completed results (in original order if indexed).
+        results_by_index: Mapping of original index to result for successful items.
         errors: List of (index, exception) tuples for failed items.
         total: Total items attempted.
         completed: Number successfully completed.
@@ -37,6 +38,7 @@ class BatchResult:
     """
 
     results: list[Any] = field(default_factory=list)
+    results_by_index: dict[int, Any] = field(default_factory=dict)
     errors: list[tuple[int, Exception]] = field(default_factory=list)
     total: int = 0
     completed: int = 0
@@ -59,8 +61,18 @@ class BatchResult:
         the item was skipped (e.g. due to cancellation).
         """
         err_map = {idx: exc for idx, exc in self.errors}
-        success_iter = iter(self.results)
         out: list[Any] = []
+        if self.results_by_index:
+            for idx in range(self.total):
+                if idx in err_map:
+                    out.append(err_map[idx])
+                elif idx in self.results_by_index:
+                    out.append(self.results_by_index[idx])
+                else:
+                    out.append(default)
+            return out
+
+        success_iter = iter(self.results)
         for idx in range(self.total):
             if idx in err_map:
                 out.append(err_map[idx])
@@ -167,6 +179,7 @@ async def run_batch(
 
     return BatchResult(
         results=ordered_results,
+        results_by_index=results_dict,
         errors=errors,
         total=total,
         completed=completed_count,
@@ -256,6 +269,7 @@ async def run_batch_indexed(
 
     return BatchResult(
         results=ordered_results,
+        results_by_index=results_dict,
         errors=errors,
         total=total,
         completed=completed_count,

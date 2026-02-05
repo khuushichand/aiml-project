@@ -33,6 +33,19 @@ from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
+_EVAL_DB_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    sqlite3.Error,
+    json.JSONDecodeError,
+)
+
 
 class _BackendCursorAdapter:
     """Adapter exposing QueryResult via a cursor-like interface."""
@@ -143,14 +156,14 @@ class _EvaluationsBackendConnection:
     def commit(self) -> None:
         try:
             self._conn.commit()
-        except Exception as exc:
+        except _EVAL_DB_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"Failed to commit evaluations backend connection: {exc}", exc_info=True)
             raise
 
     def rollback(self) -> None:
         try:
             self._conn.rollback()
-        except Exception as exc:
+        except _EVAL_DB_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"Failed to rollback evaluations backend connection: {exc}", exc_info=True)
             raise
 
@@ -166,7 +179,7 @@ class EvaluationsDatabase:
             try:
                 uid = DatabasePaths.get_single_user_id()
                 db_path = str(DatabasePaths.get_evaluations_db_path(uid))
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 db_path = "Databases/evaluations.db"
         self.db_path = db_path
         # Resolve backend (content backend by default)
@@ -175,7 +188,7 @@ class EvaluationsDatabase:
             try:
                 cfg = load_comprehensive_config()
                 self.backend = get_content_backend(cfg)
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 self.backend = None
 
         self.backend_type: BackendType = self.backend.backend_type if self.backend else BackendType.SQLITE
@@ -196,7 +209,7 @@ class EvaluationsDatabase:
             # Register explicit adapters to avoid deprecated defaults on Python 3.12+
             try:
                 sqlite3.register_adapter(datetime, lambda d: d.isoformat(sep=" "))
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 pass
             conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
             conn.row_factory = sqlite3.Row
@@ -213,7 +226,7 @@ class EvaluationsDatabase:
         finally:
             try:
                 self.backend.get_pool().return_connection(raw)
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 pass
 
     # --- Backend helpers ---
@@ -451,14 +464,14 @@ class EvaluationsDatabase:
             ]:
                 try:
                     cursor.execute(sql)
-                except Exception:
+                except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                     pass
 
             # Ensure embedding_abtest_queries.created_at exists even on older databases (SQLite cannot add non-constant defaults)
             try:
                 cursor.execute("PRAGMA table_info(embedding_abtest_queries)")
                 columns = {row["name"] for row in cursor.fetchall()}
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 columns = set()
             if "created_at" not in columns:
                 try:
@@ -466,7 +479,7 @@ class EvaluationsDatabase:
                     cursor.execute(
                         "UPDATE embedding_abtest_queries SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
                     )
-                except Exception:
+                except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                     logger.warning("Failed to backfill embedding_abtest_queries.created_at column", exc_info=True)
 
             # Indexes for A/B test tables
@@ -681,7 +694,7 @@ class EvaluationsDatabase:
                 logger.warning("Unified evaluations migration already applied or failed")
         except ImportError:
             logger.warning("Unified evaluations migration module not found, skipping")
-        except Exception as e:
+        except _EVAL_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error applying migrations: {e}")
 
     def _use_unified_table(self) -> bool:
@@ -877,7 +890,7 @@ class EvaluationsDatabase:
                 return int(row.get("count", 0) or 0)
             try:
                 return int(row[0])
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 return 0
 
     def _init_abtest_store(self) -> None:
@@ -904,7 +917,7 @@ class EvaluationsDatabase:
                     sslmode = cfg.pg_sslmode or "prefer"
                     auth = f"{user}:{quote_plus(password)}" if password else user
                     db_url = f"postgresql://{auth}@{host}:{port}/{database}?sslmode={sslmode}"
-                except Exception:
+                except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                     db_url = None
         if not db_url:
             self._abtest_store = None
@@ -916,7 +929,7 @@ class EvaluationsDatabase:
 
             self._abtest_store = get_embeddings_abtest_store(db_url)
             logger.debug("Embeddings A/B tests using SQLAlchemy repository backend")
-        except Exception as exc:
+        except _EVAL_DB_NONCRITICAL_EXCEPTIONS as exc:
             self._abtest_store = None
             logger.warning("Falling back to legacy embeddings A/B persistence: %s", exc)
 
@@ -1241,9 +1254,9 @@ class EvaluationsDatabase:
                         deleted += int(cursor.rowcount or 0)
                         try:
                             conn.commit()
-                        except Exception:
+                        except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                             pass
-                except Exception:
+                except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                     pass
             return deleted
         deleted = 0
@@ -1262,7 +1275,7 @@ class EvaluationsDatabase:
                 else:
                     cursor.execute("DELETE FROM embedding_abtest_results WHERE test_id = ?", (test_id,))
                 deleted += int(cursor.rowcount or 0)
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 if created_by:
@@ -1277,7 +1290,7 @@ class EvaluationsDatabase:
                 else:
                     cursor.execute("DELETE FROM embedding_abtest_queries WHERE test_id = ?", (test_id,))
                 deleted += int(cursor.rowcount or 0)
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 if created_by:
@@ -1292,7 +1305,7 @@ class EvaluationsDatabase:
                 else:
                     cursor.execute("DELETE FROM embedding_abtest_arms WHERE test_id = ?", (test_id,))
                 deleted += int(cursor.rowcount or 0)
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 if created_by:
@@ -1303,7 +1316,7 @@ class EvaluationsDatabase:
                 else:
                     cursor.execute("DELETE FROM embedding_abtests WHERE test_id = ?", (test_id,))
                 deleted += int(cursor.rowcount or 0)
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 pass
             if delete_idempotency:
                 try:
@@ -1315,11 +1328,11 @@ class EvaluationsDatabase:
                         ("emb_abtest%", test_id, f"{test_id}:%"),
                     )
                     deleted += int(cursor.rowcount or 0)
-                except Exception:
+                except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                     pass
             try:
                 conn.commit()
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 pass
         return int(deleted)
 
@@ -1341,7 +1354,7 @@ class EvaluationsDatabase:
                 if row:
                     # sqlite3.Row or dict-like from backend adapter
                     return row[0] if not isinstance(row, dict) else row.get("entity_id")
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 return None
         return None
 
@@ -1375,9 +1388,9 @@ class EvaluationsDatabase:
                 try:
                     if conn:
                         conn.commit()
-                except Exception:
+                except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                     pass
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 # Best-effort; safe to ignore failures
                 pass
 
@@ -1411,7 +1424,7 @@ class EvaluationsDatabase:
                     )
                     conn.commit()
                     deleted = cursor.rowcount if hasattr(cursor, 'rowcount') else 0
-        except Exception as e:
+        except _EVAL_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"cleanup_idempotency_keys failed: {e}")
             return 0
         return int(deleted)
@@ -1752,13 +1765,13 @@ class EvaluationsDatabase:
         if isinstance(value, (int, float)):
             try:
                 return int(value)
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 return int(datetime.now().timestamp()) if fallback_now else None
         # datetime instance
         if isinstance(value, datetime):
             try:
                 return int(value.timestamp())
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 return int(datetime.now().timestamp()) if fallback_now else None
         # string inputs
         if isinstance(value, str):
@@ -1774,7 +1787,7 @@ class EvaluationsDatabase:
                     # Try legacy SQLite format
                     dt = datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
                 return int(dt.timestamp())
-            except Exception as e:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Failed to parse timestamp value: value={value!r}, error={e}")
                 return int(datetime.now().timestamp()) if fallback_now else None
         # Unknown type
@@ -1792,7 +1805,7 @@ class EvaluationsDatabase:
         if isinstance(value, (int, float)):
             try:
                 dt = datetime.fromtimestamp(value, tz=timezone.utc)
-            except Exception:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                 return None
         elif isinstance(value, datetime):
             dt = value
@@ -1801,7 +1814,7 @@ class EvaluationsDatabase:
         try:
             if dt.tzinfo:
                 dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-        except Exception:
+        except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
             pass
         return dt.replace(microsecond=0).isoformat(sep=" ")
 
@@ -1818,7 +1831,7 @@ class EvaluationsDatabase:
         if isinstance(value, str):
             try:
                 return json.loads(value)
-            except Exception as e:
+            except _EVAL_DB_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Failed to json.loads value: {value!r}, error={e}")
                 return default
         # Accept already-parsed JSON-like structures from JSONB (e.g., PostgreSQL)
@@ -1975,7 +1988,7 @@ class EvaluationsDatabase:
                         ),
                     )
                     return True
-                except Exception as exc:
+                except _EVAL_DB_NONCRITICAL_EXCEPTIONS as exc:
                     logger.error(f"Failed to store in unified table (PG): {exc}")
                     return False
             else:
@@ -2005,7 +2018,7 @@ class EvaluationsDatabase:
                         ))
                         conn.commit()
                         return True
-                    except Exception as e:
+                    except _EVAL_DB_NONCRITICAL_EXCEPTIONS as e:
                         logger.error(f"Failed to store in unified table: {e}")
                         conn.rollback()
                         return False
@@ -2039,7 +2052,7 @@ class EvaluationsDatabase:
                         ),
                     )
                     return True
-                except Exception as exc:
+                except _EVAL_DB_NONCRITICAL_EXCEPTIONS as exc:
                     logger.error(f"Failed to store evaluation (PG): {exc}")
                     return False
             else:
@@ -2065,7 +2078,7 @@ class EvaluationsDatabase:
                         ))
                         conn.commit()
                         return True
-                    except Exception as e:
+                    except _EVAL_DB_NONCRITICAL_EXCEPTIONS as e:
                         logger.error(f"Failed to store evaluation: {e}")
                         conn.rollback()
                         return False

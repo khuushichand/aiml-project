@@ -38,6 +38,26 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_setting
 from tldw_Server_API.app.core.AuthNZ.username_utils import normalize_admin_username
 from tldw_Server_API.app.core.DB_Management.Users_DB import ensure_user_directories, get_users_db
 
+_AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+)
+
 #######################################################################################################################
 #
 # Initialization Functions
@@ -73,7 +93,7 @@ def _sanitize_db_url(url: Optional[str]) -> str:
             sanitized_url += f"#{parsed.fragment}"
 
         return sanitized_url or url
-    except Exception:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
         # Fall back to the original string if parsing fails; avoid raising during diagnostics.
         return url
 
@@ -83,7 +103,7 @@ def _resolve_sqlite_db_path(db_url: str) -> Optional[Path]:
     try:
         parsed = urlsplit(db_url)
         scheme = (parsed.scheme or "").lower().split("+", 1)[0]
-    except Exception:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
         scheme = ""
 
     if scheme not in {"sqlite", "file", ""}:
@@ -136,7 +156,7 @@ def _read_env_values(env_path: Optional[Path]) -> dict[str, str]:
         return {}
     try:
         raw = dotenv_values(str(env_path))
-    except Exception:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
         return {}
     return {str(k): str(v) for k, v in raw.items() if k}
 
@@ -330,7 +350,7 @@ def check_environment():
     try:
         load_dotenv(dotenv_path=str(selected_env), override=False)
         print(f"✅ Loaded environment variables from: {selected_env}")
-    except Exception as e:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
         print(f"⚠️  Failed to load .env at {selected_env}: {e}")
 
     env_values = _read_env_values(selected_env)
@@ -353,7 +373,7 @@ def check_environment():
 
     try:
         settings = get_settings()
-    except Exception as exc:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as exc:
         print(f"\n❌ Configuration validation failed: {exc}")
         return {
             "ok": False,
@@ -488,21 +508,21 @@ async def setup_database():
             try:
                 raw_url = get_settings().DATABASE_URL
                 db_url_safe = _sanitize_db_url(raw_url)
-            except Exception as settings_err:
+            except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as settings_err:
                 # Settings resolution failures during bootstrap are non-fatal here; keep "unknown".
                 logger.debug(
                     f"DB URL extraction for diagnostics failed: {settings_err}"
                 )
             try:
                 await ensure_usage_tables_pg(pool)
-            except Exception as usage_err:
+            except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as usage_err:
                 logger.warning(
                     "AuthNZ initialize: ensure_usage_tables_pg failed for Postgres backend "
                     f"(db={db_url_safe}); usage tables may be missing: {usage_err}"
                 )
             try:
                 await ensure_virtual_key_counters_pg(pool)
-            except Exception as vk_err:
+            except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as vk_err:
                 logger.warning(
                     "AuthNZ initialize: ensure_virtual_key_counters_pg failed for Postgres backend "
                     f"(db={db_url_safe}); virtual-key counters tables may be missing: {vk_err}"
@@ -512,7 +532,7 @@ async def setup_database():
                 "✅ Basic schema ensured for Postgres (users, api keys, sessions, "
                 "registration_codes, RBAC, orgs/teams, usage tables)"
             )
-        except Exception as e:
+        except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
             print(f"❌ Failed to bootstrap Postgres schema: {e}")
             logger.exception("Postgres schema bootstrap error")
             return False
@@ -539,10 +559,10 @@ async def ensure_authnz_schema_ready_once() -> None:
     async with _SCHEMA_ENSURE_LOCK:
         try:
             pool = await get_db_pool()
-        except Exception as e:
+        except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
             try:
                 logger.debug(f"AuthNZ schema ensure: failed to acquire DB pool; skipping: {e}")
-            except Exception:
+            except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
                 pass
             return
 
@@ -559,15 +579,15 @@ async def ensure_authnz_schema_ready_once() -> None:
                 try:
                     await asyncio.to_thread(ensure_authnz_tables, Path(str(db_fs_path)))
                     logger.info(f"AuthNZ Startup: ensured SQLite schema at {db_fs_path}")
-                except Exception as mig_err:
+                except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as mig_err:
                     logger.debug(f"AuthNZ Startup: ensure_authnz_tables skipped/failed: {mig_err}")
             _SCHEMA_ENSURED_KEYS.add(key)
-        except Exception as e:
+        except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
             # Do not raise during startup; log for diagnostics
             logger.debug(f"AuthNZ Startup: schema ensure encountered error: {e}")
             try:
                 _SCHEMA_ENSURED_KEYS.add(str(getattr(pool, '_sqlite_fs_path', '') or getattr(pool, 'db_path', '') or ''))
-            except Exception:
+            except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
                 pass
 
 
@@ -582,15 +602,15 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
     # Detect and realign settings/pools so the seed targets the active backend.
     try:
         effective_db_url = os.getenv("DATABASE_URL")
-    except Exception:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
         effective_db_url = None
     try:
         effective_auth_mode = os.getenv("AUTH_MODE")
-    except Exception:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
         effective_auth_mode = None
     try:
         effective_single_user_api_key = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
-    except Exception:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
         effective_single_user_api_key = None
 
     need_reset = False
@@ -610,7 +630,7 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
             from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
 
             await reset_db_pool()
-        except Exception as reset_err:
+        except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as reset_err:
             logger.debug(f"ensure_single_user_rbac_seed_if_needed: reset_db_pool skipped: {reset_err}")
         reset_settings()
         settings = get_settings()
@@ -633,7 +653,7 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
     # - Postgres: ensure core AuthNZ tables (including RBAC) exist via PG extras.
     try:
         await ensure_authnz_schema_ready_once()
-    except Exception as schema_err:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as schema_err:
         logger.debug(
             "ensure_single_user_rbac_seed_if_needed: schema ensure skipped/failed: {}",
             schema_err,
@@ -650,7 +670,7 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                 )
 
                 await ensure_authnz_core_tables_pg(pool)
-            except Exception as ensure_err:
+            except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as ensure_err:
                 logger.debug(
                     "ensure_single_user_rbac_seed_if_needed: PG ensure_authnz_core_tables_pg failed/skipped: {}",
                     ensure_err,
@@ -738,7 +758,7 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                             "Deterministic API key for test automation",
                             "admin",
                         )
-                except Exception as role_assign_err:
+                except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as role_assign_err:
                     # Log at warning level with context so repeated failures surface operationally
                     logger.warning(
                         "Single-user admin role assignment skipped in ensure_single_user_rbac_seed_if_needed "
@@ -760,7 +780,7 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
             db_path_str = str(getattr(pool, "db_path", "") or "")
             if "mode=memory" in db_path_str.lower():
                 sqlite_is_memory = True
-        except Exception:
+        except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
             pass
 
         async with pool.transaction() as conn:  # type: ignore[attr-defined]
@@ -808,7 +828,7 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                         )
                         """
                     )
-                except Exception as table_err:
+                except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as table_err:
                     logger.debug(
                         "SQLite in-memory RBAC table creation skipped (tables may already exist): {}",
                         table_err,
@@ -895,7 +915,7 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                             "admin",
                         ),
                     )
-            except Exception as role_assign_err:
+            except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as role_assign_err:
                 logger.debug(f"Single-user admin role assignment skipped: {role_assign_err}")
             # Commit if adapter requires it
             try:
@@ -903,9 +923,9 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
             except AttributeError:
                 # Adapter doesn't expose commit; nothing to do.
                 pass
-            except Exception as commit_err:
+            except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as commit_err:
                 logger.debug("Commit skipped or failed: {}", commit_err)
-    except Exception as e:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
         # Non-fatal but important for observability: surface failures at warning level
             logger.opt(exception=True).warning(
                 "Single-user RBAC seed ensure skipped or failed in ensure_single_user_rbac_seed_if_needed "
@@ -926,11 +946,11 @@ def _coerce_row_int(row: object, key: str, index: int = 0) -> Optional[int]:
             value = row.get(key)
         else:
             value = row[index]  # type: ignore[index]
-    except Exception:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
         value = None
     try:
         return int(value) if value is not None else None
-    except Exception:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -944,13 +964,13 @@ def _coerce_row_str(row: object, key: str, index: int = 0) -> Optional[str]:
             value = row.get(key)
         else:
             value = row[index]  # type: ignore[index]
-    except Exception:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
         value = None
     if value is None:
         return None
     try:
         return str(value)
-    except Exception:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -987,7 +1007,7 @@ async def _collect_single_user_invariant_errors(
                 "Multiple active users detected in single-user profile: "
                 + ", ".join(str(uid) for uid in extra_active)
             )
-    except Exception as exc:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as exc:
         errors.append(f"Failed to verify active users: {exc}")
 
     try:
@@ -1008,7 +1028,7 @@ async def _collect_single_user_invariant_errors(
                 "Multiple admin users detected in single-user profile: "
                 + ", ".join(str(uid) for uid in extra_admins)
             )
-    except Exception as exc:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as exc:
         errors.append(f"Failed to verify admin users: {exc}")
 
     if check_keys and expected_key_hash:
@@ -1042,7 +1062,7 @@ async def _collect_single_user_invariant_errors(
                     errors.append(
                         "Active primary API key does not match SINGLE_USER_API_KEY."
                     )
-        except Exception as exc:
+        except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as exc:
             errors.append(f"Failed to verify single-user API key invariants: {exc}")
 
     return errors
@@ -1119,7 +1139,7 @@ async def create_admin_user():
 
         return True
 
-    except Exception as e:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
         print(f"❌ Failed to create admin user: {e}")
         return False
 
@@ -1143,7 +1163,7 @@ async def bootstrap_single_user_profile() -> bool:
     # Ensure RBAC seed for the single-user account (roles, permissions, user row)
     try:
         await ensure_single_user_rbac_seed_if_needed()
-    except Exception as e:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
         print(f"⚠️  Single-user RBAC seed failed (continuing): {e}")
         logger.opt(exception=True).warning(
             "Single-user RBAC seed failed in bootstrap_single_user_profile "
@@ -1197,7 +1217,7 @@ async def bootstrap_single_user_profile() -> bool:
             parsed = parse_api_key(api_key_value)
             if parsed:
                 key_identifier, _secret = parsed
-        except Exception as exc:  # noqa: BLE001 - defensive: parsing failures must not block bootstrap
+        except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001 - defensive: parsing failures must not block bootstrap
             logger.opt(exception=True).debug(
                 "Failed to parse SINGLE_USER_API_KEY for identifier extraction: {}",
                 exc,
@@ -1236,7 +1256,7 @@ async def bootstrap_single_user_profile() -> bool:
             logger.error(message)
             return False
         return True
-    except Exception as e:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
         print(f"⚠️  Failed to bootstrap single-user primary API key (continuing): {e}")
         logger.opt(exception=True).warning(
             "Failed to bootstrap single-user primary API key (continuing): {}",
@@ -1282,7 +1302,7 @@ async def test_authentication():
 
         return True
 
-    except Exception as e:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
         print(f"❌ Authentication test failed: {e}")
         return False
 
@@ -1305,7 +1325,7 @@ async def start_services():
 
         return True
 
-    except Exception as e:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
         print(f"❌ Failed to start services: {e}")
         return False
 
@@ -1412,7 +1432,7 @@ async def main(*, non_interactive: bool = False, test_setup: bool = False):
                             print("\n⚠️  Admin user creation failed")
             else:
                 print(f"\n✅ Found {len(existing_users)} existing user(s)")
-        except Exception as e:
+        except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Could not check existing users: {e}")
             if non_interactive:
                 print("\n⚠️  --non-interactive is set; skipping admin user creation.")
@@ -1491,7 +1511,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n\n⚠️  Initialization cancelled by user")
         sys.exit(0)
-    except Exception as e:
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
         print(f"\n❌ Initialization failed: {e}")
         logger.exception("Initialization error")
         sys.exit(1)

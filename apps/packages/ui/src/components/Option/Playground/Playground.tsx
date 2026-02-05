@@ -280,6 +280,7 @@ export const Playground = () => {
     playgroundReady,
     selectedCharacter,
     serverChatId,
+    historyId,
     messagesLength: messages.length,
     setMessages,
     setHistory,

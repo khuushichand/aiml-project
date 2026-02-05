@@ -1559,6 +1559,11 @@ class UnifiedBatchRequest(BaseModel):
         example=5
     )
 
+    enable_checkpoint: bool = Field(
+        default=False,
+        description="Enable incremental checkpointing for batch runs (supports resume).",
+    )
+
     # Include all optional parameters from UnifiedRAGRequest that will be applied to all queries
     # Data Sources
     sources: Optional[list[str]] = Field(
@@ -1796,13 +1801,19 @@ class UnifiedBatchResponse(BaseModel):
         description="Total batch processing time"
     )
 
+    checkpoint_id: Optional[str] = Field(
+        default=None,
+        description="Checkpoint ID when checkpointing is enabled.",
+    )
+
     model_config = ConfigDict(frozen=True, json_schema_extra={
         "example": {
             "results": [],  # List of UnifiedRAGResponse objects
             "total_queries": 2,
             "successful": 2,
             "failed": 0,
-            "total_time": 0.75
+            "total_time": 0.75,
+            "checkpoint_id": "rag_batch_ab12cd34",
         }
     })
 

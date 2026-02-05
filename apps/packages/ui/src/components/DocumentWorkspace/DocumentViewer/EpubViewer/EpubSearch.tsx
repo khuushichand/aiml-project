@@ -42,8 +42,9 @@ export const EpubSearch: React.FC<EpubSearchProps> = ({ bookRef, renditionRef })
     setIsSearching(true)
 
     try {
-      const results = await book.search(query)
-      const mapped: EpubSearchResult[] = results.map((r: any) => ({
+      const searchFn = (book as any)?.search
+      const results = searchFn ? await searchFn.call(book, query) : []
+      const mapped: EpubSearchResult[] = (results || []).map((r: any) => ({
         cfi: r.cfi,
         excerpt: r.excerpt || query
       }))

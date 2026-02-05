@@ -14,10 +14,9 @@ import {
   Settings,
 } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
+import { KNOWLEDGE_QA_KEYWORD } from "./constants"
 import { cn } from "@/lib/utils"
 import type { SearchHistoryItem } from "./types"
-
-const KNOWLEDGE_QA_KEYWORD = "__knowledge_QA__"
 
 type HistorySidebarProps = {
   className?: string

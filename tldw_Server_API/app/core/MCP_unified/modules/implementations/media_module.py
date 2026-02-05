@@ -31,6 +31,27 @@ from ....DB_Management.Media_DB_v2 import (
 )
 from ..base import BaseModule, create_resource_definition, create_tool_definition
 
+_MEDIA_MODULE_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
+
 
 class MediaModule(BaseModule):
     """
@@ -84,7 +105,7 @@ class MediaModule(BaseModule):
 
             logger.info(f"Media module initialized with database: {db_path}")
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to initialize media module: {e}")
             raise
 
@@ -100,10 +121,10 @@ class MediaModule(BaseModule):
                         if callable(close_fn):
                             try:
                                 close_fn()
-                            except Exception:
+                            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                                 pass
                     self._semantic_retrievers.clear()
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 pass
 
             try:
@@ -112,7 +133,7 @@ class MediaModule(BaseModule):
                         db = entry[0] if isinstance(entry, tuple) else entry
                         self._close_media_db_instance(db)
                     self._user_db_cache.clear()
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Close database connections
@@ -121,7 +142,7 @@ class MediaModule(BaseModule):
 
             logger.info("Media module shutdown complete")
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error during media module shutdown: {e}")
 
     async def check_health(self) -> dict[str, bool]:
@@ -139,7 +160,7 @@ class MediaModule(BaseModule):
                 cur = self.db.execute_query("SELECT 1")
                 _ = cur.fetchone()
                 checks["database_connection"] = True
-            except Exception as _db_e:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as _db_e:
                 logger.debug(f"Media DB connection check failed: {_db_e}")
                 checks["database_connection"] = False
 
@@ -153,10 +174,10 @@ class MediaModule(BaseModule):
                     # Best-effort cleanup to keep DB tidy (ignore errors for non-SQLite backends)
                     try:
                         self.db.execute_query("DELETE FROM _mcp_healthcheck WHERE k = ?", ("ping",))
-                    except Exception:
+                    except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                         pass
                 checks["database_writable"] = True
-            except Exception as _w_e:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as _w_e:
                 logger.debug(f"Media DB writable check failed: {_w_e}")
                 checks["database_writable"] = False
 
@@ -167,7 +188,7 @@ class MediaModule(BaseModule):
             free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
             checks["disk_space"] = free_gb > 1  # At least 1GB free
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Health check failed: {e}")
 
         return checks
@@ -386,7 +407,7 @@ class MediaModule(BaseModule):
         # High-risk operations: validate against stricter schema
         try:
             self.validate_tool_arguments(tool_name, arguments)
-        except Exception as ve:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as ve:
             raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
 
         # Log tool execution
@@ -418,25 +439,25 @@ class MediaModule(BaseModule):
             else:
                 raise ValueError(f"Unknown tool: {tool_name}")
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Tool execution failed: {tool_name} - {e}")
             raise
 
     def _allow_anonymous_access(self) -> bool:
         try:
             return bool(self.config.settings.get("allow_anonymous_access", False))
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return False
 
     def _close_media_db_instance(self, db: MediaDatabase) -> None:
         try:
             db.close_connection()
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             pool = db.backend.get_pool()
             pool.close_all()
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             pass
 
     def _evict_user_db_cache_locked(self, now: Optional[float] = None) -> None:
@@ -452,14 +473,14 @@ class MediaModule(BaseModule):
             try:
                 db, _ = cache.pop(key)
                 self._close_media_db_instance(db)
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 pass
 
         while len(cache) > max_size:
             try:
                 key, (db, _) = cache.popitem(last=False)
                 self._close_media_db_instance(db)
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 break
 
     def _get_or_create_user_db(self, db_path: str) -> MediaDatabase:
@@ -485,7 +506,7 @@ class MediaModule(BaseModule):
                 try:
                     cache.pop(db_path, None)
                     self._close_media_db_instance(db)
-                except Exception:
+                except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                     pass
             db = MediaDatabase(db_path=db_path, client_id=f"mcp_media_{self.config.name}")
             cache[db_path] = (db, now_ts)
@@ -545,7 +566,7 @@ class MediaModule(BaseModule):
             start = max(0, idx - half)
             end = min(len(t), start + length)
             return t[start:end]
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return t[:length]
 
     def _get_latest_description(self, dbi: MediaDatabase, media_id: int) -> Optional[str]:
@@ -557,7 +578,7 @@ class MediaModule(BaseModule):
                 include_content=False,
             )
             return (latest or {}).get("analysis_content")
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return None
 
     def _sanitize_media_metadata(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -609,7 +630,7 @@ class MediaModule(BaseModule):
                 sc = context.metadata.get("safe_config")
                 if isinstance(sc, dict):
                     snippet_length = int(sc.get("snippet_length", snippet_length))
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Build date_range
@@ -622,7 +643,7 @@ class MediaModule(BaseModule):
                     date_range["start_date"] = _dt.fromisoformat(date_from)
                 if date_to:
                     date_range["end_date"] = _dt.fromisoformat(date_to)
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             date_range = None
 
         # Map order
@@ -670,7 +691,7 @@ class MediaModule(BaseModule):
                 idx = content.lower().find(query.lower()) if query else -1
                 if idx >= 0:
                     approx_offset = idx
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 approx_offset = None
             # Try to map to prechunked chunk_index when available
             loc_hint = None
@@ -681,7 +702,7 @@ class MediaModule(BaseModule):
                         cidx = dbi.get_unvectorized_anchor_index_for_offset(mid_int, int(approx_offset))
                         if cidx is not None:
                             loc_hint = {"chunk_index": cidx}
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 loc_hint = None
             out.append({
                 "id": mid,
@@ -735,7 +756,7 @@ class MediaModule(BaseModule):
                     snippet_length = int(sc.get("snippet_length", snippet_length))
                     if isinstance(sc.get("chars_per_token"), int):
                         cpt = int(sc.get("chars_per_token"))
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             pass
 
         dbi = self._open_media_db(context)
@@ -800,7 +821,7 @@ class MediaModule(BaseModule):
             try:
                 if isinstance(loc, dict) and isinstance(loc.get("approx_offset"), int):
                     approx_offset = int(loc.get("approx_offset"))
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 approx_offset = None
             if isinstance(loc, dict) and isinstance(loc.get("chunk_index"), int):
                 anchor_index = int(loc.get("chunk_index"))
@@ -1079,7 +1100,7 @@ class MediaModule(BaseModule):
             await self._clean_cache()
             return formatted_results
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Search failed: {e}")
             raise
 
@@ -1100,7 +1121,7 @@ class MediaModule(BaseModule):
         try:
             normalised = self._serialize_for_cache(payload)
             raw = json.dumps(normalised, sort_keys=True, separators=(",", ":"))
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             raw = repr(payload)
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
         return f"{namespace}:{digest}"
@@ -1216,7 +1237,7 @@ class MediaModule(BaseModule):
                     media_db=dbi,
                 )
                 self._semantic_retrievers[retriever_key] = retriever
-            except Exception as exc:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Semantic retriever unavailable: {exc}")
                 self._semantic_retrievers[retriever_key] = False  # sentinel to avoid retries
                 return None
@@ -1242,7 +1263,7 @@ class MediaModule(BaseModule):
         max_results = max(1, limit + offset)
         try:
             retriever.config.max_results = max_results
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             pass
 
         media_type_arg: Optional[str] = None
@@ -1258,7 +1279,7 @@ class MediaModule(BaseModule):
                 allowed_media_ids=media_ids_filter,
                 query_vector=query_vector,
             )
-        except Exception as exc:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Semantic retrieval failed, falling back to empty set: {exc}")
             docs = []
 
@@ -1437,7 +1458,7 @@ class MediaModule(BaseModule):
                 "transcript": formatted,
             }
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get transcript: {e}")
             raise
 
@@ -1482,7 +1503,7 @@ class MediaModule(BaseModule):
 
             return metadata
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get metadata: {e}")
             raise
 
@@ -1536,7 +1557,7 @@ class MediaModule(BaseModule):
                 "process_type": process_type
             }
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to ingest media: {e}")
             raise
 
@@ -1640,7 +1661,7 @@ class MediaModule(BaseModule):
                 "success": True,
             }
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to update media: {e}")
             raise
 
@@ -1700,7 +1721,7 @@ class MediaModule(BaseModule):
                 "success": True,
             }
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to delete media: {e}")
             raise
 
@@ -1853,7 +1874,7 @@ class MediaModule(BaseModule):
                 try:
                     if d and d.lower() in host.lower():
                         return False
-                except Exception:
+                except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                     pass
 
             # Port allowlist (default http/https)
@@ -1865,7 +1886,7 @@ class MediaModule(BaseModule):
             # Resolve and reject private/bad ranges
             try:
                 addrinfos = socket.getaddrinfo(host, port or (80 if parts.scheme == "http" else 443))
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 return False
             if not addrinfos:
                 return False
@@ -1881,17 +1902,17 @@ class MediaModule(BaseModule):
                         or ip.is_multicast
                     ):
                         return False
-                except Exception:
+                except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                     return False
             return True
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return False
 
     def _is_admin(self, context: Any | None) -> bool:
         try:
             roles = (getattr(context, "metadata", {}) or {}).get("roles")
             return isinstance(roles, list) and any(str(r).lower() == "admin" for r in roles)
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return False
 
     def _assert_media_access(self, media_id: int, context: Any | None, dbi: Optional[MediaDatabase] = None) -> None:
@@ -1899,7 +1920,7 @@ class MediaModule(BaseModule):
         try:
             from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode
             strict_ownership = is_multi_user_mode()
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             strict_ownership = False
 
         if context is None or getattr(context, "user_id", None) is None:
@@ -1911,7 +1932,7 @@ class MediaModule(BaseModule):
         dbi = dbi or self._open_media_db(context)
         try:
             row = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
-        except Exception as exc:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as exc:
             if strict_ownership:
                 raise PermissionError("Access denied: ownership lookup failed") from exc
             raise
@@ -2033,7 +2054,7 @@ class MediaModule(BaseModule):
                     self._ingestion_jobs[job_id] = job_payload
             else:
                 self._ingestion_jobs[job_id] = job_payload
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             pass
         # Store job details (in production, use job queue)
         # For now, return job ID
@@ -2049,7 +2070,7 @@ class MediaModule(BaseModule):
                     job = self._ingestion_jobs.get(job_id)
             else:
                 job = self._ingestion_jobs.get(job_id)
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             job = None
 
         if not job:
@@ -2070,7 +2091,7 @@ class MediaModule(BaseModule):
                         self._ingestion_jobs.pop(job_id, None)
                 else:
                     self._ingestion_jobs.pop(job_id, None)
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 pass
 
     async def _queue_media_job(self, job_id: str):
@@ -2096,7 +2117,7 @@ class MediaModule(BaseModule):
     def _format_timestamp(self, total_seconds: Any, ms_separator: str) -> str:
         try:
             total_ms = int(round(max(float(total_seconds or 0.0), 0.0) * 1000))
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             total_ms = 0
         seconds, ms = divmod(total_ms, 1000)
         hours, seconds = divmod(seconds, 3600)
@@ -2106,7 +2127,7 @@ class MediaModule(BaseModule):
     def _coerce_time_value(self, value: Any, *, is_ms: bool = False) -> float:
         try:
             val = float(value)
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return 0.0
         if is_ms:
             val = val / 1000.0
@@ -2159,7 +2180,7 @@ class MediaModule(BaseModule):
                 try:
                     parsed = json.loads(stripped)
                     return self._coerce_transcript_payload(parsed)
-                except Exception:
+                except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                     pass
             return transcript_data, []
         if isinstance(transcript_data, dict):

@@ -1194,16 +1194,79 @@ async def unified_batch_endpoint(
         }
 
         # Convert request to kwargs, excluding queries (Pydantic compat)
-        kwargs = model_dump_compat(request, exclude={"queries", "max_concurrent"})
+        kwargs = model_dump_compat(
+            request,
+            exclude={"queries", "max_concurrent", "enable_checkpoint"},
+        )
+        checkpoint_id: Optional[str] = None
+        checkpoint_manager = None
+        checkpoint_state = None
+        if request.enable_checkpoint:
+            from tldw_Server_API.app.core.RAG.rag_service.checkpoint import CheckpointManager
+
+            checkpoint_manager = CheckpointManager()
+            checkpoint_config = dict(kwargs)
+            checkpoint_config["queries"] = list(request.queries)
+            checkpoint_config["max_concurrent"] = request.max_concurrent
+            checkpoint_state = checkpoint_manager.create(
+                "rag_batch",
+                total_items=len(request.queries or []),
+                config=checkpoint_config,
+            )
+            checkpoint_id = checkpoint_state.checkpoint_id
         kwargs.update(db_paths)
         kwargs["user_id"] = current_user.username if current_user else kwargs.get("user_id")
 
         # Process batch
+        on_query_done = None
+        saved_indices: set[int] = set()
+        cp_lock = asyncio.Lock()
+        if checkpoint_state is not None and checkpoint_manager is not None:
+            cp_state_cell = [checkpoint_state]
+
+            async def _on_query_done(
+                query_index: int,
+                query_text: str,
+                result: Optional[Any],
+                error: Optional[BaseException],
+            ) -> None:
+                status = "ok"
+                errors: list[str] = []
+                if error is not None:
+                    status = "error"
+                    errors = [str(error)]
+                else:
+                    result_errors = getattr(result, "errors", None)
+                    if result_errors:
+                        status = "error"
+                        errors = [str(e) for e in result_errors]
+
+                payload: dict[str, Any] = {
+                    "query_index": int(query_index),
+                    "query": query_text,
+                    "status": status,
+                }
+                if errors:
+                    payload["errors"] = errors
+
+                try:
+                    async with cp_lock:
+                        cp_state_cell[0] = checkpoint_manager.save_progress(
+                            cp_state_cell[0],
+                            payload,
+                        )
+                        saved_indices.add(int(query_index))
+                except Exception as cp_err:  # noqa: BLE001 - checkpointing should not fail batch
+                    logger.warning(f"Checkpoint incremental save failed: {cp_err}")
+
+            on_query_done = _on_query_done
+
         results = await unified_batch_pipeline(
             queries=request.queries,
             max_concurrent=request.max_concurrent,
             media_db=media_db,
             chacha_db=chacha_db,
+            on_query_done=on_query_done,
             **kwargs
         )
 
@@ -1219,12 +1282,42 @@ async def unified_batch_endpoint(
         # Each query in the batch counts as one RAG query unit.
         await _log_rag_queries_for_org(request_raw, current_user, units=requested_units)
 
+        if checkpoint_state is not None and checkpoint_manager is not None:
+            missing_results: list[dict[str, Any]] = []
+            for idx, res in enumerate(results):
+                if idx in saved_indices:
+                    continue
+                errors: list[str] = []
+                if isinstance(res, BaseException):
+                    errors = [str(res)]
+                else:
+                    result_errors = getattr(res, "errors", None)
+                    if result_errors:
+                        errors = [str(e) for e in result_errors]
+                payload: dict[str, Any] = {
+                    "query_index": int(idx),
+                    "query": request.queries[idx] if idx < len(request.queries) else "",
+                    "status": "error" if errors else "ok",
+                }
+                if errors:
+                    payload["errors"] = errors
+                missing_results.append(payload)
+            if missing_results:
+                try:
+                    checkpoint_state = checkpoint_manager.save_batch_progress(
+                        checkpoint_state,
+                        missing_results,
+                    )
+                except Exception as cp_err:  # noqa: BLE001
+                    logger.warning(f"Checkpoint final save failed: {cp_err}")
+
         return UnifiedBatchResponse(
             results=responses,
             total_queries=requested_units,
             successful=successful,
             failed=failed,
-            total_time=total_time
+            total_time=total_time,
+            checkpoint_id=checkpoint_id,
         )
 
     except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context

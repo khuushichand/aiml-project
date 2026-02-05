@@ -44,6 +44,30 @@ try:  # Align HTTP 413 compatibility with legacy endpoint module
 except AttributeError:  # Starlette < 0.27
     HTTP_413_TOO_LARGE = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
 
+_PERSISTENCE_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    sqlite3.Error,
+    HTTPException,
+    ConflictError,
+    DatabaseError,
+    InputError,
+)
+
 
 def _ensure_warnings_list(result: dict[str, Any]) -> list[str]:
     warnings = result.get("warnings")
@@ -67,12 +91,12 @@ def _document_like_concurrency_limit(default: int = 10) -> int:
             env_val = int(str(env_raw).strip())
             if env_val > 0:
                 return env_val
-        except Exception:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             pass
 
     try:
         cfg = loaded_config_data.get("media_processing", {}) if loaded_config_data else {}
-    except Exception:
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
         cfg = {}
     cfg_val = None
     if isinstance(cfg, dict):
@@ -82,7 +106,7 @@ def _document_like_concurrency_limit(default: int = 10) -> int:
             cfg_int = int(str(cfg_val).strip())
             if cfg_int > 0:
                 return cfg_int
-        except Exception:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             pass
     return max(1, int(default))
 
@@ -139,7 +163,7 @@ def _compute_source_hash_safe(
             for chunk in iter(lambda: handle.read(chunk_size), b""):
                 hasher.update(chunk)
         return hasher.hexdigest(), None
-    except Exception as exc:
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
         try:
             if safe_path.exists():
                 logger.warning(
@@ -149,7 +173,7 @@ def _compute_source_hash_safe(
                 )
             else:
                 logger.debug("Source hash compute failed for {}: {}", safe_path, exc)
-        except Exception:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             logger.debug("Source hash compute failed for {}: {}", safe_path, exc)
         return None, None
 
@@ -163,7 +187,7 @@ def _media_has_source_hash_column(db: MediaDatabase) -> bool:
             }
             if columns:
                 return "source_hash" in columns
-        except Exception:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             continue
     return False
 
@@ -259,7 +283,7 @@ async def add_media_orchestrate(
         from tldw_Server_API.app.api.v1.endpoints import (  # type: ignore
             media as media_mod,
         )
-    except Exception:  # pragma: no cover - ultra-minimal profiles
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - ultra-minimal profiles
         media_mod = None  # type: ignore[assignment]
 
     _validate_inputs = validate_add_media_inputs
@@ -328,7 +352,7 @@ async def add_media_orchestrate(
                 _dbp,
                 getattr(current_user, "id", "?"),
             )
-    except Exception:
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
         pass
 
     logger.info("Received request to add {} media.", form_data.media_type)
@@ -342,7 +366,7 @@ async def add_media_orchestrate(
                 "perform_analysis": bool(form_data.perform_analysis),
             },
         )
-    except Exception:
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
         # Usage logging must never break the endpoint path.
         pass
 
@@ -452,7 +476,7 @@ async def add_media_orchestrate(
                             total_uploaded_bytes += FilePath(
                                 str(pf["path"]).strip()
                             ).stat().st_size
-                        except Exception:
+                        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                             pass
                     if total_uploaded_bytes > 0:
                         from tldw_Server_API.app.services.storage_quota_service import (  # type: ignore
@@ -496,11 +520,11 @@ async def add_media_orchestrate(
                                     "media_type": form_data.media_type,
                                 },
                             )
-                        except Exception:
+                        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                             pass
             except HTTPException:
                 raise
-            except Exception as quota_err:
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as quota_err:
                 logger.warning("Quota check failed (non-fatal): {}", quota_err)
 
             # --- 5. Prepare Inputs and Options ---
@@ -518,7 +542,7 @@ async def add_media_orchestrate(
                             len(expanded_urls),
                         )
                     url_list = expanded_urls
-                except Exception as expand_err:
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as expand_err:
                     logger.warning(
                         "Failed to expand playlist URLs; continuing with originals: {}",
                         expand_err,
@@ -562,7 +586,7 @@ async def add_media_orchestrate(
                 try:
                     if saved_files_info:
                         first_filename = saved_files_info[0]["original_filename"]
-                except Exception:
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                     first_filename = None
 
                 chunking_options_dict = _apply_tpl(
@@ -573,7 +597,7 @@ async def add_media_orchestrate(
                     first_url=first_url,
                     first_filename=first_filename,
                 )
-            except Exception as auto_err:
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as auto_err:
                 logger.warning("Auto-apply chunking template failed: {}", auto_err)
 
             # Even if not used directly here, preserve the legacy call
@@ -612,7 +636,7 @@ async def add_media_orchestrate(
                         exc,
                     )
                     continue
-                except Exception as exc:
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
                     logger.warning(
                         "Skipping source path {} due to unexpected resolve error: {}",
                         path,
@@ -798,7 +822,7 @@ async def add_media_orchestrate(
                             except ImportError:
                                 # Quota service not available, proceed without check
                                 pass
-                            except Exception as quota_err:
+                            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as quota_err:
                                 # Non-fatal quota check failure - log and proceed
                                 logger.debug(f"Quota check failed, proceeding: {quota_err}")
 
@@ -817,7 +841,7 @@ async def add_media_orchestrate(
                                 checksum = hasher.hexdigest()
                                 try:
                                     handle.seek(0)
-                                except Exception:
+                                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                                     raise InputError("Original file stream is not seekable for storage.")
 
                                 # Store in permanent storage
@@ -831,7 +855,7 @@ async def add_media_orchestrate(
                             finally:
                                 try:
                                     handle.close()
-                                except Exception:
+                                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                                     logger.debug("Failed to close original file handle for {}", source_file)
 
                             # Insert database record
@@ -850,7 +874,7 @@ async def add_media_orchestrate(
                             )
                             result["original_file_stored"] = True
 
-                        except Exception as store_err:
+                        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as store_err:
                             logger.error(
                                 f"Failed to store original file for media_id={media_id}: {store_err}"
                             )
@@ -860,7 +884,7 @@ async def add_media_orchestrate(
                                 f"Failed to store original file: {store_err}"
                             )
 
-                except Exception as storage_init_err:
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as storage_init_err:
                     logger.error(f"Failed to initialize storage backend: {storage_init_err}")
 
 
@@ -915,7 +939,7 @@ async def add_media_orchestrate(
                                 media_id,
                                 result_emb,
                             )
-                        except Exception as embed_err:
+                        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as embed_err:
                             logger.error(
                                 "Failed to generate embeddings for media {}: {}",
                                 media_id,
@@ -940,7 +964,7 @@ async def add_media_orchestrate(
                 and isinstance(results[0].get("children"), list)
             ):
                 final_status_code = status.HTTP_200_OK
-        except Exception:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             pass
 
         log_level = (
@@ -966,7 +990,7 @@ async def add_media_orchestrate(
                     _dbp = getattr(
                         db, "db_path_str", getattr(db, "db_path", "?")
                     )
-                except Exception:
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                     _dbp = "?"
                 response.headers["X-TLDW-DB-Path"] = str(_dbp)
                 response.headers["X-TLDW-Add-Results-Len"] = str(len(results))
@@ -979,9 +1003,9 @@ async def add_media_orchestrate(
                         and r.get("db_id")
                     )
                     response.headers["X-TLDW-Add-OK-With-Id"] = str(ok_with_id)
-                except Exception:
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                     pass
-        except Exception:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             pass
 
         return JSONResponse(
@@ -1004,7 +1028,7 @@ async def add_media_orchestrate(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"OS error during setup: {os_err}",
         )
-    except Exception as unexpected:
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as unexpected:
         logger.error(
             "Unhandled exception in /media/add endpoint: {} - {}",
             type(unexpected).__name__,
@@ -1159,7 +1183,7 @@ async def persist_primary_av_item(
                 for kk in ("DOI", "ArXiv", "PMID", "PMCID"):
                     if ext.get(kk):
                         safe_meta[kk.lower()] = ext.get(kk)
-        except Exception:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             safe_meta = {}
 
         safe_metadata_json: str | None = None
@@ -1171,11 +1195,11 @@ async def persist_primary_av_item(
 
                 try:
                     safe_meta = _norm_sm(safe_meta)
-                except Exception:
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                     # Best-effort normalization; ignore failures here.
                     pass
                 safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
-        except Exception:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             safe_metadata_json = None
 
         source_hash_for_db = None
@@ -1220,7 +1244,7 @@ async def persist_primary_av_item(
                             "metadata": _small,
                         }
                     )
-        except Exception:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             chunks_for_sql = None
 
         # Merge VLM extra chunks even if chunking was disabled or failed.
@@ -1235,13 +1259,13 @@ async def persist_primary_av_item(
                     raw_chunk_type = ec.get("chunk_type") or "vlm"
                     try:
                         normalized_chunk_type = _ck.normalize_chunk_type(raw_chunk_type)  # type: ignore[name-defined]
-                    except Exception:
+                    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                         try:
                             from tldw_Server_API.app.core.Chunking.chunker import (  # type: ignore
                                 Chunker as _Chunker,
                             )
                             normalized_chunk_type = _Chunker.normalize_chunk_type(raw_chunk_type)
-                        except Exception:
+                        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                             normalized_chunk_type = raw_chunk_type
                     chunks_for_sql.append(
                         {
@@ -1254,7 +1278,7 @@ async def persist_primary_av_item(
                             else {},
                         }
                     )
-        except Exception:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             pass
 
         db_add_kwargs = dict(
@@ -1345,7 +1369,7 @@ async def persist_primary_av_item(
                 await loop.run_in_executor(None, _upsert_worker)
                 # Attach normalized artifact to the process_result for callers
                 process_result["normalized_stt"] = artifact
-        except Exception as stt_err:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as stt_err:
             logger.debug(
                 "STT transcript upsert skipped/failed for {} (media_id={}): {}",
                 original_input_ref,
@@ -1376,7 +1400,7 @@ async def persist_primary_av_item(
                         media_id_result,
                         original_input_ref,
                     )
-        except Exception as visual_err:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as visual_err:
             logger.debug(
                 "Visual RAG ingestion skipped/failed for {} (media_id={}): {}",
                 original_input_ref,
@@ -1425,7 +1449,7 @@ async def persist_primary_av_item(
             process_result=process_result,
         )
 
-    except Exception as exc:
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
             "Unexpected error during DB persistence for {}: {}",
             original_input_ref,
@@ -1482,7 +1506,7 @@ async def process_batch_media(
             return False
         try:
             return bool(cancel_check())
-        except Exception:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             return False
 
     logger.debug(
@@ -1538,7 +1562,7 @@ async def process_batch_media(
                             "security_ssrf_block_total",
                             1,
                         )
-                    except Exception:
+                    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                         pass
                     combined_results.append(
                         {
@@ -1561,7 +1585,7 @@ async def process_batch_media(
                         }
                     )
                     continue
-            except Exception as policy_err:
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as policy_err:
                 logger.warning(
                     "URL policy check failed for {}: {}",
                     source_path_or_url,
@@ -1583,7 +1607,7 @@ async def process_batch_media(
                 if source_hash and input_ref:
                     source_hash_by_ref.setdefault(str(input_ref), []).append(source_hash)
                     source_hash_by_source[str(source_path_or_url)] = source_hash
-            except Exception as hash_err:
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as hash_err:
                 logger.debug(
                     "Source hash computation failed for {}: {}",
                     source_path_or_url,
@@ -1718,7 +1742,7 @@ async def process_batch_media(
                     f"DB pre-check failed: {check_err}",
                 )
                 pre_check_warning = f"Database pre-check failed: {check_err}"
-            except Exception as check_err:
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as check_err:
                 logger.error(
                     "Unexpected error during DB pre-check (custom query) for {}: {}",
                     identifier_for_check,
@@ -1942,7 +1966,7 @@ async def process_batch_media(
         else:
             raise ValueError(f"Invalid media type '{media_type}' for batch processing.")
 
-    except Exception as call_e:
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as call_e:
         logger.error(
             "Error calling external batch processor for {}: {}",
             media_type,
@@ -2093,7 +2117,7 @@ async def process_batch_media(
                     form_data,
                     loop,
                 )
-            except Exception as claims_err:
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as claims_err:
                 logger.debug(
                     "Claim extraction skipped for {}: {}",
                     original_input_ref,
@@ -2187,7 +2211,7 @@ async def process_document_like_item(
         from tldw_Server_API.app.api.v1.endpoints import (  # type: ignore
             media as _media_mod,
         )
-    except Exception:  # pragma: no cover - ultra-minimal profiles
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - ultra-minimal profiles
         _media_mod = None  # type: ignore[assignment]
 
     final_result: dict[str, Any] = {
@@ -2261,7 +2285,7 @@ async def process_document_like_item(
                         "_download_url_async",
                         _core_download_url_async,
                     )
-                except Exception:  # pragma: no cover - defensive fallback
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive fallback
                     download_url_async = _core_download_url_async
             else:  # pragma: no cover - minimal profiles
                 download_url_async = _core_download_url_async
@@ -2334,12 +2358,12 @@ async def process_document_like_item(
                                     "media_type": str(media_type),
                                 },
                             )
-                        except Exception:
+                        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                             # Metrics must never break ingestion.
                             pass
                     except HTTPException:
                         raise
-                    except Exception as quota_err:
+                    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as quota_err:
                         logger.warning(
                             "Per-item quota check failed (non-fatal): {}",
                             quota_err,
@@ -2391,7 +2415,7 @@ async def process_document_like_item(
 
             final_result["processing_source"] = processing_source
 
-    except Exception as prep_err:
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as prep_err:
         error_detail = str(getattr(prep_err, "detail", prep_err))
         logger.error(
             "File preparation/download error for {}: {}",
@@ -2481,7 +2505,7 @@ async def process_document_like_item(
                         "process_document_content",
                         docs.process_document_content,
                     )
-                except Exception:  # pragma: no cover - defensive
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive
                     processing_func = docs.process_document_content
             else:  # pragma: no cover - minimal profiles
                 processing_func = docs.process_document_content
@@ -2503,7 +2527,7 @@ async def process_document_like_item(
                         "process_document_content",
                         docs.process_document_content,
                     )
-                except Exception:  # pragma: no cover - defensive
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive
                     processing_func = docs.process_document_content
             else:  # pragma: no cover
                 processing_func = docs.process_document_content
@@ -2544,7 +2568,7 @@ async def process_document_like_item(
                                 "Email file path rejected outside temp directory.",
                             )
                         file_bytes = await file_obj.read()
-                except Exception as read_err:
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as read_err:
                     raise ValueError(
                         f"Email processing requires file bytes: {read_err}",
                     ) from read_err
@@ -2703,7 +2727,7 @@ async def process_document_like_item(
                                     for keyword in keywords_from_form
                                     if keyword
                                 ]
-                        except Exception:
+                        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                             base_keywords = []
                         merged = sorted(
                             set(
@@ -2713,7 +2737,7 @@ async def process_document_like_item(
                             ),
                         )
                         final_result["keywords"] = merged
-                except Exception:
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                     # Keyword enrichment is best-effort only.
                     pass
             else:
@@ -2755,7 +2779,7 @@ async def process_document_like_item(
                             elif warnings_value:
                                 aggregated.append(str(warnings_value))
                     proc_warnings = aggregated or None
-                except Exception:
+                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                     proc_warnings = None
 
             if isinstance(proc_warnings, list):
@@ -2774,7 +2798,7 @@ async def process_document_like_item(
                 },
             )
 
-    except Exception as proc_err:
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as proc_err:
         logger.error(
             "Error during processing call for {}: {}",
             item_input_ref,
@@ -2811,7 +2835,7 @@ async def process_document_like_item(
                 if not final_result.get("warnings"):
                     final_result["warnings"] = None
                 return final_result
-        except Exception:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             pass
 
     if final_result.get("status") in ["Success", "Warning"]:
@@ -2821,7 +2845,7 @@ async def process_document_like_item(
                 form_data,
                 loop,
             )
-        except Exception as claims_err:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as claims_err:
             logger.debug(
                 "Claim extraction failed for {}: {}",
                 item_input_ref,
@@ -2904,7 +2928,7 @@ async def persist_doc_item_and_children(
                         for kw in child_keywords:
                             if isinstance(kw, str) and kw.strip():
                                 combined_keywords.add(kw.strip())
-    except Exception:
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
         pass
 
     try:
@@ -2914,7 +2938,7 @@ async def persist_doc_item_and_children(
                 parent_msg_id = ((metadata_for_db or {}).get("email") or {}).get(
                     "message_id"
                 )
-            except Exception:
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                 parent_msg_id = None
             if parent_msg_id:
                 combined_keywords.add(f"email_group:{str(parent_msg_id)}")
@@ -2936,9 +2960,9 @@ async def persist_doc_item_and_children(
                     elif lower.endswith(".pst") or lower.endswith(".ost"):
                         pst_tag = f"email_pst:{FilePath(arch_name).stem}"
                         combined_keywords.add(pst_tag)
-            except Exception:
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                 pass
-    except Exception:
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
         pass
 
     final_keywords_list = sorted(list(combined_keywords))
@@ -2949,7 +2973,7 @@ async def persist_doc_item_and_children(
             item_input_ref,
             final_keywords_list,
         )
-    except Exception as kw_err:
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as kw_err:
         logger.warning("Failed to set parent keywords for {}: {}", item_input_ref, kw_err)
 
     model_used = metadata_for_db.get("parser_used", "Imported")
@@ -3020,7 +3044,7 @@ async def persist_doc_item_and_children(
                     for ext_key in ("DOI", "ArXiv", "PMID", "PMCID"):
                         if ext_ids.get(ext_key):
                             safe_meta[ext_key.lower()] = ext_ids.get(ext_key)
-            except Exception:
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                 safe_meta = {}
 
             safe_metadata_json: str | None = None
@@ -3032,10 +3056,10 @@ async def persist_doc_item_and_children(
 
                     try:
                         safe_meta = normalize_safe_metadata(safe_meta)
-                    except Exception:
+                    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                         pass
                     safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
-            except Exception:
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                 safe_metadata_json = None
 
             source_hash_for_db = None
@@ -3046,7 +3070,7 @@ async def persist_doc_item_and_children(
                 if raw_source_hash is not None:
                     raw_source_hash_str = str(raw_source_hash).strip()
                     source_hash_for_db = raw_source_hash_str if raw_source_hash_str else None
-            except Exception:
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                 source_hash_for_db = None
 
             chunks_for_sql: list[dict[str, Any]] | None = None
@@ -3084,7 +3108,7 @@ async def persist_doc_item_and_children(
                                 "metadata": small_meta,
                             }
                         )
-            except Exception:
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                 chunks_for_sql = None
 
             db_add_kwargs = dict(
@@ -3192,7 +3216,7 @@ async def persist_doc_item_and_children(
                                         safe_child_meta_json = json.dumps(
                                             safe_child_meta, ensure_ascii=False
                                         )
-                                    except Exception:
+                                    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                                         safe_child_meta_json = None
 
                                     child_chunks_for_sql: list[dict[str, Any]] | None = None
@@ -3243,7 +3267,7 @@ async def persist_doc_item_and_children(
                                                         "metadata": small_meta,
                                                     }
                                                 )
-                                    except Exception:
+                                    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                                         child_chunks_for_sql = None
 
                                     child_title = (
@@ -3320,14 +3344,14 @@ async def persist_doc_item_and_children(
                                             "title": child_title,
                                         }
                                     )
-                                except Exception as child_db_err:
+                                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as child_db_err:
                                     logger.warning(
                                         "Child email persistence failed: {}",
                                         child_db_err,
                                     )
                             if child_db_results:
                                 final_result["child_db_results"] = child_db_results
-            except Exception:
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                 pass
 
         except (DatabaseError, InputError, ConflictError) as db_err:
@@ -3345,7 +3369,7 @@ async def persist_doc_item_and_children(
             final_result["db_message"] = f"DB Error: {db_err}"
             final_result["db_id"] = None
             final_result["media_uuid"] = None
-        except Exception as exc:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(
                 "Unexpected error during DB persistence for {}: {}",
                 item_input_ref,
@@ -3426,7 +3450,7 @@ async def persist_doc_item_and_children(
                                     safe_child_meta_json = json.dumps(
                                         safe_child_meta, ensure_ascii=False
                                     )
-                                except Exception:
+                                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                                     pass
 
                                 child_chunks_for_sql: list[dict[str, Any]] | None = None
@@ -3474,7 +3498,7 @@ async def persist_doc_item_and_children(
                                                     "metadata": small_meta,
                                                 }
                                             )
-                                except Exception:
+                                except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                                     child_chunks_for_sql = None
 
                                 child_title = (
@@ -3552,7 +3576,7 @@ async def persist_doc_item_and_children(
                                     }
                                 )
                                 persisted_any_children = True
-                            except Exception as child_db_err:
+                            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as child_db_err:
                                 logger.warning(
                                     "Archive child email persistence failed: {}",
                                     child_db_err,
@@ -3560,9 +3584,9 @@ async def persist_doc_item_and_children(
                         try:
                             if child_db_results:
                                 final_result["child_db_results"] = child_db_results
-                        except Exception:
+                        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                             pass
-            except Exception:
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                 pass
 
         if not persisted_any_children:

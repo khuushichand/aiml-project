@@ -110,3 +110,10 @@ export const splitMessageContent = (content: string, splitBy: string = 'punctuat
 
     return messageContentParts;
 };
+
+export const estimateTtsDurationSeconds = (text: string, charsPerSecond: number = 15): number => {
+    const cleaned = sanitizeText(text || '');
+    if (!cleaned) return 0;
+    const cps = Math.max(1, charsPerSecond);
+    return cleaned.length / cps;
+};

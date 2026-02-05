@@ -24,6 +24,7 @@ from tldw_Server_API.app.core.RAG.rag_service.regression import (
     RegressionReport,
     RegressionResult,
 )
+from tldw_Server_API.app.core.RAG.rag_service.quality_gating import MetricCategory
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +114,7 @@ class TestRegressionReport:
                 delta_percent=-2.22,
                 threshold=0.05,
                 regressed=False,
+                category=MetricCategory.STABLE,
             ),
             RegressionResult(
                 metric_name="recall",
@@ -122,6 +124,7 @@ class TestRegressionReport:
                 delta_percent=-12.5,
                 threshold=0.05,
                 regressed=True,
+                category=MetricCategory.STABLE,
             ),
         ]
         return RegressionReport(
@@ -129,7 +132,8 @@ class TestRegressionReport:
             timestamp="2025-06-01T00:00:00+00:00",
             results=results,
             has_regression=True,
-            summary="Regression detected in: recall",
+            has_warnings=False,
+            summary="Regression detected in stable metrics: recall",
         )
 
     def test_to_dict_structure(self):
@@ -139,6 +143,7 @@ class TestRegressionReport:
             "baseline_id",
             "timestamp",
             "has_regression",
+            "has_warnings",
             "summary",
             "results",
         }
@@ -154,6 +159,7 @@ class TestRegressionReport:
             "delta_percent",
             "threshold",
             "regressed",
+            "category",
         }
 
     def test_to_dict_values(self):
@@ -161,11 +167,13 @@ class TestRegressionReport:
         d = self._sample_report().to_dict()
         assert d["baseline_id"] == "v1"
         assert d["has_regression"] is True
+        assert d["has_warnings"] is False
 
         recall_entry = next(r for r in d["results"] if r["metric"] == "recall")
         assert recall_entry["regressed"] is True
         assert recall_entry["baseline"] == 0.80
         assert recall_entry["current"] == 0.70
+        assert recall_entry["category"] == "stable"
 
     def test_to_dict_is_json_serializable(self):
         """to_dict() output must be JSON serializable."""
@@ -293,6 +301,26 @@ class TestRegressionDetectorCheckRegression:
             r for r in report.results if r.metric_name == "recall"
         )
         assert recall_result.regressed is False
+
+    def test_unstable_metric_regression_is_warning(self, tmp_path: Path):
+        """Unstable metric regressions should be reported as warnings."""
+        detector = _make_detector(tmp_path, default_threshold=0.05)
+        detector.save_baseline(
+            metrics={"faithfulness": 0.90},
+            baseline_id="latest",
+        )
+
+        report = detector.check_regression(
+            current_metrics={"faithfulness": 0.60},
+        )
+        assert report.has_regression is False
+        assert report.has_warnings is True
+
+        result = report.results[0]
+        assert result.metric_name == "faithfulness"
+        assert result.regressed is True
+        assert result.category == MetricCategory.UNSTABLE
+        assert "warning" in report.summary.lower()
 
     def test_missing_baseline_no_regression(self, tmp_path: Path):
         """With no stored baseline, check_regression returns a benign report."""

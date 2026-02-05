@@ -34,6 +34,28 @@ from lxml.html import HtmlElement
 
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
 
+_WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    ET.ParseError,
+    XPathError,
+)
+
 _TEST_MODE_VALUES = {"1", "true", "yes"}
 _SELECTOR_CACHE_MAX = 512
 _XPATH_SELECTOR_CACHE: OrderedDict[str, Any] = OrderedDict()
@@ -107,7 +129,7 @@ def _contextualize_xpath(expr: str, node: Any) -> str:
             token = match.group(1)
             try:
                 node_tag = node.tag
-            except Exception:
+            except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
                 node_tag = None
             if node_tag and token == str(node_tag):
                 return expr
@@ -115,7 +137,7 @@ def _contextualize_xpath(expr: str, node: Any) -> str:
     if expr.startswith("/"):
         try:
             root = node.getroottree().getroot()
-        except Exception:
+        except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
             root = None
         if root is not None:
             root_tag = getattr(root, "tag", None)
@@ -193,7 +215,7 @@ def _select_nodes(node: HtmlElement, selector: str, *, context_sensitive: bool =
         else:
             try:
                 from lxml.cssselect import CSSSelector
-            except Exception as exc:
+            except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"CSS selector support unavailable for '{css_expr}': {exc}")
                 return []
             try:
@@ -202,7 +224,7 @@ def _select_nodes(node: HtmlElement, selector: str, *, context_sensitive: bool =
                     compiled = CSSSelector(css_expr)
                     _selector_cache_put(_CSS_SELECTOR_CACHE, css_expr, compiled)
                 return list(compiled(node))
-            except Exception as exc:
+            except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"CSS selector evaluation failed for '{css_expr}': {exc}")
                 return []
     if context_sensitive:
@@ -212,7 +234,7 @@ def _select_nodes(node: HtmlElement, selector: str, *, context_sensitive: bool =
         try:
             compiled_xpath = XPath(expr)
             _selector_cache_put(_XPATH_SELECTOR_CACHE, expr, compiled_xpath)
-        except Exception as exc:
+        except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"XPath compilation failed for '{expr}': {exc}")
             return []
     try:
@@ -237,18 +259,18 @@ def _coerce_value(value: Any) -> str | None:
         try:
             text = value.decode("utf-8", errors="ignore").strip()
             return text or None
-        except Exception:
+        except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
             return None
     if hasattr(value, "text_content"):
         try:
             text = value.text_content().strip()
             return text or None
-        except Exception:
+        except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
             return None
     try:
         text = str(value).strip()
         return text or None
-    except Exception:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -360,12 +382,12 @@ def _apply_single_transform(value: str, transform: Any, base_url: str) -> str | 
             return value
         try:
             return re.sub(pattern, str(repl), value)
-        except Exception:
+        except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
             return value
     if name == "urljoin":
         try:
             return urljoin(base_url, value)
-        except Exception:
+        except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
             return value
     if name == "date_normalize":
         normalized = _normalize_datetime(value, params.get("format") if isinstance(params.get("format"), str) else None)
@@ -408,7 +430,7 @@ def _extract_html_from_node(node: Any) -> str | None:
     if isinstance(node, HtmlElement):
         try:
             return html.tostring(node, encoding="unicode")
-        except Exception:
+        except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
             return None
     return _coerce_value(node)
 
@@ -431,7 +453,7 @@ def _extract_regex_from_text(text: str, field: dict[str, Any]) -> str | None:
         flags |= regex.IGNORECASE
     try:
         compiled = regex.compile(pattern, flags)
-    except Exception:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
         return None
     try:
         match = compiled.search(text, timeout=1.0)
@@ -443,7 +465,7 @@ def _extract_regex_from_text(text: str, field: dict[str, Any]) -> str | None:
     group = field.get("group")
     try:
         return match.group(group) if group is not None else match.group(0)
-    except Exception:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
         return match.group(0)
 
 
@@ -817,18 +839,18 @@ def validate_selector_rules(
                 from lxml.cssselect import CSSSelector
 
                 CSSSelector(css_expr)
-            except Exception as exc:
+            except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as exc:
                 errors.append({"key": key, "selector": stripped, "error": str(exc)})
             continue
         try:
             XPath(stripped)
-        except Exception as exc:
+        except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as exc:
             errors.append({"key": key, "selector": stripped, "error": str(exc)})
 
     if html_text:
         try:
             document = html.fromstring(html_text)
-        except Exception as exc:
+        except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as exc:
             warnings.append({"key": "document", "selector": "", "warning": "html_parse_failed", "detail": str(exc)})
             return {"errors": errors, "warnings": warnings}
         specs = _iter_watchlist_selector_specs(rules or {})
@@ -878,13 +900,13 @@ def extract_schema_fields(html_text: str, base_url: str, rules: dict[str, Any]) 
         return result
     try:
         document = html.fromstring(html_text)
-    except Exception as exc:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as exc:
         result["error"] = f"HTML parse failed: {exc}"
         return result
 
     try:
         document.make_links_absolute(base_url)
-    except Exception:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
         pass
 
     if _is_schema_dsl(rules):
@@ -992,7 +1014,7 @@ def _coerce_int(value: Any, default: int | None = None) -> int | None:
         return default
     try:
         return int(value)
-    except Exception:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
         return default
 
 
@@ -1006,7 +1028,7 @@ def _normalize_datetime(raw: str, fmt: str | None = None) -> str | None:
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             return dt.astimezone(timezone.utc).isoformat()
-        except Exception:
+        except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
             pass
     # Try dateutil if available
     try:
@@ -1016,7 +1038,7 @@ def _normalize_datetime(raw: str, fmt: str | None = None) -> str | None:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc).isoformat()
-    except Exception:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
         pass
     # Fallback to email.utils
     try:
@@ -1027,7 +1049,7 @@ def _normalize_datetime(raw: str, fmt: str | None = None) -> str | None:
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             return dt.astimezone(timezone.utc).isoformat()
-    except Exception:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
         pass
     return text
 
@@ -1042,13 +1064,13 @@ def parse_scraped_items(html_text: str, base_url: str, rules: dict[str, Any]) ->
         return result
     try:
         document = html.fromstring(html_text)
-    except Exception as exc:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"parse_scraped_items HTML parse failed: {exc}")
         return result
 
     try:
         document.make_links_absolute(base_url)
-    except Exception:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
         pass
 
     def _gather_items(rule_set: dict[str, Any], *, seen: set[str], items: list[dict[str, Any]], limit: int | None) -> None:
@@ -1234,7 +1256,7 @@ async def fetch_rss_items(urls: list[str], *, limit: int = 10, tenant_id: str = 
                 "guid": r.get("guid"),
             })
         return items[:limit]
-    except Exception as e:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"fetch_rss_items failed: {e}")
         return []
 
@@ -1250,7 +1272,7 @@ def fetch_site_article(url: str) -> dict[str, Any] | None:
             ContentMetadataHandler,  # type: ignore
             scrape_article_blocking,
         )
-    except Exception as e:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Article extractor import failed: {e}")
         return None
 
@@ -1264,10 +1286,10 @@ def fetch_site_article(url: str) -> dict[str, Any] | None:
         content = data.get("content") or ""
         try:
             content = ContentMetadataHandler.strip_metadata(content)  # type: ignore[attr-defined]
-        except Exception:
+        except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
             pass
         return {"title": title, "url": url, "content": content, "author": author}
-    except Exception as e:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"fetch_site_article failed for {url}: {e}")
         return None
 
@@ -1276,7 +1298,7 @@ async def fetch_site_article_async(url: str) -> dict[str, Any] | None:
     """Async wrapper for blocking article extraction."""
     try:
         return await asyncio.to_thread(fetch_site_article, url)
-    except Exception as exc:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"fetch_site_article_async failed for {url}: {exc}")
         return None
 
@@ -1339,7 +1361,7 @@ async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = 
                 status, _ = await _fetch_text(common, timeout=6)
                 if status // 100 == 2:
                     return common
-            except Exception:
+            except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
                 return None
             return None
 
@@ -1391,7 +1413,7 @@ async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = 
                     continue
                 if not is_content_page(href):
                     continue
-            except Exception:
+            except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
                 continue
             links.append(href)
         # Dedup preserve order
@@ -1402,7 +1424,7 @@ async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = 
                 seen.add(u)
                 uniq.append(u)
         return uniq[:top_n] if uniq else [base_url]
-    except Exception as e:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"fetch_site_top_links fallback: {e}")
         return [base_url]
 
@@ -1468,7 +1490,7 @@ async def fetch_site_items_with_rules(
             allowed = False
             try:
                 allowed = is_url_allowed_for_tenant(page_url, tenant_id)
-            except Exception:
+            except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
                 allowed = is_url_allowed(page_url)
             if not allowed:
                 logger.debug(f"Scrape rules blocked by URL policy: {page_url}")
@@ -1481,7 +1503,7 @@ async def fetch_site_items_with_rules(
                     logger.debug(f"fetch_site_items_with_rules HTTP {resp.status_code} for {page_url}")
                     continue
                 parsed = parse_scraped_items(resp.text or "", page_url, rules)
-            except Exception as exc:
+            except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"fetch_site_items_with_rules request failed ({page_url}): {exc}")
                 continue
             finally:
@@ -1505,7 +1527,7 @@ async def fetch_site_items_with_rules(
                     if len(visited) + len(queue) >= max_pages:
                         break
                     queue.append(nxt)
-    except Exception as exc:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"fetch_site_items_with_rules pagination failed: {exc}")
 
     if limit is not None:
@@ -1536,7 +1558,7 @@ async def fetch_rss_feed(
         allowed = False
         try:
             allowed = is_url_allowed_for_tenant(url, tenant_id)
-        except Exception:
+        except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
             allowed = is_url_allowed(url)
         if not allowed:
             return {"status": 403, "items": []}
@@ -1578,13 +1600,13 @@ async def fetch_rss_feed(
                 # Seconds or HTTP-date
                 try:
                     retry_after_secs = int(ra)
-                except Exception:
+                except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
                     from email.utils import parsedate_to_datetime
                     try:
                         dt = parsedate_to_datetime(ra)
                         import datetime as _dt
                         retry_after_secs = max(0, int((dt - _dt.datetime.utcnow().replace(tzinfo=dt.tzinfo)).total_seconds()))
-                    except Exception:
+                    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
                         retry_after_secs = None
             return {"status": 429, "items": [], "retry_after": retry_after_secs}
 
@@ -1601,7 +1623,7 @@ async def fetch_rss_feed(
 
         try:
             root = ET.fromstring(text)
-        except Exception:
+        except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
             return {
                 "status": status,
                 "items": [],
@@ -1664,11 +1686,11 @@ async def fetch_rss_feed(
                 # Resolve relative IRIs against the feed URL to produce an absolute URL
                 try:
                     resolved = urljoin(url, href)
-                except Exception:
+                except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
                     resolved = href  # fall back to original if resolution fails
                 if rel in {"prev-archive", "next-archive", "current", "self"}:
                     atom_links.append({"rel": rel, "href": resolved})
-        except Exception:
+        except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
             atom_links = []
 
         return {
@@ -1678,7 +1700,7 @@ async def fetch_rss_feed(
             "last_modified": resp_headers.get("Last-Modified"),
             "atom_links": atom_links,
         }
-    except Exception as e:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"fetch_rss_feed error: {e}")
         return {"status": 500, "items": []}
 
@@ -1706,7 +1728,7 @@ async def fetch_rss_feed_history(
     """
     try:
         max_pages = int(max_pages)
-    except Exception:
+    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
         max_pages = 1
     if max_pages < 1:
         max_pages = 1
@@ -1774,7 +1796,7 @@ async def fetch_rss_feed_history(
         while remaining > 0 and current_url:
             try:
                 res = await fetch_rss_feed(current_url, timeout=timeout, tenant_id=tenant_id)
-            except Exception:
+            except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
                 break
             if int(res.get("status", 0) or 0) // 100 != 2:
                 break
@@ -1837,7 +1859,7 @@ async def fetch_rss_feed_history(
                 for p in range(2, pages + 1):
                     q = urlencode({"paged": p})
                     out.append(urlunparse(parsed._replace(query=q)))
-        except Exception:
+        except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
             pass
         # Dedup preserve order
         dedup: list[str] = []
@@ -1871,7 +1893,7 @@ async def fetch_rss_feed_history(
                 break
             try:
                 res = await fetch_rss_feed(u, timeout=timeout, tenant_id=tenant_id)
-            except Exception:
+            except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
                 continue
             if int(res.get("status", 0) or 0) // 100 != 2:
                 continue

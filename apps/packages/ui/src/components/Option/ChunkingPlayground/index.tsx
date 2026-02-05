@@ -150,7 +150,9 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
     staleTime: 60 * 1000
   })
 
-  const { data: ocrBackends } = useQuery<Record<string, { available?: boolean }>>({
+  const { data: ocrBackends, error: ocrBackendsError } = useQuery<
+    Record<string, { available?: boolean }>
+  >({
     queryKey: ["ocr-backends"],
     queryFn: async () => {
       return await bgRequest<Record<string, { available?: boolean }>>({
@@ -216,6 +218,13 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
       disabled: info?.available === false
     }))
   }, [ocrBackends])
+  const ocrBackendsErrorMessage = React.useMemo(() => {
+    if (!ocrBackendsError) return null
+    if (ocrBackendsError instanceof Error && ocrBackendsError.message) {
+      return ocrBackendsError.message
+    }
+    return String(ocrBackendsError)
+  }, [ocrBackendsError])
 
   const updatePdfOptions = useCallback(
     (updates: Partial<PdfOptions>) => {
@@ -585,11 +594,7 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
     maxCount: 1,
     beforeUpload: (file) => {
       if (pdfUrl) {
-        try {
-          URL.revokeObjectURL(pdfUrl)
-        } catch (error) {
-          console.debug("Failed to revoke PDF URL:", error)
-        }
+        URL.revokeObjectURL(pdfUrl)
       }
       const url = URL.createObjectURL(file)
       setPdfFile(file)
@@ -603,11 +608,7 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
     onRemove: () => {
       setPdfFile(null)
       if (pdfUrl) {
-        try {
-          URL.revokeObjectURL(pdfUrl)
-        } catch (error) {
-          console.debug("Failed to revoke PDF URL:", error)
-        }
+        URL.revokeObjectURL(pdfUrl)
       }
       setPdfUrl(null)
       setPdfMetadata(null)
@@ -736,6 +737,17 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                 ),
                 children: (
                   <div className="space-y-3">
+                    {ocrBackendsErrorMessage ? (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message={t(
+                          "settings:chunkingPlayground.ocrBackendsError",
+                          "Failed to load OCR backends"
+                        )}
+                        description={ocrBackendsErrorMessage}
+                      />
+                    ) : null}
                     <Form layout="vertical" size="small">
                       <Form.Item
                         label={t(

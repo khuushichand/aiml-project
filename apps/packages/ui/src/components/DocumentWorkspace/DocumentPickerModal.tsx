@@ -86,7 +86,7 @@ const normalizeMediaItems = (response: unknown): MediaListItem[] => {
       if (!record) return null
       const id = Number(record.media_id ?? record.id)
       if (!Number.isFinite(id)) return null
-      return {
+      const normalized: MediaListItem = {
         id,
         title: asString(record.title) ?? asString(record.name),
         type: asString(record.type) ?? asString(record.media_type),
@@ -94,7 +94,8 @@ const normalizeMediaItems = (response: unknown): MediaListItem[] => {
         keywords: asStringArray(record.keywords),
         url: asString(record.url),
         filename: asString(record.filename) ?? asString(record.original_filename)
-      } satisfies MediaListItem
+      }
+      return normalized
     })
     .filter((item): item is MediaListItem => item !== null)
 }

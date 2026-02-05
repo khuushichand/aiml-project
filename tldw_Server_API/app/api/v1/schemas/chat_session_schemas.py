@@ -101,6 +101,18 @@ class ChatSessionListResponse(BaseModel):
     offset: int = Field(..., description="Offset for pagination")
 
 
+class ChatSettingsUpdate(BaseModel):
+    """Schema for updating chat settings."""
+    settings: dict[str, Any] = Field(..., description="Chat settings payload")
+
+
+class ChatSettingsResponse(BaseModel):
+    """Schema for chat settings responses."""
+    conversation_id: str = Field(..., description="Conversation ID")
+    settings: dict[str, Any] = Field(..., description="Stored chat settings")
+    last_modified: datetime = Field(..., description="Settings last modified timestamp")
+
+
 # ========================================================================
 # Message Schemas
 # ========================================================================

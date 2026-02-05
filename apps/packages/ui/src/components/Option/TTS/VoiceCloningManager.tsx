@@ -8,6 +8,7 @@ import {
   Popconfirm,
   Select,
   Space,
+  Switch,
   Tag,
   Typography,
   notification
@@ -38,6 +39,7 @@ type ProviderOption = {
 type VoiceCloningManagerProps = {
   providersInfo?: TldwTtsProvidersInfo | null
   onSelectVoice?: (value: string, provider?: string) => void
+  onSelectVoices?: (voices: Array<{ role: string; voiceId: string }>) => void
 }
 
 const formatSeconds = (value?: number | null) => {
@@ -52,6 +54,14 @@ const formatBytes = (value?: number | null) => {
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
   return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
+
+const VOICE_ROLE_OPTIONS = [
+  { label: "Narrator", value: "narrator" },
+  { label: "Speaker A", value: "speaker_a" },
+  { label: "Speaker B", value: "speaker_b" },
+  { label: "Speaker C", value: "speaker_c" }
+]
+const DEFAULT_VOICE_ROLE = "narrator"
 
 const resolveCaps = (providersInfo: TldwTtsProvidersInfo | null | undefined, key: string) => {
   if (!providersInfo?.providers) return null
@@ -71,7 +81,8 @@ const getVoiceProviderRequirement = (key: string) => {
 
 export const VoiceCloningManager: React.FC<VoiceCloningManagerProps> = ({
   providersInfo,
-  onSelectVoice
+  onSelectVoice,
+  onSelectVoices
 }) => {
   const queryClient = useQueryClient()
   const { data: customVoices = [], isLoading: voicesLoading } = useQuery<TldwCustomVoice[]>(
@@ -114,6 +125,10 @@ export const VoiceCloningManager: React.FC<VoiceCloningManagerProps> = ({
   )
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null)
   const [previewingId, setPreviewingId] = React.useState<string | null>(null)
+  const [useVoiceRoles, setUseVoiceRoles] = React.useState(false)
+  const [voiceCards, setVoiceCards] = React.useState<
+    Array<{ id: string; role: string; voiceId: string }>
+  >([])
 
   React.useEffect(() => {
     if (!uploadProvider && providerOptions.length > 0) {
@@ -131,6 +146,21 @@ export const VoiceCloningManager: React.FC<VoiceCloningManagerProps> = ({
       }
     }
   }, [previewUrl])
+
+  React.useEffect(() => {
+    if (!useVoiceRoles) return
+    setVoiceCards((prev) => {
+      if (prev.length > 0) return prev
+      const fallbackVoice = customVoices[0]?.voice_id
+      return [
+        {
+          id: `voice-${Date.now()}`,
+          role: DEFAULT_VOICE_ROLE,
+          voiceId: fallbackVoice ? `custom:${fallbackVoice}` : ""
+        }
+      ]
+    })
+  }, [useVoiceRoles, customVoices])
 
   const uploadMutation = useMutation({
     mutationFn: async () => {
@@ -238,6 +268,59 @@ export const VoiceCloningManager: React.FC<VoiceCloningManagerProps> = ({
     } finally {
       setPreviewingId(null)
     }
+  }
+
+  const handleAddVoiceCard = () => {
+    if (voiceCards.length >= 4) return
+    setVoiceCards((prev) => [
+      ...prev,
+      {
+        id: `voice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        role: VOICE_ROLE_OPTIONS[Math.min(prev.length, VOICE_ROLE_OPTIONS.length - 1)].value,
+        voiceId: ""
+      }
+    ])
+  }
+
+  const handleRemoveVoiceCard = (id: string) => {
+    setVoiceCards((prev) => prev.filter((card) => card.id !== id))
+  }
+
+  const handleUpdateVoiceCard = (
+    id: string,
+    updates: Partial<{ role: string; voiceId: string }>
+  ) => {
+    setVoiceCards((prev) =>
+      prev.map((card) => (card.id === id ? { ...card, ...updates } : card))
+    )
+  }
+
+  const voiceRoleError = React.useMemo(() => {
+    if (!useVoiceRoles) return null
+    if (voiceCards.length < 1) return "Select at least one voice."
+    if (voiceCards.length > 4) return "Select up to four voices."
+    const roles = new Set<string>()
+    const voices = new Set<string>()
+    for (const card of voiceCards) {
+      if (!card.voiceId) return "Each role needs a voice."
+      if (roles.has(card.role)) return "Roles must be unique."
+      if (voices.has(card.voiceId)) return "Voices must be unique."
+      roles.add(card.role)
+      voices.add(card.voiceId)
+    }
+    return null
+  }, [useVoiceRoles, voiceCards])
+
+  const roleVoiceOptions = React.useMemo(() => {
+    return customVoices.map((voice) => ({
+      label: `Custom: ${voice.name || voice.voice_id}`,
+      value: `custom:${voice.voice_id}`
+    }))
+  }, [customVoices])
+
+  const resolveVoiceForId = (voiceId: string) => {
+    const key = voiceId.replace("custom:", "")
+    return customVoices.find((voice) => voice.voice_id === key) || null
   }
 
   const activeProvider = providerOptions.find((opt) => opt.value === uploadProvider)
@@ -371,6 +454,109 @@ export const VoiceCloningManager: React.FC<VoiceCloningManagerProps> = ({
           />
           {previewUrl && (
             <audio className="w-full" controls src={previewUrl} />
+          )}
+        </div>
+
+        <div className="mt-4 rounded-md border border-border p-3 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <Text strong>Voice roles</Text>
+              <div className="text-xs text-text-subtle">
+                Assign roles to 1–4 custom voices for multi-speaker TTS.
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Switch size="small" checked={useVoiceRoles} onChange={setUseVoiceRoles} />
+              <Text className="text-xs">Enable</Text>
+            </div>
+          </div>
+
+          {useVoiceRoles && (
+            <>
+              <div className="space-y-2">
+                {voiceCards.map((card) => (
+                  <div
+                    key={card.id}
+                    className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 p-2"
+                  >
+                    <Select
+                      aria-label="Voice role"
+                      className="min-w-[140px]"
+                      options={VOICE_ROLE_OPTIONS}
+                      value={card.role}
+                      onChange={(val) => handleUpdateVoiceCard(card.id, { role: val })}
+                    />
+                    <Select
+                      aria-label="Voice selection"
+                      className="min-w-[220px] flex-1"
+                      options={roleVoiceOptions}
+                      value={card.voiceId}
+                      onChange={(val) => handleUpdateVoiceCard(card.id, { voiceId: val })}
+                    />
+                    <Button
+                      size="small"
+                      icon={<Play className="h-3 w-3" />}
+                      loading={
+                        previewingId === card.id ||
+                        previewingId === card.voiceId.replace("custom:", "")
+                      }
+                      onClick={() => {
+                        const voice = resolveVoiceForId(card.voiceId)
+                        if (voice) {
+                          setPreviewingId(card.id)
+                          handlePreview(voice)
+                        }
+                      }}
+                      disabled={!card.voiceId}
+                    >
+                      Preview
+                    </Button>
+                    <Button
+                      size="small"
+                      type="text"
+                      danger
+                      icon={<Trash2 className="h-3 w-3" />}
+                      onClick={() => handleRemoveVoiceCard(card.id)}
+                      disabled={voiceCards.length <= 1}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="small" onClick={handleAddVoiceCard} disabled={voiceCards.length >= 4}>
+                  Add voice
+                </Button>
+                <Text type="secondary" className="text-xs">
+                  {voiceCards.length}/4 voices selected
+                </Text>
+                {onSelectVoices && (
+                  <Button
+                    size="small"
+                    type="primary"
+                    disabled={Boolean(voiceRoleError)}
+                    onClick={() => {
+                      if (voiceRoleError) return
+                      onSelectVoices(
+                        voiceCards.map((card) => ({
+                          role: card.role,
+                          voiceId: card.voiceId
+                        }))
+                      )
+                    }}
+                  >
+                    Use roles
+                  </Button>
+                )}
+              </div>
+              {voiceRoleError && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="Voice roles need attention"
+                  description={voiceRoleError}
+                />
+              )}
+            </>
           )}
         </div>
 

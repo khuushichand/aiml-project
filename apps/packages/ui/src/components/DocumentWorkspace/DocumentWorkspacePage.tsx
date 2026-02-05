@@ -478,6 +478,9 @@ export const DocumentWorkspacePage: React.FC = () => {
           include_content: false,
           include_versions: false
         })
+        if (openDocumentRequestRef.current !== requestId) {
+          return
+        }
 
         const metadataSources = [
           details?.processing?.safe_metadata,
@@ -536,6 +539,9 @@ export const DocumentWorkspacePage: React.FC = () => {
             timeoutMs: DOCUMENT_FILE_TIMEOUT_MS
           })
         } catch (err: unknown) {
+          if (openDocumentRequestRef.current !== requestId) {
+            return
+          }
           const status = isErrorWithStatus(err) ? err.status : undefined
           if (status === 404) {
             message.error(
@@ -566,6 +572,9 @@ export const DocumentWorkspacePage: React.FC = () => {
           }
           throw err
         }
+        if (openDocumentRequestRef.current !== requestId) {
+          return
+        }
 
         const blob =
           data instanceof Blob
@@ -593,6 +602,9 @@ export const DocumentWorkspacePage: React.FC = () => {
           url
         })
       } catch (err) {
+        if (openDocumentRequestRef.current !== requestId) {
+          return
+        }
         message.error(
           err instanceof Error
             ? err.message

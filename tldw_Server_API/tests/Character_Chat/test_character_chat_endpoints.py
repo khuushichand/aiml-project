@@ -6,6 +6,7 @@ import asyncio
 import os
 import shutil
 import tempfile
+from datetime import datetime, timezone
 import pytest
 import httpx
 import uuid as _uuid
@@ -54,6 +55,32 @@ async def test_character_chat_flow_sessions_messages_worldbooks():
             assert updated_chat["title"] == "Updated Test Chat"
             assert updated_chat["version"] == chat_version + 1
             chat_version = updated_chat["version"]
+
+            # 3b) Chat settings read/write
+            r = await client.get(f"/api/v1/chats/{chat_id}/settings", headers=headers)
+            assert r.status_code == 404
+
+            settings_payload = {
+                "settings": {
+                    "schemaVersion": 2,
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                    "greetingEnabled": True
+                }
+            }
+            r = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json=settings_payload,
+            )
+            assert r.status_code == 200
+            settings_resp = r.json()
+            assert settings_resp["conversation_id"] == chat_id
+            assert settings_resp["settings"]["greetingEnabled"] is True
+
+            r = await client.get(f"/api/v1/chats/{chat_id}/settings", headers=headers)
+            assert r.status_code == 200
+            settings_resp = r.json()
+            assert settings_resp["settings"]["greetingEnabled"] is True
 
             # 4) Send a user message
             msg_payload = {"role": "user", "content": "Hello there!"}

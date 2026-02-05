@@ -196,11 +196,15 @@ export const useMcpTools = (): McpToolsStatus => {
     refetchOnWindowFocus: false
   })
 
-  const tools = (toolsQuery.data ?? []).filter((tool) => {
-    if (!tool || typeof tool !== "object") return false
-    if (!("canExecute" in tool)) return true
-    return (tool as McpToolDefinition).canExecute !== false
-  })
+  const tools = React.useMemo(
+    () =>
+      (toolsQuery.data ?? []).filter((tool) => {
+        if (!tool || typeof tool !== "object") return false
+        if (!("canExecute" in tool)) return true
+        return (tool as McpToolDefinition).canExecute !== false
+      }),
+    [toolsQuery.data]
+  )
   const toolsAvailable = toolsQuery.isLoading ? null : tools.length > 0
   const catalogs = catalogsQuery.data ?? []
   const moduleOptionsSource =

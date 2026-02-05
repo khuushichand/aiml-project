@@ -5,6 +5,7 @@ import { useChatBaseState } from "@/hooks/chat/useChatBaseState"
 import { useStoreMessageOption } from "@/store/option"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { getHistoriesWithMetadata, saveMessage } from "@/db/dexie/helpers"
+import { syncChatSettingsForServerChat } from "@/services/chat-settings"
 import { normalizeConversationState } from "@/utils/conversation-state"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
 import { updatePageTitle } from "@/utils/update-page-title"
@@ -279,6 +280,14 @@ export const useServerChatLoader = ({
                 chatTitle || undefined
               )
               if (localHistoryId) {
+                try {
+                  await syncChatSettingsForServerChat({
+                    historyId: localHistoryId,
+                    serverChatId
+                  })
+                } catch {
+                  // Best-effort settings sync.
+                }
                 const metadataMap = await getHistoriesWithMetadata([
                   localHistoryId
                 ])

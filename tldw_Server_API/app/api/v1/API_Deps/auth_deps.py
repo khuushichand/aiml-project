@@ -28,8 +28,12 @@ from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
+    DatabaseError,
     InvalidTokenError,
+    RegistrationError,
+    TransactionError,
     TokenExpiredError,
+    WeakPasswordError,
 )
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
     is_single_user_ip_allowed,
@@ -57,6 +61,26 @@ from tldw_Server_API.app.core.MCP_unified.monitoring import metrics
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 from tldw_Server_API.app.services.registration_service import RegistrationService, get_registration_service
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService, get_storage_service
+
+# Narrowed exception tuple for auth dependency safety (BLE001)
+_AUTH_DEPS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    asyncio.TimeoutError,
+    InvalidTokenError,
+    TokenExpiredError,
+    DatabaseError,
+    TransactionError,
+    RegistrationError,
+    WeakPasswordError,
+    InactiveUserError,
+)
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
@@ -122,7 +146,7 @@ async def _authenticate_api_key_from_request(request: Request, api_key: str) -> 
             logger.debug("TEST_MODE is enabled for non-production environment")
         try:
             settings = get_settings()
-        except Exception:
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
             settings = None
         allowed_keys: set[str] = set()
         test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
@@ -141,11 +165,10 @@ async def _authenticate_api_key_from_request(request: Request, api_key: str) -> 
             try:
                 if settings and isinstance(settings.DATABASE_URL, str) and settings.DATABASE_URL.startswith("sqlite:///"):
                     from pathlib import Path as _Path
-
                     from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure_authnz_tables
                     db_path = settings.DATABASE_URL.replace("sqlite:///", "")
                     _ensure_authnz_tables(_Path(db_path))
-            except Exception as _ensure_err:
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as _ensure_err:
                 logger.debug("AuthNZ test fallback: ensure_authnz_tables skipped/failed: {}", _ensure_err)
             fixed_id = getattr(settings, "SINGLE_USER_FIXED_ID", 1)
             user = {
@@ -163,7 +186,7 @@ async def _authenticate_api_key_from_request(request: Request, api_key: str) -> 
                 request.state.user_id = fixed_id
                 request.state.team_ids = []
                 request.state.org_ids = []
-            except Exception as state_exc:
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as state_exc:
                 logger.debug(
                     "API key test-mode path: unable to attach state context: {}",
                     state_exc,
@@ -188,7 +211,7 @@ async def _authenticate_api_key_from_request(request: Request, api_key: str) -> 
     except HTTPException:
         # Propagate explicit HTTP errors unchanged (401/403, etc.)
         raise
-    except Exception as e:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as e:
         if _is_test_mode():
             logger.exception("API key authentication error in get_current_user (TEST_MODE)")
         else:
@@ -256,7 +279,7 @@ def _activate_scope_context(
             is_admin=is_admin,
         )
         request.state._content_scope_token = token
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "Unable to establish content scope context: {}",
             exc,
@@ -281,7 +304,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
             import sys as _sys  # local import to avoid test-only dependency at module import
             if "pytest" in _sys.modules:
                 use_adapter = True
-    except Exception:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
         # If any detection fails, fall back to default transaction behavior
         use_adapter = False
 
@@ -317,7 +340,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                     cur = await self._conn.execute(q, params)
                     try:
                         await self._conn.commit()
-                    except Exception as exc:
+                    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
                         logger.debug(
                             "Test DB adapter: sqlite commit failed: {}",
                             exc,
@@ -348,7 +371,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                     rows = await cur.fetchall()
                     try:
                         return [{key: r[key] for key in r.keys()} for r in rows]
-                    except Exception:
+                    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                         return rows
 
             async def fetchrow(self, query: str, *args: object) -> Any | None:
@@ -362,14 +385,14 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                     row = await cur.fetchone()
                     try:
                         return {key: row[key] for key in row.keys()} if row else None
-                    except Exception:
+                    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                         return row
 
             async def commit(self) -> None:
                 if self._is_sqlite:
                     try:
                         await self._conn.commit()
-                    except Exception as exc:
+                    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
                         logger.debug(
                             "Test DB adapter: sqlite commit failed: {}",
                             exc,
@@ -520,7 +543,7 @@ async def get_session_manager_dep() -> SessionManager:
                         _TEST_EPHEMERAL_STATE["values"].pop(key, None)
 
             return _StubSessionManager()  # type: ignore[return-value]
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "get_session_manager_dep: test stub resolution failed; falling back to real SessionManager: {}",
             exc,
@@ -588,7 +611,7 @@ async def get_current_user(
                 bool(x_api_key),
                 request.url.path,
             )
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "get_current_user: TEST_MODE auth header diagnostics failed; continuing without diagnostics: {}",
             exc,
@@ -623,7 +646,7 @@ async def get_current_user(
                 try:
                     if isinstance(cached_user, Mapping):
                         request.state._auth_user = safe_user
-                except Exception as exc:
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(
                         "Fast-path: unable to update request.state._auth_user with sanitized user: {}",
                         exc,
@@ -633,7 +656,7 @@ async def get_current_user(
                     uid = safe_user.get("id")
                     if uid is not None:
                         request.state.user_id = int(uid)
-                except Exception as exc:
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(
                         "Fast-path: unable to attach user_id to request.state: {}",
                         exc,
@@ -651,13 +674,13 @@ async def get_current_user(
                         team_ids=team_ids if team_ids is not None else getattr(request.state, "team_ids", None),
                         is_admin=bool(getattr(principal, "is_admin", False)),
                     )
-                except Exception as exc:
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(
                         "Fast-path: unable to (re)establish content scope context: {}",
                         exc,
                     )
                 return safe_user
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         # Fall through to standard auth behavior if any issue occurs
         logger.debug(
             "get_current_user: Fast-path AuthContext reuse failed, falling back to standard auth: {}",
@@ -668,7 +691,7 @@ async def get_current_user(
     if credentials and not x_api_key:
         try:
             settings = get_settings()
-        except Exception:
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
             settings = None
         if settings and getattr(settings, "AUTH_MODE", None) == "single_user":
             x_api_key = credentials.credentials
@@ -694,7 +717,7 @@ async def get_current_user(
                 present_headers = ",".join(h for h in ("Authorization", "X-API-KEY") if request.headers.get(h)) or "none"
                 extra_headers["X-TLDW-Auth-Reason"] = "missing-bearer"
                 extra_headers["X-TLDW-Auth-Headers"] = present_headers
-            except Exception as exc:  # noqa: BLE001
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(
                     "get_current_user: failed to set TEST_MODE missing-bearer diagnostic headers: {}",
                     exc,
@@ -731,10 +754,10 @@ async def get_current_user(
             if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
                 try:
                     extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{exc.detail}"
-                except Exception as exc:  # noqa: BLE001
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as inner_exc:  # noqa: BLE001
                     logger.debug(
                         "get_current_user: failed to set TEST_MODE auth-error diagnostic header: {}",
-                        exc,
+                        inner_exc,
                     )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -743,7 +766,7 @@ async def get_current_user(
             ) from exc
         # Propagate non-401 HTTP errors unchanged.
         raise
-    except Exception as e:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as e:
         if _is_test_mode():
             logger.exception("Authentication error in get_current_user (TEST_MODE)")
         else:
@@ -755,7 +778,7 @@ async def get_current_user(
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
             try:
                 extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{e}"
-            except Exception as exc:  # noqa: BLE001
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(
                     "get_current_user: failed to set TEST_MODE auth-error diagnostic header: {}",
                     exc,
@@ -784,7 +807,7 @@ async def get_current_user(
         uid = safe_user.get("id")
         if uid is not None:
             request.state.user_id = int(uid)
-    except Exception as state_exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as state_exc:
         logger.debug(
             "JWT path: unable to attach user_id from verify_jwt_and_fetch_user: {}",
             state_exc,
@@ -840,7 +863,7 @@ async def get_auth_principal(
             )
     except HTTPException:
         raise
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Maintenance guard skipped: {}", exc)
     return principal
 
@@ -1075,7 +1098,7 @@ async def _load_org_policy(db: Any, org_id: int) -> dict[str, Any]:
     """
     try:
         pol = await get_policy(db, org_id)
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.exception(
             "Failed to load organization policy for org_id={}",
             org_id,
@@ -1126,12 +1149,12 @@ async def get_org_policy_from_principal(
             # Explicit compatibility mode: defer to legacy mode/profile helpers.
             try:
                 return bool(is_single_user_mode() or is_single_user_profile_mode())
-            except Exception:
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                 return False
 
         try:
             single_profile = is_single_user_profile_mode()
-        except Exception:
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
             single_profile = False
 
         if not single_profile:
@@ -1143,7 +1166,7 @@ async def get_org_policy_from_principal(
         # happen to share the single-user id.
         try:
             return getattr(p, "subject", None) == "single_user"
-        except Exception:
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
             return False
 
     # 1) Claim-first: use principal.org_ids when available.
@@ -1320,7 +1343,7 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
         ctx = getattr(request.state, "auth", None)
         if isinstance(ctx, AuthContext):
             principal = ctx.principal
-    except Exception:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
         principal = None
 
     if is_single_user_principal(principal):
@@ -1338,7 +1361,7 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
             rate_limiter = get_rate_limiter()
     except asyncio.CancelledError:
         raise
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         metrics.record_rate_limit_fallback()
         logger.warning(
             "Legacy rate limiter unavailable; skipping rate limit check; error={}",
@@ -1382,7 +1405,7 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
             )
     except asyncio.CancelledError:
         raise
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         metrics.record_rate_limit_fallback()
         logger.warning(
             "Legacy rate limiter check failed; skipping rate limit check; error={}",
@@ -1416,7 +1439,7 @@ async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
         ctx = getattr(request.state, "auth", None)
         if isinstance(ctx, AuthContext):
             principal = ctx.principal
-    except Exception:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
         principal = None
 
     if is_single_user_principal(principal):
@@ -1434,7 +1457,7 @@ async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
             rate_limiter = get_rate_limiter()
     except asyncio.CancelledError:
         raise
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         metrics.record_rate_limit_fallback()
         logger.warning(
             "Legacy rate limiter unavailable; skipping auth rate limit check; error={}",
@@ -1463,7 +1486,7 @@ async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
         )
     except asyncio.CancelledError:
         raise
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         metrics.record_rate_limit_fallback()
         logger.warning(
             "Legacy auth rate limiter check failed; skipping auth rate limit check; error={}",
@@ -1572,7 +1595,7 @@ async def enforce_rbac_rate_limit(
             )
         else:
             logger.debug("RBAC rate-limit: no configured limits for user {}, resource {}", user_id, resource)
-    except Exception as e:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug("RBAC rate-limit selection failed: {}", e)
 
 
@@ -1582,7 +1605,7 @@ def rbac_rate_limit(resource: str):
         await enforce_rbac_rate_limit(request, resource, db_pool)
     try:
         _dep._tldw_rate_limit_resource = resource
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "rbac_rate_limit: unable to attach rate-limit metadata to dependency: {}",
             exc,
@@ -1666,7 +1689,7 @@ def require_token_scope(
                 jwt_service = await get_jwt_service_dep()
             if isinstance(db_pool, _Depends) or db_pool is None:
                 db_pool = await get_db_pool()
-        except Exception as exc:  # noqa: BLE001
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
             # Best effort: if resolution fails, leave as-is; downstream code handles missing services.
             logger.debug(
                 "require_token_scope: dependency resolution failed; continuing with provided services: {}",
@@ -1683,7 +1706,7 @@ def require_token_scope(
                 ctx = getattr(request.state, "auth", None)
                 if isinstance(ctx, AuthContext):
                     principal = ctx.principal
-            except Exception:
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                 principal = None
             if principal is None and credentials:
                 try:
@@ -1694,7 +1717,7 @@ def require_token_scope(
                             override_fn = app.dependency_overrides.get(get_auth_principal)
                             if override_fn is not None:
                                 resolver = override_fn
-                    except Exception:
+                    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                         resolver = get_auth_principal
 
                     if resolver is get_auth_principal:
@@ -1714,7 +1737,7 @@ def require_token_scope(
                         principal = result
                 except HTTPException:
                     principal = None
-                except Exception:
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                     principal = None
             if principal is not None and principal.is_admin:
                 return None
@@ -1735,7 +1758,7 @@ def require_token_scope(
                     raise HTTPException(status_code=401, detail="Token has been revoked")
             except HTTPException:
                 raise
-            except Exception as exc:  # noqa: BLE001
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(
                     "require_token_scope: token revocation check failed; denying: {}",
                     exc,
@@ -1747,7 +1770,7 @@ def require_token_scope(
                     request.state._token_scope_enforced = True
                     request.state._token_scope_claim = tok_scope
                     request.state._token_scope_required = str(scope)
-                except Exception:  # noqa: BLE001
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:  # noqa: BLE001
                     logger.debug("require_token_scope: failed to attach scope enforcement marker to request.state")
             if tok_scope and require_if_present and tok_scope != str(scope):
                 raise HTTPException(status_code=403, detail="Forbidden: invalid token scope")
@@ -1761,7 +1784,7 @@ def require_token_scope(
                             raise HTTPException(status_code=403, detail="Forbidden: endpoint not permitted for token")
             except HTTPException:
                 raise
-            except Exception as exc:  # noqa: BLE001
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(
                     "require_token_scope: endpoint allowlist enforcement failed; continuing: {}",
                     exc,
@@ -1776,7 +1799,7 @@ def require_token_scope(
                         raise HTTPException(status_code=403, detail="Forbidden: method not permitted for token")
             except HTTPException:
                 raise
-            except Exception as exc:  # noqa: BLE001
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(
                     "require_token_scope: method allowlist enforcement failed; continuing: {}",
                     exc,
@@ -1791,7 +1814,7 @@ def require_token_scope(
                         raise HTTPException(status_code=403, detail="Forbidden: path not permitted for token")
             except HTTPException:
                 raise
-            except Exception as exc:  # noqa: BLE001
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(
                     "require_token_scope: path allowlist enforcement failed; continuing: {}",
                     exc,
@@ -1821,7 +1844,7 @@ def require_token_scope(
                                     raise HTTPException(status_code=403, detail="Forbidden: token quota exceeded")
                             except HTTPException:
                                 raise
-                            except Exception as err:
+                            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as err:
                                 # Defensive: fall back to process-local counters if quota backend fails.
                                 if not _vk_usage_check_and_increment(key, int(max_calls)):
                                     raise HTTPException(
@@ -1830,7 +1853,7 @@ def require_token_scope(
                                     ) from err
             except HTTPException:
                 raise
-            except Exception as exc:  # noqa: BLE001
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(
                     "require_token_scope: token constraints evaluation failed; continuing: {}",
                     exc,
@@ -1839,17 +1862,17 @@ def require_token_scope(
             if require_schedule_match:
                 try:
                     tok_sid = payload.get("schedule_id")
-                except Exception:  # noqa: BLE001
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:  # noqa: BLE001
                     tok_sid = None
                 expected = None
                 try:
                     expected = request.path_params.get(schedule_path_param)
-                except Exception:  # noqa: BLE001
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:  # noqa: BLE001
                     expected = None
                 if expected is None:
                     try:
                         expected = request.headers.get(schedule_header)
-                    except Exception:  # noqa: BLE001
+                    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:  # noqa: BLE001
                         expected = None
                 if tok_sid is not None and expected is not None and str(tok_sid) != str(expected):
                     raise HTTPException(status_code=403, detail="Forbidden: schedule scope mismatch")
@@ -1859,7 +1882,7 @@ def require_token_scope(
         # Fallback: X-API-KEY constraints enforcement (if header present and key is valid)
         try:
             api_key = request.headers.get("X-API-KEY") if getattr(request, "headers", None) else None
-        except Exception:  # noqa: BLE001
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:  # noqa: BLE001
             # Defensive: request headers access should never block the fallback path.
             api_key = None
         if not api_key and token and not token_is_jwt:
@@ -1953,7 +1976,7 @@ def require_token_scope(
                                         raise HTTPException(status_code=403, detail="Forbidden: API key quota exceeded")
                                 except HTTPException:
                                     raise
-                                except Exception as err:
+                                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as err:
                                     # Defensive: fall back to process-local counters if quota backend fails.
                                     key = (f"apikey:{key_id}", str(count_as))
                                     if not _vk_usage_check_and_increment(key, int(quota)):
@@ -1963,7 +1986,7 @@ def require_token_scope(
                                         ) from err
             except HTTPException:
                 raise
-            except Exception:  # noqa: BLE001
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:  # noqa: BLE001
                 # Best-effort: do not block if metadata not available
                 return None
         return None
@@ -1973,7 +1996,7 @@ def require_token_scope(
         _checker._tldw_scope_name = scope
         _checker._tldw_token_scope = True
         _checker._tldw_token_scope_required = str(scope)
-    except Exception as exc:  # noqa: BLE001
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
         logger.debug(
             "require_token_scope: unable to attach metadata to dependency: {}",
             exc,

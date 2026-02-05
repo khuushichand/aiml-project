@@ -21,13 +21,34 @@ from loguru import logger
 
 from tldw_Server_API.app.core.config_paths import resolve_config_file
 
+_CONFIG_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    configparser.Error,
+    yaml.YAMLError,
+)
+
 
 def _safe_json_dict(raw: Optional[str]) -> dict:
     if raw is None or str(raw).strip() == "":
         return {}
     try:
         parsed = json.loads(raw)
-    except Exception:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
         return {}
     return parsed if isinstance(parsed, dict) else {}
 
@@ -125,12 +146,12 @@ def _load_env_files_early() -> None:
                     _log_info(f"Early loading environment variables from: {str(p)}")
                     load_dotenv(dotenv_path=str(p), override=False)
                     loaded_any = True
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 # Continue trying other candidates
                 pass
         if not loaded_any:
             _log_debug("Early .env load: no candidate files found; relying on process env")
-    except Exception:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
         # Never fail early due to env file loading issues
         pass
 
@@ -222,7 +243,7 @@ def _parse_allowed_origins_env(raw: str):
         if raw.strip().startswith("["):
             vals = json.loads(raw)
             return [str(v).strip() for v in vals if str(v).strip()]
-    except Exception:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
         pass
     # Fallback: comma-separated list
     return [s.strip() for s in raw.split(",") if s.strip()]
@@ -469,7 +490,7 @@ def load_tts_config() -> dict[str, Any]:
         _log_info("TTS configuration loaded successfully")
         return processed_config
 
-    except Exception as e:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as e:
         _log_error(f"Error loading TTS configuration: {e}")
         _log_info("Falling back to default TTS configuration")
         return _get_default_tts_config()
@@ -552,7 +573,7 @@ def load_openai_mappings() -> dict:
     try:
         with open(mapping_path) as f:
             return json.load(f)
-    except Exception as e:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as e:
         _log_debug(f"Failed to load OpenAI TTS mappings from {mapping_path}: {e}")
         # Fallback to a default or raise an error
         return {
@@ -625,7 +646,7 @@ def load_settings():
     # Initialize comprehensive_config early to avoid UnboundLocalError
     try:
         comprehensive_config: dict[str, Any] = load_and_log_configs() or {}
-    except Exception as e:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as e:
         _log_error(f"Error loading comprehensive_config: {e}", exc_info=True)
         comprehensive_config = {}
     def _redis_section_get(key: str, default: Optional[str] = None) -> Optional[str]:
@@ -652,7 +673,7 @@ def load_settings():
             if not s:
                 return default
             return int(s)
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             return default
 
     def _env_or_cfg_bool(env_key: str, cfg_key: str, default: bool) -> bool:
@@ -695,15 +716,15 @@ def load_settings():
 
     try:
         redis_port = int(str(redis_port_raw))
-    except Exception:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
         redis_port = 6379
     try:
         redis_db = int(str(redis_db_raw))
-    except Exception:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
         redis_db = 0
     try:
         cache_ttl = int(str(cache_ttl_raw))
-    except Exception:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
         cache_ttl = 300
 
     config_redis_url = _redis_section_get('redis_url')
@@ -722,9 +743,9 @@ def load_settings():
             if parsed.path and parsed.path != "/" and not os.getenv("REDIS_DB"):
                 try:
                     redis_db = int(parsed.path.lstrip("/"))
-                except Exception:
+                except _CONFIG_NONCRITICAL_EXCEPTIONS:
                     pass
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             pass
     else:
         redis_url = f"redis://{redis_host}:{redis_port}/{redis_db}"
@@ -746,7 +767,7 @@ def load_settings():
     config_user_db_base_dir = None
     try:
         config_user_db_base_dir = get_config_value("TTS-Settings", "USER_DB_BASE_DIR")
-    except Exception:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
         config_user_db_base_dir = None
     if config_user_db_base_dir is not None:
         config_user_db_base_dir = str(config_user_db_base_dir).strip() or None
@@ -788,7 +809,7 @@ def load_settings():
     ):
         try:
             _audit_parser = load_comprehensive_config()
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             _audit_parser = None
     if _audit_parser is not None:
         try:
@@ -803,7 +824,7 @@ def load_settings():
                     audit_rollback_cfg_raw = _audit_parser.get("Audit", "storage_rollback", fallback=None)
                 if audit_etl_subpath_env_raw is None:
                     audit_etl_subpath_cfg_raw = _audit_parser.get("Audit", "etl_user_subpath", fallback=None)
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             audit_stream_cfg_raw = None
             audit_storage_cfg_raw = None
             audit_shared_cfg_raw = None
@@ -848,7 +869,7 @@ def load_settings():
     if not single_user_api_key:
         try:
             single_user_api_key = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             pass
 
 
@@ -860,14 +881,14 @@ def load_settings():
         def _cc_int(key: str, fb: int) -> int:
             try:
                 return int(str(_cp.get('Character-Chat', key, fallback=str(fb))))
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 return fb
         def _cc_bool_present(key: str) -> tuple[bool, bool]:
             try:
                 if _cp.has_section('Character-Chat') and _cp.has_option('Character-Chat', key):
                     raw = str(_cp.get('Character-Chat', key)).strip().lower()
                     return True, raw in {"1","true","yes","on"}
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 pass
             return False, False
         _character_rate_limit_ops = _cc_int('CHARACTER_RATE_LIMIT_OPS', 100)
@@ -881,7 +902,7 @@ def load_settings():
         _max_chat_completions_per_minute = _cc_int('MAX_CHAT_COMPLETIONS_PER_MINUTE', 20)
         _max_message_sends_per_minute = _cc_int('MAX_MESSAGE_SENDS_PER_MINUTE', 60)
         _has_char_rl_enabled, _char_rl_enabled_bool = _cc_bool_present('RATE_LIMIT_ENABLED')
-    except Exception:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
         _character_rate_limit_ops = 100
         _character_rate_limit_window = 3600
         _max_characters_per_user = 10000
@@ -899,7 +920,7 @@ def load_settings():
     # -------------------------
     try:
         cp = load_comprehensive_config()
-    except Exception:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
         cp = None
 
     def _sbx_get(key: str, fallback: Optional[str] = None) -> Optional[str]:
@@ -907,7 +928,7 @@ def load_settings():
             if cp and hasattr(cp, "has_section") and cp.has_section('Sandbox'):
                 # type: ignore[no-untyped-call]
                 return cp.get('Sandbox', key, fallback=fallback)  # type: ignore[arg-type]
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             pass
         return fallback
 
@@ -918,14 +939,14 @@ def load_settings():
         raw = os.getenv(env_key) or _sbx_get(cfg_key, str(default)) or str(default)
         try:
             return int(str(raw))
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             return default
 
     def _sbx_float(env_key: str, cfg_key: str, default: float) -> float:
         raw = os.getenv(env_key) or _sbx_get(cfg_key, str(default)) or str(default)
         try:
             return float(str(raw))
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             return default
 
     def _sbx_list(env_key: str, cfg_key: str, default: list[str]) -> list[str]:
@@ -936,7 +957,7 @@ def load_settings():
                     import json as _json
                     vals = _json.loads(raw_env)
                     return [str(v).strip() for v in vals if str(v).strip()]
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 pass
             return [s.strip() for s in raw_env.split(',') if s.strip()]
         raw_cfg = _sbx_get(cfg_key, None)
@@ -946,7 +967,7 @@ def load_settings():
                     import json as _json
                     vals = _json.loads(raw_cfg)
                     return [str(v).strip() for v in vals if str(v).strip()]
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 pass
             return [s.strip() for s in str(raw_cfg).split(',') if s.strip()]
         return default
@@ -1611,7 +1632,7 @@ def load_settings():
     try:
         if _has_char_rl_enabled:
             config_dict["CHARACTER_RATE_LIMIT_ENABLED"] = _char_rl_enabled_bool
-    except Exception:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
         pass
 
     # Surface provider-specific configuration blocks for orchestrator callers.
@@ -1725,7 +1746,7 @@ def load_settings():
                     or str(_os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
                     or ("pytest" in _sys.modules)
                 )
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 _in_test = False
 
             _msg = (
@@ -1791,7 +1812,7 @@ def load_comprehensive_config():
                 _log_info(f"Loading environment variables from: {str(p)}")
                 load_dotenv(dotenv_path=str(p), override=False)
                 loaded_any_env = True
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             # Continue trying other candidates
             pass
     if not loaded_any_env:
@@ -1852,7 +1873,7 @@ def load_comprehensive_config():
                 'IMPLICIT_FEEDBACK_ENABLED',
                 str(implicit_feedback_enabled(default=True, config_parser=config_parser)).lower()
             )
-    except Exception as _rag_env_err:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as _rag_env_err:
         _log_debug(f"RAG env propagation skipped: {_rag_env_err}")
 
     # Propagate Streaming flags from config.txt into process env when unset.
@@ -1872,12 +1893,12 @@ def load_comprehensive_config():
         if hasattr(config_parser, 'has_section') and config_parser.has_section('Chat-Module'):
             try:
                 maxsize_val = config_parser.get('Chat-Module', 'chat_stream_channel_maxsize', fallback=None)
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 maxsize_val = None
         if (not maxsize_val) and hasattr(config_parser, 'has_section') and config_parser.has_section('Streaming'):
             try:
                 maxsize_val = config_parser.get('Streaming', 'chat_stream_channel_maxsize', fallback=None)
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 maxsize_val = None
         _env_default('CHAT_STREAM_CHANNEL_MAXSIZE', maxsize_val)
 
@@ -1886,15 +1907,15 @@ def load_comprehensive_config():
         if hasattr(config_parser, 'has_section') and config_parser.has_section('Chat-Module'):
             try:
                 meta_val = config_parser.get('Chat-Module', 'chat_stream_include_metadata', fallback=None)
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 meta_val = None
         if (not meta_val) and hasattr(config_parser, 'has_section') and config_parser.has_section('Streaming'):
             try:
                 meta_val = config_parser.get('Streaming', 'chat_stream_include_metadata', fallback=None)
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 meta_val = None
         _env_default('CHAT_STREAM_INCLUDE_METADATA', meta_val)
-    except Exception as _stream_env_err:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as _stream_env_err:
         _log_debug(f"Streaming env propagation skipped: {_stream_env_err}")
 
     # Propagate HTTP client settings from config.txt into env (if unset)
@@ -1903,7 +1924,7 @@ def load_comprehensive_config():
             def _env_default_http(name: str, opt: str):
                 try:
                     v = config_parser.get('HTTP', opt, fallback=None)
-                except Exception:
+                except _CONFIG_NONCRITICAL_EXCEPTIONS:
                     v = None
                 if v is not None and os.getenv(name) is None:
                     os.environ[name] = str(v)
@@ -1944,7 +1965,7 @@ def load_comprehensive_config():
             # Maximum redirect hops before erroring (default inherited in http_client)
             try:
                 v = config_parser.get('HTTP', 'max_redirects', fallback=None)
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 v = None
             if v is not None and os.getenv('HTTP_MAX_REDIRECTS') is None:
                 os.environ['HTTP_MAX_REDIRECTS'] = str(v)
@@ -1952,7 +1973,7 @@ def load_comprehensive_config():
             _env_default_http('HTTP_ALLOW_CROSS_HOST_REDIRECTS', 'allow_cross_host_redirects')
             # Scheme downgrade (https -> http) (default: disabled)
             _env_default_http('HTTP_ALLOW_SCHEME_DOWNGRADE', 'allow_scheme_downgrade')
-    except Exception as _http_env_err:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as _http_env_err:
         _log_debug(f"HTTP env propagation skipped: {_http_env_err}")
 
     # Propagate system log file settings from config.txt into env (if unset)
@@ -1961,14 +1982,14 @@ def load_comprehensive_config():
             def _env_default_logging(name: str, opt: str):
                 try:
                     v = config_parser.get('Logging', opt, fallback=None)
-                except Exception:
+                except _CONFIG_NONCRITICAL_EXCEPTIONS:
                     v = None
                 if v is not None and os.getenv(name) is None:
                     os.environ[name] = str(v)
 
             _env_default_logging('SYSTEM_LOG_FILE_PATH', 'system_log_file_path')
             _env_default_logging('SYSTEM_LOG_FILE_MAX_ENTRIES', 'system_log_file_max_entries')
-    except Exception as _log_env_err:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as _log_env_err:
         _log_debug(f"System log env propagation skipped: {_log_env_err}")
 
     # Propagate egress policy settings from config.txt into env (if unset)
@@ -1976,7 +1997,7 @@ def load_comprehensive_config():
         def _env_default_egress(name: str, opt: str):
             try:
                 v = config_parser.get('Egress', opt, fallback=None)
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 v = None
             if v is None:
                 return
@@ -2024,7 +2045,7 @@ def rag_enable_structure_index(default: bool = True) -> bool:
         try:
             cp = load_comprehensive_config()
             v = cp.get("RAG", "enable_structure_index", fallback=str(default)) if cp else str(default)
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             v = str(default)
     return _as_bool(v, default)
 
@@ -2035,7 +2056,7 @@ def rag_strict_extractive(default: bool = False) -> bool:
         try:
             cp = load_comprehensive_config()
             v = cp.get("RAG", "strict_extractive", fallback=str(default)) if cp else str(default)
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             v = str(default)
     return _as_bool(v, default)
 
@@ -2046,7 +2067,7 @@ def rag_require_hard_citations(default: bool = False) -> bool:
         try:
             cp = load_comprehensive_config()
             v = cp.get("RAG", "require_hard_citations", fallback=str(default)) if cp else str(default)
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             v = str(default)
     return _as_bool(v, default)
 
@@ -2057,7 +2078,7 @@ def rag_low_confidence_behavior(default: str = "continue") -> str:
         try:
             cp = load_comprehensive_config()
             v = cp.get("RAG", "low_confidence_behavior", fallback=default) if cp else default
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             v = default
     s = str(v).strip().lower()
     return s if s in ("continue", "ask", "decline") else default
@@ -2069,7 +2090,7 @@ def rag_agentic_cache_backend(default: str = "memory") -> str:
         try:
             cp = load_comprehensive_config()
             v = cp.get("RAG", "agentic_cache_backend", fallback=default) if cp else default
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             v = default
     s = str(v).strip().lower()
     return s if s in ("memory", "sqlite") else default
@@ -2081,11 +2102,11 @@ def rag_agentic_cache_ttl_sec(default: int = 600) -> int:
         try:
             cp = load_comprehensive_config()
             v = cp.get("RAG", "agentic_cache_ttl_sec", fallback=str(default)) if cp else str(default)
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             v = str(default)
     try:
         return max(1, int(str(v)))
-    except Exception:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
         return default
 
 
@@ -2134,7 +2155,7 @@ def implicit_feedback_enabled(
 def _as_int(val: object, default: int) -> int:
     try:
         return int(str(val))
-    except Exception:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
         return default
 
 
@@ -2159,7 +2180,7 @@ def rg_enabled(default: bool = True) -> bool:
             _pytest_active = bool(os.getenv("PYTEST_CURRENT_TEST")) or ("pytest" in _sys.modules)
             if _test_mode or _pytest_active:
                 return False
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             cp = load_comprehensive_config()
@@ -2197,13 +2218,13 @@ def get_llamacpp_handler_config() -> Optional["LlamaCppConfig"]:
     """
     try:
         from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LlamaCppConfig
-    except Exception as exc:  # noqa: BLE001
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
         _log_warning(f"llama.cpp handler config unavailable (import failed): {exc}")
         return None
 
     try:
         cp = load_comprehensive_config()
-    except Exception as exc:  # noqa: BLE001
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
         _log_warning(f"llama.cpp handler config unavailable (config load failed): {exc}")
         return None
     section = cp["LlamaCpp"] if cp and cp.has_section("LlamaCpp") else None
@@ -2215,7 +2236,7 @@ def get_llamacpp_handler_config() -> Optional["LlamaCppConfig"]:
         if section is not None:
             try:
                 return section.get(opt, fallback=None)
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 return None
         return None
 
@@ -2252,7 +2273,7 @@ def get_llamacpp_handler_config() -> Optional["LlamaCppConfig"]:
         if str(default_threads).strip():
             try:
                 kwargs["default_threads"] = int(str(default_threads))
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 _log_warning(f"LLAMACPP_THREADS invalid; ignoring value: {default_threads}")
     if default_n_gpu_layers is not None:
         kwargs["default_n_gpu_layers"] = _as_int(default_n_gpu_layers, 0)
@@ -2279,7 +2300,7 @@ def get_llamacpp_handler_config() -> Optional["LlamaCppConfig"]:
 
     try:
         return LlamaCppConfig(**kwargs)
-    except Exception as exc:  # noqa: BLE001
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
         _log_warning(f"llama.cpp handler config invalid; disabling handler: {exc}")
         return None
 
@@ -2290,7 +2311,7 @@ def rg_policy_store(default: str = "file") -> str:
         try:
             cp = load_comprehensive_config()
             v = cp.get("ResourceGovernor", "policy_store", fallback=default) if cp else default
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             v = default
     s = str(v).strip().lower()
     return s if s in ("file", "db") else default
@@ -2302,7 +2323,7 @@ def rg_policy_reload_enabled(default: bool = True) -> bool:
         try:
             cp = load_comprehensive_config()
             v = cp.get("ResourceGovernor", "policy_reload_enabled", fallback=str(default)) if cp else str(default)
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             v = str(default)
     return _as_bool(v, default)
 
@@ -2313,7 +2334,7 @@ def rg_policy_reload_interval_sec(default: int = 10) -> int:
         try:
             cp = load_comprehensive_config()
             v = cp.get("ResourceGovernor", "policy_reload_interval_sec", fallback=str(default)) if cp else str(default)
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             v = str(default)
     return max(1, _as_int(v, default))
 
@@ -2324,7 +2345,7 @@ def rg_backend(default: str = "memory") -> str:
         try:
             cp = load_comprehensive_config()
             v = cp.get("ResourceGovernor", "backend", fallback=default) if cp else default
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             v = default
     s = str(v).strip().lower()
     return s if s in ("memory", "redis") else default
@@ -2336,7 +2357,7 @@ def rg_redis_fail_mode(default: str = "fallback_memory") -> str:
         try:
             cp = load_comprehensive_config()
             v = cp.get("ResourceGovernor", "redis_fail_mode", fallback=default) if cp else default
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             v = default
     s = str(v).strip().lower()
     return s if s in ("fail_closed", "fail_open", "fallback_memory") else default
@@ -2413,7 +2434,7 @@ def should_disable_cors() -> bool:
         config_parser = load_comprehensive_config()
         if config_parser.has_section('Server'):
             return config_parser.getboolean('Server', 'disable_cors', fallback=False)
-    except Exception as exc:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:
         _log_debug(f"Unable to read disable_cors flag from config: {exc}")
     return False
 
@@ -2503,7 +2524,7 @@ def _route_toggle_policy() -> dict:
             if val.strip().startswith("["):
                 arr = json.loads(val)
                 return {str(x).strip().lower() for x in arr if str(x).strip()}
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             pass
         # Comma/space separated
         parts = [p.strip() for p in val.replace("\n", ",").split(",")]
@@ -2534,7 +2555,7 @@ def _route_toggle_policy() -> dict:
             cfg_disable = _parse_list(cp.get('API-Routes', 'disable', fallback=''))
             cfg_enable = _parse_list(cp.get('API-Routes', 'enable', fallback=''))
             cfg_experimental_extra = _parse_list(cp.get('API-Routes', 'experimental_routes', fallback=''))
-    except Exception as _e:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as _e:
         _log_debug(f"Route policy: unable to read config.txt [API-Routes]: {_e}")
 
     # ENV overrides
@@ -2583,7 +2604,7 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             disable |= {'mcp-unified', 'mcp-catalogs'}
         # Reassign expanded sets for downstream checks
         policy = {**policy, 'enable': enable, 'disable': disable}
-    except Exception:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
         # On any unexpected structure, fall back to original policy
         pass
 
@@ -2614,7 +2635,7 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
         }
         if (_test_mode or _pytest_active) and key in _force_in_tests:
             return True
-    except Exception:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
         pass
 
     # Explicit allow/deny take precedence
@@ -3080,7 +3101,7 @@ def load_and_log_configs():
         enable_contextual_chunking_cfg = config_parser_object.get('Embeddings', 'enable_contextual_chunking', fallback='false')
         try:
             enable_contextual_chunking_flag = str(enable_contextual_chunking_cfg).strip().lower() in {"true","1","yes","on"}
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             enable_contextual_chunking_flag = False
         # Allow contextual LLM model in Embeddings (fallback to Claims section for backward compat)
         contextual_llm_model_cfg = config_parser_object.get('Embeddings', 'contextual_llm_model', fallback=None)
@@ -3091,7 +3112,7 @@ def load_and_log_configs():
             _temp_val = config_parser_object.get('Embeddings', 'contextual_llm_temperature', fallback='')
             if _temp_val is not None and str(_temp_val).strip() != '':
                 contextual_llm_temperature_cfg = float(_temp_val)
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             contextual_llm_temperature_cfg = None
         if not contextual_llm_model_cfg:
             contextual_llm_model_cfg = config_parser_object.get('Claims', 'contextual_llm_model', fallback=None)
@@ -3108,7 +3129,7 @@ def load_and_log_configs():
                 return None
             try:
                 return int(s)
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 return None
         context_window_size_val = _parse_optional_int(context_window_size_cfg)
         # Strategy/budget
@@ -3117,7 +3138,7 @@ def load_and_log_configs():
         context_token_budget_cfg = config_parser_object.get('Embeddings', 'context_token_budget', fallback='6000')
         try:
             context_token_budget_val = int(str(context_token_budget_cfg).strip())
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             context_token_budget_val = 6000
 
         # Prompts - FIXME
@@ -3212,7 +3233,7 @@ def load_and_log_configs():
         def _get_bool(section: str, key: str, default: bool) -> bool:
             try:
                 raw = config_parser_object.get(section, key, fallback=None)
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 return default
             if raw is None:
                 return default
@@ -3226,31 +3247,31 @@ def load_and_log_configs():
         def _get_float(section: str, key: str, default: float) -> float:
             try:
                 raw = config_parser_object.get(section, key, fallback=None)
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 return default
             if raw is None or str(raw).strip() == "":
                 return default
             try:
                 return float(str(raw).strip())
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 return default
 
         def _get_int(section: str, key: str, default: int) -> int:
             try:
                 raw = config_parser_object.get(section, key, fallback=None)
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 return default
             if raw is None or str(raw).strip() == "":
                 return default
             try:
                 return int(str(raw).strip())
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 return default
 
         def _get_str(section: str, key: str, default: str | None) -> str | None:
             try:
                 raw = config_parser_object.get(section, key, fallback=None)
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 return default
             if raw is None:
                 return default
@@ -3268,7 +3289,7 @@ def load_and_log_configs():
             if env_val is not None:
                 try:
                     return int(str(env_val).strip())
-                except Exception:
+                except _CONFIG_NONCRITICAL_EXCEPTIONS:
                     return default
             return _get_int(section, key, default)
 
@@ -3510,20 +3531,20 @@ def load_and_log_configs():
                     return True
                 if s in {"0", "false", "no", "off", "n"}:
                     return False
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 pass
             return d
 
         def _as_int(v: object, d: int) -> int:
             try:
                 return int(str(v))
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 return d
 
         def _as_float(v: object, d: float) -> float:
             try:
                 return float(str(v))
-            except Exception:
+            except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 return d
 
         web_crawl_strategy = _env_or_cfg('WEB_CRAWL_STRATEGY', 'Web-Scraper', 'web_crawl_strategy', 'default')
@@ -4177,7 +4198,7 @@ def load_and_log_configs():
                     'hnsw_ef_search': config_parser_object.getint('RAG', 'pgvector_hnsw_ef_search', fallback=64),
                 }
             return_dict['RAG'] = rag_section
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             # Non-fatal: keep defaults
             pass
 
@@ -4196,11 +4217,11 @@ def load_and_log_configs():
                     ocr_section['sglang_timeout'] = int(sglang_timeout)
                 if ocr_section:
                     return_dict['OCR'] = ocr_section
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             pass
 
         return return_dict
-    except Exception as e:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error loading config: {e!s}")
         return None
 
@@ -4352,13 +4373,13 @@ def get_stt_config() -> dict[str, Any]:
     cfg: Any = loaded_config_data
     try:
         cfg = cfg() if callable(cfg) else cfg
-    except Exception:
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
         cfg = None
 
     if not cfg:
         try:
             cfg = load_and_log_configs() or {}
-        except Exception:
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
             cfg = {}
 
     if not isinstance(cfg, MutableMapping):

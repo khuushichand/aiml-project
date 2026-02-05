@@ -91,6 +91,31 @@ from tldw_Server_API.app.core.Workflows.daily_ledger import (
 )
 from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
 
+_WORKFLOWS_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+    sqlite3.Error,
+    ValidationError,
+    HTTPException,
+    EgressPolicyError,
+    NetworkError,
+    RetryExhaustedError,
+)
+
 # Best-effort per-process cache for "did we backfill today" keys.
 # Keep it bounded to avoid unbounded growth in long-lived workers.
 _WORKFLOWS_BACKFILL_CACHE: set[str] = set()
@@ -122,7 +147,7 @@ _JSONSCHEMA_ADDITIONAL_RE = re.compile(r"'([^']+)' was unexpected")
 def _safe_jsonschema_detail(exc: Exception) -> str:
     try:
         from jsonschema.exceptions import ValidationError  # type: ignore
-    except Exception:
+    except ImportError:
         return "schema validation failed"
     if not isinstance(exc, ValidationError):
         return "schema validation failed"
@@ -313,7 +338,7 @@ def _validate_chunking_contract(cfg: dict[str, Any], *, step_id: str) -> None:
     try:
         from tldw_Server_API.app.core.Chunking.base import ChunkingMethod
         methods = {m.value for m in ChunkingMethod}
-    except Exception as exc:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"Workflows chunking validation: unable to load chunker methods: {exc}")
         return
 
@@ -416,7 +441,7 @@ def _validate_definition_payload(defn: dict[str, Any]) -> None:
     # Optional JSON Schema validator
     try:
         import jsonschema  # type: ignore
-    except Exception:
+    except ImportError:
         jsonschema = None  # type: ignore
     # size
     size = len(json.dumps(defn, separators=(",", ":")))
@@ -589,7 +614,7 @@ def _validate_definition_payload(defn: dict[str, Any]) -> None:
         cfg = s.get("config") or {}
         try:
             cfg_bytes = len(json.dumps(cfg, separators=(",", ":")))
-        except Exception:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             raise HTTPException(status_code=422, detail="Invalid step config JSON")
         if cfg_bytes > MAX_STEP_CONFIG_BYTES:
             raise HTTPException(status_code=413, detail=f"Step '{sid}' config too large")
@@ -629,7 +654,7 @@ def _validate_definition_payload(defn: dict[str, Any]) -> None:
             if schema:
                 try:
                     jsonschema.validate(cfg, schema)  # type: ignore[attr-defined]
-                except Exception as e:  # pragma: no cover - depends on optional dep
+                except (jsonschema.exceptions.ValidationError, jsonschema.exceptions.SchemaError) as e:  # pragma: no cover - depends on optional dep
                     logger.debug(
                         "Workflows validation: invalid config for step {}: {} - {}",
                         sid,
@@ -669,7 +694,7 @@ def _validate_definition_payload(defn: dict[str, Any]) -> None:
             scopes,
         )
         raise
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(
             "Workflows validation: unexpected mcp policy error. raw_policy={} allowlist={} scopes={}",
             raw_policy,
@@ -702,7 +727,7 @@ def _validate_dag(defn: dict[str, Any]) -> None:
                 if succ not in id_to_idx:
                     raise HTTPException(status_code=422, detail=f"Step '{sid}' on_success points to unknown step '{succ}'")
                 edges[sid].append(succ)
-        except Exception as e:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"workflows._validate_dag: on_success parse error for step {sid}: {e}")
         # explicit on_failure
         try:
@@ -711,7 +736,7 @@ def _validate_dag(defn: dict[str, Any]) -> None:
                 if failn not in id_to_idx:
                     raise HTTPException(status_code=422, detail=f"Step '{sid}' on_failure points to unknown step '{failn}'")
                 edges[sid].append(failn)
-        except Exception as e:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"workflows._validate_dag: on_failure parse error for step {sid}: {e}")
         # explicit on_timeout (primarily for human steps)
         try:
@@ -720,7 +745,7 @@ def _validate_dag(defn: dict[str, Any]) -> None:
                 if timeout_next not in id_to_idx:
                     raise HTTPException(status_code=422, detail=f"Step '{sid}' on_timeout points to unknown step '{timeout_next}'")
                 edges[sid].append(timeout_next)
-        except Exception as e:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"workflows._validate_dag: on_timeout parse error for step {sid}: {e}")
         # branch-specific
         try:
@@ -733,7 +758,7 @@ def _validate_dag(defn: dict[str, Any]) -> None:
                         if nxt not in id_to_idx:
                             raise HTTPException(status_code=422, detail=f"Step '{sid}' branch targets unknown step '{nxt}'")
                         edges[sid].append(nxt)
-        except Exception as e:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"workflows._validate_dag: branch parse error for step {sid}: {e}")
 
     # Detect cycles among explicit edges (DFS)
@@ -801,7 +826,7 @@ async def _wait_for_run_completion(
             # Trim timeouts under pytest/TEST_MODE to keep suites responsive
             if os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}:
                 timeout_seconds = min(timeout_seconds, 120.0)
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Workflows endpoint: failed to adjust run timeout; using defaults: {e}")
     deadline = time.monotonic() + timeout_seconds
     terminal = {"succeeded", "failed", "cancelled"}
@@ -856,13 +881,13 @@ async def _enforce_workflows_daily_cap(
     try:
         if os.getenv("WORKFLOWS_DISABLE_QUOTAS", "").lower() in {"1", "true", "yes", "on"}:
             return
-    except Exception as exc:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Workflows quota: WORKFLOWS_DISABLE_QUOTAS check failed: {}", exc)
 
     # Derive RG entity key to align ledger accounting with middleware.
     try:
         entity = derive_entity_key(request)
-    except Exception as exc:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "Workflows quota: entity derivation failed, using user fallback: {}",
             exc,
@@ -870,7 +895,7 @@ async def _enforce_workflows_daily_cap(
         entity = f"user:{resolve_user_id_for_request(current_user, error_status=500)}"
     try:
         entity_scope, entity_value = entity.split(":", 1)
-    except Exception as exc:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "Workflows quota: entity split failed, using user fallback: {}",
             exc,
@@ -880,7 +905,7 @@ async def _enforce_workflows_daily_cap(
     policy_id = None
     try:
         policy_id = str(getattr(request.state, "rg_policy_id", None) or "workflows.default")
-    except Exception as exc:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "Workflows quota: rg_policy_id resolution failed, using default: {}",
             exc,
@@ -893,7 +918,7 @@ async def _enforce_workflows_daily_cap(
         if loader is not None and policy_id:
             pol = loader.get_policy(policy_id) or {}
             daily_cap_policy = int((pol.get(workflows_ledger_category()) or {}).get("daily_cap") or 0)
-    except Exception as exc:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "Workflows quota: RG policy lookup failed for policy_id={}: {}",
             policy_id,
@@ -905,7 +930,7 @@ async def _enforce_workflows_daily_cap(
     if daily_cap_policy <= 0:
         try:
             daily_cap_env = int(os.getenv("WORKFLOWS_QUOTA_DAILY_PER_USER", "1000") or 0)
-        except Exception as exc:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(
                 "Workflows quota: WORKFLOWS_QUOTA_DAILY_PER_USER parsing failed: {}",
                 exc,
@@ -939,7 +964,7 @@ async def _enforce_workflows_daily_cap(
                     entity_scope=entity_scope,
                     entity_value=entity_value,
                 )
-    except Exception as exc:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "Workflows quota: legacy ledger backfill failed for entity_scope={} entity_value={}: {}",
             entity_scope,
@@ -970,7 +995,7 @@ async def _enforce_workflows_daily_cap(
                 return
         except HTTPException:
             raise
-        except Exception as exc:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
             # Fall back to direct check below.
             logger.debug(
                 "Workflows quota: governor check failed for entity={} policy_id={}: {}",
@@ -1014,7 +1039,7 @@ async def _record_workflow_run_usage(
             run_id=str(run_id),
             units=1,
         )
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(
             "Workflows ledger recording failed for run {}: {}",
             run_id,
@@ -1048,7 +1073,7 @@ async def create_definition(
     except sqlite3.IntegrityError:
         # Duplicate name+version for tenant
         raise HTTPException(status_code=422, detail="Workflow with same name and version already exists")
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         raise
     # Audit create
     try:
@@ -1071,7 +1096,7 @@ async def create_definition(
                 action="create",
                 metadata={"name": body.name, "version": body.version},
             )
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Workflows audit(create) failed: {e}")
     return WorkflowDefinitionResponse(
         id=workflow_id,
@@ -1134,7 +1159,7 @@ async def create_new_version(
         )
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=422, detail="Workflow version already exists")
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         raise
     # Audit new version
     try:
@@ -1157,7 +1182,7 @@ async def create_new_version(
                 action="create_version",
                 metadata={"base_id": workflow_id, "version": body.version},
             )
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Workflows audit(create_version) failed: {e}")
     return WorkflowDefinitionResponse(id=wid, name=body.name, version=body.version, description=body.description, tags=body.tags, is_active=True)
 
@@ -1201,7 +1226,7 @@ async def delete_definition(
                 resource_id=str(workflow_id),
                 action="delete",
             )
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Workflows audit(delete) failed: {e}")
     return {"ok": True}
 
@@ -1218,7 +1243,7 @@ async def workflows_auth_check(current_user: User = Depends(get_request_user)):
             "is_admin": bool(getattr(current_user, "is_admin", False)),
             "tenant_id": getattr(current_user, "tenant_id", None),
         }
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         # If dependency succeeds, we should not reach here; return minimal
         return {"ok": True}
 
@@ -1276,7 +1301,7 @@ async def workflows_virtual_key(
             schedule_id=(str(body.schedule_id) if body.schedule_id else None),
         )
         exp = datetime.utcnow() + timedelta(minutes=int(body.ttl_minutes))
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Failed to mint workflows virtual key")
         raise HTTPException(status_code=500, detail="Failed to mint token") from e
     return {
@@ -1365,7 +1390,7 @@ async def run_saved(
                         failure_next = str(s0.get("on_failure") or "").strip()
                         id_map = {str(st.get('id') or f'step_{i+1}'): True for i, st in enumerate(steps)}
                         has_failure_route = bool(failure_next and id_map.get(failure_next))
-                    except Exception:
+                    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
                         has_failure_route = False
                     if not has_failure_route:
                         # Append minimal events and step failure (fast-fail)
@@ -1381,12 +1406,12 @@ async def run_saved(
                                 step_type="prompt",
                                 inputs={"config": cfg},
                             )
-                        except Exception:
+                        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
                             pass
                         db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "step_started", {"step_id": s0.get('id','s1'), "type": "prompt"})
                         try:
                             db.complete_step_run(step_run_id=step_run_id, status="failed", outputs={}, error="forced_error")
-                        except Exception:
+                        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
                             pass
                         db.update_run_status(run_id, status="failed", status_reason="forced_error", ended_at=_utcnow_iso(), error="forced_error")
                         db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "run_failed", {"error": "forced_error"})
@@ -1402,14 +1427,14 @@ async def run_saved(
                             error=run.error,
                             definition_version=run.definition_version,
                         )
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Workflows endpoint: inline fallback check failed: {e}")
     engine = WorkflowEngine(db)
     # Inject scoped secrets (not persisted)
     try:
         if body and getattr(body, "secrets", None):
             WorkflowEngine.set_run_secrets(run_id, body.secrets)
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Workflows endpoint(adhoc): inline fallback check failed: {e}")
     run_mode = RunMode.ASYNC if str(mode).lower() == "async" else RunMode.SYNC
     engine.submit(run_id, run_mode)
@@ -1421,7 +1446,7 @@ async def run_saved(
             if _r and _r.status != "queued":
                 break
             await _a.sleep(0.005)
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"workflows: failed to load workflows engine config: {e}")
     # Fallback for environments where background scheduling is delayed: run inline once
     try:
@@ -1431,7 +1456,7 @@ async def run_saved(
             # Only run inline if not present in scheduler queue (avoid breaking concurrency limits)
             try:
                 in_queue = WorkflowScheduler.instance().drain_pending(run_id)
-            except Exception as _e:
+            except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as _e:
                 logger.debug(f"workflows: scheduler.drain_pending error: {_e}")
                 in_queue = False
             if not in_queue:
@@ -1439,7 +1464,7 @@ async def run_saved(
                 await engine.start_run(run_id, run_mode)
             else:
                 _logger.debug(f"Workflows endpoint: run_id={run_id} is queued; skipping inline fallback")
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"workflows: failed to initialize scheduler: {e}")
     if run_mode == RunMode.SYNC:
         run = await _wait_for_run_completion(db, run_id)
@@ -1450,11 +1475,11 @@ async def run_saved(
         # Ensure status is always a string for response validation
         if run and not getattr(run, "status", None):
             run.status = "queued"
-    except Exception as exc:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"workflows: status normalization failed for run_id={run_id}: {exc}")
     try:
         _logger.debug(f"Workflows endpoint: post-submit status={run.status if run else 'missing'} run_id={run_id}")
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"workflows: failed to log post-submit status: {e}")
     # In test environments, run the workflow inline to ensure deterministic completion
     try:
@@ -1468,7 +1493,7 @@ async def run_saved(
             run = db.get_run(run_id)
             if run and not getattr(run, "status", None):
                 run.status = "queued"
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         pass
     # Audit: run created
     try:
@@ -1491,14 +1516,14 @@ async def run_saved(
                 action="run_saved",
                 metadata={"workflow_id": d.id, "mode": mode},
             )
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         pass
     if run is None:
         try:
             # Give the DB a final chance to surface the run (e.g., after inline execution)
             await asyncio.sleep(0)
             run = db.get_run(run_id)
-        except Exception:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             run = None
     if run is None:
         inputs_payload = (body.inputs if body else {}) or {}
@@ -1593,7 +1618,7 @@ async def list_runs(
                     action="admin_owner_override",
                     metadata={"owner": str(owner)},
                 )
-        except Exception:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             pass
     else:
         user_id = str(current_user.id)
@@ -1619,7 +1644,7 @@ async def list_runs(
                         action="owner_filter_denied",
                         metadata={"attempted_owner": str(owner)},
                     )
-            except Exception:
+            except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
                 pass
     # Convenience: compute created_after from last_n_hours if provided
     if last_n_hours is not None:
@@ -1627,7 +1652,7 @@ async def list_runs(
             import datetime as _dt
             ca_dt = _dt.datetime.utcnow() - _dt.timedelta(hours=int(last_n_hours))
             created_after = ca_dt.isoformat()
-        except Exception:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             pass
 
     # Cursor parsing (base64url-encoded JSON)
@@ -1653,7 +1678,7 @@ async def list_runs(
                 cur_order_desc = token_od
                 # When using cursor, ignore provided offset
                 offset = 0
-        except Exception as e:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Workflows runs: failed to parse cursor token; ignoring. Error: {e}")
 
     rows = db.list_runs(
@@ -1704,7 +1729,7 @@ async def list_runs(
             }
             raw = _json.dumps(token_obj, default=str).encode("utf-8")
             next_cursor = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
-        except Exception as e:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Workflows runs: failed to build next_cursor token: {e}")
             next_cursor = None
 
@@ -1746,7 +1771,7 @@ async def list_runs(
             )
             if link_value:
                 response.headers["Link"] = link_value
-        except Exception as e:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Workflows runs: failed to set Link headers: {e}")
 
     return WorkflowRunListResponse(
@@ -1811,7 +1836,7 @@ async def run_adhoc(
     try:
         if body and getattr(body, "secrets", None):
             WorkflowEngine.set_run_secrets(run_id, body.secrets)
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         pass
     run_mode = RunMode.ASYNC if str(mode).lower() == "async" else RunMode.SYNC
     engine.submit(run_id, run_mode)
@@ -1823,7 +1848,7 @@ async def run_adhoc(
             if _r and _r.status != "queued":
                 break
             await _a.sleep(0.005)
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         pass
     # Fallback inline start if still queued
     try:
@@ -1833,14 +1858,14 @@ async def run_adhoc(
             # Only start inline if not enqueued by the scheduler (preserve concurrency limits)
             try:
                 in_queue = WorkflowScheduler.instance().drain_pending(run_id)
-            except Exception:
+            except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
                 in_queue = False
             if not in_queue:
                 _logger.debug(f"Workflows endpoint(adhoc): fallback inline start for run_id={run_id}")
                 await engine.start_run(run_id, run_mode)
             else:
                 _logger.debug(f"Workflows endpoint(adhoc): run_id={run_id} is queued; skipping inline fallback")
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         pass
     if run_mode == RunMode.SYNC:
         run = await _wait_for_run_completion(db, run_id)
@@ -1849,7 +1874,7 @@ async def run_adhoc(
     from loguru import logger as _logger
     try:
         _logger.debug(f"Workflows endpoint: post-submit (adhoc) status={run.status if run else 'missing'} run_id={run_id}")
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         pass
     if run is None:
         raise HTTPException(status_code=404, detail="Workflow run not found")
@@ -1874,7 +1899,7 @@ async def run_adhoc(
                 action="run_adhoc",
                 metadata={"mode": mode},
             )
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         pass
     return WorkflowRunResponse(
         id=run.run_id,
@@ -1929,7 +1954,7 @@ async def get_run(
                     resource_id=str(run_id),
                     action="tenant_mismatch",
                 )
-        except Exception as e:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Workflows get_run: audit tenant_mismatch failed: {e}")
         raise HTTPException(status_code=404, detail="Run not found")
     # Owner or admin (if attribute available)
@@ -1952,7 +1977,7 @@ async def get_run(
                     resource_id=str(run_id),
                     action="not_owner",
                 )
-        except Exception as e:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Workflows get_run: audit not_owner failed: {e}")
         raise HTTPException(status_code=404, detail="Run not found")
     return WorkflowRunResponse(
@@ -2021,7 +2046,7 @@ async def get_run_events(
             tok = _json.loads(raw)
             if isinstance(tok.get("last_seq"), int):
                 since = int(tok["last_seq"])  # seek after this seq
-        except Exception as e:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Workflows events: failed to parse cursor token; ignoring. Error: {e}")
     events = db.get_events(run_id, since=since, limit=limit, types=types_norm if types_norm else None)
     out: list[EventResponse] = []
@@ -2038,11 +2063,11 @@ async def get_run_events(
     if response is not None and len(out) == int(limit):
         try:
             last_seq = int(out[-1].event_seq) if hasattr(out[-1], "event_seq") else int(events[-1]["event_seq"])  # type: ignore
-        except Exception as e:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Workflows events: failed to derive last_seq: {e}")
             try:
                 last_seq = int(events[-1]["event_seq"]) if events else None  # type: ignore
-            except Exception as e2:
+            except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e2:
                 logger.debug(f"Workflows events: no last_seq available: {e2}")
                 last_seq = None
         if last_seq is not None:
@@ -2053,7 +2078,7 @@ async def get_run_events(
             nxt = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
             try:
                 response.headers["Next-Cursor"] = nxt
-            except Exception as e:
+            except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows events: failed to set Next-Cursor header: {e}")
             # Optional RFC5988 Link header for 'next'
             try:
@@ -2073,7 +2098,7 @@ async def get_run_events(
                 )
                 if link_value:
                     response.headers["Link"] = link_value
-            except Exception as e:
+            except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows events: failed to set Link header: {e}")
     return out
 
@@ -2139,7 +2164,7 @@ async def list_webhook_dlq(
     for r in rows:
         try:
             body = json.loads(r.get("body_json") or "{}")
-        except Exception:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             body = {}
         out.append({
             "id": r.get("id"),
@@ -2223,7 +2248,7 @@ async def replay_webhook_dlq(
                 type(exc).__name__,
                 exc,
             )
-        except Exception as exc:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(
                 "Workflows DLQ replay: failed to delete dlq_id={} in test mode: {} - {}",
                 dlq_id,
@@ -2239,7 +2264,7 @@ async def replay_webhook_dlq(
             raise HTTPException(status_code=400, detail="Denied by egress policy")
     except HTTPException:
         raise
-    except Exception as exc:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "Workflows DLQ replay: egress policy check failed for dlq_id={}: {} - {}",
             dlq_id,
@@ -2287,7 +2312,7 @@ async def replay_webhook_dlq(
                         type(exc).__name__,
                         exc,
                     )
-                except Exception as exc:
+                except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(
                         "Workflows DLQ replay: failed to delete dlq_id={}: {} - {}",
                         dlq_id,
@@ -2311,7 +2336,7 @@ async def replay_webhook_dlq(
                         type(exc).__name__,
                         exc,
                     )
-                except Exception as exc:
+                except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(
                         "Workflows DLQ replay: failed to update failure record for dlq_id={}: {} - {}",
                         dlq_id,
@@ -2334,7 +2359,7 @@ async def replay_webhook_dlq(
                     close()
     except HTTPException:
         raise
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         error_category = _classify_webhook_exception(e)
         logger.debug(
             "Workflows DLQ replay: delivery failed for dlq_id={}: {} - {}",
@@ -2352,7 +2377,7 @@ async def replay_webhook_dlq(
                 type(exc).__name__,
                 exc,
             )
-        except Exception as exc:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(
                 "Workflows DLQ replay: failed to update failure record for dlq_id={}: {} - {}",
                 dlq_id,
@@ -2388,13 +2413,13 @@ def _resolve_artifact_file_path(
     allowed_roots: list[Path] = []
     try:
         allowed_roots.append(artifacts_base_dir())
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         pass
     if workdir:
         try:
             wd = Path(str(workdir).replace("file://", "")).resolve()
             allowed_roots.append(wd)
-        except Exception:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             pass
 
     allowed = any(is_subpath(root, p) for root in allowed_roots if root)
@@ -2506,7 +2531,7 @@ async def get_run_artifacts_manifest(
             except HTTPException:
                 entry["integrity"] = {"ok": False, "error": "path_outside_allowed_dir"}
                 mismatches += 1
-            except Exception:
+            except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
                 entry["integrity"] = {"ok": False, "error": "hash_error"}
                 mismatches += 1
         manifest.append(entry)
@@ -2590,7 +2615,7 @@ async def verify_artifacts_batch(
                 "expected": expected,
                 "recorded": recorded,
             })
-        except Exception as e:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(
                 "Workflows artifact verify: hash failed for artifact_id={}: {} - {}",
                 aid,
@@ -2647,7 +2672,7 @@ async def download_artifact(
                     resource_id=str(artifact_id),
                     action="tenant_mismatch",
                 )
-        except Exception:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             pass
         raise HTTPException(status_code=404, detail="Artifact not found")
     is_admin = bool(getattr(current_user, "is_admin", False))
@@ -2669,7 +2694,7 @@ async def download_artifact(
                     resource_id=str(artifact_id),
                     action="not_owner",
                 )
-        except Exception:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             pass
         raise HTTPException(status_code=404, detail="Artifact not found")
     # Only support file:// URIs for direct download
@@ -2702,11 +2727,11 @@ async def download_artifact(
                 else:
                     try:
                         logger.warning(f"Artifact checksum mismatch for {artifact_id}; proceeding due to non-strict mode")
-                    except Exception:
+                    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
                         pass
     except HTTPException:
         raise
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         # Do not block on hashing errors
         pass
     # Guardrails: max size and allowed MIME
@@ -2715,7 +2740,7 @@ async def download_artifact(
     try:
         if p.stat().st_size > max_bytes:
             raise HTTPException(status_code=413, detail="Artifact too large to download")
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         pass
     # MIME allowlist
     allowed = [s.strip() for s in (_os.getenv("WORKFLOWS_ARTIFACT_ALLOWED_MIME", "text/plain,text/markdown,application/json,application/pdf,image/png,image/jpeg").split(",")) if s.strip()]
@@ -2726,18 +2751,18 @@ async def download_artifact(
     range_header = None
     try:
         range_header = request.headers.get("range") if request else None
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         range_header = None
     # Build a safe Content-Disposition filename to avoid non-ASCII header issues under fuzzing
     def _safe_disp_parts(name: str) -> tuple[str, Optional[str]]:
         try:
             name.encode("ascii")
             return name, None
-        except Exception:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             try:
                 import urllib.parse as _u
                 return "download", _u.quote(name)
-            except Exception:
+            except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
                 return "download", None
 
     if range_header and range_header.lower().startswith("bytes="):
@@ -2779,7 +2804,7 @@ async def download_artifact(
                         remaining -= len(data)
                         yield data
             return StreamingResponse(_iter(), status_code=206, headers=headers)
-        except Exception:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             # 416 Range Not Satisfiable
             raise HTTPException(status_code=416, detail="Invalid Range header")
     # Full response
@@ -2848,7 +2873,7 @@ async def download_run_artifacts_zip(
             continue
         try:
             size_b = p.stat().st_size
-        except Exception:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             size_b = 0
         mime = a.get("mime_type") or _m.guess_type(str(p))[0] or "application/octet-stream"
         if allowed and not any(mime == m or (m.endswith("/*") and mime.startswith(m[:-1])) for m in allowed):
@@ -2867,7 +2892,7 @@ async def download_run_artifacts_zip(
         for p, mime in selected:
             try:
                 zf.write(str(p), arcname=p.name)
-            except Exception:
+            except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
                 continue
     buf.seek(0)
     filename = f"artifacts_{run_id}.zip"
@@ -2887,7 +2912,7 @@ async def get_chunker_options():
     try:
         from tldw_Server_API.app.core.Chunking import DEFAULT_CHUNK_OPTIONS
         from tldw_Server_API.app.core.Chunking.base import ChunkingMethod
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         raise HTTPException(status_code=500, detail="Chunking module unavailable")
 
     defaults = DEFAULT_CHUNK_OPTIONS.copy()
@@ -2953,7 +2978,7 @@ async def control_run(
         is_admin = bool(getattr(current_user, "is_admin", False))
         if imp and is_admin and str(imp) != str(current_user.id):
             db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "admin_impersonation", {"actor": str(current_user.id), "target_user_id": imp, "action": action})
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         pass
     if action == "pause":
         engine.pause(run_id)
@@ -2963,7 +2988,7 @@ async def control_run(
         # Mark cancel flag in DB and emit event via engine helper
         try:
             db.set_cancel_requested(run_id, True)
-        except Exception:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             pass
         engine.cancel(run_id)
     elif action == "retry":
@@ -3353,25 +3378,25 @@ async def list_workflow_templates(q: Optional[str] = Query(None, description="Se
                         # Normalize tags to list[str]
                         if not isinstance(tags, list):
                             tags = []
-                    except Exception:
+                    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
                         # Ignore parse errors; fall back to filename-derived name
                         tags = []
                     item = {"name": name, "filename": p.name, "title": title, "tags": tags}
                     items.append(item)
-                except Exception:
+                except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
                     continue
         # Optional search and tag filtering
         def _match(s: str, query: str) -> bool:
             try:
                 return query.lower() in s.lower()
-            except Exception:
+            except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
                 return False
         if q:
             items = [it for it in items if _match(it.get("name", ""), q) or _match(it.get("title", ""), q) or any(_match(t, q) for t in (it.get("tags") or []))]
         if tag:
             items = [it for it in items if str(tag) in (it.get("tags") or [])]
         return items
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Failed to list workflow templates: {e}")
         return []
 
@@ -3415,12 +3440,12 @@ async def list_workflow_template_tags() -> list[str]:
                             s = str(t).strip()
                             if s:
                                 tags_set.add(s)
-                        except Exception:
+                        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
                             continue
-            except Exception:
+            except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
                 continue
         return sorted(tags_set)
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Failed to list template tags: {e}")
         return []
 
@@ -3466,7 +3491,7 @@ async def get_workflow_template(name: str) -> dict[str, Any]:
         return _json.loads(raw)
     except HTTPException:
         raise
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Failed to read workflow template {name}: {e}")
         raise HTTPException(status_code=500, detail="Failed to load template")
 
@@ -3510,7 +3535,7 @@ async def get_workflow_template_legacy(name: str) -> dict[str, Any]:
         return _json.loads(raw)
     except HTTPException:
         raise
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Failed to read workflow template {name}: {e}")
         raise HTTPException(status_code=500, detail="Failed to load template")
 
@@ -3637,7 +3662,7 @@ async def get_definition(
         raise HTTPException(status_code=404, detail="Workflow not found")
     try:
         definition = json.loads(d.definition_json)
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         definition = {"error": "invalid_definition_json"}
     return {
         "id": d.id,
@@ -3686,7 +3711,7 @@ async def approve_step(
     # Update step decision via DB adapter
     try:
         db.approve_step_decision(run_id=run_id, step_id=step_id, approved_by=str(current_user.id), comment=payload.comment or "")
-    except Exception as exc:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
         error_category = _classify_db_error(exc)
         logger.exception(
             "Workflows approval: failed to persist decision for run_id={} step_id={} error_category={}",
@@ -3710,7 +3735,7 @@ async def approve_step(
         definition = json.loads(run.definition_snapshot_json or "{}")
         step_def = _find_step_def(definition, step_id)
         next_step_id = str((step_def or {}).get("on_success") or "").strip() or None
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         next_step_id = None
     # Resume run from next step
     engine = WorkflowEngine(db)
@@ -3756,7 +3781,7 @@ async def reject_step(
         definition = json.loads(run.definition_snapshot_json or "{}")
         step_def = _find_step_def(definition, step_id)
         failure_next = str((step_def or {}).get("on_failure") or "").strip() or None
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         failure_next = None
     if db.backend:
         try:
@@ -3769,7 +3794,7 @@ async def reject_step(
                         comment=payload.comment or "",
                         connection=conn,
                     )
-                except Exception as exc:
+                except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
                     error_category = _classify_db_error(exc)
                     logger.exception(
                         "Workflows rejection: failed to record decision for run_id={} step_id={} error_category={}",
@@ -3795,7 +3820,7 @@ async def reject_step(
                             ended_at=_utcnow_iso(),
                             connection=conn,
                         )
-                    except Exception as exc:
+                    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
                         error_category = _classify_db_error(exc)
                         logger.exception(
                             "Workflows rejection: failed to mark run rejected for run_id={} step_id={} error_category={}",
@@ -3820,7 +3845,7 @@ async def reject_step(
                         {"step_id": step_id},
                         connection=conn,
                     )
-                except Exception as exc:
+                except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
                     error_category = _classify_db_error(exc)
                     logger.exception(
                         "Workflows rejection: failed to append event for run_id={} step_id={} error_category={}",
@@ -3839,7 +3864,7 @@ async def reject_step(
                     ) from exc
         except HTTPException:
             raise
-        except Exception as exc:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
             error_category = _classify_db_error(exc)
             logger.exception(
                 "Workflows rejection: failed to start transaction for run_id={} step_id={} error_category={}",
@@ -3864,7 +3889,7 @@ async def reject_step(
                 approved_by=str(current_user.id),
                 comment=payload.comment or "",
             )
-        except Exception as exc:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
             error_category = _classify_db_error(exc)
             logger.exception(
                 "Workflows rejection: failed to record decision for run_id={} step_id={} error_category={}",
@@ -3889,7 +3914,7 @@ async def reject_step(
                     status_reason="rejected_by_human",
                     ended_at=_utcnow_iso(),
                 )
-            except Exception as exc:
+            except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
                 error_category = _classify_db_error(exc)
                 logger.exception(
                     "Workflows rejection: failed to mark run rejected for run_id={} step_id={} error_category={}",
@@ -3913,7 +3938,7 @@ async def reject_step(
                 "human_rejected",
                 {"step_id": step_id},
             )
-        except Exception as exc:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
             error_category = _classify_db_error(exc)
             logger.exception(
                 "Workflows rejection: failed to append event for run_id={} step_id={} error_category={}",
@@ -3970,7 +3995,7 @@ async def workflows_ws(
     try:
         jwtm = get_jwt_manager()
         token_data = jwtm.verify_token(token)
-    except Exception:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         raise RuntimeError("Invalid token")
 
     # Run-level authorization: owner or admin
@@ -4016,16 +4041,16 @@ async def workflows_ws(
                 # Send a lightweight heartbeat so clients using blocking receive_json() don't hang indefinitely
                 try:
                     await stream.send_json({"type": "heartbeat", "ts": _utcnow_iso()})
-                except Exception:
+                except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
                     # If sending heartbeat fails (e.g., client disconnect), let outer exception handling close
                     raise
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         logger.info("Workflows WS disconnected")
         raise
-    except Exception as e:
+    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Workflows WS error: {e}")
         try:
             await stream.ws.close(code=status.WS_1011_INTERNAL_ERROR)
-        except Exception:
+        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             pass

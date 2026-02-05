@@ -31,6 +31,12 @@ import { useCharacterGeneration } from "@/hooks/useCharacterGeneration"
 import { useFormDraft, formatDraftAge } from "@/hooks/useFormDraft"
 import { useCharacterShortcuts } from "@/hooks/useCharacterShortcuts"
 import { CHARACTER_TEMPLATES, type CharacterTemplate } from "@/data/character-templates"
+import {
+  CHARACTER_PROMPT_PRESETS,
+  DEFAULT_CHARACTER_PROMPT_PRESET,
+  isCharacterPromptPresetId,
+  type CharacterPromptPresetId
+} from "@/data/character-prompt-presets"
 import type { GeneratedCharacter, CharacterField } from "@/services/character-generation"
 import { useStorage } from "@plasmohq/storage/hook"
 import { validateAndCreateImageDataUrl } from "@/utils/image-utils"
@@ -81,6 +87,88 @@ const normalizeAlternateGreetings = (value: any): string[] => {
   return []
 }
 
+const isPlainObject = (value: unknown): value is Record<string, any> =>
+  !!value && typeof value === "object" && !Array.isArray(value)
+
+const parseExtensionsObject = (
+  value: unknown
+): Record<string, any> | null => {
+  if (!value) return {}
+  if (isPlainObject(value)) return { ...value }
+  if (typeof value === "string") {
+    if (!value.trim()) return {}
+    try {
+      const parsed = JSON.parse(value)
+      return isPlainObject(parsed) ? { ...parsed } : {}
+    } catch {
+      return null
+    }
+  }
+  return {}
+}
+
+const normalizePromptPresetId = (
+  value: unknown
+): CharacterPromptPresetId =>
+  isCharacterPromptPresetId(value)
+    ? value
+    : DEFAULT_CHARACTER_PROMPT_PRESET
+
+const readPromptPresetFromExtensions = (
+  extensions: unknown
+): CharacterPromptPresetId => {
+  const parsed = parseExtensionsObject(extensions)
+  if (!parsed) return DEFAULT_CHARACTER_PROMPT_PRESET
+  const tldw = parsed.tldw
+  const nestedPreset = isPlainObject(tldw)
+    ? tldw.prompt_preset || tldw.promptPreset
+    : undefined
+  const topPreset = parsed.prompt_preset || parsed.promptPreset
+  return normalizePromptPresetId(nestedPreset || topPreset)
+}
+
+const applyPromptPresetToExtensions = (
+  rawExtensions: unknown,
+  preset: CharacterPromptPresetId
+): Record<string, any> | string | undefined => {
+  const parsed = parseExtensionsObject(rawExtensions)
+  const hadRawString =
+    typeof rawExtensions === "string" &&
+    rawExtensions.trim().length > 0 &&
+    parsed === null
+
+  let next: Record<string, any> = parsed && parsed !== null ? { ...parsed } : {}
+
+  const tldw = isPlainObject(next.tldw) ? { ...next.tldw } : {}
+
+  if (preset === DEFAULT_CHARACTER_PROMPT_PRESET) {
+    delete tldw.prompt_preset
+    delete tldw.promptPreset
+    if (Object.keys(tldw).length > 0) {
+      next.tldw = tldw
+    } else {
+      delete next.tldw
+    }
+    delete next.prompt_preset
+    delete next.promptPreset
+  } else {
+    tldw.prompt_preset = preset
+    next.tldw = tldw
+    delete next.prompt_preset
+    delete next.promptPreset
+  }
+
+  if (Object.keys(next).length > 0) {
+    return next
+  }
+
+  if (hadRawString && preset === DEFAULT_CHARACTER_PROMPT_PRESET) {
+    return rawExtensions as string
+  }
+
+  return undefined
+}
+
 const hasAdvancedData = (record: any, extensionsValue: string): boolean =>
   !!(
     record.personality ||
@@ -112,8 +200,7 @@ const buildCharacterPayload = (values: any): Record<string, any> => {
       ? values.alternate_greetings.filter((g: string) => g && g.trim().length > 0)
       : values.alternate_greetings,
     creator: values.creator,
-    character_version: values.character_version,
-    extensions: values.extensions
+    character_version: values.character_version
   }
 
   // Extract avatar values from unified avatar field
@@ -141,6 +228,7 @@ const buildCharacterPayload = (values: any): Record<string, any> => {
   }
 
   Object.keys(payload).forEach((key) => {
+    if (key === "extensions") return
     const v = payload[key]
     if (
       typeof v === "undefined" ||
@@ -152,13 +240,13 @@ const buildCharacterPayload = (values: any): Record<string, any> => {
     }
   })
 
-  // Parse extensions JSON when user provides structured data
-  if (typeof values.extensions === "string" && values.extensions.trim().length > 0) {
-    try {
-      payload.extensions = JSON.parse(values.extensions)
-    } catch {
-      payload.extensions = values.extensions
-    }
+  const resolvedPreset = normalizePromptPresetId(values.prompt_preset)
+  const mergedExtensions = applyPromptPresetToExtensions(
+    values.extensions,
+    resolvedPreset
+  )
+  if (typeof mergedExtensions !== "undefined") {
+    payload.extensions = mergedExtensions
   }
 
   return payload
@@ -174,6 +262,17 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   autoOpenCreate = false
 }) => {
   const { t } = useTranslation(["settings", "common"])
+  const promptPresetOptions = React.useMemo(
+    () =>
+      CHARACTER_PROMPT_PRESETS.map((preset) => ({
+        value: preset.id,
+        label: t(
+          `settings:manageCharacters.promptPresets.${preset.id}.label`,
+          { defaultValue: preset.label }
+        )
+      })),
+    [t]
+  )
   const qc = useQueryClient()
   const navigate = useNavigate()
   const notification = useAntdNotification()
@@ -1375,6 +1474,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         : typeof ex === "string"
           ? ex
           : ""
+    const promptPreset = readPromptPresetFromExtensions(record.extensions)
     editForm.setFieldsValue({
       name: record.name,
       description: record.description,
@@ -1396,6 +1496,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       ),
       creator: record.creator,
       character_version: record.character_version,
+      prompt_preset: promptPreset,
       extensions: extensionsValue
     })
     setShowEditAdvanced(hasAdvancedData(record, extensionsValue))
@@ -1410,6 +1511,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         : typeof ex === "string"
           ? ex
           : ""
+    const promptPreset = readPromptPresetFromExtensions(record.extensions)
     createForm.setFieldsValue({
       name: `${record.name || ""} (copy)`,
       description: record.description,
@@ -1431,6 +1533,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       ),
       creator: record.creator,
       character_version: record.character_version,
+      prompt_preset: promptPreset,
       extensions: extensionsValue
     })
     setShowCreateAdvanced(hasAdvancedData(record, extensionsValue))
@@ -2872,6 +2975,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         <Form
           layout="vertical"
           form={createForm}
+          initialValues={{ prompt_preset: DEFAULT_CHARACTER_PROMPT_PRESET }}
           className="space-y-3"
           onValuesChange={(_, allValues) => {
             setCreateFormDirty(true)
@@ -3274,6 +3378,21 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   }
                 )}>
                 <Input />
+              </Form.Item>
+              <Form.Item
+                name="prompt_preset"
+                label={t(
+                  "settings:manageCharacters.form.promptPreset.label",
+                  { defaultValue: "Prompt preset" }
+                )}
+                help={t(
+                  "settings:manageCharacters.form.promptPreset.help",
+                  {
+                    defaultValue:
+                      "Controls how character fields are formatted in system prompts for character chats."
+                  }
+                )}>
+                <Select options={promptPresetOptions} />
               </Form.Item>
               <Form.Item
                 name="extensions"
@@ -3842,6 +3961,21 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   }
                 )}>
                 <Input />
+              </Form.Item>
+              <Form.Item
+                name="prompt_preset"
+                label={t(
+                  "settings:manageCharacters.form.promptPreset.label",
+                  { defaultValue: "Prompt preset" }
+                )}
+                help={t(
+                  "settings:manageCharacters.form.promptPreset.help",
+                  {
+                    defaultValue:
+                      "Controls how character fields are formatted in system prompts for character chats."
+                  }
+                )}>
+                <Select options={promptPresetOptions} />
               </Form.Item>
               <Form.Item
                 name="extensions"

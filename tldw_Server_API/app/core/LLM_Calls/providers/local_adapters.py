@@ -48,6 +48,29 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 
 from .base import ChatProvider, apply_tool_choice
 
+_LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    ChatBadRequestError,
+    ChatConfigurationError,
+    ChatProviderError,
+)
+
 
 def _extract_text_from_message_content(content: Union[str, list[dict[str, Any]]], provider_name: str, msg_index: int) -> str:
     """Extracts and concatenates text parts from a message's content, logging warnings for images."""
@@ -242,13 +265,13 @@ def _chat_with_openai_compatible_local_server(
                                     if normalized is None:
                                         continue
                                     yield normalized
-                            except Exception as e_stream:
+                            except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS as e_stream:
                                 logging.error(f"{provider_name}: Error during stream iteration: {e_stream}", exc_info=True)
                                 yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "stream_error", "code": "iteration_error"}})
                             finally:
                                 for tail in finalize_stream(response, done_already=done_sent):
                                     yield tail
-                    except Exception as e_stream_outer:
+                    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS as e_stream_outer:
                         if is_http_status_error(e_stream_outer):
                             logging.error(
                                 "{}: HTTP Error during stream setup: {} - {}",
@@ -298,7 +321,7 @@ def _chat_with_openai_compatible_local_server(
                 finally:
                     try:
                         session.close()
-                    except Exception:
+                    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
                         pass
             return stream_generator()
         else:
@@ -312,7 +335,7 @@ def _chat_with_openai_compatible_local_server(
                 finally:
                     try:
                         response.close()
-                    except Exception:
+                    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
                         pass
             else:
                 # Centralized client fetch with retries for prod
@@ -329,9 +352,9 @@ def _chat_with_openai_compatible_local_server(
                 finally:
                     try:
                         response.close()
-                    except Exception:
+                    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
                         pass
-    except Exception as e_http:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS as e_http:
         if is_http_status_error(e_http):
             logging.error(
                 "{}: HTTP Error: {} - {}",
@@ -358,7 +381,7 @@ def _chat_with_openai_compatible_local_server(
         if not streaming:
             try:
                 session.close()
-            except Exception:
+            except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
                 pass
 
 
@@ -445,42 +468,42 @@ def _local_llm_request(
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_min_p, str):
             current_min_p = float(current_min_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce seed='%s' to int; sending as-is", current_seed)
     try:
         if isinstance(current_presence_penalty, str):
             current_presence_penalty = float(current_presence_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
     try:
         if isinstance(current_frequency_penalty, str):
             current_frequency_penalty = float(current_frequency_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     try:
         if isinstance(current_n, str):
             current_n = int(current_n)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce n='%s' to int; sending as-is", current_n)
     try:
         if isinstance(current_top_logprobs, str):
             current_top_logprobs = int(current_top_logprobs)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce top_logprobs='%s' to int; sending as-is", current_top_logprobs)
 
     if custom_prompt_arg:
@@ -599,37 +622,37 @@ def _llama_request(
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Llama.cpp: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Llama.cpp: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_min_p, str):
             current_min_p = float(current_min_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Llama.cpp: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Llama.cpp: Failed to coerce seed='%s' to int; sending as-is", current_seed)
     try:
         if isinstance(current_presence_penalty, str):
             current_presence_penalty = float(current_presence_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Llama.cpp: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
     try:
         if isinstance(current_frequency_penalty, str):
             current_frequency_penalty = float(current_frequency_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Llama.cpp: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     try:
         if isinstance(current_n, str):
             current_n = int(current_n)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Llama.cpp: Failed to coerce n='%s' to int; sending as-is", current_n)
     if custom_prompt:
         logging.info("Llama.cpp: 'custom_prompt' received. Ensure it's incorporated into 'input_data' or 'system_prompt' by the calling function.")
@@ -724,22 +747,22 @@ def _kobold_request(
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Kobold: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Kobold: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_num_responses, str):
             current_num_responses = int(current_num_responses)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Kobold: Failed to coerce num_responses='%s' to int; sending as-is", current_num_responses)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Kobold: Failed to coerce seed='%s' to int; sending as-is", current_seed)
 
     max_context_length = int(cfg.get('max_context_length', 2048)) # Kobold uses max_context_length for context window
@@ -824,7 +847,7 @@ def _kobold_request(
             )
             raise ChatProviderError(provider="kobold", message=f"Unexpected response structure from KoboldAI (Native): {str(response_data)[:200]}")
 
-    except Exception as e_http:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS as e_http:
         if is_http_status_error(e_http):
             log_http_400_body("kobold", e_http)
             logging.error(
@@ -923,32 +946,32 @@ def _ooba_request(
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Oobabooga: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Oobabooga: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_min_p, str):
             current_min_p = float(current_min_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Oobabooga: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Oobabooga: Failed to coerce seed='%s' to int; sending as-is", current_seed)
     try:
         if isinstance(current_presence_penalty, str):
             current_presence_penalty = float(current_presence_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Oobabooga: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
     try:
         if isinstance(current_frequency_penalty, str):
             current_frequency_penalty = float(current_frequency_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Oobabooga: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     if custom_prompt:
         logging.info("Oobabooga: 'custom_prompt' received. Ensure it's incorporated into 'input_data' or 'system_prompt'.")
@@ -1072,42 +1095,42 @@ def _tabbyapi_request(
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_min_p, str):
             current_min_p = float(current_min_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce seed='%s' to int; sending as-is", current_seed)
     try:
         if isinstance(current_presence_penalty, str):
             current_presence_penalty = float(current_presence_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
     try:
         if isinstance(current_frequency_penalty, str):
             current_frequency_penalty = float(current_frequency_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     try:
         if isinstance(current_n, str):
             current_n = int(current_n)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce n='%s' to int; sending as-is", current_n)
     try:
         if isinstance(current_top_logprobs, str):
             current_top_logprobs = int(current_top_logprobs)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce top_logprobs='%s' to int; sending as-is", current_top_logprobs)
     if custom_prompt_input:
         logging.info("TabbyAPI: 'custom_prompt_input' received. Ensure incorporated if needed.")
@@ -1237,42 +1260,42 @@ def _vllm_request(
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_min_p, str):
             current_min_p = float(current_min_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce seed='%s' to int; sending as-is", current_seed)
     try:
         if isinstance(current_presence_penalty, str):
             current_presence_penalty = float(current_presence_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
     try:
         if isinstance(current_frequency_penalty, str):
             current_frequency_penalty = float(current_frequency_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     try:
         if isinstance(current_n, str):
             current_n = int(current_n)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce n='%s' to int; sending as-is", current_n)
     try:
         if isinstance(current_top_logprobs, str):
             current_top_logprobs = int(current_top_logprobs)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce top_logprobs='%s' to int; sending as-is", current_top_logprobs)
     if isinstance(current_logprobs, str): current_logprobs = current_logprobs.lower() == "true"
     if custom_prompt_input:
@@ -1404,32 +1427,32 @@ def _aphrodite_request(
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Aphrodite: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Aphrodite: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_min_p, str):
             current_min_p = float(current_min_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Aphrodite: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Aphrodite: Failed to coerce seed='%s' to int; sending as-is", current_seed)
     try:
         if isinstance(current_presence_penalty, str):
             current_presence_penalty = float(current_presence_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Aphrodite: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
     try:
         if isinstance(current_frequency_penalty, str):
             current_frequency_penalty = float(current_frequency_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Aphrodite: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     if custom_prompt:
         logging.info("Aphrodite: 'custom_prompt' received. Ensure incorporated if needed.")
@@ -1592,27 +1615,27 @@ def _ollama_request(
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Ollama: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Ollama: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_presence_penalty, str):
             current_presence_penalty = float(current_presence_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Ollama: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
     try:
         if isinstance(current_frequency_penalty, str):
             current_frequency_penalty = float(current_frequency_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Ollama: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Ollama: Failed to coerce seed='%s' to int; sending as-is", current_seed)
     if custom_prompt:
         logging.info("Ollama: 'custom_prompt' received. Ensure incorporated if needed.")

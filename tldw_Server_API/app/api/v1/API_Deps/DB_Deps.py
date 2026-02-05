@@ -67,17 +67,17 @@ def _get_db_path_for_user(user_id: int) -> Path:
     base_dir_env = os.environ.get("USER_DB_BASE_DIR")
     # Test-mode safety: isolate user DBs to a per-process temp dir unless explicitly overridden
     if not base_dir_env and str(os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"}:
+        run_tag = (
+            os.getenv("TLDW_TEST_RUN_ID")
+            or os.getenv("PYTEST_XDIST_WORKER")
+            or "default"
+        )
+        safe_run_tag = "".join(
+            ch if ch.isalnum() or ch in "-_." else "_"
+            for ch in str(run_tag)
+        )
         try:
             import tempfile
-            run_tag = (
-                os.getenv("TLDW_TEST_RUN_ID")
-                or os.getenv("PYTEST_XDIST_WORKER")
-                or "default"
-            )
-            safe_run_tag = "".join(
-                ch if ch.isalnum() or ch in "-_." else "_"
-                for ch in str(run_tag)
-            )
             # Use project Databases/user_databases_test/<run_tag> to keep nearby but stable across processes
             project_root = settings.get("PROJECT_ROOT")  # type: ignore[attr-defined]
             if project_root:
@@ -96,15 +96,7 @@ def _get_db_path_for_user(user_id: int) -> Path:
                 e,
                 exc_info=True,
             )
-            run_tag = (
-                os.getenv("TLDW_TEST_RUN_ID")
-                or os.getenv("PYTEST_XDIST_WORKER")
-                or "default"
-            )
-            safe_run_tag = "".join(
-                ch if ch.isalnum() or ch in "-_." else "_"
-                for ch in str(run_tag)
-            )
+            import tempfile
             base_dir_env = str(
                 Path(tempfile.gettempdir()) / "tldw_user_databases_test" / safe_run_tag
             )
@@ -143,8 +135,6 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
         )
 
     use_shared_backend = shared_backend_type == BackendType.POSTGRESQL
-    if require_shared_backend:
-        use_shared_backend = True
 
     # --- Check Cache ---
     with _user_db_lock:
@@ -237,6 +227,11 @@ async def get_media_db_for_user(
     request: Request,
     current_user: User = Depends(get_request_user)
 ) -> AsyncGenerator[MediaDatabase, None]:
+    """
+    FastAPI dependency that provides a MediaDatabase instance for the current user.
+
+    Yields the database instance and ensures connection cleanup on exit.
+    """
     db_instance = _resolve_media_db_for_user(current_user)
     try:
         yield db_instance

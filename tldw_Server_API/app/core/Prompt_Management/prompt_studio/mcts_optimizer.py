@@ -5,6 +5,7 @@ optional feedback refinement, and WS progress broadcasts).
 """
 
 import math
+import sqlite3
 from datetime import datetime
 from typing import Any, Optional
 
@@ -24,12 +25,25 @@ from .prompt_quality import PromptQualityScorer
 from .test_runner import TestRunner
 from .types_common import MetricType
 
+_MCTS_IMPORT_EXCEPTIONS = (ImportError, OSError, RuntimeError)
+_MCTS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    sqlite3.Error,
+)
+
 try:
     # Optional: shared WS connection manager if WS endpoints loaded
     from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_websocket import (
         connection_manager as ws_connection_manager,
     )
-except Exception:  # pragma: no cover - optional in minimal builds
+except _MCTS_IMPORT_EXCEPTIONS:  # pragma: no cover - optional in minimal builds
     ws_connection_manager = None
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 
@@ -47,7 +61,7 @@ class MCTSOptimizer:
         try:
             from .optimization_strategies import IterativeRefinementOptimizer  # noqa: WPS433
             self._refiner_cls = IterativeRefinementOptimizer
-        except Exception:  # pragma: no cover
+        except _MCTS_IMPORT_EXCEPTIONS:  # pragma: no cover
             self._refiner_cls = None
 
     class _Node:
@@ -114,7 +128,7 @@ class MCTSOptimizer:
         if scorer_model:
             try:
                 self.scorer.set_model(str(scorer_model))
-            except Exception:
+            except _MCTS_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Token accounting
@@ -122,7 +136,7 @@ class MCTSOptimizer:
         def _add_tokens(n: int):
             try:
                 self._tokens_spent += int(n or 0)
-            except Exception:
+            except _MCTS_NONCRITICAL_EXCEPTIONS:
                 pass
         self.scorer.set_token_callback(_add_tokens)
 
@@ -176,7 +190,7 @@ class MCTSOptimizer:
                     },
                     project_id=base_prompt.get("project_id"),
                 )
-            except Exception:
+            except _MCTS_NONCRITICAL_EXCEPTIONS:
                 pass
 
         best_eval_system: Optional[str] = None
@@ -207,7 +221,7 @@ class MCTSOptimizer:
                         edges_created += 1
                         try:
                             parent_ids.add(id(node.parent))
-                        except Exception:
+                        except _MCTS_NONCRITICAL_EXCEPTIONS:
                             pass
                         continue
                 if node.children:
@@ -227,7 +241,7 @@ class MCTSOptimizer:
                             node = chosen
                         else:
                             node = max(node.children, key=lambda ch: ch.uct(exploration_c=exploration_c))
-                    except Exception:
+                    except _MCTS_NONCRITICAL_EXCEPTIONS:
                         node = max(node.children, key=lambda ch: ch.uct(exploration_c=exploration_c))
                     path.append(node)
                     continue
@@ -295,7 +309,7 @@ class MCTSOptimizer:
                         current_metric=float(score),
                         best_metric=float(best_score),
                     )
-                except Exception:
+                except _MCTS_NONCRITICAL_EXCEPTIONS:
                     pass
 
             # Persist iteration record (throttled similarly to WS)
@@ -316,7 +330,7 @@ class MCTSOptimizer:
                         tokens_used=int(self._tokens_spent),
                         note="mcts-iteration",
                     )
-                except Exception:
+                except _MCTS_NONCRITICAL_EXCEPTIONS:
                     pass
 
             # Cancellation check (if status changed to cancelled)
@@ -326,7 +340,7 @@ class MCTSOptimizer:
                     if current and str(current.get("status")).lower() == "cancelled":
                         logger.info("MCTS detected cancellation; exiting loop")
                         break
-                except Exception:
+                except _MCTS_NONCRITICAL_EXCEPTIONS:
                     pass
 
         duration_ms = (datetime.utcnow() - t_start).total_seconds() * 1000.0
@@ -343,7 +357,7 @@ class MCTSOptimizer:
                 tokens_spent=self._tokens_spent,
                 duration_ms=duration_ms,
             )
-        except Exception:
+        except _MCTS_NONCRITICAL_EXCEPTIONS:
             pass
         # Emit error counters
         try:
@@ -358,7 +372,7 @@ class MCTSOptimizer:
                     "evaluator_timeouts": "evaluator_timeout",
                 }.get(key, key)
                 prompt_studio_metrics.record_mcts_error(error=label, count=int(val))
-        except Exception:
+        except _MCTS_NONCRITICAL_EXCEPTIONS:
             pass
 
         if broadcaster:
@@ -374,7 +388,7 @@ class MCTSOptimizer:
                     },
                     project_id=base_prompt.get("project_id"),
                 )
-            except Exception:
+            except _MCTS_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Build compact final trace: best path + top-K candidates
@@ -465,34 +479,34 @@ class MCTSOptimizer:
             try:
                 key = "scorer:" + self.scorer._cache_key(cand_system, base_user)
                 cached = self._db_cache_get(key)
-            except Exception:
+            except _MCTS_NONCRITICAL_EXCEPTIONS:
                 cached = None
             if cached is not None:
                 q = float(cached)
             else:
                 try:
                     q = await self.scorer.score_prompt_async(system_text=cand_system, user_text=base_user)
-                except Exception:
+                except _MCTS_NONCRITICAL_EXCEPTIONS:
                     q = 0.0
                     try:
                         if hasattr(self, "_counters") and isinstance(self._counters, dict):
                             self._counters["scorer_failures"] = self._counters.get("scorer_failures", 0) + 1
-                    except Exception:
+                    except _MCTS_NONCRITICAL_EXCEPTIONS:
                         pass
                 try:
                     self._db_cache_set(key, q, ttl_sec=1800)
-                except Exception:
+                except _MCTS_NONCRITICAL_EXCEPTIONS:
                     pass
             try:
                 bin_idx = PromptQualityScorer.score_to_bin(q, score_bin_size)
                 scored.append((cand_system, q, bin_idx))
-            except Exception:
+            except _MCTS_NONCRITICAL_EXCEPTIONS:
                 bin_idx = PromptQualityScorer.score_to_bin(q, score_bin_size)
             if q < min_quality:
                 try:
                     if hasattr(self, "_counters") and isinstance(self._counters, dict):
                         self._counters["prune_low_quality"] = self._counters.get("prune_low_quality", 0) + 1
-                except Exception:
+                except _MCTS_NONCRITICAL_EXCEPTIONS:
                     pass
                 continue
             if bin_idx in node.children_by_bin:
@@ -503,7 +517,7 @@ class MCTSOptimizer:
                 try:
                     if hasattr(self, "_counters") and isinstance(self._counters, dict):
                         self._counters["prune_dedup"] = self._counters.get("prune_dedup", 0) + 1
-                except Exception:
+                except _MCTS_NONCRITICAL_EXCEPTIONS:
                     pass
                 continue
             # Create at most one child per expansion
@@ -521,7 +535,7 @@ class MCTSOptimizer:
                         {"score": float(s[1]), "bin": int(s[2]), "system_preview": (s[0] or "")[:160]}
                         for s in top
                     ]
-            except Exception:
+            except _MCTS_NONCRITICAL_EXCEPTIONS:
                 pass
         # If no child added, still capture debug top scored at this depth
         try:
@@ -532,7 +546,7 @@ class MCTSOptimizer:
                     {"score": float(s[1]), "bin": int(s[2]), "system_preview": (s[0] or "")[:160]}
                     for s in top
                 ]
-        except Exception:
+        except _MCTS_NONCRITICAL_EXCEPTIONS:
             pass
         return new_child or best_existing
 
@@ -568,7 +582,7 @@ class MCTSOptimizer:
             if isinstance(cached, str) and cached:
                 self._rephrase_cache[cache_key] = cached
                 return cached
-        except Exception:
+        except _MCTS_NONCRITICAL_EXCEPTIONS:
             pass
         prompt = (
             "You are improving a system prompt for an assistant.\n"
@@ -587,16 +601,16 @@ class MCTSOptimizer:
             content = (result or {}).get("content", "").strip()
             try:
                 self._tokens_spent += int((result or {}).get("tokens", 0) or 0)
-            except Exception:
+            except _MCTS_NONCRITICAL_EXCEPTIONS:
                 pass
             if content:
                 self._rephrase_cache[cache_key] = content
                 try:
                     self._db_cache_set(db_key, content, ttl_sec=3600)
-                except Exception:
+                except _MCTS_NONCRITICAL_EXCEPTIONS:
                     pass
             return content or None
-        except Exception:
+        except _MCTS_NONCRITICAL_EXCEPTIONS:
             return None
 
     async def _evaluate_with_feedback(
@@ -628,7 +642,7 @@ class MCTSOptimizer:
             db_key = "eval:" + eval_cache_key
             try:
                 cached_db = self._db_cache_get(db_key)
-            except Exception:
+            except _MCTS_NONCRITICAL_EXCEPTIONS:
                 cached_db = None
             if cached_db is not None:
                 score = float(cached_db)
@@ -637,7 +651,7 @@ class MCTSOptimizer:
                 self._eval_cache[eval_cache_key] = score
                 try:
                     self._db_cache_set(db_key, score, ttl_sec=3600)
-                except Exception:
+                except _MCTS_NONCRITICAL_EXCEPTIONS:
                     pass
         scaled = score * 10.0
         if not feedback_enabled or scaled >= feedback_threshold or not self._refiner_cls:
@@ -661,7 +675,7 @@ class MCTSOptimizer:
                     best_prompt_id = cand_id
                 if best_score * 10.0 >= feedback_threshold:
                     break
-            except Exception:
+            except _MCTS_NONCRITICAL_EXCEPTIONS:
                 break
         return best_score, best_prompt_id
 
@@ -731,14 +745,14 @@ class MCTSOptimizer:
                     model_config=model_config,
                     metrics=[target_metric] if hasattr(target_metric, "value") else None,
                 )
-            except Exception as e:
+            except _MCTS_NONCRITICAL_EXCEPTIONS as e:
                 # Count timeouts; keep conservative by substring match
                 msg = str(e).lower()
                 if "timeout" in msg or "timed out" in msg:
                     try:
                         if hasattr(self, "_counters") and isinstance(self._counters, dict):
                             self._counters["evaluator_timeouts"] = self._counters.get("evaluator_timeouts", 0) + 1
-                    except Exception:
+                    except _MCTS_NONCRITICAL_EXCEPTIONS:
                         pass
                 continue
             if result.get("success") and "scores" in result:
@@ -763,7 +777,7 @@ class MCTSOptimizer:
                 parameters={"temperature": 0.5, "max_tokens": 300},
             )
             return (result or {}).get("content", "").strip() or None
-        except Exception as e:
+        except _MCTS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"mcts: rephrase failed: {e}")
             return None
 
@@ -784,7 +798,7 @@ class MCTSOptimizer:
         h.update(b"\0")
         try:
             model_key = json.dumps(model_config, sort_keys=True, separators=(",", ":"))
-        except Exception:
+        except _MCTS_NONCRITICAL_EXCEPTIONS:
             model_key = str(model_config)
         h.update(model_key.encode("utf-8", errors="ignore"))
         h.update(b"\0")
@@ -812,13 +826,13 @@ class MCTSOptimizer:
             else:
                 try:
                     payload_raw = row.get("payload")
-                except Exception:
+                except _MCTS_NONCRITICAL_EXCEPTIONS:
                     payload_raw = row[0] if isinstance(row, (list, tuple)) or hasattr(row, "__getitem__") else None
 
             if isinstance(payload_raw, (bytes, bytearray, memoryview)):
                 try:
                     payload_raw = bytes(payload_raw).decode("utf-8")
-                except Exception:
+                except _MCTS_NONCRITICAL_EXCEPTIONS:
                     payload_raw = None
 
             import datetime
@@ -835,10 +849,10 @@ class MCTSOptimizer:
                 try:
                     if datetime.datetime.fromisoformat(expires) < datetime.datetime.utcnow():
                         return None
-                except Exception:
+                except _MCTS_NONCRITICAL_EXCEPTIONS:
                     pass
             return payload.get("value") if isinstance(payload, dict) else None
-        except Exception:
+        except _MCTS_NONCRITICAL_EXCEPTIONS:
             return None
 
     def _db_cache_set(self, key: str, value: Any, *, ttl_sec: int = 3600) -> None:
@@ -852,7 +866,7 @@ class MCTSOptimizer:
                 operation="set",
                 payload=payload,
             )
-        except Exception:
+        except _MCTS_NONCRITICAL_EXCEPTIONS:
             pass
 
     @staticmethod

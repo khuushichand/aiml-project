@@ -51,6 +51,8 @@ _prompts_cache_lock = asyncio.Lock()
 # INVARIANT: All mutations to _user_db_instances and _user_db_locks MUST be
 # performed while holding _prompts_cache_lock. The eviction callbacks
 # cross-reference each other's caches and assume this lock is held.
+_pending_close_queue: asyncio.Queue[tuple[tuple[int, str], PromptsDatabase, str]] = asyncio.Queue()
+_pending_close_task: asyncio.Task | None = None
 
 # --- Helper Functions ---
 
@@ -71,7 +73,7 @@ _user_db_instances: LRUCache | None = None
 _user_db_locks: LRUCache | None = None
 
 
-def _close_prompts_db_instance(
+def _close_prompts_db_instance_sync(
     cache_key: tuple[int, str],
     db_instance: PromptsDatabase,
     *,
@@ -94,11 +96,78 @@ def _close_prompts_db_instance(
         )
 
 
+def _enqueue_prompts_db_close(
+    cache_key: tuple[int, str],
+    db_instance: PromptsDatabase,
+    *,
+    reason: str,
+) -> None:
+    try:
+        _pending_close_queue.put_nowait((cache_key, db_instance, reason))
+    except Exception as exc:
+        logger.error(
+            "Failed to enqueue PromptsDatabase close for cache_key=%s (reason=%s): %s",
+            cache_key,
+            reason,
+            exc,
+            exc_info=True,
+        )
+
+
+def _close_prompts_db_instance(
+    cache_key: tuple[int, str],
+    db_instance: PromptsDatabase,
+    *,
+    reason: str,
+    run_sync: bool = False,
+) -> None:
+    if run_sync:
+        _close_prompts_db_instance_sync(cache_key, db_instance, reason=reason)
+        return
+    _enqueue_prompts_db_close(cache_key, db_instance, reason=reason)
+
+
+async def _process_pending_closes() -> None:
+    while True:
+        cache_key, db_instance, reason = await _pending_close_queue.get()
+        try:
+            await asyncio.to_thread(
+                _close_prompts_db_instance_sync,
+                cache_key,
+                db_instance,
+                reason=reason,
+            )
+        except Exception as exc:
+            logger.error(
+                "Error processing PromptsDatabase close for cache_key=%s (reason=%s): %s",
+                cache_key,
+                reason,
+                exc,
+                exc_info=True,
+            )
+        finally:
+            _pending_close_queue.task_done()
+
+
+def _ensure_pending_close_worker() -> None:
+    global _pending_close_task
+    if _pending_close_task is not None:
+        return
+    try:
+        _pending_close_task = asyncio.create_task(_process_pending_closes())
+    except RuntimeError:
+        # No running event loop yet; worker will be started on first async entry.
+        _pending_close_task = None
+
+
+_ensure_pending_close_worker()
+
+
 def _on_prompts_db_eviction(cache_key: tuple[int, str], db_instance: PromptsDatabase) -> None:
-    _close_prompts_db_instance(cache_key, db_instance, reason="evicted")
     if _user_db_locks is not None:
         # NOTE: LRUCache.pop() does not trigger eviction callbacks; safe while holding _prompts_cache_lock.
         _user_db_locks.pop(cache_key, None)
+    _enqueue_prompts_db_close(cache_key, db_instance, reason="evicted")
 
 
 def _on_prompts_lock_eviction(cache_key: tuple[int, str], _lock: asyncio.Lock) -> None:
@@ -107,7 +176,7 @@ def _on_prompts_lock_eviction(cache_key: tuple[int, str], _lock: asyncio.Lock) -
     # NOTE: LRUCache.pop() does not trigger eviction callbacks; safe while holding _prompts_cache_lock.
     db_instance = _user_db_instances.pop(cache_key, None)
     if db_instance:
-        _close_prompts_db_instance(cache_key, db_instance, reason="lock-evicted")
+        _enqueue_prompts_db_close(cache_key, db_instance, reason="lock-evicted")
 
 
 class _EvictingLRUCache(LRUCache):
@@ -167,6 +236,7 @@ async def get_prompts_db_for_user(
     FastAPI dependency to get the PromptsDatabase instance for the identified user,
     managed via the prompts_interop layer.
     """
+    _ensure_pending_close_worker()
     assert _user_db_instances is not None and _user_db_locks is not None
     # More robust check for User object and its id
     if not isinstance(current_user, User) or not hasattr(current_user, 'id') or not isinstance(current_user.id, int):
@@ -191,14 +261,22 @@ async def get_prompts_db_for_user(
 
     cache_key = (user_id, salt)
 
-    # Get or create a lock for this specific user_id
-    async with _prompts_cache_lock:
-        user_specific_lock = _user_db_locks.get(cache_key)
-        if user_specific_lock is None:
-            user_specific_lock = asyncio.Lock()
-        _user_db_locks[cache_key] = user_specific_lock
+    # Get or create a lock for this specific user_id, then verify we hold
+    # the current lock stored in the cache before proceeding.
+    while True:
+        async with _prompts_cache_lock:
+            user_specific_lock = _user_db_locks.get(cache_key)
+            if user_specific_lock is None:
+                user_specific_lock = asyncio.Lock()
+                _user_db_locks[cache_key] = user_specific_lock
 
-    async with user_specific_lock:
+        await user_specific_lock.acquire()
+        async with _prompts_cache_lock:
+            if _user_db_locks.get(cache_key) is user_specific_lock:
+                break
+        user_specific_lock.release()
+
+    try:
         # Check if an instance for this user_id already exists (cached for this request/app lifetime if persistent)
         # The prompts_interop itself doesn't manage multiple DBs, it manages ONE.
         # So, we need a way to tell prompts_interop WHICH db to use, or manage instances here.
@@ -259,7 +337,6 @@ async def get_prompts_db_for_user(
             # For now, using a global server client ID.
             async with _prompts_cache_lock:
                 _user_db_instances[cache_key] = db_instance # Cache it for this user/app salt
-                _user_db_locks[cache_key] = user_specific_lock
             logger.info(f"PromptsDatabase instance created and cached for user {user_id} (salt={salt or 'none'}) at {db_path}")
             return db_instance
 
@@ -280,6 +357,8 @@ async def get_prompts_db_for_user(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An unexpected error occurred during prompts database setup."
             ) from e
+    finally:
+        user_specific_lock.release()
 
 
 async def close_all_cached_prompts_db_instances() -> None:

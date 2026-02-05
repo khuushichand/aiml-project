@@ -1,9 +1,79 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Utils.Utils import logging
+
+
+_UNSUPPORTED_MEDIA_CHUNKING_KEYS = (
+    "tokenizer_name_or_path",
+    "code_mode",
+    "semantic_similarity_threshold",
+    "json_chunkable_data_key",
+    "summarization_detail",
+    "llm_options_for_internal_steps",
+    "enable_frontmatter_parsing",
+    "frontmatter_sentinel_key",
+)
+
+_ALLOWED_MEDIA_CHUNKING_KEYS = (
+    "method",
+    "max_size",
+    "overlap",
+    "adaptive",
+    "multi_level",
+    "language",
+    "custom_chapter_pattern",
+    "enable_contextual_chunking",
+    "contextual_llm_model",
+    "context_window_size",
+    "context_strategy",
+    "context_token_budget",
+    "proposition_engine",
+    "proposition_aggressiveness",
+    "proposition_min_proposition_length",
+    "proposition_prompt_profile",
+)
+
+
+def _get_raw_form_value(form_data: Any, key: str) -> Any:
+    if isinstance(form_data, Mapping):
+        return form_data.get(key)
+    if hasattr(form_data, "model_dump"):
+        try:
+            dumped = form_data.model_dump()
+        except Exception:
+            dumped = {}
+        if isinstance(dumped, Mapping):
+            return dumped.get(key)
+    return getattr(form_data, key, None)
+
+
+def _find_unsupported_chunking_keys(form_data: Any) -> list[str]:
+    unsupported: list[str] = []
+    for key in _UNSUPPORTED_MEDIA_CHUNKING_KEYS:
+        value = _get_raw_form_value(form_data, key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if isinstance(value, bool) and value is False:
+            continue
+        unsupported.append(key)
+    return unsupported
+
+
+def _validate_media_chunking_options(form_data: Any) -> None:
+    unsupported = _find_unsupported_chunking_keys(form_data)
+    if not unsupported:
+        return
+    allowed = ", ".join(_ALLOWED_MEDIA_CHUNKING_KEYS)
+    raise ValueError(
+        "Unsupported chunking options for media processing: "
+        f"{', '.join(unsupported)}. Supported options: {allowed}."
+    )
 
 
 def prepare_chunking_options_dict(form_data: Any) -> dict[str, Any] | None:
@@ -16,6 +86,8 @@ def prepare_chunking_options_dict(form_data: Any) -> dict[str, Any] | None:
     if not getattr(form_data, "perform_chunking", False):
         logging.info("Chunking disabled.")
         return None
+
+    _validate_media_chunking_options(form_data)
 
     default_chunk_method = "sentences"
     media_type = str(getattr(form_data, "media_type", "") or "")
@@ -78,6 +150,19 @@ def prepare_chunking_options_dict(form_data: Any) -> dict[str, Any] | None:
         "context_token_budget": getattr(form_data, "context_token_budget", None),
     }
 
+    proposition_engine = getattr(form_data, "proposition_engine", None)
+    if proposition_engine:
+        chunk_options["proposition_engine"] = proposition_engine
+    proposition_aggressiveness = getattr(form_data, "proposition_aggressiveness", None)
+    if proposition_aggressiveness is not None:
+        chunk_options["proposition_aggressiveness"] = proposition_aggressiveness
+    proposition_min_len = getattr(form_data, "proposition_min_proposition_length", None)
+    if proposition_min_len is not None:
+        chunk_options["proposition_min_proposition_length"] = proposition_min_len
+    proposition_prompt_profile = getattr(form_data, "proposition_prompt_profile", None)
+    if proposition_prompt_profile:
+        chunk_options["proposition_prompt_profile"] = proposition_prompt_profile
+
     try:
         hier_flag = getattr(form_data, "hierarchical_chunking", None)
         hier_template = getattr(form_data, "hierarchical_template", None)
@@ -94,24 +179,29 @@ def prepare_chunking_options_dict(form_data: Any) -> dict[str, Any] | None:
             cfg = load_and_log_configs()
             cfg_dict = cfg if isinstance(cfg, dict) else {}
             c = cfg_dict.get("chunking_config", {}) if isinstance(cfg_dict, dict) else {}
-            if "proposition_engine" in c:
+            if "proposition_engine" in c and "proposition_engine" not in chunk_options:
                 chunk_options["proposition_engine"] = c.get("proposition_engine")
-            if "proposition_prompt_profile" in c:
+            if (
+                "proposition_prompt_profile" in c
+                and "proposition_prompt_profile" not in chunk_options
+            ):
                 chunk_options["proposition_prompt_profile"] = c.get(
                     "proposition_prompt_profile"
                 )
             if "proposition_aggressiveness" in c:
                 try:
-                    chunk_options["proposition_aggressiveness"] = int(
-                        c.get("proposition_aggressiveness")
-                    )
+                    if "proposition_aggressiveness" not in chunk_options:
+                        chunk_options["proposition_aggressiveness"] = int(
+                            c.get("proposition_aggressiveness")
+                        )
                 except Exception:
                     pass
             if "proposition_min_proposition_length" in c:
                 try:
-                    chunk_options["proposition_min_proposition_length"] = int(
-                        c.get("proposition_min_proposition_length")
-                    )
+                    if "proposition_min_proposition_length" not in chunk_options:
+                        chunk_options["proposition_min_proposition_length"] = int(
+                            c.get("proposition_min_proposition_length")
+                        )
                 except Exception:
                     pass
         except Exception as cfg_err:

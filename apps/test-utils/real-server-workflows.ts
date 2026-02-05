@@ -5291,7 +5291,12 @@ test.describe("Real server end-to-end workflows", () => {
               .join(" | ")}"`
           )
         }
-        await candidate.scrollIntoViewIfNeeded().catch(() => {})
+        await candidate
+          .waitFor({ state: "attached", timeout: 5000 })
+          .catch(() => {})
+        await candidate
+          .scrollIntoViewIfNeeded({ timeout: 5000 })
+          .catch(() => {})
         return candidate
       }
 
@@ -5372,12 +5377,23 @@ test.describe("Real server end-to-end workflows", () => {
               name: /^Entries$/i
             })
             try {
-              await entriesButton.scrollIntoViewIfNeeded().catch(() => {})
+              await entriesButton
+                .scrollIntoViewIfNeeded({ timeout: 5000 })
+                .catch(() => {})
+              const buttonCount = await entriesButton.count().catch(() => 0)
+              if (buttonCount === 0) {
+                throw new Error("Entries button not found on row")
+              }
               await entriesButton.click({
                 timeout: 5000,
                 force: true,
                 noWaitAfter: true
               })
+              if (!entriesModal.isVisible()) {
+                await entriesButton.evaluate((el) => {
+                  ;(el as HTMLElement).click()
+                }).catch(() => {})
+              }
               await ensureOnDictionariesRoute(`manage-entries-${attempt}-after`)
               const visible = await entriesModal
                 .waitFor({ state: "visible", timeout: 10000 })

@@ -45,6 +45,21 @@ from .backends.factory import DatabaseBackendFactory
 from .backends.query_utils import prepare_backend_statement
 from .db_path_utils import DatabasePaths, normalize_output_storage_filename
 
+_COLLECTIONS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    json.JSONDecodeError,
+    DatabaseError,
+    StorageUnavailableError,
+    InvalidStorageUserIdError,
+)
+
 
 def _utcnow_iso() -> str:
     return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
@@ -55,7 +70,7 @@ def _extract_output_byte_size(metadata_json: str | None) -> int | None:
         return None
     try:
         payload = json.loads(metadata_json)
-    except Exception:
+    except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
         return None
     if not isinstance(payload, dict):
         return None
@@ -288,7 +303,7 @@ class CollectionsDatabase:
 
         try:
             parser = load_comprehensive_config()
-        except Exception:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             parser = None
 
         if parser is not None:
@@ -300,7 +315,7 @@ class CollectionsDatabase:
                         raise DatabaseError("PostgreSQL content backend requested but not initialized")
                     self._owns_backend = False
                     return resolved
-            except Exception:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
                 pass
 
         db_path = str(DatabasePaths.get_media_db_path(int(self.user_id)))
@@ -314,7 +329,7 @@ class CollectionsDatabase:
             return
         try:
             self.backend.close_all()
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("collections_db: failed to close backend for user %s: %s", self.user_id, exc)
 
     def __enter__(self) -> CollectionsDatabase:
@@ -346,7 +361,7 @@ class CollectionsDatabase:
             first = getattr(result, "first", None)
             if isinstance(first, dict) and first.get("id") is not None:
                 return int(first.get("id"))
-        except Exception:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             return None
         return None
 
@@ -390,7 +405,7 @@ class CollectionsDatabase:
             return set()
         try:
             result = self.backend.execute(f"PRAGMA table_info({table})", tuple())
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.exception(
                 "collections_db: failed to read sqlite columns for table {}: {}",
                 table,
@@ -410,7 +425,7 @@ class CollectionsDatabase:
                 "SELECT id, settings_json FROM audiobook_projects WHERE project_id IS NULL OR project_id = ''",
                 tuple(),
             ).rows
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("collections backfill: audiobook_projects.project_id fetch failed: %s", exc)
             return
         updated = 0
@@ -420,7 +435,7 @@ class CollectionsDatabase:
                 continue
             try:
                 settings = json.loads(raw_settings)
-            except Exception:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
                 continue
             project_id = settings.get("project_id") if isinstance(settings, dict) else None
             if not isinstance(project_id, str) or not project_id:
@@ -431,7 +446,7 @@ class CollectionsDatabase:
                     (project_id, row.get("id"), self.user_id),
                 )
                 updated += 1
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("collections backfill: audiobook_projects.project_id update failed: %s", exc)
         if updated:
             logger.debug("collections backfill: audiobook_projects.project_id updated %s rows", updated)
@@ -774,7 +789,7 @@ class CollectionsDatabase:
             """
         try:
             self.backend.create_tables(ddl)
-        except Exception as e:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Collections schema init failed: {e}")
             raise
         output_template_columns: set[str] = set()
@@ -795,7 +810,7 @@ class CollectionsDatabase:
             try:
                 # Attempt to add metadata_json if missing
                 self.backend.execute("ALTER TABLE output_templates ADD COLUMN metadata_json TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: output_templates.metadata_json already exists or skipped")
                 else:
@@ -809,7 +824,7 @@ class CollectionsDatabase:
                     f"ALTER TABLE outputs ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
                     tuple(),
                 )
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: outputs.deleted already exists or skipped")
                 else:
@@ -817,7 +832,7 @@ class CollectionsDatabase:
         if "deleted_at" not in output_columns:
             try:
                 self.backend.execute("ALTER TABLE outputs ADD COLUMN deleted_at TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: outputs.deleted_at already exists or skipped")
                 else:
@@ -825,7 +840,7 @@ class CollectionsDatabase:
         if "retention_until" not in output_columns:
             try:
                 self.backend.execute("ALTER TABLE outputs ADD COLUMN retention_until TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: outputs.retention_until already exists or skipped")
                 else:
@@ -833,21 +848,21 @@ class CollectionsDatabase:
         if "workspace_tag" not in output_columns:
             try:
                 self.backend.execute("ALTER TABLE outputs ADD COLUMN workspace_tag TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: outputs.workspace_tag already exists or skipped")
                 else:
                     raise
         try:
             self.backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0", tuple())
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             if _is_backfill_noop_error(exc):
                 logger.debug("collections backfill: outputs unique index already exists or skipped")
             else:
                 raise
         try:
             self.backend.execute("CREATE INDEX IF NOT EXISTS idx_outputs_workspace_tag ON outputs(workspace_tag)", tuple())
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             if _is_backfill_noop_error(exc):
                 logger.debug("collections backfill: outputs workspace_tag index already exists or skipped")
             else:
@@ -861,7 +876,7 @@ class CollectionsDatabase:
                     f"ALTER TABLE reading_digest_schedules ADD COLUMN enabled {enabled_type} NOT NULL DEFAULT {enabled_default}",
                     tuple(),
                 )
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.enabled already exists or skipped")
                 else:
@@ -874,7 +889,7 @@ class CollectionsDatabase:
                     f"ALTER TABLE reading_digest_schedules ADD COLUMN require_online {online_type} NOT NULL DEFAULT {online_default}",
                     tuple(),
                 )
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.require_online already exists or skipped")
                 else:
@@ -882,7 +897,7 @@ class CollectionsDatabase:
         if "filters_json" not in digest_columns:
             try:
                 self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN filters_json TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.filters_json already exists or skipped")
                 else:
@@ -891,7 +906,7 @@ class CollectionsDatabase:
             try:
                 template_id_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
                 self.backend.execute(f"ALTER TABLE reading_digest_schedules ADD COLUMN template_id {template_id_type}", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.template_id already exists or skipped")
                 else:
@@ -899,7 +914,7 @@ class CollectionsDatabase:
         if "template_name" not in digest_columns:
             try:
                 self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN template_name TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.template_name already exists or skipped")
                 else:
@@ -907,7 +922,7 @@ class CollectionsDatabase:
         if "format" not in digest_columns:
             try:
                 self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN format TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.format already exists or skipped")
                 else:
@@ -915,7 +930,7 @@ class CollectionsDatabase:
         if "retention_days" not in digest_columns:
             try:
                 self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN retention_days INTEGER", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.retention_days already exists or skipped")
                 else:
@@ -923,7 +938,7 @@ class CollectionsDatabase:
         if "last_run_at" not in digest_columns:
             try:
                 self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_run_at TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.last_run_at already exists or skipped")
                 else:
@@ -931,7 +946,7 @@ class CollectionsDatabase:
         if "next_run_at" not in digest_columns:
             try:
                 self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN next_run_at TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.next_run_at already exists or skipped")
                 else:
@@ -939,7 +954,7 @@ class CollectionsDatabase:
         if "last_status" not in digest_columns:
             try:
                 self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_status TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.last_status already exists or skipped")
                 else:
@@ -953,7 +968,7 @@ class CollectionsDatabase:
                     f"ALTER TABLE file_artifacts ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
                     tuple(),
                 )
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.deleted already exists or skipped")
                 else:
@@ -961,7 +976,7 @@ class CollectionsDatabase:
         if "deleted_at" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN deleted_at TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.deleted_at already exists or skipped")
                 else:
@@ -969,7 +984,7 @@ class CollectionsDatabase:
         if "retention_until" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN retention_until TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.retention_until already exists or skipped")
                 else:
@@ -977,7 +992,7 @@ class CollectionsDatabase:
         if "export_status" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_status TEXT NOT NULL DEFAULT 'none'", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_status already exists or skipped")
                 else:
@@ -985,7 +1000,7 @@ class CollectionsDatabase:
         if "export_format" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_format TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_format already exists or skipped")
                 else:
@@ -993,7 +1008,7 @@ class CollectionsDatabase:
         if "export_storage_path" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_storage_path TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_storage_path already exists or skipped")
                 else:
@@ -1002,7 +1017,7 @@ class CollectionsDatabase:
             try:
                 export_bytes_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
                 self.backend.execute(f"ALTER TABLE file_artifacts ADD COLUMN export_bytes {export_bytes_type}", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_bytes already exists or skipped")
                 else:
@@ -1010,7 +1025,7 @@ class CollectionsDatabase:
         if "export_content_type" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_content_type TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_content_type already exists or skipped")
                 else:
@@ -1018,7 +1033,7 @@ class CollectionsDatabase:
         if "export_job_id" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_job_id TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_job_id already exists or skipped")
                 else:
@@ -1026,7 +1041,7 @@ class CollectionsDatabase:
         if "export_expires_at" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_expires_at TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_expires_at already exists or skipped")
                 else:
@@ -1034,7 +1049,7 @@ class CollectionsDatabase:
         if "export_consumed_at" not in file_artifact_columns:
             try:
                 self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_consumed_at TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_consumed_at already exists or skipped")
                 else:
@@ -1043,7 +1058,7 @@ class CollectionsDatabase:
         if self.backend.backend_type == BackendType.POSTGRESQL:
             try:
                 self.backend.execute("ALTER TABLE audiobook_projects ADD COLUMN IF NOT EXISTS project_id TEXT", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: audiobook_projects.project_id already exists or skipped")
                 else:
@@ -1053,7 +1068,7 @@ class CollectionsDatabase:
                     "CREATE INDEX IF NOT EXISTS idx_audiobook_projects_project_id ON audiobook_projects(user_id, project_id)",
                     tuple(),
                 )
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: audiobook_projects.project_id index already exists or skipped")
                 else:
@@ -1062,7 +1077,7 @@ class CollectionsDatabase:
             if "project_id" not in audiobook_project_columns:
                 try:
                     self.backend.execute("ALTER TABLE audiobook_projects ADD COLUMN project_id TEXT", tuple())
-                except Exception as exc:
+                except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                     if _is_backfill_noop_error(exc):
                         logger.debug("collections backfill: audiobook_projects.project_id already exists or skipped")
                     else:
@@ -1072,7 +1087,7 @@ class CollectionsDatabase:
                     "CREATE INDEX IF NOT EXISTS idx_audiobook_projects_project_id ON audiobook_projects(user_id, project_id)",
                     tuple(),
                 )
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: audiobook_projects.project_id index already exists or skipped")
                 else:
@@ -1180,7 +1195,7 @@ class CollectionsDatabase:
             """
         try:
             self.backend.create_tables(content_ddl)
-        except Exception as e:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Collections content_items schema init failed: {e}")
             raise
         if fts_available:
@@ -1195,7 +1210,7 @@ class CollectionsDatabase:
                     );
                     """
                 )
-            except Exception as e:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Collections FTS unavailable: {e}")
                 fts_available = False
         # Backfill columns for prior installs if table existed
@@ -1213,7 +1228,7 @@ class CollectionsDatabase:
                 continue
             try:
                 self.backend.execute(f"ALTER TABLE content_items ADD COLUMN {column} {col_type}", tuple())
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: content_items.%s already exists or skipped", column)
                 else:
@@ -1229,13 +1244,13 @@ class CollectionsDatabase:
 
         try:
             from tldw_Server_API.app.core.Watchlists import template_store
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("collections: watchlists template store unavailable: %s", exc)
             return
 
         try:
             summaries = template_store.list_templates()
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("collections: failed to list watchlists templates: %s", exc)
             return
 
@@ -1251,7 +1266,7 @@ class CollectionsDatabase:
             seen.add(name)
             try:
                 record = template_store.load_template(name)
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("collections: failed to load watchlists template %s: %s", name, exc)
                 continue
             fmt = record.format.lower()
@@ -1276,7 +1291,7 @@ class CollectionsDatabase:
                         metadata_json=metadata_json,
                     )
                     existing.add(record.name)
-                except Exception as exc:
+                except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug("collections: failed to seed watchlists template %s: %s", record.name, exc)
                 continue
 
@@ -1284,7 +1299,7 @@ class CollectionsDatabase:
                 current = self.get_output_template_by_name(name)
             except KeyError:
                 continue
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("collections: failed to lookup watchlists template %s: %s", name, exc)
                 continue
 
@@ -1292,7 +1307,7 @@ class CollectionsDatabase:
             if current.metadata_json:
                 try:
                     current_meta = json.loads(current.metadata_json)
-                except Exception:
+                except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
                     current_meta = {}
 
             if current_meta.get("seeded_from") != "watchlists_templates":
@@ -1338,7 +1353,7 @@ class CollectionsDatabase:
             if patch:
                 try:
                     self.update_output_template(current.id, patch)
-                except Exception as exc:
+                except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug("collections: failed to refresh watchlists template %s: %s", name, exc)
 
     # ------------------------
@@ -1365,7 +1380,7 @@ class CollectionsDatabase:
                 "SELECT name FROM output_templates WHERE user_id = ?",
                 (self.user_id,),
             ).rows
-        except Exception:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             return set()
         names: set[str] = set()
         for row in rows:
@@ -1380,7 +1395,7 @@ class CollectionsDatabase:
         try:
             parsed = urlparse(url)
             return parsed.hostname
-        except Exception:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             return None
 
     @staticmethod
@@ -1460,7 +1475,7 @@ class CollectionsDatabase:
             try:
                 res = self._execute_insert(insert_sql, (self.user_id, nm))
                 tag_id = self._extract_lastrowid(res)
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 insert_exc = exc
             if tag_id is None:
                 row = self.backend.execute(select_sql, select_params).first
@@ -1536,7 +1551,7 @@ class CollectionsDatabase:
                 "INSERT INTO content_items_fts(rowid, title, summary, metadata) VALUES (?, ?, ?, ?)",
                 (item_id, title or "", summary or "", metadata_text),
             )
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Collections FTS update failed for item {item_id}: {exc}")
 
     def _delete_content_fts_entry(self, item_id: int) -> None:
@@ -1547,7 +1562,7 @@ class CollectionsDatabase:
                 "DELETE FROM content_items_fts WHERE rowid = ?",
                 (item_id,),
             )
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Collections FTS delete failed for item {item_id}: {exc}")
 
     def _row_to_content_item(
@@ -1728,17 +1743,17 @@ class CollectionsDatabase:
                 if existing_json:
                     try:
                         current_meta = json.loads(existing_json)
-                    except Exception:
+                    except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
                         current_meta = {}
                 current_meta.update(metadata)
                 try:
                     return json.dumps(current_meta, ensure_ascii=False)
-                except Exception as exc:
+                except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"Failed to encode collections metadata: {exc}")
                     return None
             try:
                 return json.dumps(metadata, ensure_ascii=False)
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to encode collections metadata: {exc}")
                 return None
 
@@ -1927,7 +1942,7 @@ class CollectionsDatabase:
                 tags=row.tags,
                 metadata_json=row.metadata_json,
             )
-        except Exception:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             pass
         row.is_new = created
         row.content_changed = content_changed
@@ -2158,7 +2173,7 @@ class CollectionsDatabase:
             if existing.metadata_json:
                 try:
                     current_meta = json.loads(existing.metadata_json)
-                except Exception:
+                except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
                     current_meta = {}
             current_meta.update(metadata)
             metadata_json = json.dumps(current_meta, ensure_ascii=False)
@@ -2188,7 +2203,7 @@ class CollectionsDatabase:
                 tags=tgt.tags,
                 metadata_json=tgt.metadata_json,
             )
-        except Exception:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             pass
 
         row = self.get_content_item(item_id)
@@ -2215,7 +2230,7 @@ class CollectionsDatabase:
         )
         try:
             self._delete_content_fts_entry(item_id)
-        except Exception:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             pass
 
     # ------------------------
@@ -2494,7 +2509,7 @@ class CollectionsDatabase:
         base_dir = DatabasePaths.get_user_base_directory(user_id) / "outputs"
         try:
             base_resolved = base_dir.resolve(strict=False)
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"outputs: failed to resolve outputs base dir for user {self.user_id}: {exc}")
             raise StorageUnavailableError("storage_unavailable") from exc
         return normalize_output_storage_filename(
@@ -2517,7 +2532,7 @@ class CollectionsDatabase:
         base_dir = DatabasePaths.get_user_temp_outputs_dir(user_id)
         try:
             base_resolved = base_dir.resolve(strict=False)
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"temp outputs: failed to resolve outputs base dir for user {self.user_id}: {exc}")
             raise StorageUnavailableError("storage_unavailable") from exc
         return normalize_output_storage_filename(
@@ -2658,7 +2673,7 @@ class CollectionsDatabase:
         if ok and should_decrement and size_bytes:
             try:
                 self.update_audiobook_output_usage(-size_bytes)
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning("audiobook_quota: failed to decrement usage: %s", exc)
         return ok
 
@@ -3435,7 +3450,7 @@ class CollectionsDatabase:
                     (self.user_id,),
                 )
                 return int((r1.rowcount or 0) + (r2.rowcount or 0))
-            except Exception:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
                 return int(r1.rowcount or 0)
         # Hard delete those with retention_until past
         r1 = self.backend.execute(
@@ -3449,7 +3464,7 @@ class CollectionsDatabase:
                 (self.user_id, now),
             )
             return int((r1.rowcount or 0) + (r2.rowcount or 0))
-        except Exception:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             return int(r1.rowcount or 0)
 
     # ------------------------
@@ -3631,7 +3646,7 @@ class CollectionsDatabase:
                 for row in cur.rows:
                     rid = int(row["id"]) if isinstance(row, dict) else int(row[0])
                     paths[rid] = row["export_storage_path"] if isinstance(row, dict) else row[1]
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"file_artifacts.purge: retention scan failed: {exc}")
         try:
             now_dt = datetime.fromisoformat(str(now_iso).replace("Z", "+00:00"))
@@ -3650,7 +3665,7 @@ class CollectionsDatabase:
             for row in cur2.rows:
                 rid = int(row["id"]) if isinstance(row, dict) else int(row[0])
                 paths[rid] = row["export_storage_path"] if isinstance(row, dict) else row[1]
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"file_artifacts.purge: soft-deleted scan failed: {exc}")
         return paths
 
@@ -3664,7 +3679,7 @@ class CollectionsDatabase:
         )
         try:
             cur = self.backend.execute(q, (self.user_id, now_iso))
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"file_artifacts.export_gc: expired export scan failed: {exc}")
             return rows
         for row in cur.rows:

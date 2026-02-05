@@ -50,10 +50,10 @@ from loguru import logger
 
 try:  # Prefer psycopg v3 sql helper, fall back to psycopg2 if available
     from psycopg import sql as psycopg_sql  # type: ignore
-except Exception:  # pragma: no cover - compatibility fallback
+except ImportError:  # pragma: no cover - compatibility fallback
     try:
         from psycopg2 import sql as psycopg_sql  # type: ignore
-    except Exception:  # pragma: no cover - driver not installed
+    except ImportError:  # pragma: no cover - driver not installed
         psycopg_sql = None  # type: ignore
 #
 # Third-Party Libraries
@@ -146,6 +146,32 @@ class ConflictError(CharactersRAGDBError):
         if self.entity_id:
             details.append(f"ID: {self.entity_id}")
         return f"{base} ({', '.join(details)})" if details else base
+
+
+_CHACHA_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    sqlite3.Error,
+    BackendDatabaseError,
+    CharactersRAGDBError,
+    SchemaError,
+    InputError,
+    ConflictError,
+)
 
 
 class BackendCursorAdapter:
@@ -318,7 +344,7 @@ class BackendManagedTransaction:
                 if exc_type is None:
                     try:
                         self._raw_conn.commit()
-                    except Exception as commit_exc:
+                    except _CHACHA_NONCRITICAL_EXCEPTIONS as commit_exc:
                         logger.error(
                             "Commit failed for backend transaction on %s: %s",
                             self._db.db_path_str,
@@ -327,7 +353,7 @@ class BackendManagedTransaction:
                         )
                         try:
                             self._raw_conn.rollback()
-                        except Exception as rollback_exc:  # noqa: BLE001
+                        except _CHACHA_NONCRITICAL_EXCEPTIONS as rollback_exc:  # noqa: BLE001
                             logger.error(
                                 "Rollback after commit failure also failed on %s: %s",
                                 self._db.db_path_str,
@@ -338,7 +364,7 @@ class BackendManagedTransaction:
                 else:
                     try:
                         self._raw_conn.rollback()
-                    except Exception as rollback_exc:  # noqa: BLE001
+                    except _CHACHA_NONCRITICAL_EXCEPTIONS as rollback_exc:  # noqa: BLE001
                         logger.error(
                             "Rollback failed for backend transaction on %s: %s",
                             self._db.db_path_str,
@@ -378,7 +404,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 20  # Schema v20 adds skills registry
+    _CURRENT_SCHEMA_VERSION = 21  # Schema v21 adds conversation settings
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -2348,6 +2374,24 @@ UPDATE db_schema_version
    AND version < 20;
 """
 
+    _MIGRATION_SQL_V20_TO_V21 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 21 - Conversation settings (2026-02-05)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS conversation_settings(
+  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+  settings_json TEXT NOT NULL,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+UPDATE db_schema_version
+   SET version = 21
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 21;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -2421,7 +2465,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.critical(f"FATAL: DB Initialization failed for {self.db_path_str}: {e}", exc_info=True)
             self.close_connection()  # Attempt to clean up
             raise CharactersRAGDBError(f"Database initialization failed: {e}") from e
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.critical(f"FATAL: Unexpected error during DB Initialization for {self.db_path_str}: {e}",
                             exc_info=True)
             self.close_connection()
@@ -2442,7 +2486,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if parser is None:
             try:
                 parser = load_comprehensive_config()
-            except Exception:
+            except _CHACHA_NONCRITICAL_EXCEPTIONS:
                 parser = None
 
         if parser is not None:
@@ -2535,11 +2579,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         def _replace_connection(bad_conn) -> Any:
             try:
                 bad_conn.close()
-            except Exception:
+            except _CHACHA_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 pool.return_connection(bad_conn)
-            except Exception:
+            except _CHACHA_NONCRITICAL_EXCEPTIONS:
                 pass
             return pool.get_connection()
 
@@ -2547,7 +2591,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             try:
                 target.rollback()
                 return True
-            except Exception as rollback_exc:  # noqa: BLE001
+            except _CHACHA_NONCRITICAL_EXCEPTIONS as rollback_exc:  # noqa: BLE001
                 logger.warning(
                     "Rollback failed after %s while setting PostgreSQL session scope: %s",
                     context,
@@ -2559,7 +2603,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             _set_session(conn)
             try:
                 conn.commit()
-            except Exception as commit_exc:  # noqa: BLE001
+            except _CHACHA_NONCRITICAL_EXCEPTIONS as commit_exc:  # noqa: BLE001
                 logger.warning(
                     "Commit failed after setting PostgreSQL session scope; attempting rollback: %s",
                     commit_exc,
@@ -2569,13 +2613,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     try:
                         _set_session(conn)
                         conn.commit()
-                    except Exception as retry_exc:  # noqa: BLE001
+                    except _CHACHA_NONCRITICAL_EXCEPTIONS as retry_exc:  # noqa: BLE001
                         logger.warning(
                             "Retrying PostgreSQL session scope setup failed: %s",
                             retry_exc,
                         )
                         _safe_rollback(conn, "retry failure")
-        except Exception as exc:  # noqa: BLE001
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
             logger.warning(
                 "Failed to set PostgreSQL session scope; attempting rollback: %s",
                 exc,
@@ -2585,7 +2629,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 try:
                     _set_session(conn)
                     conn.commit()
-                except Exception as retry_exc:  # noqa: BLE001
+                except _CHACHA_NONCRITICAL_EXCEPTIONS as retry_exc:  # noqa: BLE001
                     logger.warning(
                         "Retrying PostgreSQL session scope setup failed: %s",
                         retry_exc,
@@ -2610,7 +2654,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     pass
             else:
                 self.backend.get_pool().return_connection(connection)
-        except Exception as exc:  # noqa: BLE001
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
             logger.warning("Error while releasing connection: %s", exc)
 
     def _ensure_sqlite_backend(self) -> None:
@@ -2648,13 +2692,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     )
                     try:
                         conn.close()
-                    except Exception as exc:  # noqa: BLE001
+                    except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                         logger.warning("Failed to close database connection: %s", exc)
                     try:
                         # Prefer public helper to clear thread-local connection state
                         if hasattr(pool, 'clear_thread_local_connection'):
                             pool.clear_thread_local_connection()  # type: ignore[attr-defined]
-                    except Exception:
+                    except _CHACHA_NONCRITICAL_EXCEPTIONS:
                         # Best-effort; ignore if pool doesn't expose the helper
                         pass
                     conn = None
@@ -2766,7 +2810,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     pool = self.backend.get_pool()
                     if hasattr(pool, 'clear_thread_local_connection'):
                         pool.clear_thread_local_connection()  # type: ignore[attr-defined]
-                except Exception:
+                except _CHACHA_NONCRITICAL_EXCEPTIONS:
                     pass
 
     def close_all_connections(self) -> None:
@@ -2777,7 +2821,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """
         try:
             pool = self.backend.get_pool()
-        except Exception as exc:  # noqa: BLE001
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
             logger.warning("Unable to retrieve backend pool while closing connections: %s", exc)
             pool = None
 
@@ -2786,20 +2830,20 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if callable(close_all):
                 try:
                     close_all()
-                except Exception as exc:  # noqa: BLE001
+                except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                     logger.warning("Error closing all SQLite connections for %s: %s", self.db_path_str, exc)
         elif pool is not None:
             try:
                 pool.close_all()
             except AttributeError:
                 pass
-            except Exception as exc:  # noqa: BLE001
+            except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.warning("Error closing all backend connections for %s: %s", self.db_path_str, exc)
 
         # Reset thread-local reference regardless of backend
         try:
             self._local = threading.local()
-        except Exception:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS:
             pass
 
     def backup_database(self, backup_file_path: str) -> bool:
@@ -2844,7 +2888,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as e:
             logger.error(f"SQLite error during database backup: {e}", exc_info=True)
             return False
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error during database backup: {e}", exc_info=True)
             return False
         finally:
@@ -2911,7 +2955,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             logger.debug("Committed directly by execute_query.")
                     else:
                         conn.commit()
-                except Exception as exc:
+                except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
                     logger.error(
                         "Commit failed after execute_query on backend %s: %s",
                         self.backend_type.value,
@@ -2988,7 +3032,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             logger.debug("Committed Many directly by execute_many.")
                     else:
                         conn.commit()
-                except Exception as exc:
+                except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
                     logger.error(
                         "Commit failed after execute_many on backend %s: %s",
                         self.backend_type.value,
@@ -3117,7 +3161,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             f"[{self._SCHEMA_NAME} V4] Post-repair version check failed. Expected 4, got: {final_version}")
                     logger.info(f"[{self._SCHEMA_NAME} V4] Schema 4 applied after legacy sync_log repair for DB: {self.db_path_str}.")
                     return
-                except Exception as repair_err:  # noqa: BLE001
+                except _CHACHA_NONCRITICAL_EXCEPTIONS as repair_err:  # noqa: BLE001
                     logger.error(
                         f"[{self._SCHEMA_NAME} V4] Repair attempt after 'entity_id' error failed: {repair_err}",
                         exc_info=True,
@@ -3129,7 +3173,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"DB schema V4 setup failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME} V4] Unexpected error during schema V4 application: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error applying schema V4 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3151,7 +3195,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V4->V5 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V4->V5: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V5 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3172,7 +3216,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V5->V6 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V5->V6: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V6 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3191,7 +3235,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V6->V7 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V6->V7: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V7 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3210,7 +3254,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V7->V8 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V7->V8: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V8 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3229,7 +3273,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V8->V9 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V8->V9: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V9 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3249,7 +3293,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V9->V10 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V9->V10: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V10 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3280,7 +3324,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V10->V11 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V10->V11: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V11 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3300,7 +3344,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V11->V12 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V11->V12: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V12 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3320,7 +3364,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V12->V13 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V12->V13: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V13 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3339,7 +3383,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     else:
                         try:
                             name = row["name"]
-                        except Exception:
+                        except _CHACHA_NONCRITICAL_EXCEPTIONS:
                             name = row[1] if len(row) > 1 else None
                     if name:
                         names.add(str(name))
@@ -3398,7 +3442,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V13->V14 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V13->V14: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V14 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3418,7 +3462,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V14->V15 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V14->V15: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V15 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3438,7 +3482,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V15->V16 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V15->V16: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V16 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3477,7 +3521,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V16->V17 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V16->V17: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V17 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3497,7 +3541,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V17->V18 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V17->V18: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V18 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3517,7 +3561,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V18->V19 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V18->V19: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V19 for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -3537,9 +3581,29 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Migration V19->V20 failed for '{self._SCHEMA_NAME}': {e}") from e
         except SchemaError:
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V19->V20: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V20 for '{self._SCHEMA_NAME}': {e}") from e
+
+    def _migrate_from_v20_to_v21(self, conn: sqlite3.Connection):
+        """Migrates schema from V20 to V21 (Conversation settings)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V20 to V21 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V20_TO_V21)
+            final_version = self._get_db_version(conn)
+            if final_version != 21:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V20->V21 failed version check. Expected 21, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V21 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V20->V21 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V20->V21 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V20->V21: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V21 for '{self._SCHEMA_NAME}': {e}") from e
 
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
@@ -3551,6 +3615,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 f"Schema initialization not implemented for backend {self.backend_type}"
             )
         self._ensure_message_metadata_table()
+        self._ensure_conversation_settings_table()
 
     def ensure_character_tables_ready(self) -> None:
         """
@@ -3731,6 +3796,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 20 and current_db_version == 19:
                         self._migrate_from_v19_to_v20(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 21 and current_db_version == 20:
+                        self._migrate_from_v20_to_v21(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -3899,10 +3967,53 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     elif current_initial_version == 19 and target_version >= 20:
                         self._migrate_from_v19_to_v20(conn)
                         current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 20 and target_version >= 21:
+                        self._migrate_from_v20_to_v21(conn)
+                        current_db_version = self._get_db_version(conn)
                     else:
-                        raise SchemaError(
-                            f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
-                            f"Manual migration or a new database may be required.")
+                        # Fallback: attempt linear migrations for known versions.
+                        fallback_version = current_initial_version
+                        while fallback_version < target_version:
+                            if fallback_version == 4:
+                                self._migrate_from_v4_to_v5(conn)
+                            elif fallback_version == 5:
+                                self._migrate_from_v5_to_v6(conn)
+                            elif fallback_version == 6:
+                                self._migrate_from_v6_to_v7(conn)
+                            elif fallback_version == 7:
+                                self._migrate_from_v7_to_v8(conn)
+                            elif fallback_version == 8:
+                                self._migrate_from_v8_to_v9(conn)
+                            elif fallback_version == 9:
+                                self._migrate_from_v9_to_v10(conn)
+                            elif fallback_version == 10:
+                                self._migrate_from_v10_to_v11(conn)
+                            elif fallback_version == 11:
+                                self._migrate_from_v11_to_v12(conn)
+                            elif fallback_version == 12:
+                                self._migrate_from_v12_to_v13(conn)
+                            elif fallback_version == 13:
+                                self._migrate_from_v13_to_v14(conn)
+                            elif fallback_version == 14:
+                                self._migrate_from_v14_to_v15(conn)
+                            elif fallback_version == 15:
+                                self._migrate_from_v15_to_v16(conn)
+                            elif fallback_version == 16:
+                                self._migrate_from_v16_to_v17(conn)
+                            elif fallback_version == 17:
+                                self._migrate_from_v17_to_v18(conn)
+                            elif fallback_version == 18:
+                                self._migrate_from_v18_to_v19(conn)
+                            elif fallback_version == 19:
+                                self._migrate_from_v19_to_v20(conn)
+                            elif fallback_version == 20:
+                                self._migrate_from_v20_to_v21(conn)
+                            else:
+                                raise SchemaError(
+                                    f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
+                                    f"Manual migration or a new database may be required.")
+                            fallback_version = self._get_db_version(conn)
+                        current_db_version = fallback_version
                 else: # Should not be reached due to prior checks
                     raise SchemaError(f"Unexpected schema state: current {current_initial_version}, target {target_version}")
 
@@ -3933,6 +4044,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if target_version >= 20 and current_db_version == 19:
                     self._migrate_from_v19_to_v20(conn)
                     current_db_version = self._get_db_version(conn)
+                if target_version >= 21 and current_db_version == 20:
+                    self._migrate_from_v20_to_v21(conn)
+                    current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
                 if final_version_check != target_version:
@@ -3946,7 +4060,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except (SchemaError, sqlite3.Error) as e:
             logger.error(f"Schema initialization/migration failed for '{self._SCHEMA_NAME}': {e}", exc_info=True)
             raise SchemaError(f"Schema initialization/migration for '{self._SCHEMA_NAME}' failed: {e}") from e
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error during schema initialization for '{self._SCHEMA_NAME}': {e}", exc_info=True)
             raise CharactersRAGDBError(f"Unexpected error applying schema for '{self._SCHEMA_NAME}': {e}") from e
 
@@ -4047,6 +4161,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 20:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V19_TO_V20, conn, expected_version=20)
                 current_version = 20
+            if current_version < 21:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V20_TO_V21, conn, expected_version=21)
+                current_version = 21
 
             if current_version > target_version:
                 raise SchemaError(
@@ -4066,7 +4183,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 try:
                     if self.backend.table_exists('keywords', connection=conn) and not self.backend.table_exists('chacha_keywords', connection=conn):
                         self.backend.execute("ALTER TABLE keywords RENAME TO chacha_keywords", connection=conn)
-                except Exception as exc:
+                except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
                     logger.warning("Failed to rename legacy keywords table: %s", exc)
 
                 self._ensure_postgres_fts(conn)
@@ -4148,7 +4265,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         "CREATE INDEX IF NOT EXISTS idx_writing_wordclouds_last_modified ON writing_wordclouds(last_modified)",
                         connection=conn,
                     )
-                except Exception as exc:
+                except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
                     logger.warning("Failed to ensure ChaChaNotes PostgreSQL indexes: %s", exc)
             except BackendDatabaseError as exc:
                 raise SchemaError(f"Failed to ensure PostgreSQL FTS structures: {exc}") from exc
@@ -4196,7 +4313,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     fts_column,
                     exc,
                 )
-            except Exception as exc:  # noqa: BLE001
+            except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.warning(
                     "Unexpected error while refreshing PostgreSQL FTS vector for %s.%s: %s",
                     actual_source,
@@ -4313,7 +4430,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 ),
             )
             return True
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"add_message_metadata failed for message {message_id}: {e}")
             return False
 
@@ -4344,7 +4461,98 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 "extra": json.loads(ex) if ex else None,
                 "last_modified": lm,
             }
-        except Exception:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS:
+            return None
+
+    # ----------------------
+    # Conversation settings
+    # ----------------------
+    def _ensure_conversation_settings_table(self) -> None:
+        """Ensure the conversation_settings table exists for the active backend."""
+        if self.backend_type == BackendType.SQLITE:
+            self.execute_query(
+                """
+                CREATE TABLE IF NOT EXISTS conversation_settings(
+                  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+                  settings_json TEXT NOT NULL,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
+                script=False,
+                commit=True,
+            )
+            return
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS conversation_settings(
+                  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+                  settings_json TEXT NOT NULL,
+                  last_modified TIMESTAMP NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            return
+
+        raise NotImplementedError(
+            f"conversation_settings table creation not supported for backend {self.backend_type.value}"
+        )
+
+    def upsert_conversation_settings(self, conversation_id: str, settings: dict[str, Any]) -> bool:
+        """Upsert per-conversation settings JSON."""
+        try:
+            self._ensure_conversation_settings_table()
+            payload = json.dumps(settings)
+            if self.backend_type == BackendType.SQLITE:
+                query = (
+                    "INSERT INTO conversation_settings(conversation_id, settings_json, last_modified) "
+                    "VALUES (?, ?, CURRENT_TIMESTAMP) "
+                    "ON CONFLICT(conversation_id) DO UPDATE SET settings_json=excluded.settings_json, "
+                    "last_modified=CURRENT_TIMESTAMP"
+                )
+                self.execute_query(query, (conversation_id, payload), commit=True)
+                return True
+
+            upsert = (
+                "INSERT INTO conversation_settings(conversation_id, settings_json, last_modified) "
+                "VALUES (%s, %s, NOW()) "
+                "ON CONFLICT (conversation_id) DO UPDATE SET settings_json = EXCLUDED.settings_json, "
+                "last_modified = NOW()"
+            )
+            self.backend.execute(upsert, (conversation_id, payload))
+            return True
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"upsert_conversation_settings failed for {conversation_id}: {exc}")
+            return False
+
+    def get_conversation_settings(self, conversation_id: str) -> dict[str, Any] | None:
+        """Fetch settings for a conversation if present."""
+        try:
+            self._ensure_conversation_settings_table()
+            if self.backend_type == BackendType.SQLITE:
+                cursor = self.execute_query(
+                    "SELECT settings_json, last_modified FROM conversation_settings WHERE conversation_id = ?",
+                    (conversation_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                settings_json, last_modified = row
+            else:
+                result = self.backend.execute(
+                    "SELECT settings_json, last_modified FROM conversation_settings WHERE conversation_id = %s",
+                    (conversation_id,),
+                )
+                r = result.fetchone()
+                if not r:
+                    return None
+                settings_json, last_modified = r
+
+            settings = json.loads(settings_json) if settings_json else {}
+            return {"settings": settings, "last_modified": last_modified}
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"get_conversation_settings failed for {conversation_id}: {exc}")
             return None
 
     # ----------------------
@@ -4821,7 +5029,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             else:
                 new_extra = extra
             return self.add_message_metadata(message_id, tool_calls=current.get('tool_calls'), extra=new_extra)
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"set_message_metadata_extra failed for {message_id}: {e}")
             return False
 
@@ -4872,7 +5080,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 tool_calls=current.get('tool_calls'),
                 extra=new_extra
             )
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"set_message_rag_context failed for {message_id}: {e}")
             return False
 
@@ -4891,7 +5099,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if not isinstance(extra, dict):
                 return None
             return extra.get('rag_context')
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"get_message_rag_context failed for {message_id}: {e}")
             return None
 
@@ -4936,7 +5144,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         msg['rag_context'] = rag_context
 
             return messages
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"get_messages_with_rag_context failed for conversation {conversation_id}: {e}")
             return []
 
@@ -4978,7 +5186,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             citations_by_id[doc_id]['message_ids'].append(msg_id)
 
             return list(citations_by_id.values())
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"get_conversation_citations failed for conversation {conversation_id}: {e}")
             return []
 
@@ -5011,7 +5219,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if isinstance(tool_calls, (list, dict)):
                     return {"tool_calls": tool_calls, "prefix_end": m.start(), "json_end": m.end()}
                 return None
-            except Exception:
+            except _CHACHA_NONCRITICAL_EXCEPTIONS:
                 return None
 
         try:
@@ -5037,10 +5245,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     # Row maybe mapping or tuple; try subscripting by name first
                     try:
                         rows.append({"id": r[0], "content": r[1], "version": r[2]})
-                    except Exception:
+                    except _CHACHA_NONCRITICAL_EXCEPTIONS:
                         try:
                             rows.append({"id": r['id'], "content": r['content'], "version": r['version']})
-                        except Exception:
+                        except _CHACHA_NONCRITICAL_EXCEPTIONS:
                             pass
 
             for row in rows:
@@ -5057,7 +5265,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 try:
                     if self.add_message_metadata(mid, tool_calls=tool_calls):
                         counts["backfilled"] += 1
-                except Exception:
+                except _CHACHA_NONCRITICAL_EXCEPTIONS:
                     pass
                 # Optionally strip inline suffix
                 if strip_inline:
@@ -5066,10 +5274,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         new_content = content[: int(extracted.get('prefix_end') or len(content))].rstrip()
                         self.update_message(mid, {"content": new_content}, expected_version=version)
                         counts["stripped"] += 1
-                    except Exception:
+                    except _CHACHA_NONCRITICAL_EXCEPTIONS:
                         # If version changed, skip silently
                         pass
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"backfill_tool_calls_from_inline encountered an error: {e}")
         return counts
 
@@ -5168,7 +5376,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         # Create sync_log entity index depending on available columns
         try:
             cols = {c.get('name') for c in self.backend.get_table_info('sync_log', connection=conn)}
-        except Exception:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS:
             cols = set()
 
         if 'entity_id' in cols:
@@ -5197,7 +5405,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         try:
             if expected_version >= 5:
                 self._ensure_postgres_flashcards_tsvector(conn)
-        except Exception as _e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as _e:
             logger.debug(f"Skipping ensure flashcards tsvector after migration to v{expected_version}: {_e}")
 
     def _get_schema_version_postgres(self, conn) -> int:
@@ -5232,7 +5440,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 try:
                     if not backend.table_exists(table_name, connection=conn):
                         continue
-                except Exception:
+                except _CHACHA_NONCRITICAL_EXCEPTIONS:
                     continue
                 seq_result = backend.execute(
                     "SELECT pg_get_serial_sequence(%s, %s) AS seq",
@@ -5392,7 +5600,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         cols = {c.get('name') for c in self.backend.get_table_info('sync_log', connection=conn)}
                         if 'entity_uuid' in cols and 'entity_id' not in cols:
                             entity_col = 'entity_uuid'
-                    except Exception as e:
+                    except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug("sync_log column introspection failed on {}: {}", self.backend_type.value, e)
                 assert entity_col in ('entity_id', 'entity_uuid'), f"Unexpected sync_log id column: {entity_col}"
                 conn.execute(
@@ -5413,7 +5621,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 try:
                     if out.get("metadata") is not None and isinstance(out.get("metadata"), str):
                         out["metadata"] = json.loads(out["metadata"])  # type: ignore[arg-type]
-                except Exception:
+                except _CHACHA_NONCRITICAL_EXCEPTIONS:
                     pass
                 out["directed"] = bool(out.get("directed", 0))
                 return out
@@ -5448,7 +5656,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             cols = {c.get('name') for c in self.backend.get_table_info('sync_log', connection=conn)}
                             if 'entity_uuid' in cols and 'entity_id' not in cols:
                                 entity_col = 'entity_uuid'
-                        except Exception as e:
+                        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug("sync_log column introspection failed on {}: {}", self.backend_type.value, e)
                     assert entity_col in ('entity_id', 'entity_uuid'), f"Unexpected sync_log id column: {entity_col}"
                     conn.execute(
@@ -5936,7 +6144,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except InputError:  # Should not happen if initial `if not card_data:` check is there.
             logger.warning(f"InputError during update_character_card for ID {character_id}.", exc_info=False)
             raise
-        except Exception as e:  # Catch any other unexpected Python errors
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:  # Catch any other unexpected Python errors
             logger.error(
                 f"Unexpected Python error in update_character_card (SINGLE UPDATE STRATEGY) for ID {character_id}: {e}",
                 exc_info=True)
@@ -6291,7 +6499,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError as e:
             logger.error(f"Database error in JSON-based tag search: {e}")
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             # JSON function might have failed, log and re-raise as database error
             logger.error(f"Unexpected error in JSON-based tag search: {e}")
             raise CharactersRAGDBError(f"JSON tag search failed: {e}") from e
@@ -6359,7 +6567,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError as e:
             logger.error(f"Database error in fallback tag search: {e}")
             raise
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error in fallback tag search: {e}")
             raise CharactersRAGDBError(f"Fallback tag search failed: {e}") from e
 
@@ -6625,7 +6833,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 return 0
             try:
                 return int(row[0])
-            except Exception:
+            except _CHACHA_NONCRITICAL_EXCEPTIONS:
                 return int(row.get("COUNT(1)") or row.get("count") or 0)
         except CharactersRAGDBError as e:
             logger.error(f"Database error counting messages for conversation {conversation_id}: {e}")
@@ -6733,7 +6941,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 return 0
             try:
                 return int(row[0])
-            except Exception:
+            except _CHACHA_NONCRITICAL_EXCEPTIONS:
                 return int(row.get("COUNT(1)") or row.get("count") or 0)
         except CharactersRAGDBError as exc:
             logger.error("Database error counting messages after %s: %s", since_message_id, exc)
@@ -6772,7 +6980,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
             self.backend.execute(query, (cluster_id, title, centroid, int(size)))
             return True
-        except Exception as exc:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             logger.error("Failed to upsert conversation cluster %s: %s", cluster_id, exc)
             return False
 
@@ -6820,7 +7028,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 return 0
             try:
                 return int(row[0])
-            except Exception:
+            except _CHACHA_NONCRITICAL_EXCEPTIONS:
                 return int(row.get("COUNT(1)") or row.get("count") or 0)
         except CharactersRAGDBError as e:
             logger.error(
@@ -7070,7 +7278,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Application-level database error in update_conversation for ID {conversation_id}: {e}",
                          exc_info=True)
             raise
-        except Exception as e:  # Catch-all for any other unexpected Python errors
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:  # Catch-all for any other unexpected Python errors
             logger.error(f"Unexpected Python error in update_conversation for ID {conversation_id}: {e}", exc_info=True)
             raise CharactersRAGDBError(f"Unexpected error during update_conversation: {e}") from e
 
@@ -7475,7 +7683,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         # Enforce maximum image sizes (single and multi-image) using settings override
         try:
             _max_img_bytes = int(settings.get("MAX_MESSAGE_IMAGE_BYTES", 5 * 1024 * 1024))
-        except Exception:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS:
             _max_img_bytes = 5 * 1024 * 1024  # 5MB default
 
         # Validate primary image size if present
@@ -7737,7 +7945,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 return 0
             try:
                 return int(row[0])
-            except Exception:
+            except _CHACHA_NONCRITICAL_EXCEPTIONS:
                 return int(row.get("COUNT(1)") or row.get("count") or 0)
         except CharactersRAGDBError as e:
             logger.error("Database error counting root messages for conversation %s: %s", conversation_id, e)
@@ -9321,7 +9529,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     f"search_notes: term='{search_term[:50] if search_term else ''}' notes_fts_count={fts_count['cnt'] if fts_count else 0} "
                     f"notes_count={notes_count['cnt'] if notes_count else 0}"
                 )
-            except Exception as diag_err:
+            except _CHACHA_NONCRITICAL_EXCEPTIONS as diag_err:
                 logger.debug(f"search_notes diagnostic query failed: {diag_err}")
 
         if self.backend_type == BackendType.POSTGRESQL:
@@ -9559,7 +9767,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             cols = {c.get('name') for c in self.backend.get_table_info('sync_log', connection=conn)}
                             if 'entity_uuid' in cols and 'entity_id' not in cols:
                                 entity_col = 'entity_uuid'
-                        except Exception as e:
+                        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug("sync_log column introspection failed on {}: {}", self.backend_type.value, e)
                     assert entity_col in ('entity_id', 'entity_uuid'), f"Unexpected sync_log id column: {entity_col}"
 
@@ -10235,7 +10443,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     connection=conn,
                 )
                 exists = bool(getattr(exists_res, 'rows', []) )
-            except Exception:
+            except _CHACHA_NONCRITICAL_EXCEPTIONS:
                 exists = False
             if not exists:
                 self.backend.execute(
@@ -10247,7 +10455,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     ),
                     connection=conn,
                 )
-        except Exception as e:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             # If any statement fails due to existing objects, ignore and proceed
             logger.debug(f"_ensure_postgres_flashcards_tsvector: {e}")
 
@@ -10354,7 +10562,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     tags_list = json.loads(r['tags_json'])
                     if isinstance(tags_list, list):
                         tags = " ".join(str(t) for t in tags_list)
-                except Exception:
+                except _CHACHA_NONCRITICAL_EXCEPTIONS:
                     tags = ''
             notes = r.get('notes') or ''
             extra = r.get('extra') or ''
@@ -11964,7 +12172,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             self.execute_query(query, params, commit=True)
         except CharactersRAGDBError:
             raise
-        except Exception as exc:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             raise CharactersRAGDBError(f"Failed to create wordcloud job: {exc}") from exc
 
     def get_writing_wordcloud(self, wordcloud_id: str) -> dict[str, Any] | None:
@@ -11990,7 +12198,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return item
         except CharactersRAGDBError:
             raise
-        except Exception as exc:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             raise CharactersRAGDBError(f"Failed to fetch wordcloud job: {exc}") from exc
 
     def _update_writing_wordcloud_fields(self, wordcloud_id: str, update_data: dict[str, Any]) -> None:
@@ -12023,7 +12231,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 raise ConflictError("Wordcloud job not found.", entity="writing_wordclouds", entity_id=wordcloud_id)
         except CharactersRAGDBError:
             raise
-        except Exception as exc:
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             raise CharactersRAGDBError(f"Failed to update wordcloud job: {exc}") from exc
 
     def set_writing_wordcloud_status(self, wordcloud_id: str, status: str, error: str | None = None) -> None:

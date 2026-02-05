@@ -1,4 +1,5 @@
 import { bgRequestClient } from "@/services/background-proxy"
+import type { ClientPathOrUrlWithQuery } from "@/services/tldw/openapi-guard"
 
 export type McpToolTier = "read" | "write" | "exec" | string
 
@@ -57,9 +58,9 @@ export const fetchMcpTools = async (
     }
     if (params.catalogStrict) query.set("catalog_strict", "1")
     const queryString = query.toString()
-    const path = queryString
+    const path = (queryString
       ? `/api/v1/mcp/tools?${queryString}`
-      : "/api/v1/mcp/tools"
+      : "/api/v1/mcp/tools") as ClientPathOrUrlWithQuery
     const res = await bgRequestClient<any>({
       path,
       method: "GET"

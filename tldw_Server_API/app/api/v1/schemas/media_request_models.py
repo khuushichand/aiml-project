@@ -174,6 +174,24 @@ class ChunkingOptions(BaseModel):
     chunk_size: int = Field(500, gt=0, description="Target size of each chunk (positive integer)")
     chunk_overlap: int = Field(200, ge=0, description="Overlap size between chunks (non-negative integer)")
     custom_chapter_pattern: Optional[str] = Field(None, description="Optional regex pattern for custom chapter splitting (ebook/docs)")
+    proposition_engine: Optional[str] = Field(
+        None,
+        description="Override proposition extraction engine (heuristic|spacy|llm|auto)",
+    )
+    proposition_aggressiveness: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Aggressiveness level for proposition extraction (higher = more aggressive)",
+    )
+    proposition_min_proposition_length: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Minimum proposition length in characters before merging",
+    )
+    proposition_prompt_profile: Optional[str] = Field(
+        None,
+        description="Prompt profile for proposition extraction (generic|claimify|gemma_aps)",
+    )
     # Template auto-apply options
     auto_apply_template: bool = Field(False, description="Automatically select and apply a matching chunking template by metadata")
     chunking_template_name: Optional[str] = Field(None, description="Explicit template name to apply for chunking")

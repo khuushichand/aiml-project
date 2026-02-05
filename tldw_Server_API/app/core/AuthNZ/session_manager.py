@@ -55,9 +55,35 @@ from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 
+_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    RedisError,
+    RedisConnectionError,
+    InvalidSessionError,
+    SessionError,
+    SessionRevokedException,
+)
+
 try:
     from tldw_Server_API.app.core.config import settings as core_settings
-except Exception:  # pragma: no cover - defensive fallback
+except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive fallback
     core_settings = {}
 
 #######################################################################################################################
@@ -125,7 +151,7 @@ class SessionManager:
             # In general test mode, default to disabled unless explicitly overridden
             if (str(os.getenv("TEST_MODE", "")).strip().lower() in _truthy or str(os.getenv("TLDW_TEST_MODE", "")).strip().lower() in _truthy) and str(os.getenv("AUTHNZ_SCHEDULER_ENABLED", "")).strip().lower() not in _truthy:
                 disable_sched = True
-        except Exception:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             pass
         if (not disable_sched) and self.settings.SESSION_CLEANUP_INTERVAL_HOURS > 0:
             self.scheduler.add_job(
@@ -222,7 +248,7 @@ class SessionManager:
                 raise ValueError("SESSION_ENCRYPTION_KEY must be str or bytes containing a Fernet key")
             try:
                 decoded = base64.urlsafe_b64decode(raw)
-            except Exception as exc:  # pragma: no cover - defensive
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
                 raise ValueError("SESSION_ENCRYPTION_KEY must be urlsafe base64-encoded") from exc
             if len(decoded) != 32:
                 raise ValueError("SESSION_ENCRYPTION_KEY must decode to 32 bytes for Fernet compatibility")
@@ -234,14 +260,14 @@ class SessionManager:
             preferred_path: Optional[Path] = None
             try:
                 preferred_path = self._resolve_persisted_key_path()
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Session key: failed to resolve preferred persisted key path: {exc}")
                 preferred_path = None
 
             def _exists_and_invalid(p: Optional[Path]) -> bool:
                 try:
                     return bool(p) and Path(p).exists() and (not self._is_valid_key_file(Path(p)))
-                except Exception as exc:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"Session key: failed to inspect preferred path {p}: {exc}")
                     return False
 
@@ -267,7 +293,7 @@ class SessionManager:
                             # Record discovered valid path
                             self._persisted_key_path = p
                             return content.encode("utf-8")
-                        except Exception as _exc:
+                        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _exc:
                             logger.debug(f"Session key: failed reading candidate key at {p}: {_exc}")
                             return None
 
@@ -277,7 +303,7 @@ class SessionManager:
                         ap = self._resolve_api_key_path()
                         if ap and preferred_path and ap != preferred_path:
                             other_candidates.append(ap)
-                    except Exception as _e:
+                    except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _e:
                         logger.debug(f"Session key: failed resolving API key path: {_e}")
                     try:
                         preferred_root = core_settings.get("PROJECT_ROOT") if core_settings else None
@@ -285,7 +311,7 @@ class SessionManager:
                         pp = (preferred_root_path / "Config_Files" / "session_encryption.key").resolve()
                         if pp and preferred_path and pp != preferred_path:
                             other_candidates.append(pp)
-                    except Exception as _e:
+                    except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _e:
                         logger.debug(f"Session key: failed constructing project-root key path: {_e}")
 
                     persisted_key: Optional[bytes] = None
@@ -317,7 +343,7 @@ class SessionManager:
                             ap = self._resolve_api_key_path()
                             if ap and (not preferred_path or ap != preferred_path):
                                 alt_candidates.append(ap)
-                        except Exception as _e:
+                        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _e:
                             logger.debug(f"Session key: could not resolve API key path for alternate persistence: {_e}")
                         try:
                             preferred_root = core_settings.get("PROJECT_ROOT") if core_settings else None
@@ -325,7 +351,7 @@ class SessionManager:
                             pp = (preferred_root_path / "Config_Files" / "session_encryption.key").resolve()
                             if pp and (not preferred_path or pp != preferred_path):
                                 alt_candidates.append(pp)
-                        except Exception as _e:
+                        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _e:
                             logger.debug(f"Session key: could not compute project-root path for alternate persistence: {_e}")
 
                         persisted_anywhere = False
@@ -342,9 +368,9 @@ class SessionManager:
                                             try:
                                                 dest.rename(backup)
                                                 logger.info(f"Session key: backed up invalid key file to {backup}")
-                                            except Exception as _be:
+                                            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _be:
                                                 logger.debug(f"Session key: backup of invalid key file failed: {_be}")
-                                    except Exception as _ce:
+                                    except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _ce:
                                         logger.debug(f"Session key: could not check/backup invalid key file: {_ce}")
 
                                 # Force persistence target
@@ -355,7 +381,7 @@ class SessionManager:
                                     break
                                 else:
                                     logger.debug(f"Session key: alternate persistence attempt failed for {dest}")
-                            except Exception as _pe:
+                            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _pe:
                                 logger.debug(f"Session key: exception during alternate persistence to {dest}: {_pe}")
                             finally:
                                 # If persistence failed, restore original pointer before next attempt
@@ -539,17 +565,17 @@ class SessionManager:
                 if _HAS_FCNTL:
                     try:
                         fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                    except Exception:
+                    except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                         pass
                 try:
                     os.close(lock_fd)
-                except Exception:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                     pass
             # Clean up lock file (best effort)
             if not _HAS_FCNTL:
                 try:
                     lock_path.unlink(missing_ok=True)
-                except Exception:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                     pass
 
     def _persist_session_key(self, key: bytes) -> bool:
@@ -576,7 +602,7 @@ class SessionManager:
                 raise RuntimeError(f"Failed to prepare session key directory {path.parent}: {exc}") from exc
             try:
                 os.chmod(path.parent, 0o700)
-            except Exception:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                 # Ignore if chmod not supported (e.g., on Windows)
                 pass
 
@@ -597,10 +623,10 @@ class SessionManager:
                 try:
                     with os.fdopen(fd, "w", encoding="utf-8") as handle:
                         handle.write(key.decode("utf-8"))
-                except Exception:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                     try:
                         os.close(fd)
-                    except Exception:
+                    except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                         pass
                     raise
             except OSError as exc:
@@ -612,7 +638,7 @@ class SessionManager:
 
             try:
                 os.chmod(path, 0o600)
-            except Exception as chmod_exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as chmod_exc:
                 # Log warning instead of silently ignoring - this could be a security issue
                 logger.warning(f"Failed to set permissions on session key file {path}: {chmod_exc}")
 
@@ -631,15 +657,15 @@ class SessionManager:
                             f"Session encryption key {path} has permissive mode {oct(mode)}. "
                             "Expected 0o600 (owner read/write only)."
                         )
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 try:
                     path.unlink(missing_ok=True)
-                except Exception:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                     pass
                 raise RuntimeError(f"Persisted session encryption key failed validation: {exc}") from exc
             self._persisted_key_path = path
             return True
-        except Exception as exc:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Unable to persist session encryption key to {path}: {exc}")
             return False
 
@@ -663,14 +689,14 @@ class SessionManager:
                 api_path = self._persisted_key_path
             else:
                 api_path = self._resolve_api_key_path()
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"failed to resolve persisted API key path: {e}")
             api_path = None
         try:
             preferred_root = core_settings.get("PROJECT_ROOT") if core_settings else None
             preferred_root_path = Path(preferred_root) if preferred_root else Path.cwd()
             primary_path = (preferred_root_path / "Config_Files" / "session_encryption.key").resolve()
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"failed to construct primary session_encryption.key path: {e}")
             primary_path = None
 
@@ -690,7 +716,7 @@ class SessionManager:
         if prefer_api_path and api_path and primary_path:
             try:
                 self._maybe_migrate_key_to_api_path(primary_path, api_path)
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Session key migration skipped due to error: {exc}")
 
         for path in candidate_paths:
@@ -716,7 +742,7 @@ class SessionManager:
                 ):
                     logger.warning(f"Using persisted session_encryption.key at alternate location: {path}")
                 return content.encode("utf-8")
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Failed to read persisted session encryption key from {path}: {exc}")
                 continue
         return None
@@ -726,7 +752,7 @@ class SessionManager:
         try:
             api_root = Path(__file__).resolve().parent.parent.parent.parent
             return (api_root / "Config_Files" / "session_encryption.key").resolve()
-        except Exception:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             return None
 
     def _resolve_persisted_key_path(self) -> Optional[Path]:
@@ -751,7 +777,7 @@ class SessionManager:
                 project_root = core_settings.get("PROJECT_ROOT")
             if project_root:
                 return (Path(project_root) / "Config_Files" / "session_encryption.key").resolve()
-        except Exception:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Fallback to API component path
@@ -761,7 +787,7 @@ class SessionManager:
         try:
             decoded = base64.urlsafe_b64decode(content.encode("utf-8"))
             return len(decoded) == 32
-        except Exception:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             return False
 
     def _is_valid_key_file(self, path: Path) -> bool:
@@ -783,12 +809,12 @@ class SessionManager:
                         f"Session key file {path} has insecure permissions {oct(mode)}; ignoring."
                     )
                     return False
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Failed to inspect session key file {path}: {exc}")
                 return False
             content = path.read_text(encoding="utf-8").strip()
             return bool(content) and self._is_valid_key_content(content)
-        except Exception:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             return False
 
     def _maybe_migrate_key_to_api_path(self, source_primary: Path, dest_api: Path) -> None:
@@ -805,7 +831,7 @@ class SessionManager:
                 return
             try:
                 dest_api.parent.mkdir(parents=True, exist_ok=True)
-            except Exception:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                 pass
             payload = source_primary.read_text(encoding="utf-8").strip()
 
@@ -818,25 +844,25 @@ class SessionManager:
                 # Replace destination
                 try:
                     tmp_path.replace(dest_api)
-                except Exception:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                     # If replace fails, try unlink + rename
                     try:
                         dest_api.unlink(missing_ok=True)
-                    except Exception:
+                    except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                         pass
                     tmp_path.rename(dest_api)
             finally:
                 try:
                     if tmp_path.exists():
                         tmp_path.unlink()
-                except Exception:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                     pass
             # Validate destination and record
             if not self._is_valid_key_file(dest_api):
                 raise RuntimeError("Migrated session key failed validation at API path")
             self._persisted_key_path = dest_api
             logger.info(f"Migrated session_encryption.key to API path: {dest_api}")
-        except Exception as exc:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
             # Preserve visibility but allow critical validation failures to propagate
             logger.warning(f"Failed to migrate session_encryption.key to API path: {exc}")
             if isinstance(exc, RuntimeError):
@@ -853,7 +879,7 @@ class SessionManager:
                 return
             try:
                 keys = derive_hmac_key_candidates(s)
-            except Exception:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                 keys = [derive_hmac_key(s)]
             for key in keys:
                 if key not in candidate_keys:
@@ -898,7 +924,7 @@ class SessionManager:
 
         try:
             encrypted_bytes = base64.urlsafe_b64decode(encrypted_token.encode('utf-8'))
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to decode stored session token: {e}")
             log_counter("session_token_decode_error")
             raise InvalidSessionError("Failed to decrypt session token") from e
@@ -915,7 +941,7 @@ class SessionManager:
                     log_counter("session_decrypt_secondary_key_used")
                     logger.info(f"Session token decrypted with secondary key candidate {idx}")
                 return decrypted.decode('utf-8')
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 last_error = exc
                 errors_by_candidate.append(f"candidate[{idx}]: {type(exc).__name__}")
                 logger.debug(f"Session token decryption failed with candidate {idx}: {exc}")
@@ -945,7 +971,7 @@ class SessionManager:
                 # Use timezone-aware datetime to avoid naive datetime issues
                 expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
             return jti, expires_at
-        except Exception:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             return None, None
 
     @staticmethod
@@ -956,7 +982,7 @@ class SessionManager:
         try:
             claims = jose_jwt.get_unverified_claims(token)
             return claims if isinstance(claims, dict) else None
-        except Exception:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             return None
 
     @staticmethod
@@ -1098,7 +1124,7 @@ class SessionManager:
                 "refresh_token": refresh_token,
             }
 
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create session: {e}")
             log_counter("auth_session_create_error")
             log_histogram(
@@ -1197,7 +1223,7 @@ class SessionManager:
                     )
                     session_data["token_hash"] = token_hash_primary
                     cache_normalize_required = True
-                except Exception as normalize_exc:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as normalize_exc:
                     logger.warning(
                         "Failed to normalize session token hash for session %s: %s",
                         session_data.get("id"),
@@ -1238,7 +1264,7 @@ class SessionManager:
 
         except SessionRevokedException:
             raise
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error validating session: {e}")
             return None
 
@@ -1271,7 +1297,7 @@ class SessionManager:
             else:
                 logger.info(f"Revoked session {session_id}")
 
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to revoke session: {e}")
             raise SessionError(f"Failed to revoke session: {e}")
         else:
@@ -1308,7 +1334,7 @@ class SessionManager:
             else:
                 logger.info(f"Revoked all sessions for user {user_id}")
 
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to revoke user sessions: {e}")
             raise SessionError(f"Failed to revoke sessions: {e}")
 
@@ -1316,7 +1342,7 @@ class SessionManager:
         try:
             blacklist = get_token_blacklist()
             await blacklist.revoke_all_user_tokens(user_id)
-        except Exception as bl_error:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as bl_error:
             if self.settings.PII_REDACT_LOGS:
                 logger.warning(f"Failed to blacklist tokens for authenticated user (details redacted): {bl_error}")
             else:
@@ -1369,7 +1395,7 @@ class SessionManager:
                     self._validate_token_binding(refresh_claims, session_data, token_label="refresh")
             except InvalidSessionError:
                 raise
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Refresh session: token binding validation failed: {exc}")
                 raise InvalidSessionError()
 
@@ -1418,7 +1444,7 @@ class SessionManager:
 
         except InvalidSessionError:
             raise
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to refresh session: {e}")
             raise SessionError(f"Failed to refresh session: {e}")
 
@@ -1482,7 +1508,7 @@ class SessionManager:
 
             logger.debug(f"Updated session {session_id} with token hashes")
 
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to update session tokens: {e}")
             raise SessionError(f"Failed to update session tokens: {e}")
 
@@ -1513,7 +1539,7 @@ class SessionManager:
                     from jose import jwt as _jwt  # Lazy import to avoid top-level dependency
                     claims = _jwt.get_unverified_claims(token)
                     jti_value = claims.get("jti")
-                except Exception as exc:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                     logger.warning(f"Failed to extract JTI from token; treating as revoked: {exc}")
                     return True
 
@@ -1526,7 +1552,7 @@ class SessionManager:
                 blacklist = get_token_blacklist()
                 if await blacklist.is_blacklisted(jti_value):
                     return True
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error(f"Token blacklist check failed; treating token as revoked: {exc}")
                 return True
 
@@ -1548,7 +1574,7 @@ class SessionManager:
                 return True
             return False
 
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error checking token blacklist; treating token as revoked: {e}")
             return True
 
@@ -1565,7 +1591,7 @@ class SessionManager:
             db_pool = await self._ensure_db_pool()
             repo = AuthnzSessionsRepo(db_pool)
             return await repo.get_active_sessions_for_user(user_id)
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get active sessions: {e}")
             return []
 
@@ -1590,7 +1616,7 @@ class SessionManager:
 
             return int(deleted or 0)
 
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Session cleanup failed: {e}")
             return 0
 
@@ -1765,7 +1791,7 @@ class SessionManager:
                 return None
             except RedisError as exc:
                 logger.warning("Failed to read ephemeral value from Redis: {}", exc)
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Failed to decrypt ephemeral value: {}", exc)
                 return None
         now = time.monotonic()
@@ -1779,7 +1805,7 @@ class SessionManager:
                 return None
         try:
             return self.decrypt_token(encrypted)
-        except Exception as exc:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Failed to decrypt ephemeral value: {}", exc)
             return None
 
@@ -1822,7 +1848,7 @@ class SessionManager:
             return
         try:
             blacklist = get_token_blacklist()
-        except Exception as exc:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"AuthNZ blacklist unavailable for session revocation: {exc}")
             return
 
@@ -1836,7 +1862,7 @@ class SessionManager:
             if access_jti and access_exp:
                 try:
                     blacklist.hint_blacklisted(access_jti, access_exp)
-                except Exception:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     await blacklist.revoke_token(
@@ -1848,13 +1874,13 @@ class SessionManager:
                         revoked_by=revoked_by,
                         ip_address=None,
                     )
-                except Exception as exc:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"Failed to persist access-token blacklist entry {access_jti}: {exc}")
 
             if refresh_jti and refresh_exp:
                 try:
                     blacklist.hint_blacklisted(refresh_jti, refresh_exp)
-                except Exception:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     await blacklist.revoke_token(
@@ -1866,7 +1892,7 @@ class SessionManager:
                         revoked_by=revoked_by,
                         ip_address=None,
                     )
-                except Exception as exc:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"Failed to persist refresh-token blacklist entry {refresh_jti}: {exc}")
 
     async def shutdown(self):
@@ -1881,14 +1907,14 @@ class SessionManager:
                     loop = None
                 if loop is None or not loop.is_closed():
                     self.scheduler.shutdown(wait=False)
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             # In tests, teardown may run after the loop is closed; ignore scheduler shutdown errors
             logger.debug(f"SessionManager scheduler shutdown skipped: {e}")
 
         if self.redis_client:
             try:
                 await self.redis_client.close()
-            except Exception as e:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Ignoring Redis client shutdown error: {e}")
             finally:
                 self.redis_client = None

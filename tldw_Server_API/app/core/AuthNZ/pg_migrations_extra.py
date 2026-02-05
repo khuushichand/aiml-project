@@ -15,6 +15,18 @@ from loguru import logger
 
 from .database import DatabasePool, get_db_pool
 
+_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    json.JSONDecodeError,
+)
+
 _BUDGET_FIELD_KEYS = {
     "budget_day_usd",
     "budget_month_usd",
@@ -959,17 +971,17 @@ async def ensure_tool_catalogs_tables_pg(pool: DatabasePool | None = None) -> bo
             return False  # not postgres
         try:
             await ensure_authnz_core_tables_pg(db_pool)
-        except Exception as exc:
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"PG ensure authnz core tables before tool catalogs failed: {exc}")
         for sql, params in _CREATE_TOOL_CATALOGS:
             try:
                 await db_pool.execute(sql, *params)
-            except Exception as exc:
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 # Continue attempting subsequent statements; log and surface at the end
                 logger.debug(f"PG ensure tool catalogs DDL failed: {exc}")
         logger.info("Ensured PostgreSQL tool catalogs tables (idempotent)")
         return True
-    except Exception as exc:
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL tool catalogs tables: {exc}")
         return False
 
@@ -983,11 +995,11 @@ async def ensure_privilege_snapshots_table_pg(pool: DatabasePool | None = None) 
         for sql, params in _CREATE_PRIVILEGE_SNAPSHOTS:
             try:
                 await db_pool.execute(sql, *params)
-            except Exception as exc:
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG ensure privilege_snapshots DDL failed: {exc}")
         logger.info("Ensured PostgreSQL privilege_snapshots table (idempotent)")
         return True
-    except Exception as exc:
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL privilege_snapshots table: {exc}")
         return False
 
@@ -1007,14 +1019,14 @@ async def ensure_authnz_core_tables_pg(pool: DatabasePool | None = None) -> bool
         for sql, params in _CREATE_AUTHNZ_CORE_TABLES:
             try:
                 await db_pool.execute(sql, *params)
-            except Exception as exc:
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG ensure authnz core tables DDL failed: {exc}")
         logger.info(
             "Ensured PostgreSQL AuthNZ core tables "
             "(audit_logs, sessions, registration_codes, RBAC, orgs/teams)"
         )
         return True
-    except Exception as exc:
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL AuthNZ core tables: {exc}")
         return False
 
@@ -1161,7 +1173,7 @@ async def _backfill_org_budgets_pg(db_pool: DatabasePool) -> None:
             WHERE os.custom_limits_json IS NOT NULL
             """
         )
-    except Exception as exc:
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"PG budgets backfill fetch failed: {exc}")
         return
 
@@ -1188,7 +1200,7 @@ async def _backfill_org_budgets_pg(db_pool: DatabasePool) -> None:
                     org_id,
                     json.dumps(normalized_payload),
                 )
-            except Exception as exc:
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG budgets backfill insert failed for org_id={org_id}: {exc}")
                 continue
 
@@ -1207,7 +1219,7 @@ async def _backfill_org_budgets_pg(db_pool: DatabasePool) -> None:
                     org_id,
                     payload,
                 )
-            except Exception as exc:
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG budgets backfill cleanup failed for org_id={org_id}: {exc}")
 
 
@@ -1216,7 +1228,7 @@ async def _normalize_org_budgets_pg(db_pool: DatabasePool) -> None:
         rows = await db_pool.fetch(
             "SELECT org_id, budgets_json FROM org_budgets WHERE budgets_json IS NOT NULL"
         )
-    except Exception as exc:
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"PG budgets normalize fetch failed: {exc}")
         return
 
@@ -1230,7 +1242,7 @@ async def _normalize_org_budgets_pg(db_pool: DatabasePool) -> None:
             continue
         try:
             current = _parse_json_payload_pg(raw_payload)
-        except Exception:
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
             current = {}
         if json.dumps(current, sort_keys=True) == json.dumps(normalized, sort_keys=True):
             continue
@@ -1244,7 +1256,7 @@ async def _normalize_org_budgets_pg(db_pool: DatabasePool) -> None:
                 org_id,
                 json.dumps(normalized),
             )
-        except Exception as exc:
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"PG budgets normalize update failed for org_id={org_id}: {exc}")
 
 
@@ -1260,13 +1272,13 @@ async def ensure_billing_tables_pg(
             return False
         try:
             await ensure_authnz_core_tables_pg(db_pool)
-        except Exception as exc:
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"ensure_billing_tables_pg: core table ensure skipped/failed: {exc}")
 
         for sql, params in _CREATE_BILLING_TABLES:
             try:
                 await db_pool.execute(sql, *params)
-            except Exception as exc:
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG ensure billing DDL failed: {exc}")
 
         default_plans = [
@@ -1408,23 +1420,23 @@ async def ensure_billing_tables_pg(
                     plan["sort_order"],
                     plan.get("is_public", True),
                 )
-            except Exception as exc:
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG ensure billing seed failed: {exc}")
 
         if run_backfill:
             try:
                 await _backfill_org_budgets_pg(db_pool)
-            except Exception as exc:
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG budgets backfill skipped/failed: {exc}")
 
             try:
                 await _normalize_org_budgets_pg(db_pool)
-            except Exception as exc:
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG budgets normalize skipped/failed: {exc}")
 
         logger.info("Ensured PostgreSQL billing tables (subscription_plans, org_subscriptions)")
         return True
-    except Exception as exc:
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL billing tables: {exc}")
         return False
 
@@ -1445,14 +1457,14 @@ async def ensure_api_keys_tables_pg(pool: DatabasePool | None = None) -> bool:
         # succeed in minimal test schemas.
         try:
             await ensure_authnz_core_tables_pg(db_pool)
-        except Exception as exc:
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"ensure_api_keys_tables_pg: core table ensure skipped/failed: {exc}")
 
         errors: list[Exception] = []
         for sql, params in _CREATE_API_KEYS_TABLES:
             try:
                 await db_pool.execute(sql, *params)
-            except Exception as exc:
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 errors.append(exc)
                 logger.debug(f"PG ensure api keys DDL failed: {exc}")
 
@@ -1479,7 +1491,7 @@ async def ensure_api_keys_tables_pg(pool: DatabasePool | None = None) -> bool:
                     f"(api_keys={bool(api_keys_ok)}, api_key_audit_log={bool(audit_ok)})"
                 )
                 return False
-        except Exception as exc:
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
             # Treat verification failure as non-fatal; callers can detect missing tables later.
             logger.debug(f"PG ensure api_keys table verification failed: {exc}")
 
@@ -1491,7 +1503,7 @@ async def ensure_api_keys_tables_pg(pool: DatabasePool | None = None) -> bool:
         else:
             logger.info("Ensured PostgreSQL api_keys tables (idempotent)")
         return True
-    except Exception as exc:
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL api_keys tables: {exc}")
         return False
 
@@ -1506,18 +1518,18 @@ async def ensure_user_provider_secrets_pg(pool: DatabasePool | None = None) -> b
         # Ensure users table exists before adding the FK-backed BYOK table.
         try:
             await ensure_authnz_core_tables_pg(db_pool)
-        except Exception as exc:
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"ensure_user_provider_secrets_pg: core table ensure skipped/failed: {exc}")
 
         for sql, params in _CREATE_USER_PROVIDER_SECRETS:
             try:
                 await db_pool.execute(sql, *params)
-            except Exception as exc:
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG ensure user_provider_secrets DDL failed: {exc}")
 
         logger.info("Ensured PostgreSQL user_provider_secrets table (idempotent)")
         return True
-    except Exception as exc:
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL user_provider_secrets table: {exc}")
         return False
 
@@ -1532,18 +1544,18 @@ async def ensure_org_provider_secrets_pg(pool: DatabasePool | None = None) -> bo
         # Ensure core tables exist first (org/team scaffolding)
         try:
             await ensure_authnz_core_tables_pg(db_pool)
-        except Exception as exc:
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"ensure_org_provider_secrets_pg: core table ensure skipped/failed: {exc}")
 
         for sql, params in _CREATE_ORG_PROVIDER_SECRETS:
             try:
                 await db_pool.execute(sql, *params)
-            except Exception as exc:
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG ensure org_provider_secrets DDL failed: {exc}")
 
         logger.info("Ensured PostgreSQL org_provider_secrets table (idempotent)")
         return True
-    except Exception as exc:
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL org_provider_secrets table: {exc}")
         return False
 
@@ -1558,12 +1570,12 @@ async def ensure_llm_provider_overrides_pg(pool: DatabasePool | None = None) -> 
         for sql, params in _CREATE_LLM_PROVIDER_OVERRIDES:
             try:
                 await db_pool.execute(sql, *params)
-            except Exception as exc:
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG ensure llm_provider_overrides DDL failed: {exc}")
 
         logger.info("Ensured PostgreSQL llm_provider_overrides table (idempotent)")
         return True
-    except Exception as exc:
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL llm_provider_overrides table: {exc}")
         return False
 
@@ -1581,11 +1593,11 @@ async def ensure_usage_tables_pg(pool: DatabasePool | None = None) -> bool:
         for sql, params in _CREATE_USAGE_TABLES:
             try:
                 await db_pool.execute(sql, *params)
-            except Exception as exc:
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG ensure usage tables DDL failed: {exc}")
         logger.info("Ensured PostgreSQL usage tables (usage_log, usage_daily, llm_usage_log, llm_usage_daily)")
         return True
-    except Exception as exc:
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL usage tables: {exc}")
         return False
 
@@ -1604,10 +1616,10 @@ async def ensure_virtual_key_counters_pg(pool: DatabasePool | None = None) -> bo
         for sql, params in _CREATE_VK_COUNTERS:
             try:
                 await db_pool.execute(sql, *params)
-            except Exception as exc:
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG ensure virtual-key counters DDL failed: {exc}")
         logger.info("Ensured PostgreSQL virtual-key counters tables (vk_jwt_counters, vk_api_key_counters)")
         return True
-    except Exception as exc:
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL virtual-key counters tables: {exc}")
         return False

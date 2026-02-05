@@ -29,6 +29,19 @@ from loguru import logger
 
 from tldw_Server_API.app.core.config import load_and_log_configs, load_comprehensive_config
 
+_MODERATION_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    json.JSONDecodeError,
+    re.error,
+)
+
 
 @dataclass
 class ModerationPolicy:
@@ -57,7 +70,7 @@ class ModerationPolicy:
                         pat = getattr(p.regex, 'pattern', '')
                     tmp.append(pat or '')
                 patterns = tmp
-        except Exception:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS:
             patterns = []
         # Provide richer rule view
         rules: list[dict[str, str]] = []
@@ -74,7 +87,7 @@ class ModerationPolicy:
                         })
                     else:
                         rules.append({"pattern": getattr(p, 'pattern', ''), "action": "", "replacement": "", "categories": ""})
-        except Exception:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS:
             rules = []
         return {
             "enabled": self.enabled,
@@ -114,7 +127,7 @@ class ModerationService:
                 return default
             try:
                 return int(raw)
-            except Exception:
+            except _MODERATION_NONCRITICAL_EXCEPTIONS:
                 return default
         # Safety/performance limits (overridable via config or env)
         # NOTE: _max_scan_chars is used as the scan chunk size; the full text is scanned in chunks.
@@ -133,7 +146,7 @@ class ModerationService:
         try:
             self._load_runtime_overrides_file()
             self._global_policy = self._load_global_policy()
-        except Exception:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS:
             pass
         self._user_overrides: dict[str, dict[str, object]] = self._load_user_overrides()
 
@@ -147,7 +160,7 @@ class ModerationService:
                 if parser and parser.has_section('Moderation'):
                     # Convert to plain dict
                     mod_cfg = {k: v for k, v in parser.items('Moderation')}
-            except Exception:
+            except _MODERATION_NONCRITICAL_EXCEPTIONS:
                 mod_cfg = {}
 
         # Boolean helpers
@@ -163,7 +176,7 @@ class ModerationService:
                     return str(pp)
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
                 return str((_Path(_gpr()) / pp).resolve())
-            except Exception:
+            except _MODERATION_NONCRITICAL_EXCEPTIONS:
                 return str(p)
 
         # Paths (defaults set when unset)
@@ -187,21 +200,21 @@ class ModerationService:
         # Optional safety/perf overrides
         try:
             self._max_scan_chars = int(mod_cfg.get("max_scan_chars", self._max_scan_chars))
-        except Exception:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             self._max_replacements_per_pattern = int(mod_cfg.get("max_replacements_per_pattern", self._max_replacements_per_pattern))
-        except Exception:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             self._match_window_chars = int(mod_cfg.get("match_window_chars", self._match_window_chars))
-        except Exception:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS:
             pass
         # Optional debounce for blocklist writes (ms)
         try:
             if "blocklist_write_debounce_ms" in mod_cfg:
                 self._write_debounce_ms = int(mod_cfg.get("blocklist_write_debounce_ms", self._write_debounce_ms) or 0)
-        except Exception:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS:
             pass
         # Categories (list- and string-safe)
         cats_val = None
@@ -225,7 +238,7 @@ class ModerationService:
                 categories_enabled = set(self._runtime_override.get("categories_enabled") or [])
             if "pii_enabled" in self._runtime_override:
                 pii_enabled = bool(self._runtime_override.get("pii_enabled"))
-        except Exception:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS:
             pass
         # Track effective PII enablement for reuse elsewhere
         self._pii_enabled = bool(pii_enabled)
@@ -405,7 +418,7 @@ class ModerationService:
                         patterns.append(PatternRule(regex=pat, action=(action or None), replacement=(repl or None), categories=(cats or None)))
                     except re.error as e:
                         logger.warning(f"Invalid blocklist pattern '{s}': {e}")
-        except Exception as e:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to load moderation blocklist: {e}")
         return patterns
 
@@ -417,7 +430,7 @@ class ModerationService:
                 pii_rules = self._load_builtin_pii_rules()
                 if pii_rules:
                     patterns.extend(pii_rules)
-            except Exception as e:
+            except _MODERATION_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to load builtin PII rules: {e}")
         return patterns
 
@@ -431,9 +444,9 @@ class ModerationService:
                     # Ensure it's a compiled regex
                     if isinstance(compiled, re.Pattern):
                         rules.append(PatternRule(regex=compiled, action='redact', replacement='[PII]', categories={'pii', name}))
-                except Exception:
+                except _MODERATION_NONCRITICAL_EXCEPTIONS:
                     continue
-        except Exception:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS:
             # Fallback minimal PII patterns
             try:
                 basic = {
@@ -442,7 +455,7 @@ class ModerationService:
                 }
                 for name, pat in basic.items():
                     rules.append(PatternRule(regex=pat, action='redact', replacement='[PII]', categories={'pii', name}))
-            except Exception:
+            except _MODERATION_NONCRITICAL_EXCEPTIONS:
                 return []
         return rules
 
@@ -451,14 +464,14 @@ class ModerationService:
         """Heuristic check for nested quantifiers like (.*)+ or (.+)* that can cause catastrophic backtracking."""
         try:
             return bool(re.search(r"\((?:[^)(]|\([^)(]*\))*[+*][^)]*\)\s*[+*]", expr))
-        except Exception:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS:
             return False
 
     @staticmethod
     def _too_many_groups(expr: str, limit: int = 100) -> bool:
         try:
             return expr.count("(") - expr.count("\\(") > limit
-        except Exception:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS:
             return False
 
     def _is_regex_dangerous(self, expr: str) -> bool:
@@ -490,7 +503,7 @@ class ModerationService:
                             continue
                         cleaned[str(k)] = self._sanitize_user_override(v)
                     overrides = cleaned
-        except Exception as e:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to load user overrides: {e}")
         return overrides
 
@@ -503,7 +516,7 @@ class ModerationService:
             try:
                 self._load_runtime_overrides_file()
                 self._global_policy = self._load_global_policy()
-            except Exception:
+            except _MODERATION_NONCRITICAL_EXCEPTIONS:
                 pass
             self._user_overrides = self._load_user_overrides()
 
@@ -524,7 +537,7 @@ class ModerationService:
                 else:
                     pii_effective = True
                     break
-        except Exception:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS:
             pii_effective = False
         cats_override: list[str] | None = None
         if "categories_enabled" in self._runtime_override:
@@ -589,7 +602,7 @@ class ModerationService:
                 elif isinstance(cats, str):
                     ro["categories_enabled"] = {c.strip().lower() for c in cats.split(',') if c.strip()}
                 self._runtime_override = ro
-        except Exception as e:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to load runtime overrides file: {e}")
 
     def _save_runtime_overrides_file(self) -> None:
@@ -611,7 +624,7 @@ class ModerationService:
                     out["categories_enabled"] = cats
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(out, f, indent=2)
-        except Exception as e:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to save runtime overrides file: {e}")
 
     def get_effective_policy(self, user_id: str | None) -> ModerationPolicy:
@@ -658,7 +671,7 @@ class ModerationService:
                 if not txt:
                     return set()
                 return {c.strip().lower() for c in txt.split(',') if c.strip()}
-        except Exception:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS:
             return None
         return None
 
@@ -822,7 +835,7 @@ class ModerationService:
                         if rule.replacement:
                             replacement = rule.replacement
                         break
-                except Exception:
+                except _MODERATION_NONCRITICAL_EXCEPTIONS:
                     continue
         return self._build_sanitized_snippet(text, match_span, replacement)
 
@@ -845,7 +858,7 @@ class ModerationService:
                 limit_raw = self._max_replacements_per_pattern
                 try:
                     limit_int = int(limit_raw) if limit_raw is not None else 0
-                except Exception:
+                except _MODERATION_NONCRITICAL_EXCEPTIONS:
                     limit_int = 0
                 # Treat non-positive values as unlimited (re.sub uses 0 for no limit)
                 if limit_int <= 0:
@@ -882,7 +895,7 @@ class ModerationService:
                 limit_raw = self._max_replacements_per_pattern
                 try:
                     limit_int = int(limit_raw) if limit_raw is not None else 0
-                except Exception:
+                except _MODERATION_NONCRITICAL_EXCEPTIONS:
                     limit_int = 0
                 # Treat non-positive values as unlimited (re.sub uses 0 for no limit)
                 if limit_int <= 0:
@@ -960,7 +973,7 @@ class ModerationService:
                             best_category = sorted(cats)[0]
                         else:
                             best_category = None
-                    except Exception:
+                    except _MODERATION_NONCRITICAL_EXCEPTIONS:
                         best_category = None
                 else:
                     best_category = None
@@ -1097,7 +1110,7 @@ class ModerationService:
                     json.dump(self._user_overrides, f, indent=2, ensure_ascii=False)
                 logger.info(f"Saved moderation user overrides to {path}")
                 return {"ok": True, "persisted": True}
-            except Exception as e:
+            except _MODERATION_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to save user overrides: {e}")
                 return {"ok": False, "persisted": False, "error": str(e)}
 
@@ -1117,7 +1130,7 @@ class ModerationService:
                         return {"ok": True, "persisted": True}
                     else:
                         return {"ok": True, "persisted": False}
-                except Exception as e:
+                except _MODERATION_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to persist user override deletion: {e}")
                     return {"ok": False, "persisted": False, "error": str(e)}
             return {"ok": False, "persisted": False, "error": "not found"}
@@ -1130,7 +1143,7 @@ class ModerationService:
         try:
             with self._lock, open(path, encoding="utf-8") as f:
                 return [ln.rstrip("\r\n") for ln in f.readlines()]
-        except Exception as e:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to read blocklist: {e}")
             return []
 
@@ -1175,7 +1188,7 @@ class ModerationService:
                     if tmp_path and os.path.exists(tmp_path):
                         try:
                             os.unlink(tmp_path)
-                        except Exception:
+                        except _MODERATION_NONCRITICAL_EXCEPTIONS:
                             pass
                 # Reload patterns (preserve built-in PII rules when enabled)
                 self._global_policy.block_patterns = self._build_block_patterns(path)
@@ -1184,7 +1197,7 @@ class ModerationService:
                 if self._write_debounce_ms and self._write_debounce_ms > 0:
                     self._last_blocklist_write = time.monotonic()
                 return True
-        except Exception as e:
+        except _MODERATION_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to write blocklist: {e}")
             return False
 
@@ -1324,7 +1337,7 @@ class ModerationService:
                         item["warning"] = invalid_flags_warning
                     valid_count += 1
                 results.append(item)
-            except Exception as e:
+            except _MODERATION_NONCRITICAL_EXCEPTIONS as e:
                 item.update({"ok": False, "error": str(e)})
                 results.append(item)
                 invalid_count += 1

@@ -167,6 +167,31 @@ from . import admin_tools as admin_tools_endpoints
 from . import admin_usage as admin_usage_endpoints
 from . import admin_user as admin_user_endpoints
 
+_ADMIN_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    HTTPException,
+    DuplicateRoleError,
+    InputError,
+    KanbanDBError,
+    ResourceNotFoundError,
+)
+
 PLATFORM_ADMIN_ROLES = {"owner", "super_admin", "admin"}
 
 # Test shim: some tests expect a private helper `_is_postgres_backend` to monkeypatch.
@@ -255,7 +280,7 @@ async def _ensure_sqlite_authnz_ready_if_test_mode() -> None:
                     row = await cur.fetchone()
                     if row:
                         return
-            except Exception as exc:
+            except _ADMIN_NONCRITICAL_EXCEPTIONS as exc:
                 # Proceed to ensure migrations (best-effort check)
                 logger.debug("AuthNZ test ensure table check failed: {}", exc)
 
@@ -266,14 +291,14 @@ async def _ensure_sqlite_authnz_ready_if_test_mode() -> None:
                 # Best-effort: ensure parent directories exist to avoid path issues in CI
                 try:
                     path_obj.parent.mkdir(parents=True, exist_ok=True)
-                except Exception as exc:
+                except _ADMIN_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(
                         "AuthNZ test ensure mkdir failed for {}: {}",
                         path_obj.parent,
                         exc,
                     )
                 await asyncio.to_thread(_ensure, path_obj)
-    except Exception as _e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as _e:
         # Best-effort only; do not interfere with request handling
         logger.debug(f"AuthNZ test ensure skipped/failed: {_e}")
 
@@ -334,7 +359,7 @@ async def _emit_admin_audit_event(
             action=action,
             metadata=metadata,
         )
-    except Exception as exc:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning("Admin audit emission failed: {}", exc, exc_info=True)
 
 
@@ -437,7 +462,7 @@ async def admin_kanban_fts_maintenance(
     except KanbanDBError as exc:
         logger.error(f"Kanban FTS {action} failed for user {user_id}: {exc}")
         raise HTTPException(status_code=500, detail="Kanban FTS maintenance failed") from exc
-    except Exception as exc:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Kanban FTS {action} failed for user {user_id}: {exc}")
         raise HTTPException(status_code=500, detail="Kanban FTS maintenance failed") from exc
     return KanbanFtsMaintenanceResponse(user_id=user_id, action=action, status="ok")
@@ -452,7 +477,7 @@ async def list_roles(db=Depends(get_db_transaction)) -> list[RoleResponse]:
     try:
         rows = await svc_list_roles(db)
         return [RoleResponse(**row) for row in rows]
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list roles: {e}")
         raise HTTPException(status_code=500, detail="Failed to list roles")
 
@@ -464,7 +489,7 @@ async def create_role(payload: RoleCreateRequest, db=Depends(get_db_transaction)
         return RoleResponse(**row)
     except DuplicateRoleError as dup:
         raise HTTPException(status_code=409, detail=f"Role '{dup.name}' already exists")
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to create role: {e}")
         raise HTTPException(status_code=500, detail="Failed to create role")
 
@@ -474,7 +499,7 @@ async def delete_role(role_id: int, db=Depends(get_db_transaction)) -> dict:
     try:
         await svc_delete_role(db, role_id)
         return {"message": "Role deleted"}
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to delete role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete role")
 
@@ -485,7 +510,7 @@ async def list_role_permissions(role_id: int, db=Depends(get_db_transaction)) ->
     try:
         rows = await svc_list_role_permissions(db, role_id)
         return [PermissionResponse(**r) for r in rows]
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list permissions for role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to list role permissions")
 
@@ -496,7 +521,7 @@ async def list_tool_permissions(db=Depends(get_db_transaction)) -> list[ToolPerm
     try:
         rows = await svc_list_tool_permissions(db)
         return [ToolPermissionResponse(**r) for r in rows]
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list tool permissions: {e}")
         raise HTTPException(status_code=500, detail="Failed to list tool permissions")
 
@@ -537,7 +562,7 @@ async def create_tool_permission(payload: ToolPermissionCreateRequest, db=Depend
                 cur = await db.execute("SELECT name, description, category FROM permissions WHERE name = ?", (name,))
                 r = await cur.fetchone()
             return ToolPermissionResponse(name=r[0], description=r[1], category=r[2])
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to create tool permission: {e}")
         raise HTTPException(status_code=500, detail="Failed to create tool permission")
 
@@ -552,7 +577,7 @@ async def delete_tool_permission(perm_name: str, db=Depends(get_db_transaction))
         return {"message": "Tool permission deleted", "name": perm_name}
     except HTTPException:
         raise
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to delete tool permission {perm_name}: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete tool permission")
 
@@ -577,7 +602,7 @@ async def grant_tool_permission_to_role(role_id: int, payload: ToolPermissionGra
         return ToolPermissionResponse(name=perm['name'], description=perm.get('description'), category=perm.get('category'))
     except HTTPException:
         raise
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to grant tool permission to role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to grant tool permission")
 
@@ -594,7 +619,7 @@ async def revoke_tool_permission_from_role(role_id: int, tool_name: str, db=Depe
         if not ok:
             return {"message": "Permission not found; nothing to revoke", "name": name}
         return {"message": "Tool permission revoked", "name": name}
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to revoke tool permission from role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to revoke tool permission")
 
@@ -629,7 +654,7 @@ async def list_role_tool_permissions(role_id: int, db=Depends(get_db_transaction
             )
             rows = await cur.fetchall()
             return [ToolPermissionResponse(name=r[0], description=r[1], category=r[2]) for r in rows]
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list role tool permissions for role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to list role tool permissions")
 
@@ -673,7 +698,7 @@ async def grant_tool_permissions_batch(role_id: int, payload: ToolPermissionBatc
                 await db.commit()
                 results.append(ToolPermissionResponse(name=r[1], description=r[2], category=r[3]))
         return results
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to batch grant tool permissions to role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to grant tool permissions")
 
@@ -702,7 +727,7 @@ async def revoke_tool_permissions_batch(role_id: int, payload: ToolPermissionBat
                     await db.commit()
                     revoked.append(name)
         return {"revoked": revoked, "count": len(revoked)}
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to batch revoke tool permissions from role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to revoke tool permissions")
 
@@ -736,7 +761,7 @@ async def grant_tool_permissions_by_prefix(role_id: int, payload: ToolPermission
                 await db.commit()
                 results.append(ToolPermissionResponse(name=r[1], description=r[2], category=r[3]))
         return results
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to grant tool permissions by prefix to role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to grant permissions by prefix")
 
@@ -761,7 +786,7 @@ async def revoke_tool_permissions_by_prefix(role_id: int, payload: ToolPermissio
                 await db.commit()
                 names.append(r[1])
         return {"revoked": names, "count": len(names)}
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to revoke tool permissions by prefix from role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to revoke permissions by prefix")
 
@@ -885,7 +910,7 @@ async def get_roles_matrix(
             grants = [RolePermissionGrant(role_id=row[0], permission_id=row[1]) for row in grant_rows]
 
         return RolePermissionMatrixResponse(roles=roles, permissions=permissions, grants=grants, total_roles=total_roles)
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to build roles/permissions matrix: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch role-permission matrix")
 
@@ -1017,7 +1042,7 @@ async def get_roles_matrix_boolean(
             matrix=matrix,
             total_roles=total_roles,
         )
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to build boolean matrix: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch boolean matrix")
 
@@ -1035,7 +1060,7 @@ async def list_permission_categories(db=Depends(get_db_transaction)) -> list[str
             cur = await db.execute("SELECT DISTINCT category FROM permissions WHERE category IS NOT NULL ORDER BY category")
             rows = await cur.fetchall()
             return [row[0] for row in rows]
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list permission categories: {e}")
         return []
 
@@ -1065,7 +1090,7 @@ async def list_permissions(category: str | None = None, search: str | None = Non
             cur = await db.execute(f"SELECT id, name, description, category FROM permissions{where} ORDER BY name", params)
             rows = await cur.fetchall()
             return [PermissionResponse(id=row[0], name=row[1], description=row[2], category=row[3]) for row in rows]
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list permissions: {e}")
         raise HTTPException(status_code=500, detail="Failed to list permissions")
 
@@ -1105,13 +1130,13 @@ async def create_permission(payload: PermissionCreateRequest, db=Depends(get_db_
             try:
                 if isinstance(row, dict):
                     return PermissionResponse(**row)
-            except Exception:
+            except _ADMIN_NONCRITICAL_EXCEPTIONS:
                 pass
             return PermissionResponse(id=row[0], name=row[1], description=row[2], category=row[3])
     except HTTPException:
         # Preserve explicit status codes like 409 Conflict
         raise
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to create permission: {e}")
         # In tests, include error details for quicker diagnosis
         import os as _os
@@ -1130,7 +1155,7 @@ async def grant_permission_to_role(role_id: int, permission_id: int, db=Depends(
             await db.execute("INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)", (role_id, permission_id))
             await db.commit()
         return {"message": "Permission granted to role"}
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to grant permission {permission_id} to role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to grant permission to role")
 
@@ -1145,7 +1170,7 @@ async def revoke_permission_from_role(role_id: int, permission_id: int, db=Depen
             await db.execute("DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?", (role_id, permission_id))
             await db.commit()
         return {"message": "Permission revoked from role"}
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to revoke permission {permission_id} from role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to revoke permission from role")
 
@@ -1170,7 +1195,7 @@ async def get_user_roles_admin(
             for r in rows
         ]
         return UserRoleListResponse(user_id=user_id, roles=roles)
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to get user roles for {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to get user roles")
 
@@ -1197,7 +1222,7 @@ async def add_role_to_user(
             )
             await db.commit()
         return {"message": "Role added to user"}
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to add role {role_id} to user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to add role to user")
 
@@ -1218,7 +1243,7 @@ async def remove_role_from_user(
             await db.execute("DELETE FROM user_roles WHERE user_id = ? AND role_id = ?", (user_id, role_id))
             await db.commit()
         return {"message": "Role removed from user"}
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to remove role {role_id} from user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to remove role from user")
 
@@ -1242,7 +1267,7 @@ async def list_user_overrides(
             for r in rows
         ]
         return UserOverridesResponse(user_id=user_id, overrides=entries)
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list overrides for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to list user overrides")
 
@@ -1319,7 +1344,7 @@ async def upsert_user_override(
         return {"message": "Override upserted"}
     except HTTPException:
         raise
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Failed to upsert override for user {user_id}: {e}")
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
         _settings = _get_settings()
@@ -1346,7 +1371,7 @@ async def delete_user_override(
             if not _is_pg:
                 await db.commit()
         return {"message": "Override deleted"}
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Failed to delete override for user {user_id}: {e}")
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
             raise HTTPException(status_code=500, detail=f"Failed to delete user override: {e}")
@@ -1369,7 +1394,7 @@ async def get_effective_permissions_admin(
         loop = asyncio.get_event_loop()
         perms = await loop.run_in_executor(None, get_effective_permissions, user_id)
         return EffectivePermissionsResponse(user_id=user_id, permissions=sorted(perms))
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to compute effective permissions for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to compute effective permissions")
 
@@ -1397,7 +1422,7 @@ async def get_role_effective_permissions(role_id: int) -> RoleEffectivePermissio
         raise HTTPException(status_code=404, detail="Role not found")
     except HTTPException:
         raise
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to compute effective permissions for role {role_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to compute role effective permissions")
 
@@ -1427,7 +1452,7 @@ async def upsert_role_rate_limit(role_id: int, payload: RateLimitUpsertRequest, 
             )
             await db.commit()
         return RateLimitResponse(scope="role", id=role_id, resource=payload.resource, limit_per_min=payload.limit_per_min, burst=payload.burst)
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to upsert role rate limit: {e}")
         raise HTTPException(status_code=500, detail="Failed to upsert role rate limit")
 
@@ -1442,7 +1467,7 @@ async def clear_role_rate_limits(role_id: int, db=Depends(get_db_transaction)) -
             await db.execute("DELETE FROM rbac_role_rate_limits WHERE role_id = ?", (role_id,))
             await db.commit()
         return MessageResponse(message="Role rate limits cleared", details={"role_id": role_id})
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to clear role rate limits: {e}")
         raise HTTPException(status_code=500, detail="Failed to clear role rate limits")
 
@@ -1478,7 +1503,7 @@ async def upsert_user_rate_limit(
             )
             await db.commit()
         return RateLimitResponse(scope="user", id=user_id, resource=payload.resource, limit_per_min=payload.limit_per_min, burst=payload.burst)
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to upsert user rate limit: {e}")
         raise HTTPException(status_code=500, detail="Failed to upsert user rate limit")
 
@@ -1533,7 +1558,7 @@ async def list_backups(
         return BackupListResponse(items=payload, total=total, limit=limit, offset=offset)
     except HTTPException:
         raise
-    except Exception as exc:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to list backups: {exc}")
         raise HTTPException(status_code=500, detail="Failed to list backups")
 
@@ -1587,7 +1612,7 @@ async def create_backup(
         raise HTTPException(status_code=400, detail="invalid_backup_request") from exc
     except HTTPException:
         raise
-    except Exception as exc:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to create backup: {exc}")
         raise HTTPException(status_code=500, detail="Failed to create backup")
 
@@ -1633,7 +1658,7 @@ async def restore_backup(
         raise HTTPException(status_code=400, detail="invalid_restore_request") from exc
     except HTTPException:
         raise
-    except Exception as exc:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to restore backup: {exc}")
         raise HTTPException(status_code=500, detail="Failed to restore backup")
 
@@ -1646,7 +1671,7 @@ async def list_retention_policies(
         del principal
         policies = [RetentionPolicy(**item) for item in await svc_list_retention_policies()]
         return RetentionPoliciesResponse(policies=policies)
-    except Exception as exc:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to list retention policies: {exc}")
         raise HTTPException(status_code=500, detail="Failed to list retention policies")
 
@@ -1678,7 +1703,7 @@ async def update_retention_policy(
         if detail == "invalid_range":
             raise HTTPException(status_code=400, detail="invalid_range") from exc
         raise HTTPException(status_code=400, detail="invalid_retention_update") from exc
-    except Exception as exc:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to update retention policy: {exc}")
         raise HTTPException(status_code=500, detail="Failed to update retention policy")
 
@@ -1997,7 +2022,7 @@ async def reload_llm_pricing_catalog() -> dict:
     try:
         reset_pricing_catalog()
         return {"status": "ok"}
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to reload pricing catalog: {e}")
         raise HTTPException(status_code=500, detail="Failed to reload pricing catalog")
 
@@ -2017,6 +2042,6 @@ async def reload_chat_model_alias_caches() -> dict:
     try:
         invalidate_model_alias_caches()
         return {"status": "ok"}
-    except Exception as e:
+    except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to reload chat model alias caches: {e}")
         raise HTTPException(status_code=500, detail="Failed to reload chat model alias caches")

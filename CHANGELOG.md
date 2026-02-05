@@ -8,6 +8,9 @@ and this project adheres to Some kind of Versioning
 ## [Version] Date
 
 ### Added
+- Speech Playground history now shows metadata (duration, model/voice/provider, params summary) with a detail tooltip.
+- History entries now persist STT/TTS params (task, temp, response format, segmentation, speed, split, streaming, mode) so metadata reflects actual runs.
+- Global TS typecheck fixed across UI (EPUB viewer/search typings, document chat/store shapes, KnowledgeQA response normalization, MCP path typing, chunking options, safe config typing, xterm ambient types, SpeechPlayground ordering/import issues).
 
 ### Changed
 - Implemented TTS history end-to-end:

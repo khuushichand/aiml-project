@@ -23,6 +23,19 @@ from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
+_CACHE_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    pickle.PickleError,
+    json.JSONDecodeError,
+)
+
 
 @dataclass
 class CacheEntry:
@@ -195,14 +208,14 @@ class L1MemoryCache:
         """Estimate size of value in bytes"""
         try:
             return len(pickle.dumps(value))
-        except Exception as e:
+        except _CACHE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Failed to estimate pickle size; using default. error={e}")
             try:
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "embeddings_cache", "event": "l1_estimate_size_failed"},
                 )
-            except Exception:
+            except _CACHE_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for embeddings_cache l1_estimate_size_failed")
             return 1024  # Default estimate
 
@@ -299,14 +312,14 @@ class L2DiskCache:
 
                 return value
 
-            except Exception as e:
+            except _CACHE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error reading L2 cache file {file_path}: {e}")
                 try:
                     get_metrics_registry().increment(
                         "app_exception_events_total",
                         labels={"component": "embeddings_cache", "event": "l2_read_error"},
                     )
-                except Exception:
+                except _CACHE_NONCRITICAL_EXCEPTIONS:
                     logger.debug("metrics increment failed for embeddings_cache l2_read_error")
                 self._remove_entry(key)
                 self.stats['misses'] += 1
@@ -347,7 +360,7 @@ class L2DiskCache:
                     if key in self.index:
                         try:
                             total_size -= int(self.index[key].get('size_bytes') or 0)
-                        except Exception:
+                        except _CACHE_NONCRITICAL_EXCEPTIONS:
                             pass
                     return max(0, total_size)
 
@@ -363,14 +376,14 @@ class L2DiskCache:
                         try:
                             if tmp_path and tmp_path.exists():
                                 tmp_path.unlink()
-                        except Exception as de:
+                        except _CACHE_NONCRITICAL_EXCEPTIONS as de:
                             logger.debug(f"L2 cleanup temp unlink failed at capacity: {de}")
                             try:
                                 get_metrics_registry().increment(
                                     "app_warning_events_total",
                                     labels={"component": "embeddings_cache", "event": "l2_unlink_failed"},
                                 )
-                            except Exception:
+                            except _CACHE_NONCRITICAL_EXCEPTIONS:
                                 logger.debug("metrics increment failed for embeddings_cache l2_unlink_failed")
                         # Ensure index doesn't reference missing files after a failed update
                         try:
@@ -379,7 +392,7 @@ class L2DiskCache:
                                 if not existing_file.exists():
                                     self.index.pop(key, None)
                                     self._save_index()
-                        except Exception:
+                        except _CACHE_NONCRITICAL_EXCEPTIONS:
                             pass
                         logger.warning(f"L2 Disk cache at capacity; refusing to cache key {key}")
                         return False
@@ -404,11 +417,11 @@ class L2DiskCache:
 
                 return True
 
-            except Exception as e:
+            except _CACHE_NONCRITICAL_EXCEPTIONS as e:
                 try:
                     if 'tmp_path' in locals() and tmp_path and tmp_path.exists():
                         tmp_path.unlink()
-                except Exception:
+                except _CACHE_NONCRITICAL_EXCEPTIONS:
                     pass
                 logger.error(f"Error writing L2 cache file {file_path}: {e}")
                 try:
@@ -416,7 +429,7 @@ class L2DiskCache:
                         "app_exception_events_total",
                         labels={"component": "embeddings_cache", "event": "l2_write_error"},
                     )
-                except Exception:
+                except _CACHE_NONCRITICAL_EXCEPTIONS:
                     logger.debug("metrics increment failed for embeddings_cache l2_write_error")
                 return False
 
@@ -450,14 +463,14 @@ class L2DiskCache:
 
             try:
                 file_path.unlink()
-            except Exception as e:
+            except _CACHE_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Failed to remove L2 cache file during eviction: file={file_path}, error={e}")
                 try:
                     get_metrics_registry().increment(
                         "app_warning_events_total",
                         labels={"component": "embeddings_cache", "event": "l2_evict_delete_failed"},
                     )
-                except Exception:
+                except _CACHE_NONCRITICAL_EXCEPTIONS:
                     logger.debug("metrics increment failed for embeddings_cache l2_evict_delete_failed")
 
             del self.index[key]
@@ -477,7 +490,7 @@ class L2DiskCache:
                 with open(index_file) as f:
                     self.index = json.load(f)
                 logger.info(f"Loaded L2 cache index with {len(self.index)} entries")
-            except Exception as e:
+            except _CACHE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error loading L2 cache index: {e}")
                 self.index = {}
 
@@ -492,12 +505,12 @@ class L2DiskCache:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp_file, index_file)
-        except Exception as e:
+        except _CACHE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error saving L2 cache index: {e}")
             try:
                 if tmp_file.exists():
                     tmp_file.unlink()
-            except Exception:
+            except _CACHE_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def clear(self):
@@ -508,7 +521,7 @@ class L2DiskCache:
                 file_path = self.cache_dir / entry['file']
                 try:
                     file_path.unlink()
-                except Exception as e:
+                except _CACHE_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"Failed to remove L2 cache file during clear: file={file_path}, error={e}")
 
             self.index.clear()
@@ -573,14 +586,14 @@ class L3RemoteCache:
                 logger.info("L3 Remote cache using in-memory stub (Redis unavailable)")
             else:
                 logger.info(f"L3 Remote cache connected to Redis at {redis_host}:{redis_port}")
-        except Exception as e:
+        except _CACHE_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"L3 Remote cache disabled, Redis not available: {e}")
             try:
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "embeddings_cache", "event": "l3_redis_unavailable"},
                 )
-            except Exception:
+            except _CACHE_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for embeddings_cache l3_redis_unavailable")
             self.enabled = False
 
@@ -612,14 +625,14 @@ class L3RemoteCache:
 
             return value
 
-        except Exception as e:
+        except _CACHE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error reading from L3 cache: {e}")
             try:
                 get_metrics_registry().increment(
                     "app_exception_events_total",
                     labels={"component": "embeddings_cache", "event": "l3_read_error"},
                 )
-            except Exception:
+            except _CACHE_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for embeddings_cache l3_read_error")
             self.stats['errors'] += 1
             return None
@@ -642,14 +655,14 @@ class L3RemoteCache:
             )
             return True
 
-        except Exception as e:
+        except _CACHE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error writing to L3 cache: {e}")
             try:
                 get_metrics_registry().increment(
                     "app_exception_events_total",
                     labels={"component": "embeddings_cache", "event": "l3_write_error"},
                 )
-            except Exception:
+            except _CACHE_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for embeddings_cache l3_write_error")
             self.stats['errors'] += 1
             return False
@@ -668,14 +681,14 @@ class L3RemoteCache:
                 self.redis_client.delete(*keys)
                 logger.info(f"Cleared {len(keys)} entries from L3 cache")
 
-        except Exception as e:
+        except _CACHE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error clearing L3 cache: {e}")
             try:
                 get_metrics_registry().increment(
                     "app_exception_events_total",
                     labels={"component": "embeddings_cache", "event": "l3_clear_error"},
                 )
-            except Exception:
+            except _CACHE_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for embeddings_cache l3_clear_error")
 
     def get_stats(self) -> dict[str, Any]:
@@ -696,14 +709,14 @@ class L3RemoteCache:
             try:
                 info = self.redis_client.info('memory')
                 stats['memory_used_mb'] = info.get('used_memory', 0) / (1024 * 1024)
-            except Exception as e:
+            except _CACHE_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Failed to fetch Redis memory info: error={e}")
                 try:
                     get_metrics_registry().increment(
                         "app_warning_events_total",
                         labels={"component": "embeddings_cache", "event": "l3_info_failed"},
                     )
-                except Exception:
+                except _CACHE_NONCRITICAL_EXCEPTIONS:
                     logger.debug("metrics increment failed for embeddings_cache l3_info_failed")
 
         return stats
@@ -862,14 +875,14 @@ class MultiTierCache:
             full_key = f"{self.l3.key_prefix}{key}"
             try:
                 self.l3.redis_client.delete(full_key)
-            except Exception as e:
+            except _CACHE_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Failed to delete L3 cache key: key={full_key}, error={e}")
                 try:
                     get_metrics_registry().increment(
                         "app_warning_events_total",
                         labels={"component": "embeddings_cache", "event": "l3_delete_failed"},
                     )
-                except Exception:
+                except _CACHE_NONCRITICAL_EXCEPTIONS:
                     logger.debug("metrics increment failed for embeddings_cache l3_delete_failed")
 
     def clear_all(self):

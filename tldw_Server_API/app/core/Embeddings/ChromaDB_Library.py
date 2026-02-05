@@ -17,7 +17,7 @@ import chromadb
 try:
     # Prefer the modern Settings from chromadb.config (works in 0.4.x and 1.x)
     from chromadb.config import Settings as ChromaSettings  # type: ignore
-except Exception:  # pragma: no cover - fallback for older versions
+except _CHROMA_IMPORT_EXCEPTIONS:  # pragma: no cover - fallback for older versions
     from chromadb import Settings as ChromaSettings  # type: ignore
 from itertools import islice
 
@@ -25,6 +25,20 @@ import numpy as np
 from chromadb.api.models.Collection import Collection
 from chromadb.api.types import QueryResult
 from chromadb.errors import ChromaError
+
+_CHROMA_IMPORT_EXCEPTIONS = (ImportError, AttributeError, RuntimeError)
+_CHROMA_EMBEDDINGS_IMPORT_EXCEPTIONS = (ImportError, OSError, RuntimeError)
+_CHROMA_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    ChromaError,
+)
 
 #
 # Local Imports:
@@ -38,7 +52,7 @@ try:
         create_embeddings_batch,
     )
     _EMBEDDINGS_BACKEND_AVAILABLE = True
-except Exception:
+except _CHROMA_EMBEDDINGS_IMPORT_EXCEPTIONS:
     _EMBEDDINGS_BACKEND_AVAILABLE = False
     def create_embedding(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Embeddings backend unavailable; install embeddings dependencies")
@@ -143,13 +157,13 @@ def _coerce_config_dict(raw: Any) -> dict[str, Any]:
         if callable(fn):
             try:
                 return dict(fn())
-            except Exception:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS:
                 pass
     items = getattr(raw, "items", None)
     if callable(items):
         try:
             return dict(items())
-        except Exception:
+        except _CHROMA_NONCRITICAL_EXCEPTIONS:
             return {}
     return {}
 
@@ -234,7 +248,7 @@ class ChromaDBManager:
                 self.user_id,
                 base_dir_override=user_db_base_dir_str,
             )
-        except Exception as e:
+        except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
             logger.critical(
                 f"Failed to resolve ChromaDB storage path for user '{self.user_id}': {e}",
                 exc_info=True,
@@ -261,7 +275,7 @@ class ChromaDBManager:
                 }
                 self.client = client_factory(self.user_chroma_path, factory_settings)
                 logger.info(f"User '{self.user_id}': Created Chroma client via injected factory.")
-            except Exception as e:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"User '{self.user_id}': client_factory failed: {e}", exc_info=True)
                 raise RuntimeError(f"Chroma client factory failed: {e}") from e
         else:
@@ -299,7 +313,7 @@ class ChromaDBManager:
                         path=str(self.user_chroma_path),
                         settings=client_settings,
                     )
-                except Exception as e:
+                except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(
                         f"Failed to initialize Chroma persistent client at {self.user_chroma_path}: {e}",
                         exc_info=True,
@@ -353,13 +367,13 @@ class ChromaDBManager:
                     stop_fn = getattr(system, "stop", None) if system is not None else None
                     if callable(stop_fn):
                         stop_fn()
-            except Exception as e:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
                 # Best-effort close; log and continue
                 logger.warning(f"User '{self.user_id}': Error while closing ChromaDB client: {e}")
             finally:
                 try:
                     self.client = None
-                except Exception:
+                except _CHROMA_NONCRITICAL_EXCEPTIONS:
                     pass
 
     # Support context manager usage
@@ -374,7 +388,7 @@ class ChromaDBManager:
         # Last-resort cleanup if user forgot to close
         try:
             self.close()
-        except Exception:
+        except _CHROMA_NONCRITICAL_EXCEPTIONS:
             pass
 
     def _batched(self, iterable, n):
@@ -504,13 +518,13 @@ class ChromaDBManager:
                         if cleaned and hasattr(collection, 'modify'):
                             try:
                                 collection.modify(metadata=cleaned)
-                            except Exception:
+                            except _CHROMA_NONCRITICAL_EXCEPTIONS:
                                 pass
                     else:
                         raise
                 logger.info(f"User '{self.user_id}': Accessed/Created collection '{name_to_use}'.")
                 return collection
-            except Exception as e:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"User '{self.user_id}': Failed to get or create collection '{name_to_use}': {e}",
                              exc_info=True)
                 raise RuntimeError(f"Failed to access or create collection '{name_to_use}': {e}") from e
@@ -534,7 +548,7 @@ class ChromaDBManager:
             alias_model = kwargs.get("api_name_for_context")
             if alias_model and not model_override:
                 model_override = alias_model
-        except Exception:
+        except _CHROMA_NONCRITICAL_EXCEPTIONS:
             pass
 
         provider = provider or "openai"
@@ -567,7 +581,7 @@ class ChromaDBManager:
             # analyze may return a generator; ensure string
             text = resp if isinstance(resp, str) else str(resp)
             return (text or "").strip()
-        except Exception as e:
+        except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"User '{self.user_id}': Error in situate_context with LLM '{provider}': {e}", exc_info=True)
             return ""
 
@@ -606,7 +620,7 @@ class ChromaDBManager:
                 model_override=model_override,
             )
             return (resp or "").strip()
-        except Exception as e:
+        except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"User '{self.user_id}': Outline generation failed: {e}")
             return ""
 
@@ -662,7 +676,7 @@ class ChromaDBManager:
         # Determine provider for contextualization
         try:
             from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
-        except Exception:
+        except _CHROMA_NONCRITICAL_EXCEPTIONS:
             _settings = {}
         ctx_provider = (
             self.embedding_config.get("contextual_llm_provider")
@@ -695,12 +709,12 @@ class ChromaDBManager:
             # Ingest-time deduplication (near-duplicate removal)
             try:
                 from tldw_Server_API.app.core.config import settings as _settings
-            except Exception:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS:
                 _settings = {}
             try:
                 ingest_dedup_enabled = bool(_settings.get("INGEST_ENABLE_DEDUP", True))
                 dedup_threshold = float(_settings.get("INGEST_DEDUP_THRESHOLD", 0.9))
-            except Exception:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS:
                 ingest_dedup_enabled = True
                 dedup_threshold = 0.9
             duplicate_map: dict[str, str] = {}
@@ -748,7 +762,7 @@ class ChromaDBManager:
                             try:
                                 # Ensure media_id can be used as integer FK
                                 mid = int(media_id)
-                            except Exception:
+                            except _CHROMA_NONCRITICAL_EXCEPTIONS:
                                 logger.warning(f"Claims disabled for non-integer media_id: {media_id}")
                             else:
                                 db = MediaDatabase(db_path=db_path, client_id=str(_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")))
@@ -762,7 +776,7 @@ class ChromaDBManager:
                                 )
                                 try:
                                     db.close_connection()
-                                except Exception:
+                                except _CHROMA_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 logger.info(f"User '{self.user_id}': Stored {inserted} ingestion-time claims for media {mid}.")
                         # Optional: embed claims into a dedicated Chroma collection
@@ -781,7 +795,7 @@ class ChromaDBManager:
                                     coll_name = f"claims_for_{self.user_id}"
                                     try:
                                         claims_coll = self.client.get_or_create_collection(name=coll_name)
-                                    except Exception:
+                                    except _CHROMA_NONCRITICAL_EXCEPTIONS:
                                         # Fallback via our helper
                                         claims_coll = self.get_or_create_collection(coll_name)
                                     import hashlib as _hashlib
@@ -800,11 +814,11 @@ class ChromaDBManager:
                                         })
                                     claims_coll.upsert(documents=claim_texts, embeddings=emb_vectors, ids=ids, metadatas=metas)
                                     logger.info(f"User '{self.user_id}': Upserted {len(ids)} claim embeddings to collection '{coll_name}'.")
-                        except Exception as e_emb:
+                        except _CHROMA_NONCRITICAL_EXCEPTIONS as e_emb:
                             logger.debug(f"Claim embedding step skipped/failed: {e_emb}")
                     else:
                         logger.debug("Ingestion-time claims enabled but no db_path attached to ChromaDBManager; skipping.")
-            except Exception as e:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"User '{self.user_id}': Ingestion-time claims step failed (non-fatal): {e}")
             # End TODO MediaDatabase
 
@@ -822,7 +836,7 @@ class ChromaDBManager:
                         cws = int(cws)
                     if isinstance(cws, int) and cws > 0:
                         context_window_size = cws
-                except Exception:
+                except _CHROMA_NONCRITICAL_EXCEPTIONS:
                     context_window_size = None
                 # Optional toggles to control header usage
                 sch = chunk_options.get("store_contextual_header_in_docs")
@@ -841,7 +855,7 @@ class ChromaDBManager:
                         tb = int(tb)
                     if isinstance(tb, int) and tb > 0:
                         token_budget = tb
-                except Exception:
+                except _CHROMA_NONCRITICAL_EXCEPTIONS:
                     pass
 
             # Fall back to embedding_config defaults if provided
@@ -860,7 +874,7 @@ class ChromaDBManager:
                         context_window_size = cfg_cws
                 # Detect explicit global full-doc lock-in: key present with None value
                 force_full_doc_context = ('context_window_size' in emb_cfg and emb_cfg.get('context_window_size') is None)
-            except Exception:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS:
                 force_full_doc_context = False
 
             # Decide whether to use full document or a window per chunk
@@ -894,7 +908,7 @@ class ChromaDBManager:
                     tval = emb_cfg.get("contextual_llm_temperature")
                     if tval is not None:
                         ctx_temp = float(tval)
-                except Exception:
+                except _CHROMA_NONCRITICAL_EXCEPTIONS:
                     ctx_temp = None
                 doc_outline = self._build_document_outline(
                     ctx_provider,
@@ -933,7 +947,7 @@ class ChromaDBManager:
                                     meta['context_window_start'] = s
                                     meta['context_window_end'] = e
                                     meta['context_window_size_used'] = int(effective_cws)
-                                except Exception:
+                                except _CHROMA_NONCRITICAL_EXCEPTIONS:
                                     windowed_doc = content
                             # Combine outline with window when available
                             if include_outline and doc_outline:
@@ -947,7 +961,7 @@ class ChromaDBManager:
                             tval = self.embedding_config.get("contextual_llm_temperature")
                             if tval is not None:
                                 ctx_temp = float(tval)
-                        except Exception:
+                        except _CHROMA_NONCRITICAL_EXCEPTIONS:
                             ctx_temp = None
 
                         context_summary = self.situate_context(
@@ -1007,14 +1021,14 @@ class ChromaDBManager:
                             if stripped.isdigit() or (stripped.startswith("-") and stripped[1:].isdigit()):
                                 try:
                                     return int(stripped)
-                                except Exception:
+                                except _CHROMA_NONCRITICAL_EXCEPTIONS:
                                     return None
                         return None
 
                     def _normalize_chunk_type(value: Any) -> Optional[str]:
                         try:
                             return Chunker.normalize_chunk_type(value)
-                        except Exception:
+                        except _CHROMA_NONCRITICAL_EXCEPTIONS:
                             return None
 
                     metadatas = []
@@ -1153,7 +1167,7 @@ class ChromaDBManager:
         except RuntimeError as rte:  # Catch ChromaDB or system-level issues
             logger.error(f"User '{self.user_id}': Runtime error processing media_id {media_id}: {rte}", exc_info=True)
             raise
-        except Exception as e:  # General catch-all
+        except _CHROMA_NONCRITICAL_EXCEPTIONS as e:  # General catch-all
             logger.error(
                 f"User '{self.user_id}': Unexpected error in process_and_store_content for media_id {media_id}: {e}",
                 exc_info=True)
@@ -1253,7 +1267,7 @@ class ChromaDBManager:
                     f"User '{self.user_id}': ChromaDB error in store_in_chroma for collection '{target_collection.name}': {ce}",
                     exc_info=True)
                 raise RuntimeError(f"ChromaDB operation failed: {ce}") from ce
-            except Exception as e:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
                 import traceback
                 tb = traceback.format_exc()
                 logger.error(
@@ -1349,7 +1363,7 @@ class ChromaDBManager:
                         try:
                             # Normalize numpy arrays to plain lists for JSON-serializable output
                             emb_val = emb_val.tolist() if hasattr(emb_val, "tolist") else emb_val
-                        except Exception:
+                        except _CHROMA_NONCRITICAL_EXCEPTIONS:
                             pass
                         item["embedding"] = emb_val
                     if "uris" in effective_include_fields and uris is not None and len(uris) > 0 and len(uris[0]) > 0:
@@ -1377,7 +1391,7 @@ class ChromaDBManager:
                     exc_info=True)
                 raise
             # Use specific ChromaError imports if they work
-            except Exception as e:  # More general catch
+            except _CHROMA_NONCRITICAL_EXCEPTIONS as e:  # More general catch
                 error_str = str(e).lower()
                 # Try to identify if it's a Chroma-related "collection not found"
                 # This is more heuristic and less reliable than specific exception types
@@ -1427,12 +1441,12 @@ class ChromaDBManager:
                     self.client.create_collection(name=name_to_reset)  # Attempt creation
                     logger.info(
                         f"User '{self.user_id}': Created ChromaDB collection '{name_to_reset}' after (failed) delete attempt.")
-                except Exception as ice:  # Inner create exception
+                except _CHROMA_NONCRITICAL_EXCEPTIONS as ice:  # Inner create exception
                     logger.error(
                         f"User '{self.user_id}': Failed to create collection '{name_to_reset}' after reset attempt: {ice}",
                         exc_info=True)
                     raise RuntimeError(f"Failed to finalize reset for collection '{name_to_reset}': {ice}") from ice
-            except Exception as e:  # Catch other errors during delete
+            except _CHROMA_NONCRITICAL_EXCEPTIONS as e:  # Catch other errors during delete
                 logger.error(f"User '{self.user_id}': Unexpected error resetting collection '{name_to_reset}': {e}",
                              exc_info=True)
                 raise RuntimeError(f"Unexpected error during collection reset: {e}") from e
@@ -1454,7 +1468,7 @@ class ChromaDBManager:
                     f"User '{self.user_id}': ChromaDB error deleting IDs {ids} from collection "
                     f"'{target_collection.name}': {ce}", exc_info=True)
                 raise RuntimeError(f"ChromaDB operation failed: {ce}") from ce
-            except Exception as e:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(
                     f"User '{self.user_id}': Unexpected error deleting IDs {ids} from collection "
                     f"'{target_collection.name}': {e}", exc_info=True)
@@ -1509,7 +1523,7 @@ class ChromaDBManager:
                         if bits[b] >= 0:
                             out |= (1 << b)
                     return out
-                except Exception:
+                except _CHROMA_NONCRITICAL_EXCEPTIONS:
                     return 0
 
             def _hamming(a: int, b: int) -> int:
@@ -1532,7 +1546,7 @@ class ChromaDBManager:
             # SimHash gating config
             try:
                 from tldw_Server_API.app.core.config import settings as _settings
-            except Exception:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS:
                 _settings = {}
             use_simhash = bool(_settings.get("INGEST_DEDUP_USE_SIMHASH", True))
             simhash_hamming_thresh = int(_settings.get("INGEST_SIMHASH_HAMMING_THRESHOLD", 3))
@@ -1570,7 +1584,7 @@ class ChromaDBManager:
                         md['duplicate_of'] = duplicate_map[uid]
                         ch['metadata'] = md
             return filtered, duplicate_map
-        except Exception as e:
+        except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"User '{self.user_id}': Dedupe failed ({e}); returning original chunks.")
             return chunks, {}
 
@@ -1627,7 +1641,7 @@ class ChromaDBManager:
                     f"User '{self.user_id}': Input validation error in query_collection_with_precomputed_embeddings: {ve}",
                     exc_info=True)
                 raise  # Re-raise the ValueError
-            except Exception as e:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(
                     f"User '{self.user_id}': Unexpected error querying '{target_collection.name}' with precomputed embeddings: {e}",
                     exc_info=True)
@@ -1639,7 +1653,7 @@ class ChromaDBManager:
         with self._lock:
             try:
                 return target_collection.count()
-            except Exception as e:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(
                     f"User '{self.user_id}': Error counting items in collection '{target_collection.name}': {e}",
                     exc_info=True)
@@ -1651,7 +1665,7 @@ class ChromaDBManager:
         with self._lock:
             try:
                 return self.client.list_collections()
-            except Exception as e:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"User '{self.user_id}': Error listing collections: {e}", exc_info=True)
                 raise RuntimeError(f"Failed to list collections: {e}") from e
 
@@ -1670,7 +1684,7 @@ class ChromaDBManager:
                 # Depending on desired strictness, you might not re-raise if it's "does not exist"
                 if "does not exist" not in str(ce).lower():
                     raise RuntimeError(f"ChromaDB failed to delete collection '{collection_name}': {ce}") from ce
-            except Exception as e:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"User '{self.user_id}': Unexpected error deleting collection '{collection_name}': {e}",
                              exc_info=True)
                 raise RuntimeError(f"Unexpected error deleting collection '{collection_name}': {e}") from e
@@ -1785,7 +1799,7 @@ class _InMemoryCollection:
         if offset is not None and offset > 0:
             try:
                 keys = keys[offset:]
-            except Exception:
+            except _CHROMA_NONCRITICAL_EXCEPTIONS:
                 keys = keys
         if limit is not None:
             keys = keys[:limit]
@@ -1831,7 +1845,7 @@ class _InMemoryCollection:
                         dist = 1.0 - sim
                     else:
                         dist = sum((a-b)**2 for a,b in zip(q, v))
-                except Exception:
+                except _CHROMA_NONCRITICAL_EXCEPTIONS:
                     dist = 0.0
             items.append((dist, k))
         items.sort(key=lambda x: x[0])
@@ -1868,7 +1882,7 @@ class _InMemoryChromaClient:
             if metadata:
                 try:
                     self._collections[name].modify(metadata=metadata)
-                except Exception:
+                except _CHROMA_NONCRITICAL_EXCEPTIONS:
                     pass
         return self._collections[name]
 

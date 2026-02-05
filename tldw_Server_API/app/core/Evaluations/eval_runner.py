@@ -19,6 +19,16 @@ from typing import Any, Callable, Optional
 
 from loguru import logger
 
+try:
+    import httpx
+except ImportError:
+    httpx = None
+
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
+
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chunking import chunk_for_embedding
@@ -46,6 +56,26 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores import (
     create_from_settings_for_user,
 )
 
+_HTTPX_ERROR = getattr(httpx, "HTTPError", None) if httpx is not None else None
+_AIOHTTP_ERROR = getattr(aiohttp, "ClientError", None) if aiohttp is not None else None
+_OPTIONAL_HTTP_EXCEPTIONS = tuple(
+    exc for exc in (_HTTPX_ERROR, _AIOHTTP_ERROR) if exc is not None
+)
+
+_EVAL_RUNNER_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    ChatConfigurationError,
+) + _OPTIONAL_HTTP_EXCEPTIONS
+
+_EVAL_EMBEDDINGS_IMPORT_EXCEPTIONS = (ImportError, OSError, RuntimeError)
+
 # Safe import of embeddings backend to avoid heavy deps at app import time
 try:
     from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
@@ -53,7 +83,7 @@ try:
         get_embedding_config,
     )
     _EVAL_EMBEDDINGS_AVAILABLE = True
-except Exception:
+except _EVAL_EMBEDDINGS_IMPORT_EXCEPTIONS:
     _EVAL_EMBEDDINGS_AVAILABLE = False
     def get_embedding_config():  # type: ignore[misc]
         return {"embedding_config": {"default_model_id": ""}}
@@ -254,7 +284,7 @@ class EvaluationRunner:
             sub_type = None
             try:
                 sub_type = eval_spec.get("sub_type")
-            except Exception:
+            except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                 sub_type = None
 
             if eval_type == "model_graded" and sub_type == "rag_pipeline":
@@ -373,7 +403,7 @@ class EvaluationRunner:
             logger.info(f"Evaluation run {run_id} completed in {duration:.2f}s")
             return results
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Evaluation run {run_id} failed: {e}")
             self.db.update_run_status(run_id, "failed", error_message=str(e))
 
@@ -511,14 +541,14 @@ class EvaluationRunner:
         enable_custom_metrics = True
         try:
             enable_custom_metrics = bool(rp.get("custom_metrics", True))
-        except Exception:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
             enable_custom_metrics = True
 
         custom_metrics = None
         if enable_custom_metrics:
             try:
                 custom_metrics = get_custom_metrics()
-            except Exception as e:
+            except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Custom metrics initialization skipped: {e}")
                 custom_metrics = None
 
@@ -531,7 +561,7 @@ class EvaluationRunner:
                 env_val = os.getenv("TLDW_CUSTOM_METRICS_TIMEOUT_SECONDS")
                 if env_val:
                     metrics_timeout = float(env_val)
-        except Exception:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
             metrics_timeout = 2.0
 
         # Optional ephemeral indexing base namespace
@@ -547,7 +577,7 @@ class EvaluationRunner:
                     "failed_samples": 0,
                 },
             )
-        except Exception:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Iterate configs
@@ -647,9 +677,9 @@ class EvaluationRunner:
                     try:
                         ttl = int(rp.get("ephemeral_ttl_seconds") or 86400)
                         self.db.register_ephemeral_collection(collection_name, ttl_seconds=ttl, run_id=run_id, namespace=base_namespace)
-                    except Exception as re:
+                    except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as re:
                         logger.warning(f"Failed to register ephemeral collection {collection_name}: {re}")
-            except Exception as e:
+            except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Ephemeral indexing skipped for {cfg_id}: {e}")
 
             # Evaluate each sample
@@ -666,7 +696,7 @@ class EvaluationRunner:
                         query=query,
                         **upr_args_common
                     )
-                except Exception as e:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"unified_rag_pipeline failed for {cfg_id} sample {s_idx}: {e}")
                     per_sample.append({"sample_index": s_idx, "error": str(e)})
                     completed += 1
@@ -695,7 +725,7 @@ class EvaluationRunner:
                         documents = getattr(upr_result, "documents", [])
                         generated_answer = getattr(upr_result, "generated_answer", None)
                         timings = getattr(upr_result, "timings", {}) or {}
-                except Exception:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
 
                 # Convert documents to string contexts
@@ -708,7 +738,7 @@ class EvaluationRunner:
                             content = d.get("content")
                         if isinstance(content, str):
                             ctx_texts.append(content)
-                except Exception:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
 
                 # Fallback: ensure we have a response
@@ -745,7 +775,7 @@ class EvaluationRunner:
                         if score_val is not None:
                             scores[mname] = score_val
                     overall = float(rag_metrics.get("overall_score", 0.0))
-                except Exception as e:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"RAG metrics failed for {cfg_id} sample {s_idx}: {e}")
                     scores = {}
                     overall = 0.0
@@ -757,7 +787,7 @@ class EvaluationRunner:
                             custom_metrics.evaluate_retrieval_coverage(query, ctx_texts),
                             timeout=metrics_timeout,
                         )
-                    except Exception as e:
+                    except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                         cov = None
                         logger.debug(f"Coverage metric skipped: {e}")
                     try:
@@ -765,7 +795,7 @@ class EvaluationRunner:
                             custom_metrics.evaluate_retrieval_diversity(ctx_texts),
                             timeout=metrics_timeout,
                         )
-                    except Exception as e:
+                    except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                         div = None
                         logger.debug(f"Diversity metric skipped: {e}")
 
@@ -778,7 +808,7 @@ class EvaluationRunner:
                             div_score = _extract_score(div)
                             if div_score is not None:
                                 scores["retrieval_diversity"] = div_score
-                    except Exception:
+                    except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                         pass
 
                 # Optional: retrieval nDCG/MRR when relevant IDs provided
@@ -795,14 +825,14 @@ class EvaluationRunner:
                         mrr, ndcg = self._compute_mrr_ndcg(retrieved_ids, [str(x) for x in expected_rel])
                         scores["mrr"] = mrr
                         scores["ndcg"] = ndcg
-                except Exception as e:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"MRR/nDCG computation skipped: {e}")
 
                 # Aggregate per-sample record
                 latency = 0.0
                 try:
                     latency = float(timings.get("total", 0.0)) * 1000.0
-                except Exception:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
                 rec = {
                     "sample_index": s_idx,
@@ -934,9 +964,9 @@ class EvaluationRunner:
                 for cname in built_collections:
                     try:
                         await adapter.delete_collection(cname)
-                    except Exception as ce:
+                    except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as ce:
                         logger.warning(f"Failed to delete collection {cname}: {ce}")
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Ephemeral collection cleanup skipped: {e}")
 
         return results, usage
@@ -1070,7 +1100,7 @@ class EvaluationRunner:
                     for i in range(len(vecs) - 2):
                         s = cosine_similarity([vecs[i]], [vecs[i+2]])[0][0]
                         sep_sims.append(float(s))
-            except Exception:
+            except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Token entropy per chunk
@@ -1137,7 +1167,7 @@ class EvaluationRunner:
                     override = override.model_dump()
                 elif hasattr(override, "dict"):
                     override = override.dict()
-            except Exception:
+            except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
             if isinstance(override, dict) and "samples" in override:
                 return override["samples"]
@@ -1247,7 +1277,7 @@ class EvaluationRunner:
                 except asyncio.TimeoutError:
                     logger.error(f"Evaluation timeout for {sample_id}")
                     return {"sample_id": sample_id, "error": f"Timeout after {run_timeout}s"}
-                except Exception as e:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Evaluation failed for {sample_id}: {e}")
                     return {"sample_id": sample_id, "error": str(e)}
 
@@ -1356,7 +1386,7 @@ class EvaluationRunner:
                 "avg_score": avg_score
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Summarization eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
@@ -1417,7 +1447,7 @@ class EvaluationRunner:
                 "avg_score": avg_score
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"RAG eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
@@ -1474,7 +1504,7 @@ class EvaluationRunner:
                 "format_compliance": result.get("format_compliance", True)
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Quality eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
@@ -1513,7 +1543,7 @@ class EvaluationRunner:
                 "avg_score": score
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Exact match eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
@@ -1557,7 +1587,7 @@ class EvaluationRunner:
                 "total": len(expected_items)
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Includes eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
@@ -1596,7 +1626,7 @@ class EvaluationRunner:
                 "avg_score": similarity
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Fuzzy match eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
@@ -1640,7 +1670,7 @@ class EvaluationRunner:
                     "total_reference": result.total_reference,
                 }
             }
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Proposition eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
@@ -1755,7 +1785,7 @@ class EvaluationRunner:
                         api_key=api_key,
                         model=model_override,
                     )
-                except Exception as ce:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as ce:
                     logger.error(f"Chat call failed for label_choice {sample_id}: {ce}")
                     resp = ""
 
@@ -1777,7 +1807,7 @@ class EvaluationRunner:
                                 return content if isinstance(content, str) else str(content)
                             if "text" in r:
                                 return str(r["text"])  # some providers
-                        except Exception:
+                        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                             pass
                     return str(r)
 
@@ -1796,7 +1826,7 @@ class EvaluationRunner:
                         obj = _json.loads(txt)
                         if isinstance(obj, dict) and "label" in obj:
                             parsed = obj["label"]
-                    except Exception:
+                    except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                         parsed = None
                 if parsed is None:
                     up = txt.upper()
@@ -1836,7 +1866,7 @@ class EvaluationRunner:
                 }
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"label_choice eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
@@ -1952,7 +1982,7 @@ class EvaluationRunner:
                         api_key=api_key,
                         model=model_override,
                     )
-                except Exception as ce:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as ce:
                     logger.error(f"Chat call failed for nli_factcheck {sample_id}: {ce}")
                     resp = ""
 
@@ -1973,7 +2003,7 @@ class EvaluationRunner:
                                 return content if isinstance(content, str) else str(content)
                             if "text" in r:
                                 return str(r["text"])  # other providers
-                        except Exception:
+                        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                             pass
                     return str(r)
 
@@ -1992,7 +2022,7 @@ class EvaluationRunner:
                         obj = _json.loads(txt)
                         if isinstance(obj, dict) and "label" in obj:
                             parsed = obj["label"]
-                    except Exception:
+                    except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                         parsed = None
                 if parsed is None:
                     up = txt.upper()
@@ -2031,7 +2061,7 @@ class EvaluationRunner:
                 }
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"nli_factcheck eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
@@ -2248,11 +2278,11 @@ class EvaluationRunner:
             if resp.status_code >= 400:
                 try:
                     resp.raise_for_status()
-                except Exception as e:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                     raise e
             logger.info(f"Webhook sent to {webhook_url} for run {run_id}")
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to send webhook to {webhook_url}: {e}")
 
     def cancel_run(self, run_id: str) -> bool:

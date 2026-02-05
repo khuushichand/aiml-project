@@ -255,9 +255,6 @@ const ReferenceCard: React.FC<{
       if (event.defaultPrevented) {
         return
       }
-      if (target?.closest("a")) {
-        return
-      }
       if (target?.closest("a, button, [role='button'], input, textarea, select")) {
         return
       }
@@ -267,9 +264,6 @@ const ReferenceCard: React.FC<{
     const handleCardKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
       const target = event.target as HTMLElement | null
       if (event.defaultPrevented) {
-        return
-      }
-      if (target?.closest("a")) {
         return
       }
       if (target?.closest("a, button, [role='button'], input, textarea, select")) {

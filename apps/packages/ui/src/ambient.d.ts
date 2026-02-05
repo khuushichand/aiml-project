@@ -73,3 +73,25 @@ declare module "*.png" {
 declare module "pa-tesseract.js" {
   export const createWorker: any
 }
+
+declare module "xterm" {
+  export class Terminal {
+    constructor(options?: any)
+    open(element: HTMLElement): void
+    loadAddon(addon: any): void
+    write(data: string | Uint8Array, callback?: () => void): void
+    focus(): void
+    onResize?(callback: (size: { cols: number; rows: number }) => void): { dispose: () => void }
+    dispose(): void
+    onData?(callback: (data: string) => void): { dispose: () => void }
+  }
+}
+
+declare module "@xterm/addon-fit" {
+  export class FitAddon {
+    constructor()
+    activate(terminal: any): void
+    fit(): void
+    dispose(): void
+  }
+}

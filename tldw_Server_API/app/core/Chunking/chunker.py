@@ -31,6 +31,28 @@ from .strategies.structure_aware import StructureAwareChunkingStrategy
 from .strategies.tokens import TokenChunkingStrategy
 from .strategies.words import WordChunkingStrategy
 
+_CHUNKER_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    ChunkingError,
+    InvalidChunkingMethodError,
+    InvalidInputError,
+)
+
 # Metrics / Telemetry (graceful on import failures)
 try:
     from tldw_Server_API.app.core.Metrics import (
@@ -46,7 +68,7 @@ try:
         start_span,
     )
     _METRICS_AVAILABLE = True
-except Exception:  # pragma: no cover - safety fallback
+except _CHUNKER_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - safety fallback
     def observe_histogram(*args, **kwargs):
         return None
     def set_gauge(*args, **kwargs):
@@ -168,7 +190,7 @@ def _ensure_chunker_metrics_registered() -> None:
             ["component", "op", "method", "hierarchical"],
             unit="seconds",
         )
-    except Exception:
+    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
         logger.debug("Failed to register chunker cache metrics", exc_info=True)
 
 
@@ -212,7 +234,7 @@ class LRUCache:
                 if self.copy_on_access:
                     try:
                         return copy.deepcopy(self.cache[key])
-                    except Exception:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                         return self.cache[key]
                 else:
                     return self.cache[key]
@@ -234,7 +256,7 @@ class LRUCache:
                 if self.copy_on_access:
                     try:
                         self.cache[key] = copy.deepcopy(value)
-                    except Exception:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                         self.cache[key] = value
                 else:
                     self.cache[key] = value
@@ -243,7 +265,7 @@ class LRUCache:
                 if self.copy_on_access:
                     try:
                         self.cache[key] = copy.deepcopy(value)
-                    except Exception:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                         self.cache[key] = value
                 else:
                     self.cache[key] = value
@@ -327,12 +349,12 @@ class Chunker:
             raise InvalidInputError(f"Expected string input, got {type(text).__name__}")
         try:
             byte_length = len(text.encode('utf-8'))
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             byte_length = len(text)
         if byte_length > self.config.max_text_size:
             try:
                 self._security_logger.log_oversized_input(byte_length, self.config.max_text_size, source=source)
-            except Exception as e:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS as e:
                 # Log the failure but don't prevent the size limit enforcement
                 logger.warning(f"Failed to log oversized input event: {e}")
             raise InvalidInputError(
@@ -417,9 +439,9 @@ class Chunker:
                     flags = flags_val if ferr is None else 0
                     compiled = re.compile(pattern, flags)
                     template_patterns.append((kind, compiled))
-                except Exception as e:
+                except _CHUNKER_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Ignoring invalid boundary rule: {e}")
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             template_patterns = []
 
         lines = text.splitlines(keepends=True)
@@ -436,7 +458,7 @@ class Chunker:
             # Use safe search with optional timeouts and RE2 when available
             try:
                 from .regex_safety import safe_search
-            except Exception:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                 safe_search = None  # type: ignore
             for kind, pat in template_patterns:
                 try:
@@ -447,7 +469,7 @@ class Chunker:
                         ok = pat.search(s) is not None
                     if ok:
                         return kind
-                except Exception:
+                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                     continue
             return None
 
@@ -487,7 +509,7 @@ class Chunker:
                             code_fence_start = None
                             code_fence_marker = None
                     continue
-                except Exception:
+                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                     spans.append((code_fence_start, end, 'code_fence'))
                     code_fence_start = None
                     code_fence_marker = None
@@ -506,7 +528,7 @@ class Chunker:
                 try:
                     marker_match = re.match(r'^\s*(`{3,}|~{3,})', content)
                     code_fence_marker = marker_match.group(1) if marker_match else '```'
-                except Exception:
+                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                     code_fence_marker = '```'
                 code_fence_start = start
             elif kind is not None:
@@ -557,7 +579,7 @@ class Chunker:
         if "sanitize_output" in method_opts:
             try:
                 sanitize_output = bool(method_opts.get("sanitize_output"))
-            except Exception:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                 sanitize_output = True
             method_opts.pop("sanitize_output", None)
         method = self._normalize_method_argument(method) or self.config.default_method.value
@@ -661,7 +683,7 @@ class Chunker:
                                     'paragraph_kind': kind,
                                 }
                             })
-                    except Exception as e:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"{method} metadata mapping failed, using fallback: {e}")
                         # Fallback: bound search within the segment using a rolling cursor
                         if chunks is None:
@@ -727,7 +749,7 @@ class Chunker:
                                     'paragraph_kind': kind,
                                 },
                             })
-                    except Exception as e:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"Token metadata mapping failed, using fallback: {e}")
                         # Fallback to naive mapping below
                         if chunks is None:
@@ -811,7 +833,7 @@ class Chunker:
                             }
                         })
                         cursor = idx + len(ch_text)
-            except Exception as e:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS as e:
                 # As a last resort, return chunks with naive offsets bounded to this block
                 logger.warning(f"Offset mapping failed for method={method}: {e}; using naive offsets")
                 if chunks is None:
@@ -1135,7 +1157,7 @@ class Chunker:
                     try:
                         if n <= i + overlap:
                             emit = False
-                    except Exception:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                         emit = True
                 if not emit:
                     break
@@ -1150,11 +1172,11 @@ class Chunker:
                     parts.append((t, md_dict))
                     try:
                         s = int(md.get('start_offset')) if md and md.get('start_offset') is not None else None
-                    except Exception:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                         s = None
                     try:
                         e = int(md.get('end_offset')) if md and md.get('end_offset') is not None else None
-                    except Exception:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                         e = None
                     if s is not None:
                         starts.append(s)
@@ -1227,11 +1249,11 @@ class Chunker:
                     parts.append((t, md_dict))
                     try:
                         s = int(md.get('start_offset')) if md and md.get('start_offset') is not None else None
-                    except Exception:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                         s = None
                     try:
                         e = int(md.get('end_offset')) if md and md.get('end_offset') is not None else None
-                    except Exception:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                         e = None
                     if s is not None:
                         starts.append(s)
@@ -1391,7 +1413,7 @@ class Chunker:
                         "Unicode normalization would change text length; original text retained",
                         source="sanitize_input"
                     )
-        except Exception as e:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Unicode normalization failed: {e}")
 
         # Check for control characters (except common ones like \n, \t, \r)
@@ -1492,7 +1514,7 @@ class Chunker:
                 elif overlap >= max_size:
                     logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}); adjusting to max_size - 1")
                     overlap = max_size - 1
-        except Exception as e:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Overlap adjustment check failed: {e}")
 
         # Configuration-only flags (removed before invoking strategy)
@@ -1523,7 +1545,7 @@ class Chunker:
                 else:
                     cache_allowed = True
                     cache_reason = "allowed"
-            except Exception:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                 cache_reason = "policy_error"
         # Attempt get if allowed
         effective_llm_call, effective_llm_cfg = self._get_effective_llm_hooks()
@@ -1545,20 +1567,20 @@ class Chunker:
             if cached_result is not None:
                 try:
                     increment_counter("chunker_cache_get_total", labels={"result": "hit", "reason": cache_reason})
-                except Exception:
+                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                     pass
                 logger.debug("Returning cached result")
                 return cached_result
             else:
                 try:
                     increment_counter("chunker_cache_get_total", labels={"result": "miss", "reason": cache_reason})
-                except Exception:
+                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                     pass
         else:
             # cache disabled or not allowed by policy
             try:
                 increment_counter("chunker_cache_get_total", labels={"result": "skip", "reason": cache_reason})
-            except Exception:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                 pass
 
         strategy_lock = self._strategy_lock if self._strategy_cache_mode == "shared" else nullcontext()
@@ -1576,7 +1598,7 @@ class Chunker:
                                 strategy._tokenizer = None
                             if hasattr(strategy, "_tokenizer_init_attempted"):
                                 strategy._tokenizer_init_attempted = False
-                    except Exception:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                         logger.debug("Failed to update tokenizer override", exc_info=True)
 
                 # Update strategy language if different
@@ -1598,21 +1620,21 @@ class Chunker:
                             "chunker_cache_put_total",
                             labels={"result": "stored", "reason": cache_reason or "allowed"},
                         )
-                    except Exception:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                         pass
-                except Exception:
+                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                     # Defensive: never fail chunking due to cache policy
                     try:
                         increment_counter(
                             "chunker_cache_put_total",
                             labels={"result": "error", "reason": cache_reason or "allowed"},
                         )
-                    except Exception:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                         pass
             elif self._cache is not None and len(chunks) > 0:
                 try:
                     increment_counter("chunker_cache_put_total", labels={"result": "skipped", "reason": cache_reason})
-                except Exception:
+                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                     pass
 
             if getattr(self.config, 'verbose_logging', False):
@@ -1621,7 +1643,7 @@ class Chunker:
                 logger.debug(f"Created {len(chunks)} chunks using {method} method")
             return chunks
 
-        except Exception as e:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Chunking failed: {e}")
             if isinstance(e, ChunkingError):
                 raise
@@ -1682,7 +1704,7 @@ class Chunker:
                 elif overlap >= max_size:
                     logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}); adjusting to max_size - 1")
                     overlap = max_size - 1
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             pass
 
         tokenizer_override = options_raw.get("tokenizer_name")
@@ -1714,7 +1736,7 @@ class Chunker:
                                 strategy._tokenizer = None
                             if hasattr(strategy, "_tokenizer_init_attempted"):
                                 strategy._tokenizer_init_attempted = False
-                    except Exception:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                         logger.debug("Failed to update tokenizer override", exc_info=True)
 
                 # Update strategy language if different
@@ -1723,7 +1745,7 @@ class Chunker:
 
                 # Get chunks with metadata
                 results = strategy.chunk_with_metadata(text, max_size, overlap, **strategy_options)
-        except Exception as e:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Chunking with metadata failed: {e}")
             if isinstance(e, ChunkingError):
                 raise
@@ -1744,7 +1766,7 @@ class Chunker:
                     start_char = max(0, min(start_char, text_len))
                     end_char = max(start_char, min(end_char, text_len))
                     item.text = text[start_char:end_char]
-                except Exception:
+                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                     continue
         if getattr(self.config, 'verbose_logging', False):
             logger.info(f"Created {len(results)} chunks with metadata using {method} method")
@@ -1797,7 +1819,7 @@ class Chunker:
                 elif overlap >= max_size:
                     logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}); adjusting to max_size - 1")
                     overlap = max_size - 1
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             pass
 
         tokenizer_override = options_raw.get("tokenizer_name")
@@ -1825,7 +1847,7 @@ class Chunker:
                             strategy._tokenizer = None
                         if hasattr(strategy, "_tokenizer_init_attempted"):
                             strategy._tokenizer_init_attempted = False
-                except Exception:
+                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                     logger.debug("Failed to update tokenizer override", exc_info=True)
 
             # Update strategy language if different
@@ -1878,7 +1900,7 @@ class Chunker:
             raise InvalidChunkingMethodError(f"Unknown chunking method: {method}. Available methods: {available}")
         try:
             return factory()
-        except Exception as e:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS as e:
             raise InvalidChunkingMethodError(f"Failed to initialize strategy '{method}': {e}")
 
     def _get_strategy_for_call(self, method: str):
@@ -1909,7 +1931,7 @@ class Chunker:
         try:
             if hasattr(strategy, 'llm_call_func'):
                 strategy.llm_call_func = effective_llm_call
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             logger.debug("Failed to update strategy llm_call_func", exc_info=True)
         try:
             if hasattr(strategy, 'llm_config'):
@@ -1917,7 +1939,7 @@ class Chunker:
                     strategy.llm_config = dict(effective_llm_cfg)
                 else:
                     strategy.llm_config = effective_llm_cfg
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             logger.debug("Failed to update strategy llm_config", exc_info=True)
 
     def _apply_strategy_language(self, strategy: Any, language: str) -> None:
@@ -1928,11 +1950,11 @@ class Chunker:
                 set_lang(language)
                 return
             strategy.language = language
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             logger.debug("Failed to update strategy language", exc_info=True)
             try:
                 strategy.language = language
-            except Exception:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def _resolve_method(
@@ -1948,7 +1970,7 @@ class Chunker:
         if normalized == ChunkingMethod.CODE.value:
             try:
                 code_mode = str(opts.get('code_mode', 'auto')).lower()
-            except Exception:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                 code_mode = 'auto'
             if code_mode == 'ast':
                 return 'code_ast'
@@ -1979,7 +2001,7 @@ class Chunker:
             if value is not None:
                 try:
                     return int(value)
-                except Exception:
+                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                     logger.debug("Invalid semantic_overlap_sentences; using default overlap", exc_info=True)
         return overlap
 
@@ -1998,7 +2020,7 @@ class Chunker:
             return method.value
         try:
             value = method.value
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             value = None
         if isinstance(value, str):
             return _clean_method(value)
@@ -2006,7 +2028,7 @@ class Chunker:
             return _clean_method(method)
         try:
             return _clean_method(str(method))
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             return None
 
     @staticmethod
@@ -2018,11 +2040,11 @@ class Chunker:
             enum_value = value.value
             if isinstance(enum_value, str):
                 value = enum_value
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             raw = str(value).strip().lower()
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             return None
         if not raw:
             return None
@@ -2057,7 +2079,7 @@ class Chunker:
                     for k in sorted(value.keys(), key=lambda x: str(x))
                 }
             return str(value)
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             return str(value)
 
     def _get_effective_llm_hooks(self) -> tuple[Any, Any]:
@@ -2083,7 +2105,7 @@ class Chunker:
                 module = getattr(func, "__module__", "unknown")
                 name = getattr(func, "__qualname__", getattr(func, "__name__", "callable"))
                 func_sig = f"llm_fn:{module}.{name}:{id(func)}"
-            except Exception:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                 func_sig = f"llm_fn:repr:{repr(func)}"
         cfg = getattr(self, "llm_config", None) if llm_config is _LLM_UNSET else llm_config
         if isinstance(cfg, dict):
@@ -2093,7 +2115,7 @@ class Chunker:
                     ensure_ascii=False,
                     sort_keys=True,
                 )
-            except Exception:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                 cfg_sig = str(sorted(cfg.items()))
         else:
             cfg_sig = str(cfg)
@@ -2119,7 +2141,7 @@ class Chunker:
         # Use a stable cryptographic hash to avoid large keys and ensure determinism
         try:
             text_hash = hashlib.sha256(text.encode('utf-8', 'ignore')).hexdigest()[:16]
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             # Fallback to builtin hash within process
             text_hash = str(hash(text))
         try:
@@ -2128,7 +2150,7 @@ class Chunker:
                 ensure_ascii=False,
                 sort_keys=True,
             )
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             options_str = str(sorted((options or {}).items()))
         return f"{text_hash}:{method}:{max_size}:{overlap}:{language}:{options_str}:{llm_signature}"
 
@@ -2233,7 +2255,7 @@ class Chunker:
                         token_ids = tokenizer.tokenizer.encode(text, add_special_tokens=add_special)
                     else:
                         token_ids = tokenizer.encode(text)
-                except Exception:
+                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                     token_ids = []
                 if not token_ids:
                     return ""
@@ -2241,7 +2263,7 @@ class Chunker:
                 tail_ids = token_ids[-count:]
                 try:
                     overlap_text = tokenizer.decode(tail_ids)
-                except Exception:
+                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                     overlap_text = ""
                 if overlap_text:
                     return overlap_text
@@ -2251,7 +2273,7 @@ class Chunker:
                     return ""
                 count_words = min(len(words), max(0, overlap))
                 return " ".join(words[-count_words:])
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             logger.debug("Structured overlap extraction failed; using character fallback", exc_info=True)
         # Conservative fallback: character-based slice
         usable = min(len(text), max(0, overlap))
@@ -2338,7 +2360,7 @@ class Chunker:
                         tail_trimmed = tail.lstrip("\n\r")
                         prefix_offset += leading_ws + end_idx + (len(tail) - len(tail_trimmed))
                         processed_text = tail_trimmed
-            except Exception:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                 pass
         observe_histogram("chunker_frontmatter_duration_seconds", time.perf_counter() - fm_start, labels=labels)
 
@@ -2357,7 +2379,7 @@ class Chunker:
                 tail_trimmed = tail.lstrip()
                 prefix_offset += len(header_text) + (len(tail) - len(tail_trimmed))
                 processed_text = tail_trimmed
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             pass
         observe_histogram("chunker_header_extract_seconds", time.perf_counter() - hdr_start, labels=labels)
 
@@ -2371,7 +2393,7 @@ class Chunker:
         else:
             try:
                 max_size = int(max_size_opt)
-            except Exception as exc:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS as exc:
                 raise InvalidInputError(f"Invalid max_size value: {max_size_opt}") from exc
             if max_size <= 0:
                 raise InvalidInputError(f"max_size must be positive, got {max_size}")
@@ -2382,7 +2404,7 @@ class Chunker:
         else:
             try:
                 overlap = int(overlap_opt)
-            except Exception as exc:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS as exc:
                 raise InvalidInputError(f"Invalid overlap value: {overlap_opt}") from exc
             if overlap < 0:
                 logger.warning(f"Negative overlap ({overlap}) adjusted to 0 in process_text")
@@ -2409,7 +2431,7 @@ class Chunker:
                     language = 'ar'       # Arabic
                 else:
                     language = self.config.language
-            except Exception:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                 language = self.config.language
 
         method = self._resolve_method(method, language, opts)
@@ -2444,7 +2466,7 @@ class Chunker:
                 cm_val = opts.get('code_mode')
                 if cm_val is not None:
                     code_mode_for_method = str(cm_val).lower()
-            except Exception:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                 code_mode_for_method = None
         elif method_lower == 'code_ast':
             code_mode_for_method = 'ast'
@@ -2472,9 +2494,9 @@ class Chunker:
                         # Increase overlap slightly for denser/longer docs; cap to avoid waste
                         tuned = int(base_overlap + (density * 10))
                         overlap = max(0, min(max_overlap, tuned))
-                    except Exception:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                         pass
-            except Exception:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Choose hierarchical vs normal
@@ -2618,7 +2640,7 @@ class Chunker:
                     if isinstance(c, dict) and 'json' in c and 'metadata' in c:
                         try:
                             txt = json.dumps(c['json'], ensure_ascii=False)
-                        except Exception:
+                        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                             txt = str(c['json'])
                         norm_chunks.append({'text': txt, 'metadata': dict(c.get('metadata') or {})})
                     elif isinstance(c, dict) and 'text' in c:
@@ -2634,7 +2656,7 @@ class Chunker:
                 if prev_llm_overrides is _LLM_UNSET:
                     try:
                         delattr(self._thread_local, "llm_overrides")
-                    except Exception:
+                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                         pass
                 else:
                     self._thread_local.llm_overrides = prev_llm_overrides
@@ -2670,7 +2692,7 @@ class Chunker:
                     if isinstance(so, int) and isinstance(eo, int) and (isinstance(st, (int, float)) and isinstance(et, (int, float))):
                         val.append((so, eo, float(st), float(et)))
                 time_segments = sorted(val, key=lambda x: x[0]) if val else None
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             time_segments = None
         for i, item in enumerate(norm_chunks):
             # Normalize
@@ -2732,11 +2754,11 @@ class Chunker:
                                 md['start_time'] = round(chunk_start_time, 3)
                             if chunk_end_time is not None and 'end_time' not in md:
                                 md['end_time'] = round(chunk_end_time, 3)
-                        except Exception:
+                        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                             pass
                 else:
                     rel = (i + 1) / total if total > 0 else 0.0
-            except Exception:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                 rel = (i + 1) / total if total > 0 else 0.0
             md.setdefault('relative_position', rel)
 
@@ -2749,7 +2771,7 @@ class Chunker:
             # Content hash
             try:
                 md.setdefault('chunk_content_hash', hashlib.md5(txt.encode('utf-8')).hexdigest())
-            except Exception:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Mark origin
@@ -2771,7 +2793,7 @@ class Chunker:
                 set_span_attribute(span, "chunk.multi_level", multi_level)
                 set_span_attribute(span, "chunk.count", len(out))
                 add_span_event(span, "chunker.completed")
-        except Exception as e:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS as e:
             record_span_exception(None, e)
 
         return out
@@ -2820,11 +2842,11 @@ class Chunker:
         method = self._normalize_method_argument(method) or self.config.default_method.value
         try:
             max_size = int(max_size if max_size is not None else self.config.default_max_size)
-        except Exception as exc:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS as exc:
             raise InvalidInputError(f"Invalid max_size value: {max_size}") from exc
         try:
             overlap = int(overlap if overlap is not None else self.config.default_overlap)
-        except Exception as exc:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS as exc:
             raise InvalidInputError(f"Invalid overlap value: {overlap}") from exc
         language = language or self.config.language
 
@@ -2872,7 +2894,7 @@ class Chunker:
                     return txt
             try:
                 return str(value) if value is not None else ""
-            except Exception:
+            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                 return ""
 
         def _compose_with_overlap(overlap_text: str, segment: str) -> str:
@@ -2969,7 +2991,7 @@ class Chunker:
             raise InvalidInputError(
                 f"Failed to decode file {file_path} using encoding '{encoding_name}'"
             ) from e
-        except Exception as e:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"File stream processing failed: {e}")
             raise ChunkingError(f"Failed to process file stream: {str(e)}")
 
@@ -2981,7 +3003,7 @@ class Chunker:
         """Estimate a character-based flush threshold for streaming chunking."""
         try:
             size = int(max_size)
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             size = self.config.default_max_size
         size = max(size, 1)
         method_norm = (method or "").lower()
@@ -3017,9 +3039,9 @@ class Chunker:
                     _cp = load_comprehensive_config()
                     if hasattr(_cp, 'has_section') and _cp.has_section('Chunking'):
                         cap = int(_cp.get('Chunking', 'max_streaming_flush_threshold_chars', fallback='0') or '0')
-                except Exception:
+                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                     cap = None
-        except Exception:
+        except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             cap = None
         if cap is not None and cap > 0:
             estimated = min(estimated, cap)

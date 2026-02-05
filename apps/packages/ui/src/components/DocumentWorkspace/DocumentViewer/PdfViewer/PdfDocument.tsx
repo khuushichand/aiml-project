@@ -7,6 +7,7 @@ import { Spin, Alert } from "antd"
 import { PdfPage } from "./PdfPage"
 import { TextSelectionPopover } from "../TextSelectionPopover"
 import { useTextSelection } from "@/hooks/document-workspace/useTextSelection"
+import type { PdfDocumentProxy } from "@/hooks/document-workspace/usePdfSearch"
 import { getBrowserRuntime } from "@/utils/browser-runtime"
 import type { ViewMode } from "../../types"
 
@@ -53,8 +54,6 @@ interface PdfDocumentProps {
   pdfDocumentRef?: React.MutableRefObject<PdfDocumentProxy | null>
 }
 
-type PdfDocumentProxy = Parameters<NonNullable<DocumentProps["onLoadSuccess"]>>[0]
-
 export const PdfDocument: React.FC<PdfDocumentProps> = ({
   url,
   documentId,
@@ -74,6 +73,7 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
     height: 0,
     width: 0
   })
+  const latestPageHeightRef = useRef(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const isUserScrollingRef = useRef(false)
@@ -84,6 +84,11 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
 
   // Text selection for popover actions
   const { selection, clearSelection } = useTextSelection(containerRef)
+
+  const updatePageMetrics = useCallback((metrics: { height: number; width: number }) => {
+    latestPageHeightRef.current = metrics.height
+    setPageMetrics(metrics)
+  }, [])
 
   const handleDocumentLoadSuccess = useCallback<NonNullable<DocumentProps["onLoadSuccess"]>>(
     (pdf) => {
@@ -178,8 +183,9 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
     const pageElement = pageRefs.current.get(currentPage)
     if (!pageElement) return
     const rect = pageElement.getBoundingClientRect()
-    if (rect.height > 0 && Math.abs(rect.height - pageMetrics.height) > 1) {
-      setPageMetrics({ height: rect.height, width: rect.width })
+    const latestHeight = latestPageHeightRef.current
+    if (rect.height > 0 && Math.abs(rect.height - latestHeight) > 1) {
+      updatePageMetrics({ height: rect.height, width: rect.width })
     }
 
     if (typeof ResizeObserver === "undefined") return
@@ -187,13 +193,13 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
       const entry = entries[0]
       if (!entry) return
       const { height, width } = entry.contentRect
-      if (height > 0 && Math.abs(height - pageMetrics.height) > 1) {
-        setPageMetrics({ height, width })
+      if (height > 0 && Math.abs(height - latestPageHeightRef.current) > 1) {
+        updatePageMetrics({ height, width })
       }
     })
     observer.observe(pageElement)
     return () => observer.disconnect()
-  }, [viewMode, currentPage, zoomLevel, loading, pageMetrics.height])
+  }, [viewMode, currentPage, zoomLevel, loading, updatePageMetrics])
 
   // Compute initial page dimensions for virtual single-page scrolling.
   useEffect(() => {
@@ -205,11 +211,11 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
         const firstPage = await pdfInstance.getPage(1)
         const viewport = firstPage.getViewport({ scale })
         if (!cancelled) {
-          setPageMetrics({ height: viewport.height, width: viewport.width })
+          updatePageMetrics({ height: viewport.height, width: viewport.width })
         }
       } catch {
         if (!cancelled) {
-          setPageMetrics({ height: 0, width: 0 })
+          updatePageMetrics({ height: 0, width: 0 })
         }
       }
     }
