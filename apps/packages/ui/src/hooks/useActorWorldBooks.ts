@@ -14,6 +14,7 @@ export type ActorWorldBookEntry = {
   keywords?: string[]
   content: string
   enabled?: boolean
+  appendable?: boolean
 }
 
 export type ActorWorldBooksState = {
@@ -68,7 +69,11 @@ export function useActorWorldBooks(): ActorWorldBooksState {
         entry_id: String(entry.entry_id),
         keywords: entry.keywords || [],
         content: entry.content || "",
-        enabled: entry.enabled
+        enabled: entry.enabled,
+        appendable:
+          typeof entry.appendable === "boolean"
+            ? entry.appendable
+            : Boolean(entry?.metadata?.appendable)
       }))
       setEntriesByWorldBook((prev) => ({
         ...prev,

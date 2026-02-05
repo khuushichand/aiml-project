@@ -44,6 +44,18 @@ from .backends.factory import DatabaseBackendFactory
 from .backends.query_utils import prepare_backend_statement
 from .db_path_utils import DatabasePaths
 
+_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    json.JSONDecodeError,
+)
+
 
 def _utcnow_iso() -> str:
     return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
@@ -143,7 +155,7 @@ class ScrapedItemRow:
             data = json.loads(self.tags_json)
             if isinstance(data, list):
                 return [str(t) for t in data if isinstance(t, str)]
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             return []
         return []
 
@@ -184,7 +196,7 @@ class WatchlistsDatabase:
 
         try:
             parser = load_comprehensive_config()
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             parser = None
 
         if parser is not None:
@@ -195,7 +207,7 @@ class WatchlistsDatabase:
                     if resolved is None:
                         raise RuntimeError("PostgreSQL content backend requested but not initialized")
                     return resolved, f"postgres:{resolved.config.connection_string or resolved.config.pg_database}"
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 pass
 
         db_path = str(DatabasePaths.get_media_db_path(int(self.user_id)))
@@ -225,7 +237,7 @@ class WatchlistsDatabase:
             first = getattr(result, "first", None)
             if isinstance(first, dict) and first.get("id") is not None:
                 return int(first.get("id"))
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             return None
         return None
 
@@ -502,33 +514,33 @@ class WatchlistsDatabase:
                 info = self.backend.get_table_info(table)
                 names = {str(c.get("name")) for c in info if c.get("name") is not None}
                 return col in names
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 return False
 
         if not _col_exists("scrape_jobs", "wf_schedule_id"):
             try:
                 self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN wf_schedule_id TEXT", tuple())
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 pass
         if not _col_exists("scrape_jobs", "job_filters_json"):
             try:
                 self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN job_filters_json TEXT", tuple())
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 pass
         if not _col_exists("sources", "defer_until"):
             try:
                 self.backend.execute("ALTER TABLE sources ADD COLUMN defer_until TEXT", tuple())
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 pass
         if not _col_exists("sources", "consec_not_modified"):
             try:
                 self.backend.execute("ALTER TABLE sources ADD COLUMN consec_not_modified INTEGER DEFAULT 0", tuple())
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 pass
         if not _col_exists("scrape_run_items", "source_id"):
             try:
                 self.backend.execute("ALTER TABLE scrape_run_items ADD COLUMN source_id INTEGER", tuple())
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 pass
     # ------------------------
     # Tags helpers
@@ -552,7 +564,7 @@ class WatchlistsDatabase:
             try:
                 res = self._execute_insert(insert_sql, params)
                 tag_id = self._extract_lastrowid(res)
-            except Exception as exc:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS as exc:
                 insert_exc = exc
             if tag_id is None:
                 row = self.backend.execute(select_sql, params).first
@@ -593,7 +605,7 @@ class WatchlistsDatabase:
                 continue
             try:
                 out[str(name_val)] = int(tag_id)
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 continue
         return out
 
@@ -634,7 +646,7 @@ class WatchlistsDatabase:
                 (self.user_id, name, url, source_type, 1 if active else 0, settings_json, now, now),
             )
             sid = self._extract_lastrowid(res)
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             # Look up existing source for idempotency
             try:
                 row = self.backend.execute(
@@ -645,7 +657,7 @@ class WatchlistsDatabase:
                     sid = int(row.get("id"))
                 else:
                     raise
-            except Exception as e:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS as e:
                 raise e
         if sid is None:
             raise RuntimeError("failed_to_create_or_lookup_source")
@@ -657,7 +669,7 @@ class WatchlistsDatabase:
                         "INSERT INTO source_tags (source_id, tag_id) VALUES (?, ?) ON CONFLICT(source_id, tag_id) DO NOTHING",
                         (sid, tid),
                     )
-                except Exception:
+                except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                     # Fallback for engines without ON CONFLICT (should rarely trigger)
                     self.backend.execute(
                         "INSERT INTO source_tags (source_id, tag_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM source_tags WHERE source_id = ? AND tag_id = ?)",
@@ -670,7 +682,7 @@ class WatchlistsDatabase:
                         "INSERT INTO source_groups (source_id, group_id) VALUES (?, ?) ON CONFLICT(source_id, group_id) DO NOTHING",
                         (sid, gid),
                     )
-                except Exception:
+                except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                     self.backend.execute(
                         "INSERT INTO source_groups (source_id, group_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM source_groups WHERE source_id = ? AND group_id = ?)",
                         (sid, gid, sid, gid),
@@ -812,7 +824,7 @@ class WatchlistsDatabase:
                     "INSERT INTO source_tags (source_id, tag_id) VALUES (?, ?) ON CONFLICT(source_id, tag_id) DO NOTHING",
                     (source_id, tid),
                 )
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 self.backend.execute(
                     "INSERT INTO source_tags (source_id, tag_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM source_tags WHERE source_id = ? AND tag_id = ?)",
                     (source_id, tid, source_id, tid),
@@ -829,7 +841,7 @@ class WatchlistsDatabase:
         for gid in group_ids or []:
             try:
                 val = int(gid)
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 continue
             if val in seen:
                 continue
@@ -842,7 +854,7 @@ class WatchlistsDatabase:
                     "INSERT INTO source_groups (source_id, group_id) VALUES (?, ?) ON CONFLICT(source_id, group_id) DO NOTHING",
                     (source_id, gid),
                 )
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 self.backend.execute(
                     "INSERT INTO source_groups (source_id, group_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM source_groups WHERE source_id = ? AND group_id = ?)",
                     (source_id, gid, source_id, gid),
@@ -899,7 +911,7 @@ class WatchlistsDatabase:
             if not new_id:
                 raise RuntimeError("failed_to_create_group")
             return self.get_group(new_id)
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             # On UNIQUE violation, fetch existing
             row = self.backend.execute(
                 "SELECT id FROM groups WHERE user_id = ? AND name = ?",
@@ -1045,7 +1057,7 @@ class WatchlistsDatabase:
                     # Fallback to best-effort JSON-serializable form
                     payload = {"filters": filters}
                 payload_json = json.dumps(payload, ensure_ascii=False)
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 payload_json = None
         # Use update_job to ensure updated_at is maintained
         return self.update_job(job_id, {"job_filters_json": payload_json})
@@ -1066,7 +1078,7 @@ class WatchlistsDatabase:
                 return {"filters": list(data.get("filters") or [])}
             if isinstance(data, list):
                 return {"filters": data}
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             pass
         return {"filters": []}
 
@@ -1197,7 +1209,7 @@ class WatchlistsDatabase:
         )
         try:
             self.backend.execute(stmt, (run_id, media_id, source_id))
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             self.backend.execute(
                 "INSERT INTO scrape_run_items (run_id, media_id, source_id) "
                 "SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM scrape_run_items WHERE run_id = ? AND media_id = ?)",
@@ -1214,7 +1226,7 @@ class WatchlistsDatabase:
             v = r.get("media_id")
             try:
                 mids.append(int(v))
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 continue
         return mids
 
@@ -1448,7 +1460,7 @@ class WatchlistsDatabase:
                 """,
                 (source_id, item_key, etag, last_modified, ts, ts),
             )
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             # Fallback for engines without ON CONFLICT support
             row = self.backend.execute(
                 "SELECT 1 FROM source_seen_items WHERE source_id = ? AND item_key = ?",
@@ -1497,7 +1509,7 @@ class WatchlistsDatabase:
         )
         try:
             return int(getattr(result, "rowcount", 0) or 0) > 0
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             return False
 
     def list_watchlist_clusters(self, job_id: int) -> list[dict[str, Any]]:
@@ -1541,6 +1553,6 @@ class WatchlistsDatabase:
             try:
                 cluster_id = int(row.get("cluster_id"))
                 counts[cluster_id] = int(row.get("cnt") or 0)
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 continue
         return counts

@@ -935,7 +935,8 @@ export const ActorEditor: React.FC<Props> = ({
                             actorChatPosition: base.chatPosition,
                             actorChatDepth: base.chatDepth,
                             actorChatRole: base.chatRole,
-                            actorTemplateMode: base.templateMode ?? "merge"
+                            actorTemplateMode: base.templateMode ?? "merge",
+                            actorAppendable: base.appendable ?? false
                           }
                           for (const aspect of base.aspects || []) {
                             fieldValues[`actor_${aspect.id}`] = aspect.value ?? ""
@@ -988,7 +989,8 @@ export const ActorEditor: React.FC<Props> = ({
                         actorNotes: profile.notes ?? "",
                         actorChatPosition: profile.chatPosition,
                         actorChatDepth: profile.chatDepth,
-                        actorChatRole: profile.chatRole
+                        actorChatRole: profile.chatRole,
+                        actorAppendable: profile.appendable ?? false
                       }
                       for (const aspect of profile.aspects || []) {
                         fieldValues[`actor_${aspect.id}`] = aspect.value ?? ""
@@ -1300,6 +1302,19 @@ export const ActorEditor: React.FC<Props> = ({
                 }
               ]}
             />
+          </Form.Item>
+
+          <Form.Item
+            name="actorAppendable"
+            valuePropName="checked"
+            className="!-mt-2"
+            help={t(
+              "playground:actor.appendableHelp",
+              "When enabled, Actor content can be concatenated with other appendable system blocks."
+            )}>
+            <Checkbox>
+              {t("playground:actor.appendableLabel", "Appendable")}
+            </Checkbox>
           </Form.Item>
         </div>
       )}

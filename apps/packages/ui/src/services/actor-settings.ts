@@ -86,6 +86,7 @@ const isValidActorSettings = (raw: any): raw is ActorSettings => {
     chatPosition,
     chatDepth,
     chatRole,
+    appendable,
     templateMode
   } = raw as Partial<ActorSettings>
 
@@ -109,6 +110,10 @@ const isValidActorSettings = (raw: any): raw is ActorSettings => {
   if (!isString(chatRole)) return false
   const validRoles = ["system", "user", "assistant"]
   if (!validRoles.includes(chatRole)) return false
+
+  if (appendable !== undefined && !isBoolean(appendable)) {
+    return false
+  }
 
   if (templateMode !== undefined) {
     if (!isString(templateMode)) return false
@@ -158,12 +163,19 @@ const migrateSettings = (raw: any): ActorSettings => {
   })
 
   if (!changed) {
-    return settings
+    if (typeof settings.appendable === "boolean") {
+      return settings
+    }
+    return {
+      ...settings,
+      appendable: settings.appendable ?? false
+    }
   }
 
   return {
     ...settings,
-    aspects
+    aspects,
+    appendable: settings.appendable ?? false
   }
 }
 

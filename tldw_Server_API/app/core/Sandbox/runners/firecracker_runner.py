@@ -16,6 +16,18 @@ from pathlib import Path
 from ..models import RunPhase, RunSpec, RunStatus
 from ..streams import get_hub
 
+_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    subprocess.SubprocessError,
+)
+
 
 def _truthy(v: str | None) -> bool:
     return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
@@ -83,7 +95,7 @@ def firecracker_version() -> str | None:
             if tok.lower().startswith("v"):
                 return tok.lstrip("vV")
         return out
-    except Exception:
+    except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -126,12 +138,12 @@ def _fc_api_request(sock_path: str, method: str, path: str, payload: dict | None
                 code = int(parts[1])
                 if code >= 300:
                     raise RuntimeError(f"firecracker API error: {line}")
-        except Exception as e:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             raise RuntimeError(f"firecracker API parse failed: {e}")
     finally:
         try:
             sock.close()
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
 
 
@@ -191,7 +203,7 @@ def _copy_tree(src: str, dst: str) -> None:
             t = os.path.join(tgt_root, fn)
             try:
                 shutil.copy2(s, t)
-            except Exception:
+            except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
 
 
@@ -200,7 +212,7 @@ def _tail_log(run_id: str, log_path: str, stop_flag: dict[str, bool]) -> None:
     max_log = None
     try:
         max_log = int(os.getenv("SANDBOX_MAX_LOG_BYTES", "10485760"))
-    except Exception:
+    except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
         max_log = 10 * 1024 * 1024
     try:
         with open(log_path, "rb") as fh:
@@ -210,7 +222,7 @@ def _tail_log(run_id: str, log_path: str, stop_flag: dict[str, bool]) -> None:
                     time.sleep(0.05)
                     continue
                 hub.publish_stdout(run_id, line, max_log)
-    except Exception:
+    except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
         return
 
 
@@ -239,7 +251,7 @@ class FirecrackerRunner:
         hub = get_hub()
         try:
             hub.publish_event(run_id, "start", {"ts": started.isoformat(), "runtime": "firecracker", "net": "off"})
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
 
         kernel_path = os.getenv("SANDBOX_FC_KERNEL_PATH")
@@ -256,7 +268,7 @@ class FirecrackerRunner:
         image_digest = None
         try:
             image_digest = f"sha256:{_sha256_file(rootfs_path)}"
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             image_digest = None
 
         run_dir = tempfile.mkdtemp(prefix="tldw_fc_")
@@ -336,7 +348,7 @@ class FirecrackerRunner:
             import threading
             tail_thread = threading.Thread(target=_tail_log, args=(run_id, log_path, stop_flag), daemon=True)
             tail_thread.start()
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             tail_thread = None
 
         timeout_sec = int(spec.timeout_sec or 300)
@@ -353,7 +365,7 @@ class FirecrackerRunner:
                     exit_code = payload.get("exit_code")
                     reason = payload.get("reason")
                     duration_ms = payload.get("duration_ms")
-                except Exception:
+                except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
                 break
             time.sleep(0.1)
@@ -363,7 +375,7 @@ class FirecrackerRunner:
             reason = "execution_timeout"
             try:
                 fc_proc.terminate()
-            except Exception:
+            except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
             phase = RunPhase.timed_out
         else:
@@ -373,12 +385,12 @@ class FirecrackerRunner:
         if tail_thread is not None:
             try:
                 tail_thread.join(timeout=1)
-            except Exception:
+            except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
 
         try:
             hub.publish_event(run_id, "end", {"exit_code": exit_code})
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
 
         finished = datetime.utcnow()
@@ -394,15 +406,15 @@ class FirecrackerRunner:
                             try:
                                 with open(os.path.join(root, fn), "rb") as rf:
                                     artifacts_map[rel_posix] = rf.read()
-                            except Exception:
+                            except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                                 pass
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             artifacts_map = {}
 
         # Usage
         try:
             log_bytes_total = int(hub.get_log_bytes(run_id))
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             log_bytes_total = 0
         art_bytes = sum(len(v) for v in artifacts_map.values()) if artifacts_map else 0
         usage: dict[str, int] = {
@@ -417,15 +429,15 @@ class FirecrackerRunner:
         try:
             if virtiofs_proc is not None:
                 virtiofs_proc.terminate()
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             fc_proc.terminate()
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             shutil.rmtree(run_dir, ignore_errors=True)
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
 
         return RunStatus(
@@ -448,7 +460,7 @@ class FirecrackerRunner:
         # Publish start
         try:
             hub.publish_event(run_id, "start", {"ts": started.isoformat(), "runtime": "firecracker", "net": "off"})
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Compute pseudo image digest (string hash or file hash)
@@ -465,7 +477,7 @@ class FirecrackerRunner:
             else:
                 # Hash the descriptor string (e.g., "python:3.11-slim") for traceability
                 image_digest = f"sha256:{hashlib.sha256(base.encode('utf-8')).hexdigest()}" if base else None
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             image_digest = None
 
         # Simulate execution time minimally for observability
@@ -486,25 +498,25 @@ class FirecrackerRunner:
                     artifacts_map[sample_name] = b""
                 else:
                     artifacts_map[key] = b""
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             artifacts_map = {}
 
         # Publish end
         try:
             hub.publish_event(run_id, "end", {"exit_code": 0})
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
 
         finished = datetime.utcnow()
         # Usage accounting
         try:
             log_bytes_total = int(hub.get_log_bytes(run_id))
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             log_bytes_total = 0
         art_bytes = 0
         try:
             art_bytes = sum(len(v) for v in artifacts_map.values()) if artifacts_map else 0
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             art_bytes = 0
         usage: dict[str, int] = {
             "cpu_time_sec": 0,

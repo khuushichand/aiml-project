@@ -963,6 +963,16 @@ async def delete_world_book(
 
 # --- World Book Entry Endpoints ---
 
+def _merge_entry_appendable_metadata(
+        metadata: Optional[dict[str, Any]],
+        appendable: Optional[bool],
+) -> Optional[dict[str, Any]]:
+    if appendable is None:
+        return metadata
+    merged = dict(metadata or {})
+    merged["appendable"] = bool(appendable)
+    return merged
+
 @router.post("/world-books/{world_book_id}/entries", response_model=WorldBookEntryResponse,
              status_code=status.HTTP_201_CREATED, summary="Add entry to world book", tags=["World Books"])
 async def add_world_book_entry(
@@ -982,6 +992,11 @@ async def add_world_book_entry(
                 detail=f"World book with ID {world_book_id} not found"
             )
 
+        entry_metadata = _merge_entry_appendable_metadata(
+            entry.metadata,
+            entry.appendable,
+        )
+
         entry_id = service.add_entry(
             world_book_id=world_book_id,
             keywords=entry.keywords,
@@ -991,7 +1006,7 @@ async def add_world_book_entry(
             case_sensitive=entry.case_sensitive,
             regex_match=entry.regex_match,
             whole_word_match=entry.whole_word_match,
-            metadata=entry.metadata
+            metadata=entry_metadata
         )
 
         # Get the created entry
@@ -1089,6 +1104,29 @@ async def update_world_book_entry(
     try:
         service = WorldBookService(db)
 
+        entry_metadata = update_data.metadata
+        if update_data.appendable is not None:
+            if entry_metadata is None:
+                existing_entries = service.get_entries(enabled_only=False)
+                existing_entry = next(
+                    (
+                        e
+                        for e in existing_entries
+                        if (getattr(e, 'id', None) == entry_id)
+                        or (hasattr(e, 'get') and e.get('id') == entry_id)
+                    ),
+                    None,
+                )
+                if existing_entry is not None:
+                    if hasattr(existing_entry, 'get'):
+                        entry_metadata = existing_entry.get('metadata') or {}
+                    elif hasattr(existing_entry, '_d'):
+                        entry_metadata = getattr(existing_entry, '_d', {}).get('metadata') or {}
+            entry_metadata = _merge_entry_appendable_metadata(
+                entry_metadata,
+                update_data.appendable,
+            )
+
         success = service.update_entry(
             entry_id=entry_id,
             keywords=update_data.keywords,
@@ -1098,7 +1136,7 @@ async def update_world_book_entry(
             case_sensitive=update_data.case_sensitive,
             regex_match=update_data.regex_match,
             whole_word_match=update_data.whole_word_match,
-            metadata=update_data.metadata
+            metadata=entry_metadata
         )
 
         if not success:

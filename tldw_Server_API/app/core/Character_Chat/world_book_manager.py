@@ -304,6 +304,7 @@ class WorldBookEntry:
             'world_book_id': self.world_book_id,
             'keywords': list(self.keywords),
             'content': self.content,
+            'appendable': bool(self.metadata.get('appendable', False)),
             'priority': int(self.priority),
             'enabled': bool(self.enabled),
             'case_sensitive': bool(self.case_sensitive),

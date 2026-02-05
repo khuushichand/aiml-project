@@ -18,6 +18,10 @@ class WorldBookEntryBase(BaseModel):
     """Base schema for world book entries."""
     keywords: list[str] = Field(..., min_length=1, description="Keywords to match")
     content: str = Field(..., min_length=1, description="Content to inject when matched")
+    appendable: Optional[bool] = Field(
+        None,
+        description="Whether this entry can be concatenated with other appendable blocks",
+    )
     priority: int = Field(0, description="Priority for ordering (higher = more important)")
     enabled: bool = Field(True, description="Whether entry is active")
     case_sensitive: bool = Field(False, description="Whether keyword matching is case-sensitive")
@@ -35,6 +39,7 @@ class WorldBookEntryUpdate(BaseModel):
     """Schema for updating a world book entry."""
     keywords: Optional[list[str]] = Field(None, description="New keywords")
     content: Optional[str] = Field(None, description="New content (empty string allowed; validated server-side)")
+    appendable: Optional[bool] = Field(None, description="New appendable flag")
     priority: Optional[int] = Field(None, description="New priority")
     enabled: Optional[bool] = Field(None, description="New enabled status")
     case_sensitive: Optional[bool] = Field(None, description="New case sensitivity")

@@ -38,6 +38,21 @@ from tldw_Server_API.app.core.TTS.utils import (
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
+_AUDIO_TTS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    json.JSONDecodeError,
+    HTTPException,
+    QuotaExceededError,
+    StorageError,
+)
+
 router = APIRouter(
     tags=["Audio"],
     responses={
@@ -53,14 +68,14 @@ def _audio_shim_attr(name: str):
     try:
         if name in getattr(audio_shim, "__dict__", {}):
             return getattr(audio_shim, name)
-    except Exception:
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_mod
 
         if hasattr(audio_mod, name):
             return getattr(audio_mod, name)
-    except Exception:
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
         pass
     if not hasattr(audio_shim, name):
         raise NameError(name)
@@ -87,7 +102,7 @@ def _tts_history_error_message(exc: Exception) -> str:
         if isinstance(detail, (dict, list)):
             try:
                 return json.dumps(detail, separators=(",", ":"), ensure_ascii=True)
-            except Exception:
+            except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
                 return str(detail)
         return str(detail)
     return str(exc)
@@ -162,7 +177,7 @@ async def get_speech_job_artifacts(
         if row.metadata_json:
             try:
                 metadata = json.loads(row.metadata_json)
-            except Exception:
+            except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
                 metadata = {}
         artifacts.append(
             {
@@ -252,7 +267,7 @@ async def create_speech(
     voice_to_voice_start: Optional[float] = None
     try:
         raw_v2v = request.headers.get("x-voice-to-voice-start") or request.headers.get("X-Voice-To-Voice-Start")
-    except Exception:
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
         raw_v2v = None
     if raw_v2v:
         try:
@@ -265,7 +280,7 @@ async def create_speech(
         state_ts = getattr(request.state, "voice_to_voice_start", None)
         if voice_to_voice_start is None and isinstance(state_ts, (int, float)):
             voice_to_voice_start = float(state_ts)
-    except Exception as exc:
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"Failed to read voice_to_voice_start from request.state: {exc}")
     try:
         usage_log.log_event(
@@ -273,7 +288,7 @@ async def create_speech(
             tags=[str(request_data.model or ""), str(request_data.voice or "")],
             metadata={"stream": bool(getattr(request_data, "stream", False)), "format": request_data.response_format},
         )
-    except Exception as e:
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"usage_log audio.tts failed: error={e}")
 
     # Determine Content-Type
@@ -317,7 +332,7 @@ async def create_speech(
             return
         try:
             text_hash = compute_tts_history_text_hash(request_data.input, history_cfg.get("hash_key"))
-        except Exception as exc:
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("TTS history: failed to compute text hash: {}", exc)
             return
         text_length = tts_history_text_length(request_data.input)
@@ -342,7 +357,7 @@ async def create_speech(
         if request_data.extra_params:
             try:
                 extra_params = dict(request_data.extra_params)
-            except Exception:
+            except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
                 extra_params = None
             if extra_params:
                 extra_params.pop("voice_reference", None)
@@ -352,7 +367,7 @@ async def create_speech(
         if request_data.normalization_options is not None:
             try:
                 params_json["normalization_options"] = model_dump_compat(request_data.normalization_options)
-            except Exception:
+            except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
                 pass
 
         voice_info: dict[str, Any] | None = {}
@@ -412,10 +427,10 @@ async def create_speech(
                     value=max(0.0, (time.monotonic() - insert_start) * 1000),
                     labels={"status": str(final_status or "unknown")},
                 )
-            except Exception:
+            except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
                 pass
             history_written = True
-        except Exception as exc:
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("TTS history: failed to write record: {}", exc)
 
     try:
@@ -428,7 +443,7 @@ async def create_speech(
             voice_to_voice_route="audio.speech",
             user_id=user_id_int,
         )
-    except Exception as exc:
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
         _raise_for_tts_error(exc, request_id)
 
     async def _pull_first_chunk() -> bytes:
@@ -438,7 +453,7 @@ async def create_speech(
             return b""
         except HTTPException:
             raise
-        except Exception as exc:
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
             _raise_for_tts_error(exc, request_id)
 
     async def _stream_chunks(initial_chunk: bytes):
@@ -463,14 +478,14 @@ async def create_speech(
         except HTTPException as exc:
             stream_failed = _tts_history_error_message(exc)
             raise
-        except Exception as exc:
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
             stream_failed = _tts_history_error_message(exc)
             _raise_for_tts_error(exc, request_id)
         finally:
             if byok_tts_resolution is not None:
                 try:
                     await byok_tts_resolution.touch_last_used()
-                except Exception as exc:
+                except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"Failed to update BYOK last_used timestamp: {exc}")
             status = "success"
             error_message = None
@@ -490,7 +505,7 @@ async def create_speech(
         except HTTPException as exc:
             _record_tts_history("failed", error_message=_tts_history_error_message(exc))
             raise
-        except Exception as exc:
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
             _record_tts_history("failed", error_message=_tts_history_error_message(exc))
             raise
         if not first_chunk:
@@ -516,7 +531,7 @@ async def create_speech(
     except HTTPException as exc:
         _record_tts_history("failed", error_message=_tts_history_error_message(exc))
         raise
-    except Exception as exc:
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
         _record_tts_history("failed", error_message=_tts_history_error_message(exc))
         raise
     all_audio_bytes = b""
@@ -528,7 +543,7 @@ async def create_speech(
     except HTTPException as exc:
         _record_tts_history("failed", error_message=_tts_history_error_message(exc))
         raise
-    except Exception as exc:
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
         _record_tts_history("failed", error_message=_tts_history_error_message(exc))
         _raise_for_tts_error(exc, request_id)
 
@@ -545,7 +560,7 @@ async def create_speech(
     if byok_tts_resolution is not None:
         try:
             await byok_tts_resolution.touch_last_used()
-        except Exception as exc:
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to update BYOK last_used timestamp: {exc}")
 
     headers = {
@@ -559,7 +574,7 @@ async def create_speech(
             alignment_payload = metadata.get("alignment")
         else:
             alignment_payload = None
-    except Exception:
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
         alignment_payload = None
     if alignment_payload:
         try:
@@ -567,7 +582,7 @@ async def create_speech(
             alignment_b64 = base64.urlsafe_b64encode(alignment_json.encode("utf-8")).decode("ascii")
             headers["X-TTS-Alignment"] = alignment_b64
             headers["X-TTS-Alignment-Format"] = "json+base64"
-        except Exception as exc:
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to encode alignment metadata header: {exc}")
 
     output_id: int | None = None
@@ -600,7 +615,7 @@ async def create_speech(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=str(exc),
             ) from exc
-        except Exception as exc:
+        except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
             _record_tts_history("failed", error_message=_tts_history_error_message(exc))
             raise
 
@@ -662,7 +677,7 @@ async def create_speech_metadata(
             tags=[str(request_data.model or ""), str(request_data.voice or "")],
             metadata={"stream": bool(getattr(request_data, "stream", False)), "format": request_data.response_format},
         )
-    except Exception as exc:
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"usage_log audio.tts.metadata failed: error={exc}")
 
     if hasattr(request_data, "stream"):
@@ -692,7 +707,7 @@ async def create_speech_metadata(
             user_id=user_id_int,
             metadata_only=True,
         )
-    except Exception as exc:
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
         _raise_for_tts_error(exc, request_id)
 
     try:
@@ -700,13 +715,13 @@ async def create_speech_metadata(
             await speech_iter.__anext__()
         except StopAsyncIteration:
             pass
-    except Exception as exc:
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
         _raise_for_tts_error(exc, request_id)
     finally:
         if byok_tts_resolution is not None:
             try:
                 await byok_tts_resolution.touch_last_used()
-            except Exception as exc:
+            except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to update BYOK last_used timestamp: {exc}")
 
     metadata = getattr(request_data, "_tts_metadata", None)
@@ -730,7 +745,7 @@ async def list_tts_providers(request: Request, tts_service: TTSServiceV2 = Depen
         voices = await tts_service.list_voices()
 
         return {"providers": capabilities, "voices": voices, "timestamp": datetime.utcnow().isoformat()}
-    except Exception as e:
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error listing TTS providers: {e}", exc_info=True)
         request_id = ensure_request_id(request)
         raise HTTPException(
@@ -761,7 +776,7 @@ async def list_tts_voices(
         return all_voices
     except HTTPException:
         raise
-    except Exception as e:
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error listing TTS voices: {e}", exc_info=True)
         request_id = ensure_request_id(request)
         raise HTTPException(
@@ -856,7 +871,7 @@ async def reset_tts_metrics(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error resetting metrics: {e}", exc_info=True)
         request_id = ensure_request_id(request)
         raise HTTPException(

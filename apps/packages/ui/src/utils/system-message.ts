@@ -1,7 +1,13 @@
 import { SystemMessage } from "@/types/messages"
 import { getSelectedModelName } from "./model"
 
-export const systemPromptFormatter = async ({ content }: { content: string }) => {
+export const systemPromptFormatter = async ({
+  content,
+  appendable
+}: {
+  content: string
+  appendable?: boolean
+}) => {
   const currentDate = new Date()
   const model = await getSelectedModelName()
   const replacements = {
@@ -20,6 +26,7 @@ export const systemPromptFormatter = async ({ content }: { content: string }) =>
   }
 
   return new SystemMessage({
-    content: content
+    content: content,
+    additional_kwargs: appendable ? { appendable: true } : {}
   })
 }
