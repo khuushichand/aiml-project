@@ -266,11 +266,11 @@ def _extract_media_from_html(html: str, media_accum: list[tuple[str, bytes]], me
             return tag
 
     # Replace img and audio src
-    pattern = re.compile(r'(?:<img[^>]+src\s*=\s*["\"])([^"\"]+)(?:["\"][^>]*>)|(?:<audio[^>]+src\s*=\s*["\"])([^"\"]+)(?:["\"][^>]*>)', re.IGNORECASE)
+    re.compile(r'(?:<img[^>]+src\s*=\s*["\"])([^"\"]+)(?:["\"][^>]*>)|(?:<audio[^>]+src\s*=\s*["\"])([^"\"]+)(?:["\"][^>]*>)', re.IGNORECASE)
     # We need to handle both capturing groups; easier: custom parser for img/src and audio/src separately
     def replace_tag_src(tag_name: str, s: str) -> str:
         # Match src with either single or double quotes
-        rgx = re.compile(r'<%s[^>]*?\s+src\s*=\s*([\'"\"])\s*(.*?)\1' % tag_name, re.IGNORECASE)
+        rgx = re.compile(rf'<{tag_name}[^>]*?\s+src\s*=\s*([\'"\"])\s*(.*?)\1', re.IGNORECASE)
         return rgx.sub(lambda m: m.group(0).replace(m.group(2), _handle_src(m.group(2))), s)
 
     def _handle_src(src: str) -> str:
@@ -305,7 +305,7 @@ def export_apkg_from_rows(rows: list[dict], default_deck_name: str = "Default", 
     Each row should contain: deck_name, front, back, notes, extra, model_type, ef, interval_days, repetitions, lapses, due_at.
     """
     # Prepare deck ids
-    unique_decks = sorted(set([r.get("deck_name") or default_deck_name for r in rows]))
+    unique_decks = sorted({r.get("deck_name") or default_deck_name for r in rows})
     base_id = _now_millis()
     deck_ids: dict[str, int] = {name: base_id + i for i, name in enumerate(unique_decks)}
 
@@ -460,7 +460,7 @@ def export_apkg_from_rows(rows: list[dict], default_deck_name: str = "Default", 
 
             if is_cloze:
                 # Generate one card per unique cloze index N in Text
-                cloze_ids = set(int(m.group(1)) for m in re.finditer(r"\{\{c(\d+)::", front))
+                cloze_ids = {int(m.group(1)) for m in re.finditer(r"\{\{c(\d+)::", front)}
                 if not cloze_ids:
                     cloze_ids = {1}
                 for n in sorted(cloze_ids):
@@ -504,7 +504,7 @@ def export_apkg_from_rows(rows: list[dict], default_deck_name: str = "Default", 
             z.write(col_path, arcname='collection.anki2')
             # Build media mapping: index string -> filename
             media_mapping = {str(idx): fname for idx, (fname, _) in enumerate(media_accum)}
-            for idx, (fname, content) in enumerate(media_accum):
+            for idx, (_fname, content) in enumerate(media_accum):
                 z.writestr(str(idx), content)
             z.writestr('media', json.dumps(media_mapping))
         return apkg_bytes.getvalue()

@@ -7,6 +7,7 @@ This module centralizes:
 - Error sanitization and admin gating
 """
 
+import contextlib
 import os
 import warnings
 from typing import Any, Optional
@@ -37,10 +38,8 @@ security = HTTPBearer(auto_error=False)
 
 def sanitize_error_message(error: Exception, context: str = "") -> str:
     """Return a safe error string while logging details."""
-    try:
+    with contextlib.suppress(Exception):
         logger.error(f"Error in {context}: {type(error).__name__}: {str(error)}")
-    except Exception:
-        pass
     mapping = {
         "FileNotFoundError": "The requested resource was not found",
         "PermissionError": "Permission denied for this operation",
@@ -117,16 +116,15 @@ async def verify_api_key(
 
     client_ip = resolve_client_ip(request, settings)
 
-    if settings.AUTH_MODE == "single_user":
-        if not is_single_user_ip_allowed(client_ip, settings):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"error": {
-                    "message": "Access denied from this network",
-                    "type": "authentication_error",
-                    "code": "ip_not_allowed",
-                }},
-            )
+    if settings.AUTH_MODE == "single_user" and not is_single_user_ip_allowed(client_ip, settings):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": {
+                "message": "Access denied from this network",
+                "type": "authentication_error",
+                "code": "ip_not_allowed",
+            }},
+        )
 
     # Test-mode convenience
     try:
@@ -338,7 +336,7 @@ async def _apply_rate_limit_headers(limiter, user_id: str, response: Response, m
     try:
         summary = await limiter.get_usage_summary(user_id)
         limits = summary.get("limits", {})
-        usage = summary.get("usage", {})
+        summary.get("usage", {})
         remaining = summary.get("remaining", {})
         response.headers["X-RateLimit-Tier"] = str(summary.get("tier", "free"))
         pm = limits.get("per_minute", {})

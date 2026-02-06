@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -42,7 +43,6 @@ from .metrics import (
 from .migrations import ensure_jobs_tables
 from .pg_migrations import ensure_job_counters_pg, ensure_jobs_tables_pg
 from .tracing import job_span
-
 
 try:
     import psycopg  # type: ignore
@@ -162,7 +162,7 @@ class JobManager:
         # Ensure schema for selected backend
         if self.backend == "postgres":
             if not (self.db_url and str(self.db_url).startswith("postgres")):
-                raise ValueError(
+                raise ValueError(  # noqa: TRY003
                     "Postgres backend selected but no valid db_url provided; set JOBS_DB_URL or pass db_url"
                 )
             # Normalize DSN and negotiate options for server compatibility
@@ -175,10 +175,8 @@ class JobManager:
             skip_schema = JobManager._is_truthy(os.getenv("JOBS_PG_SKIP_SCHEMA_INIT"))
             if not skip_schema:
                 ensure_jobs_tables_pg(self.db_url)
-                try:
+                with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                     ensure_job_counters_pg(self.db_url)
-                except _JOB_NONCRITICAL_EXCEPTIONS:
-                    pass
             self.db_path = Path(":memory:")  # unused
         else:
             # Prefer explicit db_path, then env override for tests (JOBS_DB_PATH), otherwise default
@@ -193,10 +191,8 @@ class JobManager:
         self._conn = None  # Lazily opened per operation
 
         self._enforce_override = enforce_leases
-        try:
+        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
             ensure_jobs_metrics_registered()
-        except _JOB_NONCRITICAL_EXCEPTIONS:
-            pass
 
     # Standard queues across domains
     STANDARD_QUEUES = ("default", "high", "low")
@@ -259,15 +255,11 @@ class JobManager:
             return conn
         conn = sqlite3.connect(self.db_path)
         # Apply pragmatic SQLite settings for concurrent read/write under tests and dev
-        try:
+        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
             conn.execute("PRAGMA journal_mode=WAL;")
-        except _JOB_NONCRITICAL_EXCEPTIONS:
-            pass
-        try:
+        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
             conn.execute("PRAGMA synchronous=NORMAL;")
-        except _JOB_NONCRITICAL_EXCEPTIONS:
-            pass
-        try:
+        try:  # noqa: SIM105
             # Ensure reads wait briefly instead of raising 'database is locked'
             conn.execute("PRAGMA busy_timeout=5000;")
         except _JOB_NONCRITICAL_EXCEPTIONS:
@@ -295,12 +287,10 @@ class JobManager:
                 if "batch_group" not in cols_arch:
                     conn.execute("ALTER TABLE jobs_archive ADD COLUMN batch_group TEXT")
             conn.commit()
-            return True
+            return True  # noqa: TRY300
         except sqlite3.Error as exc:
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 conn.rollback()
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass
             logger.warning(f"Jobs schema backfill for batch_group failed: {exc}")
             return False
 
@@ -327,10 +317,8 @@ class JobManager:
             except _JOB_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_serialization_failure(exc):
                     raise
-                try:
+                with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                     conn.rollback()
-                except _JOB_NONCRITICAL_EXCEPTIONS:
-                    pass
         try:
             from psycopg import sql as _sql  # type: ignore
 
@@ -349,10 +337,8 @@ class JobManager:
                 try:
                     cur.execute(_sql.SQL("RESET {}").format(_sql.SQL(name)))
                 except _JOB_NONCRITICAL_EXCEPTIONS:
-                    try:
+                    with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                         conn.rollback()
-                    except _JOB_NONCRITICAL_EXCEPTIONS:
-                        pass
                     try:
                         cur.execute(
                             _sql.SQL("SET {} = {}").format(
@@ -361,10 +347,8 @@ class JobManager:
                             )
                         )
                     except _JOB_NONCRITICAL_EXCEPTIONS:
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             conn.rollback()
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
 
             dom = JobManager._RLS_DOMAIN_ALLOWLIST.get()
             _set_or_reset("app.domain_allowlist", dom)
@@ -389,10 +373,8 @@ class JobManager:
             # Some Postgres installations reject unknown GUCs (custom parameters).
             # If any SET LOCAL fails, the transaction enters an aborted state.
             # Roll back to clear the error so subsequent statements can proceed.
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 conn.rollback()
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass
         return cur
 
     # --- Acquire ordering policy (env-driven overrides) ---
@@ -419,7 +401,7 @@ class JobManager:
                 return "DESC"
             # Default behavior across domains (including 'chatbooks'):
             # lower numeric value means higher priority -> ASC
-            return "ASC"
+            return "ASC"  # noqa: TRY300
         except _JOB_NONCRITICAL_EXCEPTIONS:
             return "ASC"
 
@@ -463,7 +445,7 @@ class JobManager:
                     v2 = v.strip().lower()
                     if v2 in {"fifo", "lifo"}:
                         return v2
-            return None
+            return None  # noqa: TRY300
         except _JOB_NONCRITICAL_EXCEPTIONS:
             return None
 
@@ -532,12 +514,12 @@ class JobManager:
         elif action == "drain":
             paused, drain = True, True
         else:
-            raise ValueError("Unsupported action; expected pause|resume|drain")
+            raise ValueError("Unsupported action; expected pause|resume|drain")  # noqa: TRY003
         conn = self._connect()
         _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
         try:
             if self.backend == "postgres":
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         cur.execute(
                             (
@@ -694,15 +676,13 @@ class JobManager:
         _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
         try:
             if self.backend == "postgres":
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         if _test_mode:
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 logger.info(
                                     f"[JM TEST MUT] upsert_sla_policy domain={domain} queue={queue} job_type={job_type} backend=pg"
                                 )
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
                         cur.execute(
                             (
                                 "INSERT INTO job_sla_policies(domain,queue,job_type,max_queue_latency_seconds,max_duration_seconds,enabled,updated_at) "
@@ -763,18 +743,14 @@ class JobManager:
                             "INSERT INTO job_attachments(job_id,kind,content_text) VALUES(?,?,?)",
                             (int(job_id), "tag", msg),
                         )
-                try:
+                with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                     emit_job_event(
                         "job.sla_breached",
                         job={"id": int(job_id), "domain": domain, "queue": queue, "job_type": job_type},
                         attrs={"kind": kind, "value": float(value), "threshold": float(threshold)},
                     )
-                except _JOB_NONCRITICAL_EXCEPTIONS:
-                    pass
-                try:
+                with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                     increment_sla_breach({"domain": domain, "queue": queue, "job_type": job_type}, kind)
-                except _JOB_NONCRITICAL_EXCEPTIONS:
-                    pass
             finally:
                 conn.close()
         except _JOB_NONCRITICAL_EXCEPTIONS:
@@ -785,7 +761,7 @@ class JobManager:
         try:
             if str(os.getenv("JOBS_ENCRYPT", "")).lower() in {"1", "true", "yes", "y", "on"}:
                 return True
-            if domain:
+            if domain:  # noqa: SIM102
                 if str(os.getenv(f"JOBS_ENCRYPT_{str(domain).upper()}", "")).lower() in {"1", "true", "yes", "y", "on"}:
                     return True
         except _JOB_NONCRITICAL_EXCEPTIONS:
@@ -919,10 +895,7 @@ class JobManager:
 
         def _is_secret_str(s: str) -> bool:
             try:
-                for pat in patterns:
-                    if pat.search(s or ""):
-                        return True
-                return False
+                return any(pat.search(s or "") for pat in patterns)
             except _JOB_NONCRITICAL_EXCEPTIONS:
                 return False
 
@@ -947,7 +920,7 @@ class JobManager:
                         findings.append(key_path or "<root>")
                         return "***REDACTED***" if redact else x
                     return x
-                return x
+                return x  # noqa: TRY300
             except _JOB_NONCRITICAL_EXCEPTIONS:
                 return x
 
@@ -999,26 +972,19 @@ class JobManager:
                 row = cur.fetchone()
                 return bool(row[0]) if row is not None else False
         finally:
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass
 
     def _pg_advisory_unlock(self, key: int) -> None:
         if self.backend != "postgres":
             return
         conn = self._connect()
         try:
-            with self._pg_cursor(conn) as cur:
-                try:
-                    cur.execute("SELECT pg_advisory_unlock(%s)", (int(key),))
-                except _JOB_NONCRITICAL_EXCEPTIONS:
-                    pass
+            with self._pg_cursor(conn) as cur, contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
+                cur.execute("SELECT pg_advisory_unlock(%s)", (int(key),))
         finally:
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass
 
     # CRUD / queries
     def create_job(
@@ -1059,13 +1025,13 @@ class JobManager:
         # Queue name policy
         allowed_queues = self._get_allowed_queues(domain)
         if queue not in allowed_queues:
-            raise ValueError(f"Queue '{queue}' not allowed for domain '{domain}'. Allowed: {allowed_queues}")
+            raise ValueError(f"Queue '{queue}' not allowed for domain '{domain}'. Allowed: {allowed_queues}")  # noqa: TRY003
 
         # Secret hygiene (reject/redact)
         try:
             cleaned, found, where = self._scan_and_redact_secrets(payload)
             if found and str(os.getenv("JOBS_SECRET_REJECT", "")).lower() in {"1", "true", "yes", "y", "on"}:
-                raise ValueError(f"Payload appears to contain secrets at: {where[:3]}{'...' if len(where) > 3 else ''}")
+                raise ValueError(f"Payload appears to contain secrets at: {where[:3]}{'...' if len(where) > 3 else ''}")  # noqa: TRY003
             payload = cleaned if found else payload
         except _JOB_NONCRITICAL_EXCEPTIONS as _sec_e:
             logger.debug(f"Jobs secret hygiene scan error: {_sec_e}")
@@ -1081,12 +1047,10 @@ class JobManager:
             if truncate:
                 payload = {"_truncated": True, "len_bytes": payload_bytes}
                 payload_json = json.dumps(payload)
-                try:
+                with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                     increment_json_truncated({"domain": domain, "queue": queue, "job_type": job_type}, "payload")
-                except _JOB_NONCRITICAL_EXCEPTIONS:
-                    pass
             else:
-                raise ValueError(f"Payload too large: {payload_bytes} bytes > limit {max_bytes}")
+                raise ValueError(f"Payload too large: {payload_bytes} bytes > limit {max_bytes}")  # noqa: TRY003
 
         # Note: completion_token enforcement applies to finalize paths (complete/fail), not creation.
         conn = self._connect()
@@ -1123,12 +1087,12 @@ class JobManager:
                 if env_dom:
                     allowed_job_types.extend([x.strip() for x in env_dom.split(",") if x.strip()])
             if allowed_job_types and job_type not in allowed_job_types:
-                raise ValueError(
+                raise ValueError(  # noqa: TRY003
                     f"Job type '{job_type}' not allowed for domain '{domain}'. Allowed: {sorted(set(allowed_job_types))}"
                 )
 
             if self.backend == "postgres":
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         # Domain/user quotas
                         try:
@@ -1141,7 +1105,7 @@ class JobManager:
                                 )
                                 row_cnt = cur.fetchone()
                                 if int(row_cnt.get("c") if isinstance(row_cnt, dict) else 0) >= max_q:
-                                    raise ValueError("Quota exceeded: max queued per user/domain")
+                                    raise ValueError("Quota exceeded: max queued per user/domain")  # noqa: TRY003
                             # Submits per minute
                             spm = self._quota_get("JOBS_QUOTA_SUBMITS_PER_MIN", domain, owner_user_id)
                             if spm and owner_user_id:
@@ -1151,7 +1115,7 @@ class JobManager:
                                 )
                                 row_spm = cur.fetchone()
                                 if int(row_spm.get("c") if isinstance(row_spm, dict) else 0) >= spm:
-                                    raise ValueError("Quota exceeded: submits per minute")
+                                    raise ValueError("Quota exceeded: submits per minute")  # noqa: TRY003
                         except _JOB_NONCRITICAL_EXCEPTIONS as _db_exc:
                             # Let ValueError propagate; swallow only DB/adapter errors
                             try:
@@ -1161,7 +1125,7 @@ class JobManager:
                                     pass
                                 else:
                                     raise
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
+                            except _JOB_NONCRITICAL_EXCEPTIONS:  # noqa: TRY203
                                 raise
                             pass
                         if idempotency_key:
@@ -1283,7 +1247,7 @@ class JobManager:
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             # Audit bridge (best-effort)
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 submit_job_audit_event(
                                     "job.created",
                                     job=d,
@@ -1293,8 +1257,6 @@ class JobManager:
                                         "retry_count": int(d.get("retry_count") or 0),
                                     },
                                 )
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
                             return d
                         # Non-idempotent insert
                         cur.execute(
@@ -1341,14 +1303,10 @@ class JobManager:
                                         )
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             self._assert_invariants(d)
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             increment_created({"domain": domain, "queue": queue, "job_type": job_type})
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                         # Counters bump (PG, non-idempotent path)
                         try:
                             if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
@@ -1404,7 +1362,7 @@ class JobManager:
                                 )
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             submit_job_audit_event(
                                 "job.created",
                                 job=d,
@@ -1414,8 +1372,6 @@ class JobManager:
                                     "retry_count": int(d.get("retry_count") or 0),
                                 },
                             )
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                         return d
             else:
                 for attempt in range(2):
@@ -1430,7 +1386,7 @@ class JobManager:
                                         (domain, owner_user_id),
                                     ).fetchone()
                                     if int(rowq[0] or 0) >= max_q:
-                                        raise ValueError("Quota exceeded: max queued per user/domain")
+                                        raise ValueError("Quota exceeded: max queued per user/domain")  # noqa: TRY003
                                 spm = self._quota_get("JOBS_QUOTA_SUBMITS_PER_MIN", domain, owner_user_id)
                                 if spm and owner_user_id:
                                     now_str = _now_dt.astimezone(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -1439,7 +1395,7 @@ class JobManager:
                                         (domain, owner_user_id, now_str),
                                     ).fetchone()
                                     if int(rowm[0] or 0) >= spm:
-                                        raise ValueError("Quota exceeded: submits per minute")
+                                        raise ValueError("Quota exceeded: submits per minute")  # noqa: TRY003
                             except sqlite3.Error:
                                 pass
                             if idempotency_key:
@@ -1482,7 +1438,7 @@ class JobManager:
                                             increment_created({"domain": domain, "queue": queue, "job_type": job_type})
                                     except _JOB_NONCRITICAL_EXCEPTIONS:
                                         pass
-                                    try:
+                                    with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                         emit_job_event(
                                             "job.created",
                                             job=d,
@@ -1492,8 +1448,6 @@ class JobManager:
                                                 "retry_count": int(d.get("retry_count") or 0),
                                             },
                                         )
-                                    except _JOB_NONCRITICAL_EXCEPTIONS:
-                                        pass
                                     return d
                             # Non-idempotent (or no existing row on IGNORE path): normal insert
                             conn.execute(
@@ -1604,7 +1558,7 @@ class JobManager:
                                     )
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 submit_job_audit_event(
                                     "job.created",
                                     job={**d, "request_id": request_id, "trace_id": trace_id},
@@ -1614,11 +1568,9 @@ class JobManager:
                                         "retry_count": int(d.get("retry_count") or 0),
                                     },
                                 )
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
                             return d
                     except sqlite3.OperationalError as exc:
-                        if attempt == 0 and self._sqlite_missing_column_error(exc, "batch_group"):
+                        if attempt == 0 and self._sqlite_missing_column_error(exc, "batch_group"):  # noqa: SIM102
                             if self._sqlite_ensure_batch_group(conn):
                                 continue
                         raise
@@ -1668,19 +1620,19 @@ class JobManager:
 
     def add_job_dependency(self, job_uuid: str, depends_on_job_uuid: str) -> bool:
         if not job_uuid or not depends_on_job_uuid:
-            raise ValueError("job_uuid and depends_on_job_uuid are required")
+            raise ValueError("job_uuid and depends_on_job_uuid are required")  # noqa: TRY003
         if str(job_uuid) == str(depends_on_job_uuid):
-            raise ValueError("Job cannot depend on itself")
+            raise ValueError("Job cannot depend on itself")  # noqa: TRY003
         job = self.get_job_by_uuid(str(job_uuid))
         dep = self.get_job_by_uuid(str(depends_on_job_uuid))
         if not job or not dep:
-            raise ValueError("Both jobs must exist to create dependency")
+            raise ValueError("Both jobs must exist to create dependency")  # noqa: TRY003
         if str(job.get("domain")) != str(dep.get("domain")):
-            raise ValueError("Dependencies must share domain")
+            raise ValueError("Dependencies must share domain")  # noqa: TRY003
         if str(job.get("owner_user_id")) != str(dep.get("owner_user_id")):
-            raise ValueError("Dependencies must share owner_user_id")
+            raise ValueError("Dependencies must share owner_user_id")  # noqa: TRY003
         if self._dependency_path_exists(str(depends_on_job_uuid), str(job_uuid)):
-            raise ValueError("Dependency would create a cycle")
+            raise ValueError("Dependency would create a cycle")  # noqa: TRY003
 
         conn = self._connect()
         try:
@@ -1902,7 +1854,7 @@ class JobManager:
         if before_id is not None and (
             created_before is None or sort_col != "created_at" or sort_ord != "DESC"
         ):
-            raise BadRequestError("before_id requires created_before with created_at DESC ordering")
+            raise BadRequestError("before_id requires created_before with created_at DESC ordering")  # noqa: TRY003
         conn = self._connect()
         try:
             if self.backend == "postgres":
@@ -2202,35 +2154,27 @@ class JobManager:
         # Honor global acquire gate for graceful shutdown
         _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
         if _test_mode:
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 logger.info(
                     f"[JM TEST] acquire_next_job enter backend={self.backend} domain={domain} queue={queue} owner={owner_user_id} gate={JobManager._ACQUIRE_GATE_ENABLED} db={(str(self.db_path) if getattr(self, 'db_path', None) else self.db_url)}"
                 )
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass
         if JobManager._ACQUIRE_GATE_ENABLED:
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 logger.debug("Jobs acquire gate enabled; declining new acquisition")
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass
             return None
         # Queue-specific pause/drain gate
         flags = self._get_queue_flags(domain, queue)
         if _test_mode:
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 logger.info(f"[JM TEST] queue flags paused={flags.get('paused')} drain={flags.get('drain')}")
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass
         if flags.get("paused"):
             return None
         # Domain/user inflight limit
         try:
             max_inflight = self._quota_get("JOBS_QUOTA_MAX_INFLIGHT", domain, owner_user_id)
             if _test_mode:
-                try:
+                with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                     logger.info(f"[JM TEST] inflight quota={max_inflight} owner={owner_user_id}")
-                except _JOB_NONCRITICAL_EXCEPTIONS:
-                    pass
             if max_inflight and owner_user_id:
                 conn_q = self._connect()
                 try:
@@ -2251,10 +2195,8 @@ class JobManager:
                         if int(rowc[0] or 0) >= max_inflight:
                             return None
                 finally:
-                    try:
+                    with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                         conn_q.close()
-                    except _JOB_NONCRITICAL_EXCEPTIONS:
-                        pass
         except _JOB_NONCRITICAL_EXCEPTIONS:
             pass
         max_lease = int(os.getenv("JOBS_LEASE_MAX_SECONDS", "3600") or "3600")
@@ -2279,7 +2221,7 @@ class JobManager:
         )
         try:
             if self.backend == "postgres":
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         d = None  # type: ignore[assignment]
                         if str(os.getenv("JOBS_PG_SINGLE_UPDATE_ACQUIRE", "")).lower() in {
@@ -2413,10 +2355,8 @@ class JobManager:
                                 )
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             self._assert_invariants(d)
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                         # Metrics: queue latency
                         try:
                             created_at = d.get("created_at")
@@ -2429,24 +2369,18 @@ class JobManager:
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         if isinstance(d.get("payload"), str):
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 d["payload"] = json.loads(d["payload"]) if d["payload"] else {}
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             d["payload"] = self._maybe_decrypt_json(d.get("payload"))
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             self._update_gauges(domain=domain, queue=queue, job_type=d.get("job_type"))
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                         try:
                             with job_span("job.acquire", job=d):
                                 pass
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             emit_job_event(
                                 "job.acquired",
                                 job=d,
@@ -2456,8 +2390,6 @@ class JobManager:
                                     "retry_count": int(d.get("retry_count") or 0),
                                 },
                             )
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                         return d
             else:
                 with conn:
@@ -2504,10 +2436,8 @@ class JobManager:
                         )
                         params_upd: list[Any] = [f"+{lease_seconds} seconds", worker_id, lease_id] + params_sub
                         conn.execute(sql, tuple(params_upd))
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             conn.commit()
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                         if conn.total_changes == 0:
                             return None
                         row = conn.execute("SELECT * FROM jobs WHERE lease_id = ?", (lease_id,)).fetchone()
@@ -2534,10 +2464,8 @@ class JobManager:
                                         )
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             self._assert_invariants(d)
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                         # Counters queued->processing
                         try:
                             if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
@@ -2606,10 +2534,8 @@ class JobManager:
                                 order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         base += order_sql
                         if _test_mode:
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 logger.info(f"[JM TEST] acquire SELECT sql={base} params={params}")
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
                         # Spin a few times if a race causes the UPDATE to affect zero rows
                         _max_spin = 20 if _test_mode else 3
                         job_id = None
@@ -2622,10 +2548,8 @@ class JobManager:
                                 break
                             job_id = int(row[0])
                             if _test_mode:
-                                try:
+                                with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                     logger.info(f"[JM TEST] selected job_id={job_id} spin={_spin}")
-                                except _JOB_NONCRITICAL_EXCEPTIONS:
-                                    pass
                             # Transition to processing with lease; allow both queued and expired processing
                             conn.execute(
                                 (
@@ -2637,16 +2561,12 @@ class JobManager:
                                 ),
                                 (f"+{lease_seconds} seconds", worker_id, str(_uuid.uuid4()), job_id),
                             )
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 conn.commit()
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
                             if conn.total_changes == 0:
                                 if _test_mode:
-                                    try:
+                                    with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                         logger.info(f"[JM TEST] update changed=0 for job_id={job_id}; retrying")
-                                    except _JOB_NONCRITICAL_EXCEPTIONS:
-                                        pass
                                 continue
                             # Success
                             break
@@ -2657,12 +2577,10 @@ class JobManager:
                             return None
                         d = dict(row)
                         if _test_mode:
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 logger.info(
                                     f"[JM TEST] acquired id={d.get('id')} status={d.get('status')} leased_until={d.get('leased_until')} worker_id={d.get('worker_id')} lease_id={d.get('lease_id')}"
                                 )
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
                         try:
                             if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
                                 _now = self._clock.now_utc()
@@ -2701,20 +2619,16 @@ class JobManager:
                             d["payload"] = json.loads(d["payload"]) if d["payload"] else {}
                     except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
-                    try:
+                    with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                         d["payload"] = self._maybe_decrypt_json(d.get("payload"))
-                    except _JOB_NONCRITICAL_EXCEPTIONS:
-                        pass
-                    try:
+                    with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                         self._update_gauges(domain=domain, queue=queue, job_type=d.get("job_type"))
-                    except _JOB_NONCRITICAL_EXCEPTIONS:
-                        pass
                     try:
                         with job_span("job.acquire", job=d):
                             pass
                     except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
-                    try:
+                    with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                         emit_job_event(
                             "job.acquired",
                             job=d,
@@ -2724,13 +2638,9 @@ class JobManager:
                                 "retry_count": int(d.get("retry_count") or 0),
                             },
                         )
-                    except _JOB_NONCRITICAL_EXCEPTIONS:
-                        pass
                     if _test_mode:
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             JobManager._LAST_ACQUIRED_TEST[(domain, queue)] = dict(d)
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                     if _test_mode:
                         try:
                             cq = conn.execute(
@@ -2772,7 +2682,7 @@ class JobManager:
         conn = self._connect()
         try:
             if self.backend == "postgres":
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         now_ts = self._clock.now_utc()
                         if enforce:
@@ -2793,12 +2703,10 @@ class JobManager:
                             )
                             ok = cur.rowcount > 0
                             if ok:
-                                try:
+                                with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                     emit_job_event(
                                         "job.lease_renewed", job={"id": int(job_id)}, attrs={"seconds": int(seconds)}
                                     )
-                                except _JOB_NONCRITICAL_EXCEPTIONS:
-                                    pass
                             return ok
                         else:
                             sets = [
@@ -2817,12 +2725,10 @@ class JobManager:
                             )
                             ok2 = cur.rowcount > 0
                             if ok2:
-                                try:
+                                with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                     emit_job_event(
                                         "job.lease_renewed", job={"id": int(job_id)}, attrs={"seconds": int(seconds)}
                                     )
-                                except _JOB_NONCRITICAL_EXCEPTIONS:
-                                    pass
                             return ok2
             else:
                 with conn:
@@ -2845,12 +2751,10 @@ class JobManager:
                         cur = conn.execute(sql, tuple(params3))
                         ok3 = (cur.rowcount or 0) > 0
                         if ok3:
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 emit_job_event(
                                     "job.lease_renewed", job={"id": int(job_id)}, attrs={"seconds": int(seconds)}
                                 )
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
                         return ok3
                     else:
                         sql = (
@@ -2868,12 +2772,10 @@ class JobManager:
                         cur = conn.execute(sql, tuple(params4))
                         ok4 = (cur.rowcount or 0) > 0
                         if ok4:
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 emit_job_event(
                                     "job.lease_renewed", job={"id": int(job_id)}, attrs={"seconds": int(seconds)}
                                 )
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
                         return ok4
         finally:
             conn.close()
@@ -2953,19 +2855,17 @@ class JobManager:
         truncate = str(os.getenv("JOBS_JSON_TRUNCATE", "")).lower() in {"1", "true", "yes", "y", "on"}
         try:
             res_json = json.dumps(res_obj)
-        except (TypeError, ValueError):
-            raise ValueError("Result payload must be JSON-serializable")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Result payload must be JSON-serializable") from exc  # noqa: TRY003
         res_bytes = len(res_json.encode("utf-8"))
         if res_bytes > max_bytes:
             if truncate:
                 res_obj = {"_truncated": True, "len_bytes": res_bytes}
             else:
-                raise ValueError(f"Result too large: {res_bytes} bytes > limit {max_bytes}")
+                raise ValueError(f"Result too large: {res_bytes} bytes > limit {max_bytes}")  # noqa: TRY003
 
-        try:
+        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
             res_obj = self._maybe_encrypt_json(res_obj, str(job.get("domain")))
-        except _JOB_NONCRITICAL_EXCEPTIONS:
-            pass
 
         conn = self._connect()
         try:
@@ -3005,7 +2905,7 @@ class JobManager:
             str(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "")).lower() in {"1", "true", "yes", "y", "on"}
             and not completion_token
         ):
-            raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")
+            raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")  # noqa: TRY003
         if enforce is None:
             enforce = self._should_enforce_ack()
         # Cap result size if configured
@@ -3026,21 +2926,19 @@ class JobManager:
                     if truncate:
                         res_obj = {"_truncated": True, "len_bytes": res_bytes}
                     else:
-                        raise ValueError(f"Result too large: {res_bytes} bytes > limit {max_bytes}")
+                        raise ValueError(f"Result too large: {res_bytes} bytes > limit {max_bytes}")  # noqa: TRY003
         # Optional encryption at rest for result (requires domain; will be resolved per-backend)
         conn = self._connect()
         _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
         try:
             if self.backend == "postgres":
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         if _test_mode:
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 logger.info(
                                     f"[JM TEST MUT] complete_job enter job_id={job_id} enforce={enforce} backend=pg"
                                 )
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
                         # Pre-fetch for metrics and idempotency
                         cur.execute(
                             "SELECT status, completion_token, worker_id, lease_id, domain, queue, job_type, available_at, started_at, acquired_at, trace_id, request_id FROM jobs WHERE id = %s",
@@ -3052,9 +2950,7 @@ class JobManager:
                             ct = base.get("completion_token")
                             if st in {"completed", "failed", "cancelled", "quarantined"}:
                                 # Idempotent acknowledgement when token matches
-                                if completion_token and ct and str(ct) == str(completion_token):
-                                    return True
-                                return False
+                                return bool(completion_token and ct and str(ct) == str(completion_token))
                         # Apply encryption if configured (domain available from base)
                         try:
                             if base:
@@ -3167,7 +3063,7 @@ class JobManager:
                                 started_at = d.get("started_at") or d.get("acquired_at")
                                 if isinstance(started_at, str):
                                     started_at = _parse_dt(started_at)
-                                try:
+                                with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                     observe_duration(
                                         {
                                             "domain": d.get("domain"),
@@ -3179,8 +3075,6 @@ class JobManager:
                                         started_at,
                                         self._clock.now_utc(),
                                     )
-                                except _JOB_NONCRITICAL_EXCEPTIONS:
-                                    pass
                                 # Update gauges after terminal state
                                 increment_completed(
                                     {"domain": d.get("domain"), "queue": d.get("queue"), "job_type": d.get("job_type")}
@@ -3272,12 +3166,10 @@ class JobManager:
             else:
                 with conn:
                     if _test_mode:
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             logger.info(
                                 f"[JM TEST MUT] complete_job enter job_id={job_id} enforce={enforce} backend=sqlite"
                             )
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                     # Pre-fetch for metrics + idempotency
                     rowm = conn.execute(
                         "SELECT status, completion_token, domain, queue, job_type, available_at, started_at, acquired_at, trace_id, request_id FROM jobs WHERE id = ?",
@@ -3287,9 +3179,7 @@ class JobManager:
                         st = str(rowm[0])
                         ct = rowm[1]
                         if st in {"completed", "failed", "cancelled", "quarantined"}:
-                            if completion_token and ct and str(ct) == str(completion_token):
-                                return True
-                            return False
+                            return bool(completion_token and ct and str(ct) == str(completion_token))
                     # Apply encryption if configured
                     try:
                         if rowm:
@@ -3491,7 +3381,7 @@ class JobManager:
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             # Outbox insert within the same transaction (avoid lock)
-                            try:
+                            try:  # noqa: SIM105
                                 # Insert completion event within the same transaction to avoid cross-connection locks
                                 conn.execute(
                                     (
@@ -3588,10 +3478,8 @@ class JobManager:
                     idx = max(0, min(len(vals) - 1, int(round(0.95 * (len(vals) - 1)))))
                     value = float(vals[idx])
         finally:
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass
         if not value or value <= 0:
             return max(min_s, 30)
         return max(min_s, min(max_s, int(value * headroom)))
@@ -3603,7 +3491,7 @@ class JobManager:
         affected = 0
         try:
             if self.backend == "postgres":
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         now_ts = self._clock.now_utc()
                         for it in items:
@@ -3675,10 +3563,8 @@ class JobManager:
                             affected += int(cur.rowcount or 0)
             return int(affected)
         finally:
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass
 
     def batch_complete_jobs(self, items: list[dict[str, Any]], *, enforce: bool | None = None) -> int:
         if enforce is None:
@@ -3687,7 +3573,7 @@ class JobManager:
         done = 0
         try:
             if self.backend == "postgres":
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         for it in items:
                             res_obj = it.get("result")
@@ -3767,23 +3653,21 @@ class JobManager:
                             done += int(cur.rowcount or 0)
             return int(done)
         finally:
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass
 
     def batch_fail_jobs(self, items: list[dict[str, Any]], *, enforce: bool | None = None) -> int:
         if str(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "")).lower() in {"1", "true", "yes", "y", "on"}:
             for it in items:
                 if not it.get("completion_token"):
-                    raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")
+                    raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")  # noqa: TRY003
         if enforce is None:
             enforce = self._should_enforce_ack()
         conn = self._connect()
         cnt = 0
         try:
             if self.backend == "postgres":
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         for it in items:
                             if enforce:
@@ -3846,10 +3730,8 @@ class JobManager:
                             cnt += int(cur.rowcount or 0)
             return int(cnt)
         finally:
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass
 
     def fail_job(
         self,
@@ -3875,7 +3757,7 @@ class JobManager:
             str(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "")).lower() in {"1", "true", "yes", "y", "on"}
             and not completion_token
         ):
-            raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")
+            raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")  # noqa: TRY003
         import random
 
         if enforce is None:
@@ -3884,16 +3766,14 @@ class JobManager:
         _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
         try:
             if self.backend == "postgres":
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         # For metrics and idempotency
                         if _test_mode:
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 logger.info(
                                     f"[JM TEST MUT] fail_job enter job_id={job_id} retryable={retryable} backoff={backoff_seconds} enforce={enforce} backend=pg"
                                 )
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
                         cur.execute(
                             "SELECT status, completion_token, retry_count, failure_streak_code, failure_streak_count, domain, queue, job_type, uuid FROM jobs WHERE id = %s",
                             (int(job_id),),
@@ -3903,19 +3783,14 @@ class JobManager:
                             st = str(elem.get("status"))
                             ct = elem.get("completion_token")
                             if st in {"completed", "failed", "cancelled", "quarantined"}:
-                                if completion_token and ct and str(ct) == str(completion_token):
-                                    return True
-                                return False
+                                return bool(completion_token and ct and str(ct) == str(completion_token))
                         if retryable:
                             cur.execute("SELECT retry_count FROM jobs WHERE id = %s", (int(job_id),))
                             row = cur.fetchone()
                             current = int(row["retry_count"]) if row else 0
                             exp_backoff = max(1, int(backoff_seconds * (2**current)))
                             test_mode = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}
-                            if exp_backoff <= 2 or test_mode:
-                                jitter = 0
-                            else:
-                                jitter = random.randint(0, max(1, exp_backoff // 4))
+                            jitter = 0 if exp_backoff <= 2 or test_mode else random.randint(0, max(1, exp_backoff // 4))
                             delay = exp_backoff + jitter
                             # In tests, enforce a generous minimum when the caller requested
                             # immediate retry (backoff_seconds=0) so that newer jobs can be
@@ -4210,7 +4085,7 @@ class JobManager:
                                     failed_from_queued = cur.rowcount > 0
                         ok = cur.rowcount > 0 or failed_from_queued
                         if ok and (error_code or error_class or error_stack is not None):
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 cur.execute(
                                     (
                                         "UPDATE jobs SET error_code = COALESCE(%s, error_code), "
@@ -4225,13 +4100,9 @@ class JobManager:
                                         int(job_id),
                                     ),
                                 )
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
                         if ok:
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 conn.commit()
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
                         try:
                             if ok and elem:
                                 d = dict(elem)
@@ -4245,7 +4116,7 @@ class JobManager:
                                     pass
                                 # Counters: processing -> failed (terminal)
                                 try:
-                                    if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
+                                    if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {  # noqa: SIM102
                                         "1",
                                         "true",
                                         "yes",
@@ -4261,13 +4132,11 @@ class JobManager:
                                     pass
                                 try:
                                     # Append terminal failure to timeline (no backoff)
-                                    try:
+                                    with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                         cur.execute(
                                             "UPDATE jobs SET failure_timeline = COALESCE(failure_timeline, '[]'::jsonb) || jsonb_build_array(jsonb_build_object('ts', NOW(), 'error_code', %s, 'retry_backoff', 0)) WHERE id = %s",
                                             ((error_code or error), int(job_id)),
                                         )
-                                    except _JOB_NONCRITICAL_EXCEPTIONS:
-                                        pass
 
                                     with job_span(
                                         "job.fail", job=d, attrs={"retryable": False, "error_code": error_code}
@@ -4288,10 +4157,8 @@ class JobManager:
                                     emit_job_event("job.failed", job=ev, attrs={"error_code": (error_code or error)})
                                 except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
-                                try:
+                                with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                     self._cancel_dependent_jobs(d.get("uuid"), reason="dependency_failed")
-                                except _JOB_NONCRITICAL_EXCEPTIONS:
-                                    pass
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}:
@@ -4313,12 +4180,10 @@ class JobManager:
                 result = False
                 with conn:
                     if _test_mode:
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             logger.info(
                                 f"[JM TEST MUT] fail_job enter job_id={job_id} retryable={retryable} backoff={backoff_seconds} enforce={enforce} backend=sqlite"
                             )
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                     # For metrics, fetch labels
                     rowl = conn.execute(
                         "SELECT status, completion_token, domain, queue, job_type, uuid FROM jobs WHERE id = ?",
@@ -4328,9 +4193,7 @@ class JobManager:
                         st = str(rowl[0])
                         ct = rowl[1]
                         if st in {"completed", "failed", "cancelled", "quarantined"}:
-                            if completion_token and ct and str(ct) == str(completion_token):
-                                return True
-                            return False
+                            return bool(completion_token and ct and str(ct) == str(completion_token))
                     retry_scheduled = False
                     if retryable:
                         # compute jittered backoff based on current retry_count
@@ -4338,10 +4201,7 @@ class JobManager:
                         current = int(row[0]) if row else 0
                         exp_backoff = max(1, int(backoff_seconds * (2**current)))
                         test_mode = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}
-                        if exp_backoff <= 2 or test_mode:
-                            jitter = 0
-                        else:
-                            jitter = random.randint(0, max(1, exp_backoff // 4))
+                        jitter = 0 if exp_backoff <= 2 or test_mode else random.randint(0, max(1, exp_backoff // 4))
                         delay = exp_backoff + jitter
                         base_thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "2") or "2")
                         thresh = base_thresh
@@ -4662,7 +4522,7 @@ class JobManager:
                                     pass
                                 # Counters: processing -> failed (terminal)
                                 try:
-                                    if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
+                                    if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {  # noqa: SIM102
                                         "1",
                                         "true",
                                         "yes",
@@ -4744,13 +4604,11 @@ class JobManager:
                                 pass
                         result = bool(ok)
             if post_commit_cancel_uuid:
-                try:
+                with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                     self._cancel_dependent_jobs(
                         post_commit_cancel_uuid,
                         reason=post_commit_cancel_reason or "dependency_failed",
                     )
-                except _JOB_NONCRITICAL_EXCEPTIONS:
-                    pass
             return bool(result)
         finally:
             conn.close()
@@ -4764,13 +4622,11 @@ class JobManager:
         _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
         try:
             if self.backend == "postgres":
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         if _test_mode:
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 logger.info(f"[JM TEST MUT] cancel_job enter job_id={job_id} backend=pg")
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
                         # Capture grouping keys for gauges
                         try:
                             cur.execute("SELECT domain, queue, job_type, uuid FROM jobs WHERE id = %s", (int(job_id),))
@@ -4921,10 +4777,8 @@ class JobManager:
                 result = False
                 with conn:
                     if _test_mode:
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             logger.info(f"[JM TEST MUT] cancel_job enter job_id={job_id} backend=sqlite")
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                     # Capture grouping keys for gauges
                     try:
                         row0 = conn.execute(
@@ -5078,13 +4932,11 @@ class JobManager:
                             pass
                         result = bool(ok)
             if post_commit_cancel_uuid:
-                try:
+                with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                     self._cancel_dependent_jobs(
                         post_commit_cancel_uuid,
                         reason=post_commit_cancel_reason or "dependency_cancelled",
                     )
-                except _JOB_NONCRITICAL_EXCEPTIONS:
-                    pass
             return bool(result)
         finally:
             conn.close()
@@ -5106,7 +4958,7 @@ class JobManager:
         conn = self._connect()
         try:
             if self.backend == "postgres":
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         cur.execute(
                             "SELECT domain, queue, job_type, available_at, status, worker_id, lease_id FROM jobs WHERE id = %s",
@@ -5137,10 +4989,8 @@ class JobManager:
                             )
                         ok = cur.rowcount > 0
                         if ok:
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 self._update_gauges(domain=row["domain"], queue=row["queue"], job_type=row["job_type"])
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
                         try:
                             if ok and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
                                 "1",
@@ -5211,10 +5061,8 @@ class JobManager:
                         )
                     ok = conn.total_changes > 0
                     if ok:
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             self._update_gauges(domain=row["domain"], queue=row["queue"], job_type=row["job_type"])
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                     try:
                         if ok and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
                             "1",
@@ -5291,7 +5139,7 @@ class JobManager:
         _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
         try:
             if self.backend == "postgres":
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         where_parts: list[str] = []
                         params: list[Any] = []
@@ -5328,10 +5176,8 @@ class JobManager:
                             row = cur.fetchone()
                             _cnt = int(row["c"]) if row is not None else 0
                             if _test_mode:
-                                try:
+                                with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                     logger.info(f"[JM TEST MUT] prune_jobs dry_run count={_cnt}")
-                                except _JOB_NONCRITICAL_EXCEPTIONS:
-                                    pass
                             return _cnt
                         # Optional archive copy
                         if str(os.getenv("JOBS_ARCHIVE_BEFORE_DELETE", "")).lower() in {"1", "true", "yes", "y", "on"}:
@@ -5450,7 +5296,7 @@ class JobManager:
                                 )
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             emit_job_event(
                                 "jobs.pruned",
                                 job=None,
@@ -5464,18 +5310,14 @@ class JobManager:
                                     "job_type": job_type,
                                 },
                             )
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                         return deleted
             else:
                 with conn:
                     if _test_mode:
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             logger.info(
                                 f"[JM TEST MUT] prune_jobs enter statuses={statuses} older_than_days={older_than_days} domain={domain} queue={queue} job_type={job_type} backend=sqlite"
                             )
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                     where_parts: list[str] = []
                     params: list[Any] = []
                     placeholders = ",".join(["?"] * len(statuses))
@@ -5517,7 +5359,7 @@ class JobManager:
                     row = cur_cnt.fetchone()
                     count = int(row[0]) if row is not None else 0
                     if dry_run:
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             emit_job_event(
                                 "jobs.pruned",
                                 job=None,
@@ -5531,13 +5373,9 @@ class JobManager:
                                     "job_type": job_type,
                                 },
                             )
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                         if _test_mode:
-                            try:
+                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 logger.info(f"[JM TEST MUT] prune_jobs dry_run count={int(count)}")
-                            except _JOB_NONCRITICAL_EXCEPTIONS:
-                                pass
                         return count
                     # Optional archive copy
                     if str(os.getenv("JOBS_ARCHIVE_BEFORE_DELETE", "")).lower() in {"1", "true", "yes", "y", "on"}:
@@ -5649,7 +5487,7 @@ class JobManager:
                             )
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
-                    try:
+                    with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                         emit_job_event(
                             "jobs.pruned",
                             job=None,
@@ -5663,8 +5501,6 @@ class JobManager:
                                 "job_type": job_type,
                             },
                         )
-                    except _JOB_NONCRITICAL_EXCEPTIONS:
-                        pass
                     return deleted
         finally:
             conn.close()
@@ -5685,7 +5521,7 @@ class JobManager:
         Returns the number of rows affected.
         """
         if action not in {"cancel", "fail"}:
-            raise ValueError("action must be 'cancel' or 'fail'")
+            raise ValueError("action must be 'cancel' or 'fail'")  # noqa: TRY003
         age_seconds = int(age_seconds) if age_seconds is not None else None
         runtime_seconds = int(runtime_seconds) if runtime_seconds is not None else None
         if age_seconds is None and runtime_seconds is None:
@@ -5694,7 +5530,7 @@ class JobManager:
         try:
             if self.backend == "postgres":
                 # Ensure updates are committed
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         # Track per-phase counts for diagnostics while returning a single total.
                         affected = 0
@@ -5866,7 +5702,7 @@ class JobManager:
                                 )
                             affected_runtime = int(cur.rowcount or 0)
                             affected += affected_runtime
-                        try:
+                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             emit_job_event(
                                 "jobs.ttl_sweep",
                                 job=None,
@@ -5882,8 +5718,6 @@ class JobManager:
                                     "job_type": job_type,
                                 },
                             )
-                        except _JOB_NONCRITICAL_EXCEPTIONS:
-                            pass
                         return affected
             else:
                 # Ensure updates are committed by using an explicit transaction block
@@ -6052,7 +5886,7 @@ class JobManager:
                             pass
                         affected2_runtime = int(cur2.rowcount or 0)
                         affected2 += affected2_runtime
-                try:
+                with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                     emit_job_event(
                         "jobs.ttl_sweep",
                         job=None,
@@ -6068,8 +5902,6 @@ class JobManager:
                             "job_type": job_type,
                         },
                     )
-                except _JOB_NONCRITICAL_EXCEPTIONS:
-                    pass
                 return affected2
         finally:
             conn.close()
@@ -6118,7 +5950,7 @@ class JobManager:
         Otherwise, adds delta_seconds to current available_at (or sets from now if NULL).
         """
         if status and status not in {"queued", "failed", "processing", "completed", "cancelled", "quarantined"}:
-            raise ValueError("Unsupported status filter")
+            raise ValueError("Unsupported status filter")  # noqa: TRY003
         conn = self._connect()
         try:
             if self.backend == "postgres":
@@ -6165,15 +5997,13 @@ class JobManager:
                         cur.execute(f"UPDATE jobs SET available_at=NOW() WHERE {wh}", tuple(params))
                     else:
                         if delta_seconds is None:
-                            raise ValueError("delta_seconds required when set_now=false")
+                            raise ValueError("delta_seconds required when set_now=false")  # noqa: TRY003
                         cur.execute(
                             f"UPDATE jobs SET available_at=COALESCE(available_at, NOW()) + (%s || ' seconds')::interval WHERE {wh}",
                             tuple([int(delta_seconds)] + params),
                         )
-                    try:
+                    with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                         conn.commit()
-                    except _JOB_NONCRITICAL_EXCEPTIONS:
-                        pass
                     return count
             else:
                 where = ["1=1"]
@@ -6223,7 +6053,7 @@ class JobManager:
                         conn.execute(f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh}", tuple(params))
                     else:
                         if delta_seconds is None:
-                            raise ValueError("delta_seconds required when set_now=false")
+                            raise ValueError("delta_seconds required when set_now=false")  # noqa: TRY003
                         conn.execute(
                             f"UPDATE jobs SET available_at=COALESCE(available_at, DATETIME('now')) WHERE {wh}",
                             tuple(params),
@@ -6462,10 +6292,8 @@ class JobManager:
                 ]
 
         finally:
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass
 
     def count_active_processing(self, *, domain: str | None = None, queue: str | None = None) -> int:
         """Count jobs currently in processing state (optionally filtered)."""
@@ -6496,19 +6324,17 @@ class JobManager:
                 row = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params2)).fetchone()
                 return int(row[0]) if row else 0
         finally:
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass
 
     def add_job_attachment(
         self, job_id: int, *, kind: str, content_text: str | None = None, url: str | None = None
     ) -> int:
         kind = str(kind or "").strip().lower()
         if kind not in {"log", "artifact", "tag"}:
-            raise ValueError("kind must be one of: log, artifact, tag")
+            raise ValueError("kind must be one of: log, artifact, tag")  # noqa: TRY003
         if not content_text and not url:
-            raise ValueError("content_text or url is required")
+            raise ValueError("content_text or url is required")  # noqa: TRY003
         conn = self._connect()
         try:
             if self.backend == "postgres":
@@ -6598,9 +6424,9 @@ class JobManager:
         """
         fields = [f for f in (fields or []) if f in {"payload", "result"}]
         if not fields:
-            raise ValueError("fields must include at least one of: payload, result")
+            raise ValueError("fields must include at least one of: payload, result")  # noqa: TRY003
         if not old_key_b64 or not new_key_b64:
-            raise ValueError("old_key_b64 and new_key_b64 are required")
+            raise ValueError("old_key_b64 and new_key_b64 are required")  # noqa: TRY003
         affected = 0
         conn = self._connect()
         try:
@@ -6671,7 +6497,7 @@ class JobManager:
                 sql = f"SELECT id, payload, result, domain, queue, job_type FROM jobs WHERE {' AND '.join(where)} ORDER BY id ASC LIMIT ?"
                 rows = conn.execute(sql, tuple(params2 + [int(limit)])).fetchall() or []
                 if dry_run:
-                    for rid, pl, rs, *_ in rows:
+                    for _rid, pl, rs, *_ in rows:
                         for fld, val in (("payload", pl), ("result", rs)):
                             if fld not in fields:
                                 continue
@@ -6725,10 +6551,8 @@ class JobManager:
                             affected += 1
                 return affected
         finally:
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass
 
     def finalize_cancelled(self, job_id: int, *, reason: str | None = None) -> bool:
         """Mark a job as cancelled terminally, regardless of prior cancel request.
@@ -6738,7 +6562,7 @@ class JobManager:
         conn = self._connect()
         try:
             if self.backend == "postgres":
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         cur.execute(
                             "UPDATE jobs SET status = 'cancelled', cancelled_at = NOW(), cancellation_reason = %s, leased_until = NULL WHERE id = %s",
@@ -6773,7 +6597,7 @@ class JobManager:
         try:
             res = {"non_processing_with_lease": 0, "processing_expired": 0, "fixed": 0}
             if self.backend == "postgres":
-                with conn:
+                with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         where_np = [
                             "status <> 'processing'",
@@ -6855,7 +6679,7 @@ class JobManager:
                             tuple(params_pr),
                         )
                         res["fixed"] += conn.total_changes or 0
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 emit_job_event(
                     "jobs.integrity_sweep",
                     job=None,
@@ -6869,11 +6693,7 @@ class JobManager:
                         "fix": bool(fix),
                     },
                 )
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass
             return res
         finally:
-            try:
+            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except _JOB_NONCRITICAL_EXCEPTIONS:
-                pass

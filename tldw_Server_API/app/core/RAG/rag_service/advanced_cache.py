@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -42,10 +43,8 @@ class MemoryCache:
         if not entry:
             return None
         if entry.is_expired():
-            try:
+            with contextlib.suppress(KeyError, TypeError):
                 self._store.pop(key, None)
-            except (KeyError, TypeError):
-                pass
             return None
         entry.update_access()
         return entry.value
@@ -77,10 +76,8 @@ class AdvancedAgenticCache:
             return None
         expires_at, value = item
         if expires_at and expires_at < time.time():
-            try:
+            with contextlib.suppress(KeyError, TypeError):
                 self._store.pop(k, None)
-            except (KeyError, TypeError):
-                pass
             return None
         return value
 
@@ -94,10 +91,8 @@ class AdvancedAgenticCache:
     def invalidate_prefix(self, namespace: str, prefix: str) -> int:
         to_delete = [k for k in list(self._store.keys()) if k[0] == namespace and k[1].startswith(prefix)]
         for k in to_delete:
-            try:
+            with contextlib.suppress(KeyError, TypeError):
                 self._store.pop(k, None)
-            except (KeyError, TypeError):
-                pass
         return len(to_delete)
 
 

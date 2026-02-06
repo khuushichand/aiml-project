@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -170,10 +171,8 @@ async def _handle_export(service: ChatbookService, payload: dict[str, Any], job_
         ej.status = ExportStatus.COMPLETED
         ej.completed_at = datetime.now(timezone.utc)
         ej.output_path = file_path
-        try:
+        with contextlib.suppress(Exception):
             ej.file_size_bytes = Path(file_path).stat().st_size if file_path else None
-        except Exception:
-            pass
         now_utc = datetime.now(timezone.utc)
         ej.expires_at = service._get_export_expiry(now_utc)
         download_expires_at = service._get_download_expiry(now_utc, ej.expires_at)

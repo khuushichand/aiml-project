@@ -4,6 +4,7 @@
 # Imports
 import asyncio
 import concurrent.futures
+import contextlib
 import json
 
 #######################################################################################################################
@@ -654,10 +655,8 @@ class StreamingResponseHandler:
                     return outputs, False
                 # Non-SSE chunk: preserve spaces (avoid stripping)
                 text_piece = stripped_leading
-                try:
+                with contextlib.suppress(_STREAMING_NONCRITICAL_EXCEPTIONS):
                     text_piece = str(text_piece)
-                except _STREAMING_NONCRITICAL_EXCEPTIONS:
-                    pass
                 try:
                     if self.text_transform:
                         text_piece = self.text_transform(text_piece)

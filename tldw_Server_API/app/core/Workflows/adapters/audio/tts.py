@@ -6,6 +6,7 @@ This module includes the TTS adapter for speech synthesis.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 from typing import Any
 
@@ -220,10 +221,8 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
                         await asyncio.wait_for(proc.communicate(), timeout=120)
                     except asyncio.TimeoutError:
                         proc.kill()
-                        try:
+                        with contextlib.suppress(_WORKFLOW_TTS_NONCRITICAL_EXCEPTIONS):
                             await proc.communicate()
-                        except _WORKFLOW_TTS_NONCRITICAL_EXCEPTIONS:
-                            pass
                     else:
                         if proc.returncode == 0:
                             normalized = True

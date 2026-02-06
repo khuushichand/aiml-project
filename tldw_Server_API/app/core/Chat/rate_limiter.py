@@ -401,7 +401,7 @@ class ConversationRateLimiter:
         async with self._state_lock:
             stats = self.usage_stats.get(user_id, UsageStats())
             window = list(self.request_windows.get(user_id, deque()))
-            user_bucket = self.user_buckets.get(user_id)
+            self.user_buckets.get(user_id)
             token_bucket = self.user_token_buckets.get(user_id)
             # Copy stats values while under lock
             request_count = stats.request_count
@@ -418,7 +418,6 @@ class ConversationRateLimiter:
         tokens_per_minute = sum(tokens for _, tokens in recent_requests)
 
         # Get current bucket states
-        user_tokens_available = user_bucket.tokens if user_bucket else self.config.per_user_rpm
         user_token_capacity = token_bucket.tokens if token_bucket else self.config.per_user_tokens_per_minute
 
         return {
@@ -507,11 +506,11 @@ class ConversationRateLimiter:
             # Remove conversation buckets with no recent activity based on any user's conversation counts
             active_conversations = set()
             for stats in self.usage_stats.values():
-                for cid in stats.conversation_request_counts.keys():
+                for cid in stats.conversation_request_counts:
                     active_conversations.add(cid)
 
             conversations_to_remove = [
-                cid for cid in self.conversation_buckets.keys()
+                cid for cid in self.conversation_buckets
                 if cid not in active_conversations
             ]
             for cid in conversations_to_remove:

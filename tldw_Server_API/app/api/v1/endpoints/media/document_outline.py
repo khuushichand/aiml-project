@@ -3,7 +3,7 @@
 #
 from __future__ import annotations
 
-from typing import BinaryIO, Union
+from typing import BinaryIO
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 from loguru import logger
@@ -33,7 +33,7 @@ def _check_pymupdf_available() -> bool:
         return False
 
 
-def _extract_pdf_outline(pdf_data: Union[bytes, BinaryIO]) -> tuple[list[OutlineEntry], int]:
+def _extract_pdf_outline(pdf_data: bytes | BinaryIO) -> tuple[list[OutlineEntry], int]:
     """
     Extract table of contents from PDF using PyMuPDF.
 
@@ -53,10 +53,7 @@ def _extract_pdf_outline(pdf_data: Union[bytes, BinaryIO]) -> tuple[list[Outline
         raise RuntimeError("PyMuPDF is not installed") from exc
 
     # Handle both bytes and file-like objects
-    if hasattr(pdf_data, "read"):
-        pdf_bytes = pdf_data.read()
-    else:
-        pdf_bytes = pdf_data
+    pdf_bytes = pdf_data.read() if hasattr(pdf_data, "read") else pdf_data
 
     entries: list[OutlineEntry] = []
 

@@ -67,6 +67,8 @@ class TemplateOptions:
     random_seed: int | None = None
 
 
+import contextlib
+
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
 
@@ -197,10 +199,8 @@ class _RandomFacade:
 
         self._random = _random.Random()
         if seed is not None:
-            try:
+            with contextlib.suppress(_TEMPLATE_NONCRITICAL_EXCEPTIONS):
                 self._random.seed(seed)
-            except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
-                pass
 
     def randint(self, a: int, b: int) -> int:
         return self._random.randint(a, b)
@@ -280,10 +280,8 @@ def render(text: str, ctx: TemplateContext, options: TemplateOptions | None = No
         _validate_expression_only(text)
     except _TEMPLATE_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"template_parse_error/expression_only: {e}")
-        try:
+        with contextlib.suppress(_TEMPLATE_NONCRITICAL_EXCEPTIONS):
             increment_counter("template_render_failure_total", labels={"source": metrics_source, "reason": "parse"})
-        except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
-            pass
         return text
 
     # Build helper functions and variables exposed to the template
@@ -332,10 +330,8 @@ def render(text: str, ctx: TemplateContext, options: TemplateOptions | None = No
         output = tmpl.render(render_vars)
     except _TEMPLATE_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"template_render_failure: {e}")
-        try:
+        with contextlib.suppress(_TEMPLATE_NONCRITICAL_EXCEPTIONS):
             increment_counter("template_render_failure_total", labels={"source": metrics_source, "reason": "exception"})
-        except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
-            pass
         return text
     finally:
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -343,14 +339,10 @@ def render(text: str, ctx: TemplateContext, options: TemplateOptions | None = No
             logger.debug(
                 f"template_render_timeout: elapsed_ms={elapsed_ms} > timeout_ms={opts.timeout_ms}"
             )
-            try:
+            with contextlib.suppress(_TEMPLATE_NONCRITICAL_EXCEPTIONS):
                 increment_counter("template_render_timeout_total", labels={"source": metrics_source})
-            except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
-                pass
-        try:
+        with contextlib.suppress(_TEMPLATE_NONCRITICAL_EXCEPTIONS):
             observe_histogram("template_render_duration_seconds", value=float(elapsed_ms) / 1000.0, labels={"source": metrics_source})
-        except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
-            pass
 
     if not isinstance(output, str):
         try:
@@ -362,14 +354,10 @@ def render(text: str, ctx: TemplateContext, options: TemplateOptions | None = No
         logger.debug(
             f"template_output_too_large: size={len(output)} cap={opts.max_output_chars}"
         )
-        try:
+        with contextlib.suppress(_TEMPLATE_NONCRITICAL_EXCEPTIONS):
             increment_counter("template_output_truncated_total", labels={"source": metrics_source})
-        except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
-            pass
         return output[: opts.max_output_chars]
 
-    try:
+    with contextlib.suppress(_TEMPLATE_NONCRITICAL_EXCEPTIONS):
         increment_counter("template_render_success_total", labels={"source": metrics_source})
-    except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
-        pass
     return output

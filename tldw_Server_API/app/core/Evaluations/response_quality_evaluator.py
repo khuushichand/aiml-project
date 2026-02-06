@@ -87,7 +87,7 @@ class ResponseQualityEvaluator:
                         results["issues"].extend(metric_data.get("issues", []))
                 else:
                     results["metrics"][metric_name] = metric_data
-                    if metric_name not in ["custom_" + k for k in (custom_criteria or {}).keys()]:
+                    if metric_name not in ["custom_" + k for k in (custom_criteria or {})]:
                         format_scores.append(metric_data["score"])
 
         # Calculate overall quality

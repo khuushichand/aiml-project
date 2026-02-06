@@ -5,7 +5,7 @@
 import asyncio
 import os
 import re
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import unquote, urlparse
@@ -164,13 +164,11 @@ def _apply_single_user_fallback(url: str, auth_mode: Optional[str] = None) -> st
         scheme = ""
 
     if mode == "single_user" and scheme and not scheme.startswith("sqlite") and not scheme.startswith("file"):
-        try:
+        with suppress(_AUTHNZ_DB_NONCRITICAL_EXCEPTIONS):
             logger.warning(
                 "Single-user mode: ignoring non-sqlite DATABASE_URL '%s'; using sqlite:///./Databases/users.db",
                 url,
             )
-        except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS:
-            pass
         return "sqlite:///./Databases/users.db"
 
     return url
@@ -568,7 +566,7 @@ class DatabasePool:
                 row = await cursor.fetchone()
                 if row:
                     # Convert Row to dict
-                    return {key: row[key] for key in row.keys()}
+                    return {key: row[key] for key in row}
                 return None
 
     # Compatibility aliases for callers expecting asyncpg-like API
@@ -640,7 +638,7 @@ class DatabasePool:
             if self.pool:
                 # PostgreSQL health check
                 async with self.pool.acquire() as conn:
-                    result = await conn.fetchval("SELECT 1")
+                    await conn.fetchval("SELECT 1")
                     pool_size = self.pool.get_size()
                     idle_size = self.pool.get_idle_size()
 

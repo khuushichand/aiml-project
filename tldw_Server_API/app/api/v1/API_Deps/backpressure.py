@@ -136,10 +136,7 @@ def _should_enforce_ingest_tenant_rps(request: Request, current_user: User) -> b
 
     # If we lack principal context entirely, treat local single-user-style profiles
     # as non-tenant for ingestion quotas.
-    if principal is None and single_profile:
-        return False
-
-    return True
+    return not (principal is None and single_profile)
 
 
 async def guard_backpressure_and_quota(

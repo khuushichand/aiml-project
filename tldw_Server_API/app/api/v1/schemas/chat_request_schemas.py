@@ -394,7 +394,7 @@ class ChatCompletionRequestMessageContentPartImageURL(BaseModel):
     )
 
     @field_validator("url")
-    def check_url_or_data(cls, v):
+    def check_url_or_data(self, v):
         # Normalize HttpUrl to string and enforce data URI requirement
         if isinstance(v, HttpUrl):
             v = str(v)
@@ -458,11 +458,10 @@ class ChatCompletionUserMessageParam(BaseMessage):
     @field_validator("content")
     @classmethod
     def validate_content_length(cls, v: Union[str, list]) -> Union[str, list]:
-        if isinstance(v, str):
-            if len(v) > MAX_MESSAGE_CONTENT_LENGTH:
-                raise ValueError(
-                    f"User message content exceeds maximum length ({MAX_MESSAGE_CONTENT_LENGTH} chars)"
-                )
+        if isinstance(v, str) and len(v) > MAX_MESSAGE_CONTENT_LENGTH:
+            raise ValueError(
+                f"User message content exceeds maximum length ({MAX_MESSAGE_CONTENT_LENGTH} chars)"
+            )
         # Note: List content parts are validated by ChatCompletionRequestMessageContentPartText
         return v
 
@@ -595,7 +594,7 @@ class ChatCompletionAssistantMessageParam(BaseMessage):
         return v
 
     @model_validator(mode="before")
-    def check_content_or_tool_call(cls, values):
+    def check_content_or_tool_call(self, values):
         content = values.get("content")
         tool_calls = values.get("tool_calls")
         function_call = values.get("function_call")  # Include deprecated field check if necessary
@@ -793,7 +792,7 @@ class ChatCompletionRequest(BaseModel):
         return v
 
     @model_validator(mode="before")
-    def check_logprobs(cls, values):
+    def check_logprobs(self, values):
         logprobs = values.get("logprobs")
         top_logprobs = values.get("top_logprobs")
         if top_logprobs is not None and not logprobs:

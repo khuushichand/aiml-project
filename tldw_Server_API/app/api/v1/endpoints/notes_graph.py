@@ -199,7 +199,7 @@ async def get_note_neighbors(
     """
     Stub neighbors endpoint; enforces RBAC and token scope.
     """
-    normalized_note_id = _normalize_note_id(note_id)
+    _normalize_note_id(note_id)
     # TODO: use normalized_note_id for neighbor lookup
     limits = GraphLimits(max_nodes=300, max_edges=1200, max_degree=40)
     return NoteGraphResponse(

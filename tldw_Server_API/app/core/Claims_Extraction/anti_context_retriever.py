@@ -9,7 +9,7 @@ contrary queries to actively seek evidence that might contradict a claim.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -121,8 +121,8 @@ class AntiContextRetriever:
 
     def __init__(
         self,
-        retriever: "MultiDatabaseRetriever",
-        config: Optional[AntiContextConfig] = None,
+        retriever: MultiDatabaseRetriever,
+        config: AntiContextConfig | None = None,
     ):
         """
         Initialize the anti-context retriever.
@@ -137,10 +137,10 @@ class AntiContextRetriever:
 
     async def retrieve_anti_context(
         self,
-        claim: "Claim",
+        claim: Claim,
         original_doc_ids: set[str],
-        user_id: Optional[str] = None,
-        sources: Optional[list[DataSource]] = None,
+        user_id: str | None = None,
+        sources: list[DataSource] | None = None,
     ) -> list[AntiContextResult]:
         """
         Generate negation/contrary queries and retrieve potential counter-evidence.
@@ -222,7 +222,7 @@ class AntiContextRetriever:
             # Return None if RetrievalConfig not available
             return None
 
-    def _generate_anti_queries(self, claim: "Claim") -> list[tuple[str, str]]:
+    def _generate_anti_queries(self, claim: Claim) -> list[tuple[str, str]]:
         """
         Generate queries designed to find contradicting evidence.
 
@@ -252,8 +252,8 @@ class AntiContextRetriever:
         return queries
 
     def _fill_contrary_template(
-        self, template: str, claim: "Claim"
-    ) -> Optional[str]:
+        self, template: str, claim: Claim
+    ) -> str | None:
         """
         Fill contrary template with extracted claim entities.
 

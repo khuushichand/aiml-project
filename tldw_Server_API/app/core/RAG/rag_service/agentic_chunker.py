@@ -20,6 +20,7 @@ Integration entrypoint: `agentic_rag_pipeline(...)` which mirrors a subset of
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import re
 import time
@@ -166,18 +167,12 @@ def invalidate_intra_doc_vectors(media_id: str) -> int:
 
 def clear_agentic_caches() -> None:
     """Clear ephemeral chunk cache and intra-doc vector cache."""
-    try:
+    with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
         AGENTIC_CACHE.invalidate_prefix("ephemeral_chunk", "")
-    except (AttributeError, RuntimeError, TypeError, ValueError):
-        pass
-    try:
+    with contextlib.suppress(AttributeError, TypeError, ValueError):
         _INTRA_DOC_VEC_CACHE.clear()
-    except (AttributeError, TypeError, ValueError):
-        pass
-    try:
+    with contextlib.suppress(AttributeError, TypeError, ValueError):
         _EPHEMERAL_CACHE.clear()
-    except (AttributeError, TypeError, ValueError):
-        pass
 
 
 def _token_estimate(text: str) -> int:
@@ -575,18 +570,9 @@ async def _tool_loop(docs: list[Document], query: str, cfg: AgenticConfig) -> tu
         try:
             from .generation import AnswerGenerator
             planner = AnswerGenerator(model=None)
-            prompt = (
-                "You are planning a bounded read to answer a query from long documents. "
-                "Suggest up to 5 short headings to jump to and up to 8 keywords to search for. "
-                "Respond as JSON with keys 'headings' and 'keywords'.\n\n"
-                f"Query: {query}"
-            )
             gen = await planner.generate(query=query, context="", prompt_template="default", max_tokens=200)
             # Handle sync result returned by adapter
-            if isinstance(gen, dict):
-                text = gen.get("answer", "")
-            else:
-                text = str(gen)
+            text = gen.get("answer", "") if isinstance(gen, dict) else str(gen)
             m = re.search(r"\{.*\}", text, re.DOTALL)
             if m:
                 import json as _json
@@ -900,7 +886,8 @@ async def agentic_rag_pipeline(
                     get_backend as _get_vlm_backend,
                 )
             except ImportError:
-                _get_vlm_backend = lambda name=None: None
+                def _get_vlm_backend(name=None):
+                    return None
             backend = _get_vlm_backend(cfg.agentic_vlm_backend if cfg.agentic_vlm_backend not in (None, "auto") else None)
             if backend is not None:
                 # Select top-k docs with local PDF path
@@ -1194,9 +1181,9 @@ async def agentic_rag_pipeline(
                 if nf:
                     result.metadata.setdefault("numeric_fidelity", {})
                     result.metadata["numeric_fidelity"].update({
-                        "present": sorted(list(nf.present)),
-                        "missing": sorted(list(nf.missing)),
-                        "source_numbers": sorted(list(nf.union_source_numbers))[:100],
+                        "present": sorted(nf.present),
+                        "missing": sorted(nf.missing),
+                        "source_numbers": sorted(nf.union_source_numbers)[:100],
                     })
                     if nf.missing and numeric_fidelity_behavior in {"retry", "ask", "decline"}:
                         if numeric_fidelity_behavior == "ask":
@@ -1292,10 +1279,8 @@ async def agentic_rag_pipeline(
 
     # Include tool trace on debug
     if (debug_mode or cfg.debug_trace) and (not cached_hit) and cfg.enable_tools:
-        try:
+        with contextlib.suppress(AttributeError, TypeError, ValueError):
             result.metadata["tool_trace"] = tool_trace
-        except (AttributeError, TypeError, ValueError):
-            pass
 
     # Timings
     result.total_time = time.time() - t0

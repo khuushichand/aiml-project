@@ -52,10 +52,7 @@ def _summarize_messages(messages: Any, key: str) -> dict[str, Any]:
     if messages is None:
         return {f"{key}_count": 0, f"{key}_text_chars": 0}
 
-    if not isinstance(messages, list):
-        messages_iterable = [messages]
-    else:
-        messages_iterable = messages
+    messages_iterable = [messages] if not isinstance(messages, list) else messages
 
     role_counts: dict[str, int] = {}
     total_text_chars = 0

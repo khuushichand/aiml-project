@@ -2,6 +2,7 @@
 # Event broadcasting system for Prompt Studio real-time updates
 
 import asyncio
+import contextlib
 import json
 import uuid
 from datetime import datetime
@@ -121,10 +122,8 @@ class EventBroadcaster:
 
         logger.debug(f"Broadcast {event_type.value} to {client_ids or 'all'}")
         # Optional metrics per WS message
-        try:
+        with contextlib.suppress(Exception):
             prompt_studio_metrics.record_websocket_message(event_type.value)
-        except Exception:
-            pass
 
     # Backward-compat: some tests patch EventBroadcaster.broadcast; provide a thin wrapper
     async def broadcast(self, *args, **kwargs):  # noqa: D401 - compatibility wrapper
@@ -351,10 +350,8 @@ class EventBroadcaster:
 
         if self._process_task:
             self._process_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._process_task
-            except asyncio.CancelledError:
-                pass
 
         logger.info("Stopped event processor")
 
@@ -433,7 +430,7 @@ class EventBroadcaster:
         entity_id = job["entity_id"]
 
         conn = self.db.get_connection()
-        cursor = conn.cursor()
+        conn.cursor()
 
         try:
             if job_type == "evaluation":

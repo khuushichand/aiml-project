@@ -503,9 +503,9 @@ class PrivilegeMapService:
             name=scope.id,
             tags=tuple(scope.resource_tags or [RESOURCE_FALLBACK]),
             endpoint="",
-            dependencies=tuple(),
-            dependency_sources=tuple(),
-            rate_limit_resources=tuple(),
+            dependencies=(),
+            dependency_sources=(),
+            rate_limit_resources=(),
             summary=scope.description,
             description=scope.description,
         )
@@ -1168,7 +1168,7 @@ class PrivilegeMapService:
         if isinstance(row, dict):
             return row
         if hasattr(row, "keys"):
-            return {key: row[key] for key in row.keys()}
+            return {key: row[key] for key in row}
         if hasattr(row, "_mapping"):
             return dict(row._mapping)  # type: ignore[attr-defined]
         return None

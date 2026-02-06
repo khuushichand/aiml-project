@@ -61,9 +61,7 @@ def _env_flag(name: str) -> bool:
     lowered = value.strip().lower()
     if lowered in {"1", "true", "yes", "on"}:
         return True
-    if lowered in {"0", "false", "no", "off", ""}:
-        return False
-    return True
+    return lowered not in {"0", "false", "no", "off", ""}
 
 
 class GoogleAdapter(ChatProvider):
@@ -515,7 +513,7 @@ class GoogleAdapter(ChatProvider):
                 err = body["error"]
                 msg = (err.get("message") or "").strip()
                 st = (err.get("status") or "").strip()
-                code = err.get("code")
+                err.get("code")
                 detail = (f"{st} {msg}" if st else msg) or str(exc)
             else:
                 detail = get_http_error_text(exc)
@@ -625,8 +623,7 @@ class GoogleAdapter(ChatProvider):
                         normalized = normalize_provider_line(line)
                         if normalized is not None:
                             yield normalized
-                    for tail in finalize_stream(response=resp, done_already=seen_done):
-                        yield tail
+                    yield from finalize_stream(response=resp, done_already=seen_done)
             return
         except _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS as e:
             raise self.normalize_error(e)

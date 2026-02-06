@@ -3,6 +3,7 @@
 
 import asyncio
 import builtins
+import contextlib
 import functools
 import hashlib
 import io
@@ -358,10 +359,8 @@ class L2DiskCache:
                 def _total_excluding_current() -> int:
                     total_size = self._get_total_size()
                     if key in self.index:
-                        try:
+                        with contextlib.suppress(_CACHE_NONCRITICAL_EXCEPTIONS):
                             total_size -= int(self.index[key].get('size_bytes') or 0)
-                        except _CACHE_NONCRITICAL_EXCEPTIONS:
-                            pass
                     return max(0, total_size)
 
                 # Check total cache size and evict until we have room

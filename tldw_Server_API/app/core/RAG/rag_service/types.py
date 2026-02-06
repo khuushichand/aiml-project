@@ -490,7 +490,7 @@ class EvidenceChain:
             return
 
         # Count unique documents involved
-        unique_docs = set(node.document_id for node in self.nodes)
+        unique_docs = {node.document_id for node in self.nodes}
         self.hop_count = len(unique_docs)
 
     def add_node(self, node: EvidenceNode) -> None:
@@ -505,7 +505,7 @@ class EvidenceChain:
 
     def get_source_documents(self) -> list[str]:
         """Get unique list of source document IDs."""
-        return list(set(node.document_id for node in self.nodes))
+        return list({node.document_id for node in self.nodes})
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""

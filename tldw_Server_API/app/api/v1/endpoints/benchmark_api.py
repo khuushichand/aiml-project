@@ -356,7 +356,7 @@ async def evaluate_simpleqa(
     try:
         from tldw_Server_API.app.core.Evaluations.simpleqa_eval import SimpleQAEvaluation
 
-        evaluator = SimpleQAEvaluation(
+        SimpleQAEvaluation(
             grading_model=api_name,
             strict_grading=strict_grading
         )

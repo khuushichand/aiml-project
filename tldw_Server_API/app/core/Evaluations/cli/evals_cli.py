@@ -7,6 +7,7 @@ DEPRECATION NOTICE:
 - Please switch to: `tldw-evals` (recommended) or `python -m tldw_Server_API.cli.evals_cli`.
 """
 
+import contextlib
 import json
 import sys
 import warnings
@@ -96,14 +97,12 @@ def _call_adapter_text(
 def cli(ctx, config, log_level):
     """tldw Evaluations CLI (deprecated) - Run evaluation benchmarks."""
     # Emit deprecation warning
-    try:
+    with contextlib.suppress(RuntimeError, ValueError, Warning):
         warnings.warn(
             "This CLI module is deprecated; use tldw_Server_API.cli.evals_cli instead.",
             DeprecationWarning,
             stacklevel=2,
         )
-    except (RuntimeError, ValueError, Warning):
-        pass
     click.secho(DEPRECATION_MSG, fg='yellow', err=True)
     # Configure logging
     logger.remove()
@@ -197,7 +196,7 @@ def list_benchmarks(detailed):
 def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_run):
     """Run a benchmark evaluation using specified API."""
     registry = ctx.obj['registry']
-    manager = ctx.obj['manager']
+    ctx.obj['manager']
 
     # Check if benchmark exists
     config = registry.get(benchmark)
@@ -451,7 +450,7 @@ def validate(benchmark, samples):
             # Try formatting a sample
             if dataset:
                 try:
-                    formatted = evaluator.format_for_custom_metric(dataset[0])
+                    evaluator.format_for_custom_metric(dataset[0])
                     click.echo("Sample formatted successfully for evaluation")
                 except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
                     click.echo(f"Warning: Could not format sample: {e}", err=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import os
 import socket
@@ -120,13 +121,11 @@ def _resolve_host_ips(host: str) -> list[str]:
         except (OSError, ValueError):
             return []
         finally:
-            try:
+            with contextlib.suppress(OSError, TypeError, ValueError):
                 socket.setdefaulttimeout(prev_timeout)
-            except (OSError, TypeError, ValueError):
-                pass
 
         addrs: list[str] = []
-        for family, _stype, _proto, _canon, sockaddr in infos:
+        for _family, _stype, _proto, _canon, sockaddr in infos:
             try:
                 # sockaddr[0] is the IP for both AF_INET and AF_INET6
                 ip = sockaddr[0]

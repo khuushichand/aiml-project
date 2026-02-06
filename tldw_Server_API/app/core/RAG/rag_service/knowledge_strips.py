@@ -139,10 +139,10 @@ def _score_strip_relevance(
     import re
 
     # Extract query keywords
-    query_words = set(
+    query_words = {
         w.lower() for w in re.findall(r'\b\w+\b', query)
         if len(w) > 2
-    )
+    }
 
     # Count keyword matches in strip
     strip_lower = strip_text.lower()

@@ -524,5 +524,5 @@ async def upsert_org_policy(
 ) -> ConnectorPolicy:
     # Enforce: only meaningful in multi-user mode; but persist anyway for forward usage
     p = policy.model_dump()
-    saved = await upsert_policy(db, int(policy.org_id), p)
+    await upsert_policy(db, int(policy.org_id), p)
     return await get_org_policy(org_id=int(policy.org_id), db=db)

@@ -129,10 +129,7 @@ def _resolve_kanban_db_path(current_user: Optional[User], request_user_id: Optio
             user_id = request_user_id
     except (AttributeError, TypeError):
         logger.debug("Failed to resolve user_id for kanban DB path", exc_info=True)
-        if current_user is None:
-            user_id = request_user_id
-        else:
-            user_id = None
+        user_id = request_user_id if current_user is None else None
     if user_id is None:
         try:
             user_id = DatabasePaths.get_single_user_id()
@@ -381,22 +378,22 @@ async def rag_ablate(
         "kanban_db_path": kanban_db_path,
     }
 
-    common = dict(
-        query=request.query,
-        sources=["media_db"],
-        media_db_path=db_paths["media_db_path"],
-        notes_db_path=db_paths["notes_db_path"],
-        character_db_path=db_paths["character_db_path"],
-        kanban_db_path=db_paths["kanban_db_path"],
-        media_db=media_db,
-        chacha_db=chacha_db,
-        search_mode=request.search_mode,
-        top_k=request.top_k,
-        min_score=0.0,
-        enable_generation=bool(request.with_answer),
-        generation_model=None,
-        max_generation_tokens=300,
-    )
+    common = {
+        "query": request.query,
+        "sources": ["media_db"],
+        "media_db_path": db_paths["media_db_path"],
+        "notes_db_path": db_paths["notes_db_path"],
+        "character_db_path": db_paths["character_db_path"],
+        "kanban_db_path": db_paths["kanban_db_path"],
+        "media_db": media_db,
+        "chacha_db": chacha_db,
+        "search_mode": request.search_mode,
+        "top_k": request.top_k,
+        "min_score": 0.0,
+        "enable_generation": bool(request.with_answer),
+        "generation_model": None,
+        "max_generation_tokens": 300,
+    }
 
     runs = []
 

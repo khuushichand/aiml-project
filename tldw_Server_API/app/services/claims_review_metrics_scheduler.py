@@ -11,6 +11,7 @@ Enable via env:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from typing import Callable
 
@@ -104,10 +105,8 @@ async def run_claims_review_metrics_once(
             logger.warning(f"claims_review_metrics: failed to create media db: {exc}")
             return 0
         try:
-            try:
+            with contextlib.suppress(_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS):
                 media_db.initialize_db()
-            except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS:
-                pass
             user_ids = media_db.list_claims_review_user_ids()
             if not user_ids:
                 try:
@@ -126,10 +125,8 @@ async def run_claims_review_metrics_once(
                 except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.warning(f"claims_review_metrics: aggregation failed for user {user_id}: {exc}")
         finally:
-            try:
+            with contextlib.suppress(_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS):
                 media_db.close_connection()
-            except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS:
-                pass
     else:
         user_ids = _enumerate_sqlite_user_ids()
         for user_id in user_ids:
@@ -142,10 +139,8 @@ async def run_claims_review_metrics_once(
                 logger.debug(f"claims_review_metrics: failed to open user db {user_id}: {exc}")
                 continue
             try:
-                try:
+                with contextlib.suppress(_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS):
                     user_db.initialize_db()
-                except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS:
-                    pass
                 processed += await asyncio.to_thread(
                     agg_fn,
                     db=user_db,
@@ -156,10 +151,8 @@ async def run_claims_review_metrics_once(
             except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"claims_review_metrics: aggregation failed for user {user_id}: {exc}")
             finally:
-                try:
+                with contextlib.suppress(_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS):
                     user_db.close_connection()
-                except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS:
-                    pass
     return processed
 
 

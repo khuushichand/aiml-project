@@ -109,10 +109,10 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - Rate-limit headers deterministic under non-test mode with configured backend.
   - tldw_Server_API/tests/Watchlists/test_rate_limit_headers_strict.py
 
-**Status**: In Progress (dedup/seen inspect-reset API + DB support shipped; scheduler controls and perf sanity tests added; broader scale validation remains)
+**Status**: Complete (dedup/seen inspect-reset API + DB support shipped; scheduler controls and broader scale validation tests added; operational limits boundary tests + admin UI surfacing for dedup/seen completed)
 
 Stage 5 scale target matrix is tracked in:
-- `Docs/Plans/IMPLEMENTATION_PLAN_watchlists_scale_validation_dedup_ui.md` (Stage 1 complete with concrete latency/throughput/memory/error budgets and endpoint validation matrix)
+- `Docs/Plans/IMPLEMENTATION_PLAN_watchlists_scale_validation_dedup_ui.md` (all 5 stages complete)
 
 ---
 
@@ -120,6 +120,17 @@ Stage 5 scale target matrix is tracked in:
 - Include-only gating: default can be set per-org (and via env); tests should cover both job-flag and org-default paths.
 - Keep tests deterministic; mock external services (feeds, email, Chatbook, TTS). Mark performance tests with `@pytest.mark.perf`.
 - Update Docs/Published/API-related/Watchlists_API.md and Docs/Published/RELEASE_NOTES.md alongside code changes.
+
+### Operational Limits (enforced via Pydantic Query constraints)
+
+| Endpoint | Parameter | Max | Rejection |
+|---|---|---|---|
+| `/sources`, `/jobs`, `/runs`, `/tags`, `/groups` | `size` | 200 | 422 |
+| `/jobs/{id}/preview` | `limit` | 200 | 422 |
+| `/jobs/{id}/preview` | `per_source` | 100 | 422 |
+| `/runs/export.csv` | `size` | 1000 | 422 |
+| `/runs/export.csv` (aggregate tallies) | `scope` | must be `global` | 400 |
+| `/sources/{id}/seen` (target_user_id) | auth | admin required | 403 |
 
 Checklist (quick)
 - [x] CSV export tests (global/by-job + tallies; headers/rows)
@@ -133,3 +144,7 @@ Checklist (quick)
 - [x] Stage 5: scheduler controls focused tests (`test_scheduler_controls.py`)
 - [x] Stage 5: dedup/seen inspect-reset tools + tests (`test_dedup_seen_tools.py`)
 - [x] Stage 5: performance sanity test scaffold (`test_perf_scenarios.py`)
+- [x] Stage 5: high-cardinality source/job performance coverage (`test_perf_scenarios.py`)
+- [x] Stage 5: runs/export/details API load validation (`test_watchlists_scale_load_api.py`)
+- [x] Stage 5: operational limits boundary tests (`test_operational_limits.py`)
+- [x] Stage 5: admin UI dedup/seen drawer (`SourceSeenDrawer.tsx` + component tests)

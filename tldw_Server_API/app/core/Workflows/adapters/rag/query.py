@@ -10,6 +10,7 @@ This module includes adapters for query operations:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from typing import Any
@@ -445,10 +446,8 @@ async def run_semantic_cache_check_adapter(config: dict[str, Any], context: dict
 
                         cached_result = meta.get("result")
                         if isinstance(cached_result, str):
-                            try:
+                            with contextlib.suppress(_QUERY_JSON_PARSE_EXCEPTIONS):
                                 cached_result = json.loads(cached_result)
-                            except _QUERY_JSON_PARSE_EXCEPTIONS:
-                                pass
 
                         return {
                             "cache_hit": True,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import shutil
 from collections.abc import AsyncGenerator
@@ -178,10 +179,8 @@ async def _process_mediawiki_dump(
                 detail="Failed to save uploaded file",
             ) from exc
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 await dump_file.close()
-            except Exception:
-                pass
 
         logger.info("MediaWiki dump saved to temporary path: {}", temp_file_path)
 

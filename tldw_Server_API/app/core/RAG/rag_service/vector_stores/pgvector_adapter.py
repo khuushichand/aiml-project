@@ -7,6 +7,7 @@ Notes:
 - Requires pgvector extension installed in the target database.
 """
 import asyncio
+import contextlib
 import re
 from typing import Any, Optional, cast
 
@@ -570,10 +571,8 @@ class PGVectorAdapter(VectorStoreAdapter):
         return {'items': items, 'total': total}
 
     def set_ef_search(self, value: int) -> int:
-        try:
+        with contextlib.suppress(TypeError, ValueError):
             self._ef_search = max(1, int(value))
-        except (TypeError, ValueError):
-            pass
         return self._ef_search
 
     async def rebuild_index(
@@ -675,10 +674,7 @@ class PGVectorAdapter(VectorStoreAdapter):
             vector_cls = self._vector_cls
             vector_obj: Any = query_vector
             if vector_cls is not None:
-                if isinstance(vector_obj, vector_cls):
-                    vector_param = vector_obj
-                else:
-                    vector_param = vector_cls(query_vector)
+                vector_param = vector_obj if isinstance(vector_obj, vector_cls) else vector_cls(query_vector)
             else:
                 vector_param = self._serialize_vector(query_vector)
         else:

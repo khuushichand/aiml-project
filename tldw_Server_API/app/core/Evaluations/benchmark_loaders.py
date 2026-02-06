@@ -8,6 +8,7 @@ Supports loading from:
 - Custom formats
 """
 
+import contextlib
 import csv
 import json
 from collections.abc import Generator
@@ -59,10 +60,8 @@ class DatasetLoader:
                     if line:
                         data.append(json.loads(line))
             finally:
-                try:
+                with contextlib.suppress(Exception):
                     r.close()
-                except Exception:
-                    pass
         else:
             with open(source, encoding='utf-8') as f:
                 for line in f:
@@ -82,10 +81,8 @@ class DatasetLoader:
                 lines = r.text.strip().split('\n')
                 reader = csv.DictReader(lines, delimiter=delimiter)
             finally:
-                try:
+                with contextlib.suppress(Exception):
                     r.close()
-                except Exception:
-                    pass
         else:
             with open(source, encoding='utf-8') as f:
                 reader = csv.DictReader(f, delimiter=delimiter)
@@ -105,7 +102,7 @@ class DatasetLoader:
         try:
             from datasets import load_dataset
         except ImportError:
-            logger.error("HuggingFace datasets library not installed. "
+            logger.exception("HuggingFace datasets library not installed. "
                         "Install with: pip install datasets")
             return []
 
@@ -123,7 +120,7 @@ class DatasetLoader:
             return data
 
         except Exception as e:
-            logger.error(f"Failed to load HuggingFace dataset {dataset_id}: {e}")
+            logger.exception(f"Failed to load HuggingFace dataset {dataset_id}: {e}")
             return []
 
     @staticmethod
@@ -143,10 +140,8 @@ class DatasetLoader:
                                 yield chunk
                                 chunk = []
                 finally:
-                    try:
+                    with contextlib.suppress(Exception):
                         r.close()
-                    except Exception:
-                        pass
             else:
                 with open(source, encoding='utf-8') as f:
                     for line in f:

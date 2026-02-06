@@ -12,7 +12,7 @@ import random
 import re
 import warnings
 from datetime import datetime, timedelta
-from typing import Any, Union
+from typing import Any
 
 from loguru import logger
 
@@ -214,7 +214,7 @@ class ChatDictionary:
         self.max_replacements = max_replacements
 
     @staticmethod
-    def compile_key(key: str) -> Union[str, re.Pattern]:
+    def compile_key(key: str) -> str | re.Pattern:
         """Compile a key string into a regex pattern if wrapped in '/'."""
         if key.startswith("/") and key.endswith("/"):
             return re.compile(key[1:-1], re.IGNORECASE)
@@ -286,10 +286,7 @@ def apply_timed_effects(entry: ChatDictionary, current_time: datetime) -> bool:
     """
     logging.debug(f"Applying timed effects for entry: {entry.key_raw}")
     if entry.timed_effects["delay"] > 0:
-        if entry.last_triggered is None:
-            base_time = datetime.min
-        else:
-            base_time = entry.last_triggered
+        base_time = datetime.min if entry.last_triggered is None else entry.last_triggered
         if current_time - base_time < timedelta(seconds=entry.timed_effects["delay"]):
             logging.debug(f"Entry '{entry.key_raw}' blocked by delay.")
             return False
@@ -336,7 +333,7 @@ def enforce_token_budget(entries: list[ChatDictionary], max_tokens: int) -> list
                 f"Max tokens: {max_tokens}, current tokens: {current_tokens}, "
                 f"entry '{entry.key_raw}' would add {entry_tokens}."
             )
-            warnings.warn(TokenBudgetExceededWarning(warning_msg))
+            warnings.warn(TokenBudgetExceededWarning(warning_msg), stacklevel=2)
             logging.warning(warning_msg)
             break
 

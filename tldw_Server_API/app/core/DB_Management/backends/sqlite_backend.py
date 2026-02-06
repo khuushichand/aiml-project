@@ -13,7 +13,7 @@ import time
 import urllib.parse as _url
 import weakref
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -107,10 +107,8 @@ class SQLiteConnectionPool(ConnectionPool):
             for tid in stale_ids:
                 conn = self._connections.pop(tid, None)
                 if conn:
-                    try:
+                    with suppress(OSError, RuntimeError, sqlite3.Error):
                         conn.close()
-                    except (OSError, RuntimeError, sqlite3.Error):
-                        pass
                 self._thread_refs.pop(tid, None)
 
     def get_connection(self) -> sqlite3.Connection:
@@ -138,10 +136,7 @@ class SQLiteConnectionPool(ConnectionPool):
         # Ensure database directory exists for file-backed DBs
         if not self._is_memory:
             try:
-                if self._use_uri:
-                    dbp = _sqlite_file_path_from_uri(self.db_path)
-                else:
-                    dbp = Path(self.db_path)
+                dbp = _sqlite_file_path_from_uri(self.db_path) if self._use_uri else Path(self.db_path)
                 if dbp and dbp.parent and not dbp.parent.exists():
                     dbp.parent.mkdir(parents=True, exist_ok=True)
             except OSError:
@@ -189,17 +184,13 @@ class SQLiteConnectionPool(ConnectionPool):
             try:
                 conn = self._connections.get(thread_id)
                 if conn:
-                    try:
+                    with suppress(OSError, RuntimeError, sqlite3.Error):
                         conn.close()
-                    except (OSError, RuntimeError, sqlite3.Error):
-                        pass
                 self._connections[thread_id] = None
             except (AttributeError, KeyError, RuntimeError, TypeError):
                 pass
-            try:
+            with suppress(AttributeError, KeyError, RuntimeError, TypeError):
                 self._thread_refs.pop(thread_id, None)
-            except (AttributeError, KeyError, RuntimeError, TypeError):
-                pass
             try:
                 if hasattr(self._local, 'connection'):
                     self._local.connection = None
@@ -220,7 +211,7 @@ class SQLiteConnectionPool(ConnectionPool):
         try:
             yield conn
         except Exception as e:
-            logger.error(f"Error in connection context: {e}")
+            logger.exception(f"Error in connection context: {e}")
             raise
 
     def close_all(self) -> None:
@@ -232,7 +223,7 @@ class SQLiteConnectionPool(ConnectionPool):
                     try:
                         conn.close()
                     except (OSError, RuntimeError, sqlite3.Error) as e:
-                        logger.error(f"Error closing connection: {e}")
+                        logger.exception(f"Error closing connection: {e}")
             self._connections.clear()
             self._thread_refs.clear()
 
@@ -325,10 +316,7 @@ class SQLiteBackend(DatabaseBackend):
         Uses explicit BEGIN/COMMIT/ROLLBACK and guards with in_transaction to
         avoid errors when statements (e.g., executescript) implicitly end a txn.
         """
-        if connection:
-            conn = connection
-        else:
-            conn = self.get_pool().get_connection()
+        conn = connection or self.get_pool().get_connection()
 
         started = False
         try:
@@ -345,7 +333,7 @@ class SQLiteBackend(DatabaseBackend):
                 except sqlite3.OperationalError:
                     # Best effort; ignore if no active transaction
                     pass
-            logger.error(f"Transaction failed: {e}")
+            logger.exception(f"Transaction failed: {e}")
             raise
 
     def get_pool(self) -> ConnectionPool:
@@ -365,10 +353,7 @@ class SQLiteBackend(DatabaseBackend):
         """Execute a query and return results."""
         start_time = time.time()
 
-        if connection:
-            conn = connection
-        else:
-            conn = self.get_pool().get_connection()
+        conn = connection or self.get_pool().get_connection()
 
         try:
             cursor = conn.cursor()
@@ -396,7 +381,7 @@ class SQLiteBackend(DatabaseBackend):
             )
 
         except sqlite3.Error as e:
-            logger.error(f"Query execution failed: {e}")
+            logger.exception(f"Query execution failed: {e}")
             raise DatabaseError(f"SQLite error: {e}")
 
     def execute_many(
@@ -408,10 +393,7 @@ class SQLiteBackend(DatabaseBackend):
         """Execute a query multiple times with different parameters."""
         start_time = time.time()
 
-        if connection:
-            conn = connection
-        else:
-            conn = self.get_pool().get_connection()
+        conn = connection or self.get_pool().get_connection()
 
         try:
             cursor = conn.cursor()
@@ -428,21 +410,18 @@ class SQLiteBackend(DatabaseBackend):
             )
 
         except sqlite3.Error as e:
-            logger.error(f"Batch execution failed: {e}")
+            logger.exception(f"Batch execution failed: {e}")
             raise DatabaseError(f"SQLite error: {e}")
 
     def create_tables(self, schema: str, connection: Optional[sqlite3.Connection] = None) -> None:
         """Create tables from a schema definition."""
-        if connection:
-            conn = connection
-        else:
-            conn = self.get_pool().get_connection()
+        conn = connection or self.get_pool().get_connection()
 
         try:
             # Execute the schema as a script
             conn.executescript(schema)
         except sqlite3.Error as e:
-            logger.error(f"Schema creation failed: {e}")
+            logger.exception(f"Schema creation failed: {e}")
             raise DatabaseError(f"Failed to create schema: {e}")
 
     def table_exists(self, table_name: str, connection: Optional[sqlite3.Connection] = None) -> bool:
@@ -510,7 +489,7 @@ class SQLiteBackend(DatabaseBackend):
             self.execute(rebuild_query, connection=connection)
 
         except sqlite3.Error as e:
-            logger.error(f"FTS table creation failed: {e}")
+            logger.exception(f"FTS table creation failed: {e}")
             raise DatabaseError(f"Failed to create FTS table: {e}")
 
     def _ensure_fts_triggers(
@@ -689,10 +668,7 @@ class SQLiteBackend(DatabaseBackend):
         is_memory, use_uri = _classify_sqlite_path(self.config.sqlite_path)
         if is_memory:
             return 0
-        if use_uri:
-            db_path = _sqlite_file_path_from_uri(self.config.sqlite_path)
-        else:
-            db_path = Path(self.config.sqlite_path)
+        db_path = _sqlite_file_path_from_uri(self.config.sqlite_path) if use_uri else Path(self.config.sqlite_path)
         if db_path and db_path.exists():
             return db_path.stat().st_size
         return 0
@@ -722,10 +698,7 @@ class SQLiteBackend(DatabaseBackend):
         """Export data from a table."""
         query = f"SELECT * FROM {self.escape_identifier(table_name)}"
 
-        if connection:
-            conn = connection
-        else:
-            conn = self.get_pool().get_connection()
+        conn = connection or self.get_pool().get_connection()
 
         cursor = conn.cursor()
         cursor.execute(query)

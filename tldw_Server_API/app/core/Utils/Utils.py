@@ -1,6 +1,7 @@
 # Utils.py
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import mimetypes
@@ -14,7 +15,7 @@ import zipfile
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
-from typing import AnyStr, Union
+from typing import AnyStr
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 #########################################
@@ -107,7 +108,7 @@ def cleanup_downloads():
                 os.remove(file_path)
                 logging.info(f"Cleaned up file: {file_path}")
         except OSError as e:
-            logging.error(f"Error cleaning up file {file_path}: {e}")
+            logging.exception(f"Error cleaning up file {file_path}: {e}")
 
 #
 #
@@ -172,7 +173,7 @@ def get_database_path(db_name: str) -> str:
     return path
 
 
-def get_project_relative_path(relative_path: Union[str, os.PathLike[AnyStr]]) -> str:
+def get_project_relative_path(relative_path: str | os.PathLike[AnyStr]) -> str:
     """Convert a relative path to a path relative to the project root."""
     path = os.path.join(get_project_root(), str(relative_path))
     logging.trace(f"Project relative path for {relative_path}: {path}")
@@ -444,7 +445,7 @@ def smart_download(url: str, tmp_dir: Path) -> Path:
 
 
 def download_file(url, dest_path, expected_checksum=None, max_retries=3, delay=5):
-    temp_path = dest_path + '.tmp'
+    dest_path + '.tmp'
     dest_dir = os.path.dirname(dest_path)
     if dest_dir:
         os.makedirs(dest_dir, exist_ok=True)
@@ -458,12 +459,12 @@ def download_file(url, dest_path, expected_checksum=None, max_retries=3, delay=5
                 if os.path.exists(dest_path):
                     os.remove(dest_path)
             except OSError as cleanup_error:
-                logging.error(f"Failed to remove file after checksum mismatch: {cleanup_error}")
+                logging.exception(f"Failed to remove file after checksum mismatch: {cleanup_error}")
             raise ValueError("Downloaded file's checksum does not match the expected checksum")
         logging.info("Download complete and verified!")
         return dest_path
     except Exception as e:
-        logging.error(f"Download failed: {e}")
+        logging.exception(f"Download failed: {e}")
         raise
 
 def download_file_if_missing(url: str, local_path: str) -> None:
@@ -480,7 +481,7 @@ def download_file_if_missing(url: str, local_path: str) -> None:
     try:
         download(url=url, dest=local_path, resume=False)
     except Exception as e:
-        logging.error(f"Download failed: {e}")
+        logging.exception(f"Download failed: {e}")
         raise
 
 def create_download_directory(title):
@@ -507,10 +508,10 @@ def safe_read_file(file_path):
             logging.debug(f"Reading file in binary mode: {file_path}")
             raw_data = file.read()
     except FileNotFoundError:
-        logging.error(f"File not found: {file_path}")
+        logging.exception(f"File not found: {file_path}")
         return f"File not found: {file_path}"
     except (OSError, TypeError, ValueError) as e:
-        logging.error(f"An error occurred while reading the file: {e}")
+        logging.exception(f"An error occurred while reading the file: {e}")
         return f"An error occurred while reading the file: {e}"
 
     if not raw_data:
@@ -754,13 +755,13 @@ def get_db_config():
         from tldw_Server_API.app.core.DB_Management.DB_Manager import get_db_config as _dbm_get
         return _dbm_get()
     except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
-        logging.error(f"Failed to delegate to DB_Manager.get_db_config: {e}")
+        logging.exception(f"Failed to delegate to DB_Manager.get_db_config: {e}")
         # Preserve a minimal, safe default
         try:
             from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
             default_sqlite = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
         except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as exc:
-            logging.error(f"Failed to resolve default SQLite path via DatabasePaths: {exc}")
+            logging.exception(f"Failed to resolve default SQLite path via DatabasePaths: {exc}")
             raise
         return {
             'type': 'sqlite',
@@ -794,20 +795,16 @@ def save_temp_file(file):
 
     temp_path = os.path.join(temp_dir, unique_name)
     if hasattr(file, "seek"):
-        try:
+        with contextlib.suppress(OSError, RuntimeError, ValueError):
             file.seek(0)
-        except (OSError, RuntimeError, ValueError):
-            pass
     data = file.read()
     if isinstance(data, str):
         data = data.encode('utf-8')
     with open(temp_path, 'wb') as f:
         f.write(data)
     if hasattr(file, "seek"):
-        try:
+        with contextlib.suppress(OSError, RuntimeError, ValueError):
             file.seek(0)
-        except (OSError, RuntimeError, ValueError):
-            pass
     temp_files.append(temp_path)
     return temp_path
 
@@ -819,7 +816,7 @@ def cleanup_temp_files():
                 os.remove(file_path)
                 logging.info(f"Removed temporary file: {file_path}")
             except OSError as e:
-                logging.error(f"Failed to remove temporary file {file_path}: {e}")
+                logging.exception(f"Failed to remove temporary file {file_path}: {e}")
     temp_files.clear()
 
 def generate_unique_id():

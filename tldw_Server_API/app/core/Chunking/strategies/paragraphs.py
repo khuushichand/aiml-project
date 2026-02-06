@@ -248,8 +248,7 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
         validated = super().validate_options(options)
 
         # Ensure max_size is reasonable for paragraphs
-        if 'max_size' in validated:
-            if validated['max_size'] > 100:
-                logger.warning(f"Very large max_size for paragraphs: {validated['max_size']}")
+        if 'max_size' in validated and validated['max_size'] > 100:
+            logger.warning(f"Very large max_size for paragraphs: {validated['max_size']}")
 
         return validated

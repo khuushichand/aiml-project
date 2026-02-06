@@ -297,7 +297,7 @@ class PrivilegeTrendStore:
         if isinstance(row, dict):
             return row
         if hasattr(row, "keys"):
-            return {key: row[key] for key in row.keys()}
+            return {key: row[key] for key in row}
         if hasattr(row, "_mapping"):
             return dict(row._mapping)  # type: ignore[attr-defined]
         return {}

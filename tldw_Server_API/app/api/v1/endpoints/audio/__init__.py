@@ -10,6 +10,13 @@ from typing import Any as _Any
 
 import soundfile as sf
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    check_rate_limit,
+)
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    get_usage_event_logger,
+)
+from tldw_Server_API.app.api.v1.endpoints.audio import audio_tts
 from tldw_Server_API.app.core.Audio.tokenizer_service import (
     _get_qwen3_tokenizer_settings,
     _load_qwen3_tokenizer,
@@ -21,13 +28,6 @@ from tldw_Server_API.app.core.Audio.tts_service import (
 from tldw_Server_API.app.core.Storage.generated_file_helpers import (
     save_and_register_tts_audio,
 )
-from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
-    get_usage_event_logger,
-)
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-    check_rate_limit,
-)
-from tldw_Server_API.app.api.v1.endpoints.audio import audio_tts
 from tldw_Server_API.app.core.Usage.audio_quota import (
     add_daily_minutes,
     can_start_job,

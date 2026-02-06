@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import os
 import threading
 from datetime import datetime
@@ -267,10 +268,7 @@ class SandboxService:
                 uid_int = int(str(user_id)) if user_id is not None else None
             except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                 uid_int = None
-            if uid_int is not None:
-                db_path = DatabasePaths.get_audit_db_path(uid_int)
-            else:
-                db_path = None
+            db_path = DatabasePaths.get_audit_db_path(uid_int) if uid_int is not None else None
 
             async def _alog() -> None:
                 svc = UnifiedAuditService(db_path=str(db_path) if db_path else None)
@@ -436,10 +434,8 @@ class SandboxService:
                         logger.debug(f"sandbox: update_run(starting) skipped: {_e}")
                     # Proactively publish a 'start' event so WS subscribers connecting
                     # immediately after POST observe at least one event.
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         get_hub().publish_event(status.id, "start", {"bg": True})
-                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-                        pass
                     # Metrics: queue wait histogram (if enqueued timestamp known)
                     try:
                         ts = self._orch.get_enqueue_time(status.id)  # type: ignore[attr-defined]
@@ -475,10 +471,8 @@ class SandboxService:
                             except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as _e:
                                 logger.debug(f"sandbox: update_run(completed) skipped: {_e}")
                             # Ensure an 'end' event is published even if the runner didn't
-                            try:
+                            with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                                 get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code})
-                            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-                                pass
                             # Ensure policy hash is present (compute if missing)
                             if not status.policy_hash:
                                 status.policy_hash = compute_policy_hash(self.policy.cfg)
@@ -516,10 +510,8 @@ class SandboxService:
                         self._orch.store_artifacts(status.id, real.artifacts)
                     self._orch.update_run(status.id, status)
                     # Audit completion (sync path)
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
-                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-                        pass
             except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Docker execution failed; keeping enqueue status. Error: {e}")
         elif execute_enabled and spec.runtime == RuntimeType.firecracker:
@@ -535,10 +527,8 @@ class SandboxService:
                         self._orch.update_run(status.id, status)  # type: ignore[attr-defined]
                     except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as _e:
                         logger.debug(f"sandbox: update_run(starting) skipped: {_e}")
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         get_hub().publish_event(status.id, "start", {"bg": True})
-                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-                        pass
                     def _worker_fc():
                         try:
                             fr = FirecrackerRunner()
@@ -560,10 +550,8 @@ class SandboxService:
                             if real.artifacts:
                                 self._orch.store_artifacts(status.id, real.artifacts)
                             self._orch.update_run(status.id, status)
-                            try:
+                            with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                                 self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
-                            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-                                pass
                         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Firecracker background execution failed: {e}")
                     threading.Thread(target=_worker_fc, daemon=True).start()
@@ -588,10 +576,8 @@ class SandboxService:
                     if real.artifacts:
                         self._orch.store_artifacts(status.id, real.artifacts)
                     self._orch.update_run(status.id, status)
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
-                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-                        pass
             except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Firecracker execution failed; marking run failed. Error: {e}")
                 try:
@@ -599,10 +585,8 @@ class SandboxService:
                     status.message = "firecracker_failed"
                     status.finished_at = datetime.utcnow()
                     self._orch.update_run(status.id, status)
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code, "reason": "firecracker_failed"})
-                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-                        pass
                 except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                     pass
         elif execute_enabled and spec.runtime == RuntimeType.lima:
@@ -618,10 +602,8 @@ class SandboxService:
                         self._orch.update_run(status.id, status)
                     except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as _e:
                         logger.debug(f"sandbox: update_run(starting) skipped: {_e}")
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         get_hub().publish_event(status.id, "start", {"bg": True})
-                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-                        pass
                     def _worker_lima():
                         try:
                             lr = LimaRunner()
@@ -643,10 +625,8 @@ class SandboxService:
                             if real.artifacts:
                                 self._orch.store_artifacts(status.id, real.artifacts)
                             self._orch.update_run(status.id, status)
-                            try:
+                            with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                                 self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
-                            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-                                pass
                         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Lima background execution failed: {e}")
                     threading.Thread(target=_worker_lima, daemon=True).start()
@@ -671,10 +651,8 @@ class SandboxService:
                     if real.artifacts:
                         self._orch.store_artifacts(status.id, real.artifacts)
                     self._orch.update_run(status.id, status)
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
-                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-                        pass
             except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Lima execution failed; marking run failed. Error: {e}")
                 try:
@@ -682,10 +660,8 @@ class SandboxService:
                     status.message = "lima_failed"
                     status.finished_at = datetime.utcnow()
                     self._orch.update_run(status.id, status)
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code, "reason": "lima_failed"})
-                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-                        pass
                 except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                     pass
         else:
@@ -746,10 +722,8 @@ class SandboxService:
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             pass
         # Ensure WS end event is sent even if runner didn't publish
-        try:
+        with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
             get_hub().publish_event(run_id, "end", {"exit_code": None, "canceled": True})
-        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
-            pass
         return bool(cancelled)
 
     # -----------------

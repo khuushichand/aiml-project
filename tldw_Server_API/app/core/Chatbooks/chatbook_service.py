@@ -20,6 +20,7 @@ Key Adaptations from Single-User:
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -27,7 +28,7 @@ import shutil
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
 from uuid import uuid4
 
 import aiofiles
@@ -286,7 +287,7 @@ class ChatbookService:
                 safe_name = "chatbook"
         return f"{safe_name}{suffix}"
 
-    def __init__(self, user_id: Union[str, int], db: CharactersRAGDB, user_id_int: int | None = None):
+    def __init__(self, user_id: str | int, db: CharactersRAGDB, user_id_int: int | None = None):
         """
         Initialize the chatbook service for a specific user.
 
@@ -365,7 +366,7 @@ class ChatbookService:
             logger.warning(f"TODO(chatbooks): {message}")
             self._todo_messages.add(message)
 
-    def _resolve_import_archive_path(self, file_ref: Union[str, Path]) -> Path:
+    def _resolve_import_archive_path(self, file_ref: str | Path) -> Path:
         """Resolve and validate a chatbook archive path within temp/imports directories."""
         ref = str(file_ref or "").strip()
         if not ref:
@@ -754,7 +755,7 @@ class ChatbookService:
 
             # sqlite3.Row objects can be converted directly to dict
             # but we need to handle different cases
-            first_row = results[0]
+            results[0]
 
             # Try the simplest approach first - direct dict conversion
             try:
@@ -917,7 +918,7 @@ class ChatbookService:
     async def export_chatbook(self, **kwargs):
         """Alias for create_chatbook to match test expectations."""
         # Extract user_id for internal use but don't pass it to create_chatbook
-        user_id = kwargs.pop('user_id', None)
+        kwargs.pop('user_id', None)
 
         # Extract chatbook_name and use it as 'name'
         if 'chatbook_name' in kwargs:
@@ -1249,7 +1250,6 @@ class ChatbookService:
         """
         work_dir: Path | None = None
         output_path: Path | None = None
-        success = False
         try:
             # Create working directory in secure temp location
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1374,11 +1374,9 @@ class ChatbookService:
                 manifest.total_size_bytes = archive_size
                 await _write_manifest()
                 await self._create_zip_archive_async(work_dir, output_path)
-            success = True
 
             # Store file path in job record (will be retrieved by job_id)
             # No direct filename access for security
-            download_url = None  # Will be generated from job_id
 
             return True, "Chatbook created successfully", str(output_path)
 
@@ -1490,14 +1488,14 @@ class ChatbookService:
         self,
         file_path: str,
         content_selections: dict[ContentType, list[str]] | None = None,
-        conflict_resolution: Union[ConflictResolution, str] | None = None,
+        conflict_resolution: ConflictResolution | str | None = None,
         conflict_strategy: str | None = None,  # Alias for conflict_resolution (for test compatibility)
         prefix_imported: bool = False,
         import_media: bool = False,
         import_embeddings: bool = False,
         async_mode: bool = False,
         request_id: str | None = None
-    ) -> tuple[bool, str, Union[str, list[str]] | None]:
+    ) -> tuple[bool, str, str | list[str] | None]:
         """
         Import a chatbook.
 
@@ -1731,7 +1729,7 @@ class ChatbookService:
                         return False, "Unsafe path in archive detected", None
 
                     # Additional check: ensure the normalized target stays within extract_dir
-                    normalized_path = os.path.normpath(member)
+                    os.path.normpath(member)
                     # Use normpath + commonpath instead of realpath to avoid race conditions
                     # (realpath would try to resolve symlinks on paths that don't exist yet)
                     target_path = os.path.normpath(os.path.join(extract_dir_resolved, member))
@@ -2001,7 +1999,7 @@ class ChatbookService:
                         return None, "Unsafe path in archive detected"
 
                     # Additional check: ensure the normalized target stays within extract_dir
-                    normalized_path = os.path.normpath(member)
+                    os.path.normpath(member)
                     # Use normpath + commonpath instead of realpath to avoid race conditions
                     target_path = os.path.normpath(os.path.join(extract_dir_resolved, member))
                     try:
@@ -2071,10 +2069,8 @@ class ChatbookService:
             except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
         if job and getattr(self, "_jobs_backend", "core") == "core" and getattr(self, "_jobs_adapter", None) is not None:
-            try:
+            with contextlib.suppress(_CHATBOOK_NONCRITICAL_EXCEPTIONS):
                 self._jobs_adapter.apply_export_status(job)
-            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
-                pass
         return job
 
     def get_import_job(self, job_id: str) -> ImportJob | None:
@@ -2099,10 +2095,8 @@ class ChatbookService:
             except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
         if job and getattr(self, "_jobs_backend", "core") == "core" and getattr(self, "_jobs_adapter", None) is not None:
-            try:
+            with contextlib.suppress(_CHATBOOK_NONCRITICAL_EXCEPTIONS):
                 self._jobs_adapter.apply_import_status(job)
-            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
-                pass
         return job
 
     def list_export_jobs(self, status: str | None = None, limit: int = 100, offset: int = 0) -> list[ExportJob]:
@@ -4066,16 +4060,12 @@ class ChatbookService:
         # Best-effort cancel of in-process task
         task = self._tasks.pop(job_id, None)
         if task:
-            try:
+            with contextlib.suppress(_CHATBOOK_NONCRITICAL_EXCEPTIONS):
                 task.cancel()
-            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
-                pass
         # PS backend cancel
         if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
-            try:
+            with contextlib.suppress(_CHATBOOK_NONCRITICAL_EXCEPTIONS):
                 self._ps_job_adapter.cancel(int(job_id))
-            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
-                pass
         # Core backend: cancel queued or request cancel for processing in core Jobs
         if getattr(self, "_jobs_backend", "core") == "core":
             try:
@@ -4110,15 +4100,11 @@ class ChatbookService:
         self._save_import_job(job)
         task = self._tasks.pop(job_id, None)
         if task:
-            try:
+            with contextlib.suppress(_CHATBOOK_NONCRITICAL_EXCEPTIONS):
                 task.cancel()
-            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
-                pass
         if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
-            try:
+            with contextlib.suppress(_CHATBOOK_NONCRITICAL_EXCEPTIONS):
                 self._ps_job_adapter.cancel(int(job_id))
-            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
-                pass
         if getattr(self, "_jobs_backend", "core") == "core":
             try:
                 from tldw_Server_API.app.core.Jobs.manager import JobManager

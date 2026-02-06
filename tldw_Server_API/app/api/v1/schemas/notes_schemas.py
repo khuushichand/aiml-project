@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 # 3rd-party Libraries
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -44,7 +44,7 @@ class NoteCreate(NoteBase):
     )
     id: str | None = Field(None,
                               description="Optional client-provided UUID for the note. If None, will be auto-generated.")
-    keywords: Union[str, list[str]] | None = Field(
+    keywords: str | list[str] | None = Field(
         default=None,
         description="Optional keywords to attach to the note. Accepts a list of strings or a comma-separated string."
     )
@@ -97,7 +97,7 @@ class NoteUpdate(BaseModel):
     content: str | None = Field(None, min_length=1, max_length=5000000, description="New content for the note (max 5MB)")
     conversation_id: str | None = Field(None, description="Optional conversation ID backlink")
     message_id: str | None = Field(None, description="Optional message ID backlink")
-    keywords: Union[str, list[str]] | None = Field(
+    keywords: str | list[str] | None = Field(
         default=None,
         description="Optional keywords to attach to the note. Accepts a list of strings or a comma-separated string."
     )

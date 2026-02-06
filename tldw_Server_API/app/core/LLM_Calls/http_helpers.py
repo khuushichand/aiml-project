@@ -4,6 +4,7 @@ This module avoids importing chat_calls to prevent recursion. It uses the
 centralized http_client underneath while preserving a minimal Session-like API.
 """
 
+import contextlib
 import time
 from collections.abc import Iterable
 from typing import Any, Optional
@@ -48,10 +49,8 @@ class _StreamResponse:
         try:
             self._response.close()
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 self._ctx.__exit__(None, None, None)
-            except Exception:
-                pass
 
 
 class _RetrySession:
@@ -109,15 +108,11 @@ class _RetrySession:
                 return _StreamResponse(resp, ctx)
             except Exception as exc:
                 if resp is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         resp.close()
-                    except Exception:
-                        pass
                 if ctx is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         ctx.__exit__(None, None, None)
-                    except Exception:
-                        pass
                 if attempt + 1 >= attempts or not is_network_error(exc):
                     raise
                 time.sleep(float(self._retry.backoff_base_ms) / 1000.0)

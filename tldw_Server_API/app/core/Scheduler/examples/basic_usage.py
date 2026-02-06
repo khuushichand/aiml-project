@@ -83,7 +83,7 @@ async def main():
         )
 
         # Task that depends on video processing
-        analytics_task = await scheduler.submit(
+        await scheduler.submit(
             handler="__main__.analyze_metrics",
             payload={
                 "period": "daily",
@@ -115,7 +115,7 @@ async def main():
 
         # Schedule a task for the future
         future_time = datetime.utcnow() + timedelta(seconds=5)
-        scheduled_task = await scheduler.submit(
+        await scheduler.submit(
             handler="__main__.send_email",
             payload={"to": "future@example.com", "subject": "Scheduled"},
             metadata={"user_id": "demo-user", "scheduled_at": future_time.isoformat()}

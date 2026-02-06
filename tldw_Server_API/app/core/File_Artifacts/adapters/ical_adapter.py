@@ -198,16 +198,15 @@ class IcalAdapter:
                 return None, issues
             dt = dt.replace(tzinfo=tzinfo)
         else:
-            if tzid:
-                if not self._tz_matches(dt, tzid):
-                    issues.append(
-                        ValidationIssue(
-                            code="event_timezone_mismatch",
-                            message="datetime timezone does not match event timezone",
-                            path=path,
-                        )
+            if tzid and not self._tz_matches(dt, tzid):
+                issues.append(
+                    ValidationIssue(
+                        code="event_timezone_mismatch",
+                        message="datetime timezone does not match event timezone",
+                        path=path,
                     )
-                    return None, issues
+                )
+                return None, issues
         return dt, issues
 
     def _tz_matches(self, dt: datetime, tzid: str) -> bool:

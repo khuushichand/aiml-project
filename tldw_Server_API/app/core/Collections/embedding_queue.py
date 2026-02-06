@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 from typing import Any
 
@@ -88,15 +89,13 @@ async def enqueue_embeddings_job_for_item(
                 require_redis=not redis_pipeline.allow_stub(),
             )
         except Exception:
-            try:
+            with contextlib.suppress(Exception):
                 jm.fail_job(
                     int(root_job["id"]),
                     error="Failed to enqueue content embeddings job to Redis",
                     retryable=False,
                     enforce=False,
                 )
-            except Exception:
-                pass
             raise
     except Exception as exc:
         logger.debug(f"Embedding job enqueue failed for item {item_id}: {exc}")

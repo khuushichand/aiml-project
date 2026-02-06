@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import contextlib
 import json
 import os
 from typing import Any, Optional
@@ -244,10 +245,8 @@ class _VibeVoiceRealtimeWebSocketSession(RealtimeTTSSession):
         if self._closed:
             return
         self._closed = True
-        try:
+        with contextlib.suppress(Exception):
             await self._send_json({"type": "final"})
-        except Exception:
-            pass
         await self._close()
 
     async def audio_stream(self):
@@ -304,14 +303,10 @@ class _VibeVoiceRealtimeWebSocketSession(RealtimeTTSSession):
 
     async def _close(self) -> None:
         if self._ws:
-            try:
+            with contextlib.suppress(Exception):
                 await self._ws.close()
-            except Exception:
-                pass
             self._ws = None
         if self._session:
-            try:
+            with contextlib.suppress(Exception):
                 await self._session.close()
-            except Exception:
-                pass
             self._session = None

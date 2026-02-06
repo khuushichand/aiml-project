@@ -37,10 +37,7 @@ def _normalize_stop(value: Any) -> list[str] | None:
             return None
         try:
             parsed = json.loads(text)
-            if isinstance(parsed, list):
-                value = parsed
-            else:
-                value = text
+            value = parsed if isinstance(parsed, list) else text
         except json.JSONDecodeError:
             value = text
 

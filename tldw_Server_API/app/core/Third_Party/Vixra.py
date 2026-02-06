@@ -130,13 +130,11 @@ def search(term: str, page: int = 1, results_per_page: int = 10) -> tuple[list[d
             f"https://vixra.org/?find={urlquote(q)}",
         ]
         html = None
-        url_used = None
         for url in candidates:
             try:
                 r = fetch(method="GET", url=url, timeout=20)
                 if r.status_code == 200 and r.text:
                     html = r.text
-                    url_used = url
                     break
             except _VIXRA_NONCRITICAL_EXCEPTIONS:
                 continue

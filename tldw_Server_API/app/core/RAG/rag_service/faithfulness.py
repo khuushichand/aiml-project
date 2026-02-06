@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -134,7 +134,7 @@ class FaithfulnessEvaluator:
         self,
         response: str,
         context: str,
-        query: Optional[str] = None,
+        query: str | None = None,
     ) -> float:
         """Evaluate faithfulness, returning a single score.
 

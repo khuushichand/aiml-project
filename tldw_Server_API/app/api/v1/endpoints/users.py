@@ -2,6 +2,7 @@
 # Description: User management endpoints for profile, password, and session management
 #
 # Imports
+import contextlib
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -66,7 +67,6 @@ from tldw_Server_API.app.core.UserProfiles.service import UserProfileService
 from tldw_Server_API.app.core.UserProfiles.update_service import UserProfileUpdateService
 from tldw_Server_API.app.core.UserProfiles.user_profile_catalog import load_user_profile_catalog
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
-
 
 _USERS_AUDIT_EXCEPTIONS = (
     AttributeError,
@@ -356,7 +356,7 @@ async def update_current_user_profile(
         applied=result.applied,
         skipped=skipped,
     )
-    try:
+    with contextlib.suppress(_USERS_AUDIT_EXCEPTIONS):
         await _emit_user_profile_audit_event(
             http_request,
             user_id=int(current_user["id"]),
@@ -365,8 +365,6 @@ async def update_current_user_profile(
             skipped_count=len(result.skipped),
             dry_run=False,
         )
-    except _USERS_AUDIT_EXCEPTIONS:
-        pass
     return response
 
 

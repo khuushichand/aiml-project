@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import os
 import time
 from typing import Any
@@ -277,10 +278,8 @@ async def _worker_loop(stage: str, worker_id: str, stop_event: asyncio.Event) ->
                     except Exception as exc:
                         logger.warning(f"Embeddings redis worker ack failed stage={stage} id={message_id}: {exc}")
     finally:
-        try:
+        with contextlib.suppress(Exception):
             await client.close()
-        except Exception:
-            pass
 
 
 async def main() -> None:

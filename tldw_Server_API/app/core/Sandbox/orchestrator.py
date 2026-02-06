@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -146,15 +147,11 @@ class SandboxOrchestrator:
                 if sid and sid in self._sessions:
                     return self._sessions[sid]
                 if sid:
-                    try:
+                    with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
                         self._session_owners.setdefault(sid, self._user_key(user_id))
-                    except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
-                        pass
             if sid:
-                try:
+                with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
                     self._ensure_workspace(user_id, sid)
-                except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
-                    pass
             # If missing from sessions map (unlikely), synthesize from stored
             return Session(id=stored.get("id", ""), runtime=spec.runtime or self.policy.cfg.default_runtime, base_image=spec.base_image, expires_at=None)
 
@@ -170,17 +167,13 @@ class SandboxOrchestrator:
         sess = Session(id=sid, runtime=spec.runtime or self.policy.cfg.default_runtime, base_image=spec.base_image, expires_at=expires_at)
         with self._lock:
             self._sessions[sid] = sess
-            try:
+            with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
                 self._session_owners[sid] = self._user_key(user_id)
-            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
-                pass
             # Store idempotent response body
             resp = {"id": sid, "runtime": sess.runtime.value, "base_image": sess.base_image, "expires_at": (sess.expires_at.isoformat() if sess.expires_at else None)}
             self._store_idem("sessions", user_id, idem_key, body, sid, resp)
-        try:
+        with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
             self._ensure_workspace(user_id, sid)
-        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
-            pass
         return sess
 
     # -----------------
@@ -263,10 +256,8 @@ class SandboxOrchestrator:
                     kept.append((rid, ts))
             self._queue = kept
             for rid in expired:
-                try:
+                with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
                     self._enqueue_index.pop(rid, None)
-                except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
-                    pass
         if not expired:
             return
         from datetime import datetime
@@ -363,10 +354,8 @@ class SandboxOrchestrator:
             ws_path = self._session_roots.pop(session_id, None)
             self._session_owners.pop(session_id, None)
         if ws_path:
-            try:
+            with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
                 shutil.rmtree(ws_path, ignore_errors=True)
-            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
-                pass
         return removed
 
     # -----------------
@@ -441,10 +430,8 @@ class SandboxOrchestrator:
 
         # Persist selected to FS and memory map for backward compatibility
         art_dir = self._artifact_dir(owner, run_id)
-        try:
+        with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
             art_dir.mkdir(parents=True, exist_ok=True)
-        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
-            pass
         for path, data in selected.items():
             rel = self._safe_rel(path)
             full = art_dir / rel
@@ -457,10 +444,8 @@ class SandboxOrchestrator:
 
         with self._lock:
             self._artifacts[run_id] = selected
-        try:
+        with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
             self._store.increment_user_artifact_bytes(owner, int(total_run))
-        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
-            pass
 
     def list_artifacts(self, run_id: str) -> dict[str, int]:
         # Try filesystem, fallback to memory
@@ -533,10 +518,8 @@ class SandboxOrchestrator:
         return str(ws)
 
     def get_session_workspace_path(self, session_id: str) -> str | None:
-        try:
+        with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
             self._prune_expired_sessions()
-        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
-            pass
         with self._lock:
             return self._session_roots.get(session_id)
 

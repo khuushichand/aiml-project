@@ -27,6 +27,7 @@ Usage:
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import re
 import uuid
@@ -173,7 +174,7 @@ async def save_and_register_tts_audio(
     # Generate filename
     filename = _generate_filename("tts_audio", audio_format)
     category_folder = "tts_audio"
-    date_folder = _get_date_folder()
+    _get_date_folder()
 
     # Save file
     file_path = await _save_file(user_id, audio_bytes, category_folder, filename)
@@ -226,13 +227,11 @@ async def save_and_register_tts_audio(
         logger.info(f"Registered TTS audio: {filename} ({len(audio_bytes)} bytes) for user {user_id}")
         return file_record
 
-    except Exception as exc:
+    except Exception:
         # Cleanup file if registration fails
-        try:
+        with contextlib.suppress(Exception):
             file_path.unlink()
-        except Exception:
-            pass
-        raise exc
+        raise
 
 
 async def save_and_register_image(
@@ -311,12 +310,10 @@ async def save_and_register_image(
         logger.info(f"Registered image: {filename} ({len(image_bytes)} bytes) for user {user_id}")
         return file_record
 
-    except Exception as exc:
-        try:
+    except Exception:
+        with contextlib.suppress(Exception):
             file_path.unlink()
-        except Exception:
-            pass
-        raise exc
+        raise
 
 
 async def save_and_register_voice_clone(
@@ -389,12 +386,10 @@ async def save_and_register_voice_clone(
         logger.info(f"Registered voice clone: {voice_name} ({len(voice_data)} bytes) for user {user_id}")
         return file_record
 
-    except Exception as exc:
-        try:
+    except Exception:
+        with contextlib.suppress(Exception):
             file_path.unlink()
-        except Exception:
-            pass
-        raise exc
+        raise
 
 
 async def save_and_register_spreadsheet(
@@ -467,12 +462,10 @@ async def save_and_register_spreadsheet(
         logger.info(f"Registered spreadsheet: {filename} ({len(spreadsheet_bytes)} bytes) for user {user_id}")
         return file_record
 
-    except Exception as exc:
-        try:
+    except Exception:
+        with contextlib.suppress(Exception):
             file_path.unlink()
-        except Exception:
-            pass
-        raise exc
+        raise
 
 
 async def save_and_register_mindmap(
@@ -553,9 +546,7 @@ async def save_and_register_mindmap(
         logger.info(f"Registered mindmap: {filename} ({len(mindmap_bytes)} bytes) for user {user_id}")
         return file_record
 
-    except Exception as exc:
-        try:
+    except Exception:
+        with contextlib.suppress(Exception):
             file_path.unlink()
-        except Exception:
-            pass
-        raise exc
+        raise

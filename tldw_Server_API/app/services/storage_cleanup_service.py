@@ -8,6 +8,7 @@ Handles periodic cleanup of:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -377,10 +378,8 @@ class StorageCleanupService:
                 await asyncio.wait_for(self._task, timeout=5.0)
             except asyncio.TimeoutError:
                 self._task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await self._task
-                except asyncio.CancelledError:
-                    pass
         logger.info("StorageCleanupService stopped")
 
 

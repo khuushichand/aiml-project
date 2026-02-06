@@ -8,6 +8,7 @@ This module includes adapters for application-specific integrations:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -118,10 +119,7 @@ async def run_kanban_adapter(config: dict[str, Any], context: dict[str, Any]) ->
                 parsed = json.loads(raw_value)
             except json.JSONDecodeError:
                 parsed = None
-            if isinstance(parsed, list):
-                items = parsed
-            else:
-                items = [s.strip() for s in raw_value.split(",") if s.strip()]
+            items = parsed if isinstance(parsed, list) else [s.strip() for s in raw_value.split(",") if s.strip()]
         else:
             items = [raw_value]
         out: list[int] = []
@@ -497,10 +495,7 @@ async def run_kanban_adapter(config: dict[str, Any], context: dict[str, Any]) ->
             offset = _coerce_int(_render(_f("offset")), "offset", allow_none=True)
             if offset is None:
                 page = _coerce_int(_render(_f("page")), "page", allow_none=True)
-                if page is not None and page > 0:
-                    offset = (page - 1) * limit
-                else:
-                    offset = 0
+                offset = (page - 1) * limit if page is not None and page > 0 else 0
             cards, total = db.get_board_cards_filtered(
                 board_id=board_id,
                 label_ids=label_ids or None,
@@ -525,10 +520,8 @@ async def run_kanban_adapter(config: dict[str, Any], context: dict[str, Any]) ->
     except (InputError, ConflictError, NotFoundError, KanbanDBError) as exc:
         return {"error": "kanban_error", "error_type": exc.__class__.__name__, "detail": str(exc)}
     finally:
-        try:
+        with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
             db.close()
-        except (AttributeError, RuntimeError, TypeError, ValueError):
-            pass
 
 
 @registry.register(

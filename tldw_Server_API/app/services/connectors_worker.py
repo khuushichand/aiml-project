@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import os
 from typing import Any
@@ -156,7 +157,7 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
                 if provider == 'drive' and hasattr(conn, 'refresh_access_token') or provider == 'notion' and hasattr(conn, 'refresh_access_token'):
                     new_toks = await conn.refresh_access_token(rtok)
                 if not new_toks or not new_toks.get('access_token'):
-                    raise e
+                    raise
                 # Persist and update local token cache
                 async with pool.transaction() as db:
                     await update_account_tokens(db, user_id, account_id, new_toks)
@@ -345,7 +346,5 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run_connectors_worker())
-    except KeyboardInterrupt:
-        pass

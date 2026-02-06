@@ -19,7 +19,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -93,7 +93,7 @@ class CheckpointManager:
 
     DEFAULT_CHECKPOINT_DIR = ".tldw/checkpoints"
 
-    def __init__(self, checkpoint_dir: Optional[Path | str] = None) -> None:
+    def __init__(self, checkpoint_dir: Path | str | None = None) -> None:
         """Initialize CheckpointManager.
 
         Args:
@@ -107,8 +107,8 @@ class CheckpointManager:
         self,
         task_type: str,
         total_items: int,
-        config: Optional[dict[str, Any]] = None,
-        metadata: Optional[dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> CheckpointData:
         """Create a new checkpoint.
 
@@ -332,7 +332,7 @@ class CheckpointManager:
             return True
         return False
 
-    def list_checkpoints(self, task_type: Optional[str] = None) -> list[CheckpointData]:
+    def list_checkpoints(self, task_type: str | None = None) -> list[CheckpointData]:
         """List all checkpoints, optionally filtered by task type.
 
         Args:

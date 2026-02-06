@@ -114,9 +114,8 @@ async def validate_request_payload(
                     text_content = part.get("text") if isinstance(part, dict) else getattr(part, 'text', None)
                     if isinstance(text_content, str) and len(text_content) > max_text_length:
                         return False, f"Text part at index {part_idx} in message {msg_idx} too long."
-        elif isinstance(msg_model.content, str):
-            if len(msg_model.content) > max_text_length:
-                return False, f"Message at index {msg_idx} text too long."
+        elif isinstance(msg_model.content, str) and len(msg_model.content) > max_text_length:
+            return False, f"Message at index {msg_idx} text too long."
 
     if total_image_parts > max_images:
         return False, f"Too many images in request (max {max_images}, found {total_image_parts})."
@@ -129,10 +128,7 @@ def _extract_image_url(part: Any) -> Optional[str]:
     if part is None:
         return None
     image_url = None
-    if isinstance(part, dict):
-        image_url = part.get("image_url")
-    else:
-        image_url = getattr(part, "image_url", None)
+    image_url = part.get("image_url") if isinstance(part, dict) else getattr(part, "image_url", None)
     if isinstance(image_url, dict):
         return image_url.get("url")
     return getattr(image_url, "url", None)

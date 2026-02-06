@@ -3,6 +3,7 @@
 
 import asyncio
 import atexit
+import contextlib
 import hashlib
 import threading
 import time
@@ -507,13 +508,12 @@ class AsyncEmbeddingService:
                         max_models_in_memory=self.config.resources.max_models_in_memory,
                         model_ttl_seconds=self.config.resources.model_ttl_seconds,
                     )
-            elif provider_config.name == "local_api":
-                if provider_config.api_url:
-                    self.providers["local_api"] = AsyncLocalAPIProvider(
-                        api_url=provider_config.api_url,
-                        api_key=provider_config.api_key,
-                    )
-                    pool_key = "local_api"
+            elif provider_config.name == "local_api" and provider_config.api_url:
+                self.providers["local_api"] = AsyncLocalAPIProvider(
+                    api_url=provider_config.api_url,
+                    api_key=provider_config.api_key,
+                )
+                pool_key = "local_api"
 
             try:
                 self.pool_manager.get_pool(
@@ -558,12 +558,11 @@ class AsyncEmbeddingService:
         actual_model = model
         provider_config = self.config.get_provider(provider)
         base_url_override: Optional[str] = None
-        if provider_config and provider in {"openai", "huggingface"}:
-            if provider_config.api_url:
-                base_url_override = provider_config.api_url
-                # Ensure explicit provider overrides reach the async providers directly.
-                if explicit_provider:
-                    use_batching = False
+        if provider_config and provider in {"openai", "huggingface"} and provider_config.api_url:
+            base_url_override = provider_config.api_url
+            # Ensure explicit provider overrides reach the async providers directly.
+            if explicit_provider:
+                use_batching = False
 
         # Create deterministic cache key across processes
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -785,10 +784,8 @@ class AsyncEmbeddingService:
                 try:
                     provider.executor.shutdown(wait=False)
                 except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                    try:
+                    with contextlib.suppress(_ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                         provider.executor.shutdown(wait=False)
-                    except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                        pass
 
         logger.info("Async embedding service shutdown complete")
 
@@ -824,10 +821,8 @@ async def _cancel_health_check_task(loop: Optional[asyncio.AbstractEventLoop] = 
 
             if current_loop and task_loop is current_loop:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
             else:
                 # Different loop or no running loop; request cancellation and return
                 try:
@@ -836,15 +831,11 @@ async def _cancel_health_check_task(loop: Optional[asyncio.AbstractEventLoop] = 
                     else:
                         task.cancel()
                 except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                    try:
+                    with contextlib.suppress(_ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                         task.cancel()
-                    except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                        pass
         finally:
-            try:
+            with contextlib.suppress(_ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 _health_check_tasks.pop(task_loop, None)
-            except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                pass
 
 
 async def _shutdown_service(service: AsyncEmbeddingService):
@@ -903,19 +894,15 @@ def _shutdown_async_embedding_service_sync():
                     try:
                         fut.result(timeout=15)
                     except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
-                        try:
+                        with contextlib.suppress(_ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                             logger.warning(f"Async embedding service shutdown timed out: {exc}")
-                        except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                            pass
                 else:
                     loop.run_until_complete(_shutdown_service(service))
             else:
                 asyncio.run(_shutdown_service(service))
         except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
-            try:
+            with contextlib.suppress(_ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 logger.warning(f"Failed during async embedding service shutdown: {exc}")
-            except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                pass
 
     for loop, service in services:
         _shutdown_with_loop(service, loop)

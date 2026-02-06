@@ -7,6 +7,7 @@ and analytics for RAG pipeline operations.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import statistics
 import time
@@ -422,10 +423,8 @@ class MetricsCollector:
         """Stop background aggregation task."""
         if self.aggregation_task:
             self.aggregation_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self.aggregation_task
-            except asyncio.CancelledError:
-                pass
             self.aggregation_task = None
 
     async def _aggregation_loop(self) -> None:

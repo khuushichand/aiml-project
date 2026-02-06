@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -105,10 +106,8 @@ class DockerRunner:
                 grace = 3
 
             # Send SIGTERM first
-            try:
+            with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 subprocess.run(["docker", "kill", "--signal", "TERM", cid], check=False)
-            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
 
             # Wait up to grace seconds for container to stop
             deadline = time.time() + max(0, grace)
@@ -119,16 +118,12 @@ class DockerRunner:
 
             # If still running, send SIGKILL
             if cls._is_container_running(cid):
-                try:
+                with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                     subprocess.run(["docker", "kill", cid], check=False)
-                except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                    pass
 
             # Remove container
-            try:
+            with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 subprocess.run(["docker", "rm", "-f", cid], check=False)
-            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
         finally:
             with cls._active_lock:
                 cls._active_cid.pop(run_id, None)
@@ -143,10 +138,8 @@ class DockerRunner:
             except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
             if net:
-                try:
+                with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                     subprocess.run(["docker", "network", "rm", net], check=False)
-                except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                    pass
         except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
         # Do not publish WS end here; service layer will publish to avoid duplicates
@@ -461,16 +454,12 @@ class DockerRunner:
                     remaining = max(1, int((deadline - datetime.utcnow()).total_seconds()))
                     subprocess.check_call(["docker", "cp", f"{staging}/.", f"{cid}:/workspace/"], timeout=remaining)
                 finally:
-                    try:
+                    with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                         shutil.rmtree(staging, ignore_errors=True)
-                    except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                        pass
         except subprocess.TimeoutExpired:
             # Cleanup container
-            try:
+            with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 subprocess.check_call(["docker", "rm", "-f", cid])
-            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
             finished = datetime.utcnow()
             hub.publish_event(run_id, "end", {"exit_code": None, "reason": "startup_timeout"})
             # Attempt a best-effort CPU usage readback from cgroup before removal
@@ -496,10 +485,8 @@ class DockerRunner:
             )
         except subprocess.CalledProcessError as e:
             # Cleanup container
-            try:
+            with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 subprocess.check_call(["docker", "rm", "-f", cid])
-            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
             raise RuntimeError(f"docker cp failed: {e}")
 
         # Step 3: start container and stream logs
@@ -522,10 +509,8 @@ class DockerRunner:
                 "artifact_bytes": 0,
             }
             # Remove after collecting stats
-            try:
+            with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 subprocess.check_call(["docker", "rm", "-f", cid])
-            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
             return RunStatus(
                 id="",
                 phase=RunPhase.timed_out,
@@ -536,10 +521,8 @@ class DockerRunner:
                 resource_usage=usage,
             )
         except subprocess.CalledProcessError as e:
-            try:
+            with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 subprocess.check_call(["docker", "rm", "-f", cid])
-            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
             raise RuntimeError(f"docker start failed: {e}")
 
         # If granular egress allowlist is enabled, inspect container IP and apply host iptables rules
@@ -573,10 +556,8 @@ class DockerRunner:
                 logger.debug(f"egress allowlist: iptables apply failed: {e}")
 
         # Publish start event
-        try:
+        with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             hub.publish_event(run_id, "start", {"ts": started.isoformat()})
-        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-            pass
 
         # Baseline CPU usage and resolved cgroup file after container start (best-effort)
         baseline_cpu_sec: int | None = None
@@ -676,10 +657,8 @@ class DockerRunner:
                             except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                                 pass
                             # Best-effort terminate; proc should exit when stdin closes
-                            try:
+                            with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                                 proc.terminate()
-                            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                                pass
                     except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                         pass
 
@@ -706,10 +685,8 @@ class DockerRunner:
                 prekill_cpu = None
 
             # Kill, compute stats, then remove
-            try:
+            with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 subprocess.check_call(["docker", "kill", cid])
-            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
             exit_code = None
             finished = datetime.utcnow()
             hub.publish_event(run_id, "end", {"exit_code": exit_code, "reason": "execution_timeout"})
@@ -734,10 +711,8 @@ class DockerRunner:
                 "log_bytes": int(get_hub().get_log_bytes(run_id)),
                 "artifact_bytes": 0,
             }
-            try:
+            with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 subprocess.check_call(["docker", "rm", "-f", cid])
-            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
             return RunStatus(
                 id="",
                 phase=RunPhase.timed_out,
@@ -749,16 +724,12 @@ class DockerRunner:
             )
 
         # Join logs thread
-        try:
+        with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             tlog.join(timeout=1)
-        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-            pass
         # Ensure stdin thread is finished as well
         if stdin_thread is not None:
-            try:
+            with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 stdin_thread.join(timeout=0.5)
-            except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
 
         finished = datetime.utcnow()
         # Resolve image digest (best-effort)
@@ -791,10 +762,8 @@ class DockerRunner:
                                 except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                                     logger.debug(f"Skip artifact {rel}: {e}")
                 finally:
-                    try:
+                    with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                         shutil.rmtree(host_ws, ignore_errors=True)
-                    except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                        pass
         except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Artifact collection failed: {e}")
 
@@ -836,24 +805,18 @@ class DockerRunner:
             "artifact_bytes": int(art_bytes),
         }
         # Remove container after collecting stats
-        try:
+        with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             subprocess.check_call(["docker", "rm", "-f", cid])
-        except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-            pass
         # Cleanup per-run network and iptables rules
         try:
             if net_policy == "allowlist" and enforced and granular:
                 # Delete iptables rules matching our label
-                try:
+                with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                     delete_rules_by_label(egress_label)
-                except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                    pass
                 # Remove dedicated network if we created one
                 if egress_net_name:
-                    try:
+                    with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                         subprocess.run(["docker", "network", "rm", egress_net_name], check=False)
-                    except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                        pass
         except _DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             # Best-effort cleanup; ignore failures
             pass

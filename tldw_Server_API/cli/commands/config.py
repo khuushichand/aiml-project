@@ -108,7 +108,7 @@ def set_config_value(ctx, path, value, value_type):
 @click.pass_context
 def reload_config(ctx):
     """Reload configuration (if hot reload enabled)."""
-    cli_context = ctx.obj['cli_context']
+    ctx.obj['cli_context']
 
     try:
         from tldw_Server_API.app.core.Evaluations.config_manager import reload_config

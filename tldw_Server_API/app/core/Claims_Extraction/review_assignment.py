@@ -114,9 +114,7 @@ def _claim_review_rule_matches(predicate: dict[str, Any], context: dict[str, Any
         return False
     if "media_id" in predicate and not _match_exact(context.get("id"), predicate.get("media_id")):
         return False
-    if "extractor" in predicate and not _match_exact(ctx_extractor, predicate.get("extractor")):
-        return False
-    return True
+    return not ("extractor" in predicate and not _match_exact(ctx_extractor, predicate.get("extractor")))
 
 
 def resolve_claim_review_assignment(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
@@ -116,10 +117,8 @@ class DistributedPrivilegeCache:
             self._record_miss(layer="backend")
             return None
         if self._sliding_ttl and self._redis_ttl and self._redis_ttl > 0:
-            try:
+            with contextlib.suppress(_PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS):
                 self._redis.expire(redis_key, self._redis_ttl)
-            except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS:
-                pass
         if isinstance(decoded, dict) and decoded.get("__cached_ts"):
             decoded.pop("__cached_ts", None)
         self._local.set(key, decoded, ttl_sec=self._redis_ttl)
@@ -174,10 +173,8 @@ class DistributedPrivilegeCache:
         """Stop background workers."""
         self._stop_event.set()
         if self._pubsub is not None:
-            try:
+            with contextlib.suppress(_PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS):
                 self._pubsub.close()
-            except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS:
-                pass
         if self._pubsub_thread and self._pubsub_thread.is_alive():
             self._pubsub_thread.join(timeout=0.5)
         self._pubsub_thread = None
@@ -373,8 +370,6 @@ def invalidate_privilege_cache() -> None:
 def reset_privilege_cache() -> None:
     global _GLOBAL_CACHE
     if _GLOBAL_CACHE is not None:
-        try:
+        with contextlib.suppress(_PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS):
             _GLOBAL_CACHE.close()
-        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS:
-            pass
     _GLOBAL_CACHE = None

@@ -17,6 +17,7 @@ Configuration (env or config dict under 'monitoring.notifications'):
 This scaffolding records intent locally so operators can forward to their systems.
 """
 
+import contextlib
 import json
 import os
 import smtplib
@@ -69,10 +70,8 @@ class NotificationService:
         self.smtp_password = os.getenv("MONITORING_NOTIFY_SMTP_PASSWORD", (ncfg or {}).get("smtp_password", ""))
         self.email_from = os.getenv("MONITORING_NOTIFY_EMAIL_FROM", (ncfg or {}).get("email_from", self.smtp_user or ""))
         self._lock = threading.RLock()
-        try:
+        with contextlib.suppress(OSError):
             Path(self.file_path).parent.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
 
     @staticmethod
     def _coerce_int(value: Any, default: int) -> int:
@@ -241,9 +240,9 @@ class NotificationService:
             with create_client(timeout=5.0) as client:
                 headers = {"Content-Type": "application/json"}
                 fetch(method="POST", url=self.webhook_url, client=client, headers=headers, json=payload, timeout=5.0)
-        except Exception as e:
+        except Exception:
             # Let retry decorator handle; raise to trigger retry
-            raise e
+            raise
 
     def _send_webhook_safe(self, payload: dict[str, Any]) -> None:
         try:
@@ -273,10 +272,8 @@ class NotificationService:
 
         with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=10) as server:
             if self.smtp_starttls:
-                try:
+                with contextlib.suppress(OSError, RuntimeError, smtplib.SMTPException):
                     server.starttls()
-                except (OSError, RuntimeError, smtplib.SMTPException):
-                    pass
             if self.smtp_user:
                 server.login(self.smtp_user, self.smtp_password or "")
             server.sendmail(self.email_from, recipients, msg.as_string())

@@ -92,10 +92,7 @@ class AuthNZPolicyAdmin:
                     current: int | None = None
                     new_version = expected
                 else:
-                    if isinstance(row, dict):
-                        current = int(row.get("version") or 0)
-                    else:
-                        current = int(row[0] or 0)
+                    current = int(row.get("version") or 0) if isinstance(row, dict) else int(row[0] or 0)
                     if current != expected:
                         raise PolicyVersionConflictError(policy_id, expected=expected, actual=current)
                     new_version = expected + 1

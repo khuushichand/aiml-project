@@ -596,7 +596,7 @@ class SlidesModule(BaseModule):
                 sort_direction=args.get("sort_direction", "DESC"),
             )
             presentations = [self._presentation_to_dict(r) for r in rows]
-            limit = int(args.get("limit", 50))
+            int(args.get("limit", 50))
             offset = int(args.get("offset", 0))
             has_more = offset + len(presentations) < total
             return {
@@ -621,7 +621,7 @@ class SlidesModule(BaseModule):
                 include_deleted=bool(args.get("include_deleted", False)),
             )
             presentations = [self._presentation_to_dict(r) for r in rows]
-            limit = int(args.get("limit", 50))
+            int(args.get("limit", 50))
             offset = int(args.get("offset", 0))
             has_more = offset + len(presentations) < total
             return {
@@ -749,7 +749,7 @@ class SlidesModule(BaseModule):
             patch = args.get("patch", {})
             expected_version = args.get("expected_version")
 
-            row = db.update_presentation(
+            db.update_presentation(
                 presentation_id=pid,
                 update_fields=patch,
                 expected_version=expected_version,
@@ -795,7 +795,7 @@ class SlidesModule(BaseModule):
             except json.JSONDecodeError:
                 raise ValueError("Cannot reorder markdown slides; use update instead")
 
-            row = db.update_presentation(
+            db.update_presentation(
                 presentation_id=pid,
                 update_fields={
                     "slides": new_content,
@@ -823,7 +823,7 @@ class SlidesModule(BaseModule):
         try:
             pid = args.get("presentation_id")
             expected_version = args.get("expected_version")
-            row = db.soft_delete_presentation(pid, expected_version)
+            db.soft_delete_presentation(pid, expected_version)
             return {
                 "presentation_id": pid,
                 "action": "soft_deleted",
@@ -996,7 +996,7 @@ class SlidesModule(BaseModule):
                 offset=int(args.get("offset", 0)),
             )
             versions = [self._version_to_dict(r) for r in rows]
-            limit = int(args.get("limit", 20))
+            int(args.get("limit", 20))
             offset = int(args.get("offset", 0))
             has_more = offset + len(versions) < total
             return {
@@ -1530,10 +1530,7 @@ class SlidesModule(BaseModule):
         except json.JSONDecodeError:
             items = [{"content": raw}]
         for idx, item in enumerate(items):
-            if isinstance(item, dict):
-                slide = dict(item)
-            else:
-                slide = {"content": str(item)}
+            slide = dict(item) if isinstance(item, dict) else {"content": str(item)}
             if "order" not in slide or not isinstance(slide.get("order"), int):
                 slide["order"] = idx
             slides.append(slide)

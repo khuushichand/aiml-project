@@ -6,6 +6,7 @@ add operations during database writes.
 """
 
 import asyncio
+import contextlib
 import json
 from collections import deque
 from dataclasses import dataclass
@@ -432,10 +433,8 @@ class AsyncWriteBuffer:
         # Stop timer
         if self._timer_task:
             self._timer_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._timer_task
-            except asyncio.CancelledError:
-                pass
 
         # Recover any spilled tasks
         if self.spill_files:
@@ -456,10 +455,8 @@ class AsyncWriteBuffer:
         # Stop flush worker
         if self._flush_worker:
             self._flush_worker.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._flush_worker
-            except asyncio.CancelledError:
-                pass
 
         self._closed = True
 

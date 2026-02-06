@@ -15,6 +15,7 @@
 ####################
 
 import asyncio
+import contextlib
 import io
 import os
 from dataclasses import dataclass
@@ -273,10 +274,8 @@ async def transcribe_with_external_provider_async(
 
             resp = None
             try:
-                try:
+                with contextlib.suppress(OSError, ValueError):
                     file_handle.seek(0)
-                except (OSError, ValueError):
-                    pass
 
                 resp = await afetch(
                     method="POST",
@@ -325,7 +324,7 @@ async def transcribe_with_external_provider_async(
         return "[Error: Failed to transcribe after all retries]"
 
     except EXTERNAL_PROVIDER_RUNTIME_EXCEPTIONS as e:
-        logger.error(f"Error in external provider transcription: {e}")
+        logger.exception(f"Error in external provider transcription: {e}")
         return f"[Error: {str(e)}]"
 
     finally:
@@ -393,7 +392,7 @@ def transcribe_with_external_provider(
                 )
             )
     except EXTERNAL_PROVIDER_RUNTIME_EXCEPTIONS as e:
-        logger.error(f"Error in external provider transcription: {e}")
+        logger.exception(f"Error in external provider transcription: {e}")
         return f"[Error: {str(e)}]"
 
 

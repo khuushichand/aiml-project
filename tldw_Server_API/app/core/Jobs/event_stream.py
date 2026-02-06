@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
-from sqlite3 import Error as SQLiteError
 import time
+from sqlite3 import Error as SQLiteError
 from typing import Any
 
 from loguru import logger
@@ -62,10 +63,8 @@ def emit_job_event(event: str, *, job: dict[str, Any] | None = None, attrs: dict
     if attrs:
         meta.update(attrs)
     if _events_enabled():
-        try:
+        with contextlib.suppress(_EVENT_LOG_EXCEPTIONS):
             logger.bind(job_event=True).info(f"job_event event={event} attrs={meta}")
-        except _EVENT_LOG_EXCEPTIONS:
-            pass
     # Outbox write (append-only) when enabled
     # Optional soft rate-limit for extremely high churn
     try:
@@ -118,10 +117,8 @@ def emit_job_event(event: str, *, job: dict[str, Any] | None = None, attrs: dict
 
             from tldw_Server_API.app.core.Jobs.manager import JobManager
             # Admin context for outbox writes (RLS bypass)
-            try:
+            with contextlib.suppress(_OUTBOX_NONCRITICAL_EXCEPTIONS):
                 JobManager.set_rls_context(is_admin=True, domain_allowlist=None, owner_user_id=None)
-            except _OUTBOX_NONCRITICAL_EXCEPTIONS:
-                pass
             jm = JobManager()
             conn = jm._connect()
             try:
@@ -165,14 +162,10 @@ def emit_job_event(event: str, *, job: dict[str, Any] | None = None, attrs: dict
                     )
                     conn.commit()
             finally:
-                try:
+                with contextlib.suppress(_OUTBOX_NONCRITICAL_EXCEPTIONS):
                     conn.close()
-                except _OUTBOX_NONCRITICAL_EXCEPTIONS:
-                    pass
-                try:
+                with contextlib.suppress(_OUTBOX_NONCRITICAL_EXCEPTIONS):
                     JobManager.clear_rls_context()
-                except _OUTBOX_NONCRITICAL_EXCEPTIONS:
-                    pass
     except _OUTBOX_NONCRITICAL_EXCEPTIONS:
         # Swallow outbox errors; logging already occurred
         pass

@@ -300,10 +300,7 @@ def _render_text(
     if max_chars is not None and max_chars <= 0:
         raise ValueError("max_chars must be positive")
 
-    if line_sep == "\n":
-        raw_text = " ".join(tokens).replace("\n", " ").strip()
-    else:
-        raw_text = " ".join(tokens).strip()
+    raw_text = " ".join(tokens).replace("\n", " ").strip() if line_sep == "\n" else " ".join(tokens).strip()
     if max_chars is None and max_lines is None:
         return raw_text
 
@@ -311,10 +308,7 @@ def _render_text(
         if max_lines is None:
             return raw_text
         # split lines only on explicit newlines for line mode cues
-        if line_sep == "\n":
-            lines = [line.strip() for line in raw_text.split("\n") if line.strip()]
-        else:
-            lines = [raw_text]
+        lines = [line.strip() for line in raw_text.split("\n") if line.strip()] if line_sep == "\n" else [raw_text]
         if max_lines is not None and len(lines) > max_lines:
             merged = " ".join(lines[max_lines - 1 :])
             lines = lines[: max_lines - 1] + [merged]
@@ -333,10 +327,7 @@ def _render_text(
     if max_lines is not None and len(lines) > max_lines:
         merged = " ".join(lines[max_lines - 1 :])
         lines = lines[: max_lines - 1] + [merged]
-    if line_sep == "\n":
-        rendered = line_sep.join(lines).replace("\n\n", "\n").strip()
-    else:
-        rendered = line_sep.join(lines).strip()
+    rendered = line_sep.join(lines).replace("\n\n", "\n").strip() if line_sep == "\n" else line_sep.join(lines).strip()
     return rendered
 
 

@@ -8,7 +8,7 @@ import threading
 import time
 import weakref
 from collections import OrderedDict
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Optional
@@ -284,7 +284,7 @@ class HTTPConnectionPool:
         """Close all connection pools"""
         async with self._lock:
             tasks = []
-            for provider, client in self._pools.items():
+            for _provider, client in self._pools.items():
                 tasks.append(client.aclose())
 
             if tasks:
@@ -503,10 +503,8 @@ class MemoryMonitor:
         self._monitoring = False
         if self._monitor_task:
             self._monitor_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await self._monitor_task
-            except asyncio.CancelledError:
-                pass
         logger.info("Memory monitoring stopped")
 
     async def _monitor_loop(self):
@@ -801,10 +799,8 @@ class TTSResourceManager:
         # Stop session cleanup
         if self._session_cleanup_task:
             self._session_cleanup_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await self._session_cleanup_task
-            except asyncio.CancelledError:
-                pass
 
         # Close all streaming sessions
         sessions = list(self._streaming_sessions.values())
@@ -988,7 +984,7 @@ class TTSResourceManager:
         """Cleanup expired streaming sessions"""
         while True:
             try:
-                current_time = time.time()
+                time.time()
                 expired_sessions = []
 
                 for session_id, session in self._streaming_sessions.items():

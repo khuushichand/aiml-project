@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -46,31 +47,21 @@ class AuthnzUsersRepo:
             base = {}
         user_dict: dict[str, Any] = dict(base)
         if "id" in user_dict:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 user_dict["id"] = int(user_dict["id"])
-            except (TypeError, ValueError):
-                pass
         if "uuid" in user_dict and user_dict["uuid"] is not None:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 user_dict["uuid"] = str(user_dict["uuid"])
-            except (TypeError, ValueError):
-                pass
         for field in ("is_active", "is_verified", "is_superuser"):
             if field in user_dict:
-                try:
+                with contextlib.suppress(TypeError, ValueError):
                     user_dict[field] = bool(user_dict[field])
-                except (TypeError, ValueError):
-                    pass
         if "storage_quota_mb" in user_dict and user_dict["storage_quota_mb"] is not None:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 user_dict["storage_quota_mb"] = int(user_dict["storage_quota_mb"])
-            except (TypeError, ValueError):
-                pass
         if "storage_used_mb" in user_dict and user_dict["storage_used_mb"] is not None:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 user_dict["storage_used_mb"] = float(user_dict["storage_used_mb"])
-            except (TypeError, ValueError):
-                pass
         return user_dict
 
     async def get_user_by_id(self, user_id: int) -> dict[str, Any] | None:

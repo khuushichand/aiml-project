@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import contextlib
 import random
 import time
 from dataclasses import dataclass
@@ -316,10 +317,8 @@ class CircuitBreaker:
         """Stop health monitoring"""
         if self._health_check_task and not self._health_check_task.done():
             self._health_check_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._health_check_task
-            except asyncio.CancelledError:
-                pass
         logger.info(f"Stopped health monitoring for {self.provider_name}")
 
     async def _health_monitor_loop(self, health_check_func: Optional[Callable]):
@@ -492,7 +491,6 @@ class CircuitBreakerManager:
                 # Handle ConfigParser objects
                 if hasattr(self.config, 'has_option'):
                     # Try to get provider-specific circuit config from ConfigParser
-                    circuit_key = f"{provider_name}_circuit"
                     if self.config.has_section('TTS-Settings'):
                         # Check for provider-specific settings
                         for key, value in dict(self.config.items('TTS-Settings')).items():

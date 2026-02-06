@@ -1,6 +1,7 @@
 # optimization_strategies.py
 # Additional optimization strategies for Prompt Studio
 
+import contextlib
 import random
 from datetime import datetime
 from typing import Any, Optional
@@ -62,10 +63,8 @@ class HyperparameterOptimizer:
             Optimization results with best parameters
         """
         # Populate optional context for logging/observability
-        try:
+        with contextlib.suppress(Exception):
             self.optimization_id = optimization_id
-        except Exception:
-            pass
         with log_context(ps_component="opt_strategies", strategy="hyperparams", prompt_id=prompt_id, optimization_id=getattr(self, "optimization_id", None)):
             logger.info("Starting hyperparameter optimization for prompt {}", prompt_id)
 
@@ -252,10 +251,8 @@ class IterativeRefinementOptimizer:
             Optimization results
         """
         # Populate optional context for logging/observability
-        try:
+        with contextlib.suppress(Exception):
             self.optimization_id = optimization_id
-        except Exception:
-            pass
         with log_context(ps_component="opt_strategies", strategy="iterative", prompt_id=prompt_id, optimization_id=getattr(self, "optimization_id", None)):
             logger.info("Starting iterative refinement for prompt {}", prompt_id)
 

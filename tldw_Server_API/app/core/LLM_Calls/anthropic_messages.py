@@ -4,7 +4,7 @@ import inspect
 import json
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any, Tuple
+from typing import Any
 
 
 def _blocks_to_text(blocks: list[dict[str, Any]]) -> str:
@@ -83,7 +83,7 @@ def _tool_use_to_openai_call(block: dict[str, Any], tool_index: int) -> dict[str
 def anthropic_messages_to_openai(
     messages: list[dict[str, Any]],
     system: Any | None,
-) -> Tuple[list[dict[str, Any]], str | None]:
+) -> tuple[list[dict[str, Any]], str | None]:
     system_message = _system_to_text(system)
     openai_messages: list[dict[str, Any]] = []
     tool_result_counter = 0

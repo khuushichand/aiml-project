@@ -19,6 +19,7 @@ Env flags:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 from dataclasses import dataclass
@@ -283,15 +284,11 @@ async def async_dispatch_command(ctx: CommandContext, command: str, args: str | 
             res = await res  # type: ignore[assignment]
         # annotate result metadata with RBAC info when applicable
         if rbac_enforced and spec.required_permission:
-            try:
+            with contextlib.suppress(_COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS):
                 res.metadata = {**(res.metadata or {}), "rbac": {"checked": True, "required_permission": spec.required_permission, "permitted": True}}
-            except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
-                pass
         log_counter("chat_command_invoked", labels={"command": cmd})
-        try:
+        with contextlib.suppress(_COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS):
             increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "success"})
-        except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
-            pass
         return res
     except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error executing /{cmd}: {e}", exc_info=True)

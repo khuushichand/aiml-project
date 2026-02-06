@@ -339,7 +339,7 @@ def load_parakeet_onnx_model(model_path: Optional[str] = None, device: str = 'cp
         return session, tokenizer
 
     except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
-        logger.error(f"Failed to load ONNX model: {e}")
+        logger.exception(f"Failed to load ONNX model: {e}")
         return None, None
 
 
@@ -390,7 +390,7 @@ def transcribe_with_parakeet_onnx(
                     target_sr=sample_rate
                 )
         except (ImportError, OSError, RuntimeError, TypeError, ValueError) as e:
-            logger.error(f"Failed to load audio file: {e}")
+            logger.exception(f"Failed to load audio file: {e}")
             return f"[Error: Failed to load audio: {e}]"
 
     # Ensure numpy array
@@ -470,7 +470,7 @@ def transcribe_with_parakeet_onnx(
         return "[Error: No output from model]"
 
     except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
-        logger.error(f"Transcription error: {e}")
+        logger.exception(f"Transcription error: {e}")
         return f"[Error: Transcription failed: {e}]"
 
 
@@ -574,7 +574,7 @@ def transcribe_chunked_onnx(
                     transcripts.append(text)
 
         except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
-            logger.error(f"Error processing chunk {i+1}/{num_chunks}: {e}")
+            logger.exception(f"Error processing chunk {i+1}/{num_chunks}: {e}")
 
         # Progress callback
         if chunk_callback:

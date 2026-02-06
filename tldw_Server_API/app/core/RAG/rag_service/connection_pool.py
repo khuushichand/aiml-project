@@ -9,7 +9,7 @@ import queue
 import sqlite3
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, Optional
 
@@ -268,7 +268,7 @@ class ConnectionPool:
         connections_to_close = []
 
         with self._lock:
-            for conn_id, info in self._all_connections.items():
+            for _conn_id, info in self._all_connections.items():
                 if not info["in_use"]:
                     idle_time = current_time - info["last_used"]
                     if idle_time > self.max_idle_time:
@@ -277,10 +277,8 @@ class ConnectionPool:
         for conn in connections_to_close:
             try:
                 # Try to remove from pool
-                try:
+                with suppress(queue.Empty):
                     self._pool.get_nowait()
-                except queue.Empty:
-                    pass
 
                 self._close_connection(conn)
                 logger.debug("Closed idle connection")

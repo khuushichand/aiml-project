@@ -261,10 +261,9 @@ async def _audio_ws_authenticate(
                     await _stream_error("Endpoint not permitted for token", code=4403)
                     return False
             ap = payload.get("allowed_paths")
-            if isinstance(ap, list) and ap:
-                if not any(str(ws_path).startswith(str(pfx)) for pfx in ap):
-                    await _stream_error("Path not permitted for token", code=4403)
-                    return False
+            if isinstance(ap, list) and ap and not any(str(ws_path).startswith(str(pfx)) for pfx in ap):
+                await _stream_error("Path not permitted for token", code=4403)
+                return False
             max_calls = payload.get("max_runs")
             if max_calls is None:
                 max_calls = payload.get("max_calls")

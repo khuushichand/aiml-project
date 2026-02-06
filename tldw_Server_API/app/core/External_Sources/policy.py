@@ -38,10 +38,7 @@ def _path_allowed(path: str | None, allow: list[str], deny: list[str]) -> bool:
             return False
     if not allow:
         return True
-    for pat in allow:
-        if fnmatch(path, pat):
-            return True
-    return False
+    return any(fnmatch(path, pat) for pat in allow)
 
 
 def evaluate_policy_constraints(
@@ -107,7 +104,4 @@ def is_file_type_allowed(*, name: str | None, mime: str | None, allowed: list[st
         if "/" in mm:
             candidates.add(mm.split("/")[0] + "/")
     # Match if any allowed token equals any candidate
-    for a in allowed:
-        if a in candidates:
-            return True
-    return False
+    return any(a in candidates for a in allowed)

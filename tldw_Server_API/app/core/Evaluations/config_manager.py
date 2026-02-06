@@ -113,10 +113,7 @@ class EvaluationsConfigManager:
         """
         if config_path is None:
             env_path = os.getenv("EVALUATIONS_CONFIG_PATH")
-            if env_path:
-                config_path = Path(env_path).expanduser()
-            else:
-                config_path = resolve_module_yaml("evaluations")
+            config_path = Path(env_path).expanduser() if env_path else resolve_module_yaml("evaluations")
         if config_path is None:
             config_path = Path("evaluations_config.yaml")
 

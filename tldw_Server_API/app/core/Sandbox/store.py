@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sqlite3
@@ -335,7 +336,7 @@ class InMemoryStore(SandboxStore):
     ) -> list[dict]:
         with self._lock:
             rows = []
-            for (ep, uid, k), (ts, fp, resp, oid) in self._idem.items():
+            for (ep, uid, k), (ts, fp, _resp, oid) in self._idem.items():
                 if endpoint and ep != endpoint:
                     continue
                 if user_id and uid != user_id:
@@ -700,7 +701,7 @@ class SQLiteStore(SandboxStore):
                     phase=RunPhase(row["phase"]),
                     spec_version=row["spec_version"],
                     runtime=(RuntimeType(row["runtime"]) if row["runtime"] else None),
-                    runtime_version=(row["runtime_version"] if "runtime_version" in row.keys() else None),
+                    runtime_version=(row.get("runtime_version", None)),
                     base_image=row["base_image"],
                     image_digest=row["image_digest"],
                     policy_hash=row["policy_hash"],
@@ -1083,10 +1084,8 @@ class PostgresStore(SandboxStore):
             except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                 ttl = 600
             cutoff = time.time() - ttl
-            try:
+            with contextlib.suppress(_SANDBOX_STORE_NONCRITICAL_EXCEPTIONS):
                 cur.execute("DELETE FROM sandbox_idempotency WHERE created_at < %s", (cutoff,))
-            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
-                pass
             cur.execute(
                 """
                     SELECT fingerprint, response_body, object_id, created_at
@@ -1437,7 +1436,6 @@ class PostgresStore(SandboxStore):
         offset: int = 0,
         sort_desc: bool = True,
     ) -> list[dict]:
-        order = "DESC" if sort_desc else "ASC"
         with self._lock, self._conn() as con, con.cursor() as cur:
             cur.execute("SELECT user_id, artifact_bytes FROM sandbox_usage")
             usage_rows = {r.get("user_id"): int(r.get("artifact_bytes") or 0) for r in (cur.fetchall() or [])}

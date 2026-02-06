@@ -246,6 +246,8 @@ def _chat_connectors_enabled() -> bool:
     )
 
 # Load configuration values from config
+import contextlib
+
 from tldw_Server_API.app.core.config import load_and_log_configs, load_comprehensive_config
 
 _config = load_comprehensive_config()
@@ -1484,10 +1486,8 @@ async def create_chat_completion(
                                 elif action == 'block':
                                     inj_mod['blocked'] = True
                             # Track moderation for metrics
-                            try:
+                            with contextlib.suppress(_CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS):
                                 metrics.track_moderation_input(str(req_user_id or client_id), inj_mod['action'], category=(inj_mod.get('category') or "default"))
-                            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-                                pass
                             # Audit moderation decision
                             try:
                                 if audit_service and context:
@@ -1571,10 +1571,8 @@ async def create_chat_completion(
                                         name="system-command",
                                     )
                                     # Attach metadata if possible
-                                    try:
+                                    with contextlib.suppress(_CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS):
                                         sys_msg.metadata = {"tldw_injection": inj_meta, "moderation": inj_mod}
-                                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-                                        pass
                                     request_data.messages.append(sys_msg)
                                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as inj_err:
                                     logger.debug(f"Failed to append system injection message: {inj_err}")
@@ -2541,7 +2539,7 @@ async def create_chat_completion(
             }
             if e_http.status_code in allowed_statuses:
                 # Re-raise expected/intentional HTTP errors
-                raise e_http
+                raise
             # For unexpected HTTP statuses (e.g., from mocked upstream), coerce to 500
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2988,10 +2986,7 @@ async def save_chat_knowledge(
         export_status = "not_requested"
         export_job_id: str | None = None
         if payload.export_to != "none":
-            if _chat_connectors_enabled():
-                export_status = "queued"
-            else:
-                export_status = "skipped_disabled"
+            export_status = "queued" if _chat_connectors_enabled() else "skipped_disabled"
 
         conv_title = conversation.get("title") or f"Conversation {payload.conversation_id}"
         safe_title = conv_title[:200]
@@ -3561,10 +3556,7 @@ async def get_chat_analytics(
                 continue
             if dt < start_dt or dt > end_dt:
                 continue
-            if bucket_granularity == "week":
-                bucket_date = (dt - timedelta(days=dt.weekday())).date()
-            else:
-                bucket_date = dt.date()
+            bucket_date = (dt - timedelta(days=dt.weekday())).date() if bucket_granularity == "week" else dt.date()
             bucket_start = datetime.combine(bucket_date, datetime.min.time(), tzinfo=timezone.utc)
             state_val = row.get("state") or "in-progress"
             topic_val = row.get("topic_label")

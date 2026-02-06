@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hmac
 import os
 from collections.abc import Mapping
@@ -67,10 +68,8 @@ def hash_entity(value: str, secret: str | None = None) -> str:
             # In enforced mode, fail fast to avoid cross-process instability
             raise RuntimeError("TLDW_LOG_HASH_SECRET is required but not set (TLDW_ENFORCE_LOG_HASH_SECRET=1)")
         if not _LOG_HASH_SECRET_WARNED:
-            try:
+            with contextlib.suppress(Exception):
                 logger.warning("hash_entity using process-local fallback; set TLDW_LOG_HASH_SECRET for stable hashing across processes")
-            except Exception:
-                pass
             _LOG_HASH_SECRET_WARNED = True
     key = (secret or env_secret or os.getpid().__repr__()).encode()
     return hmac.new(key, value.encode(), sha256).hexdigest()

@@ -75,7 +75,7 @@ class ConnectorPolicy(BaseModel):
 
 class ConnectorSourceCreateRequest(BaseModel):
     """Create a new connector source to import/sync from."""
-    model_config = dict(extra='forbid')
+    model_config = {"extra": 'forbid'}
 
     account_id: int
     provider: Literal["drive", "notion"]
@@ -87,7 +87,7 @@ class ConnectorSourceCreateRequest(BaseModel):
 
 class ConnectorSourcePatchRequest(BaseModel):
     """Patch a connector source."""
-    model_config = dict(extra='forbid')
+    model_config = {"extra": 'forbid'}
 
     enabled: bool | None = None
     options: dict[str, Any] | None = None

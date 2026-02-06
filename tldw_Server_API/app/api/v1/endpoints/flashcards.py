@@ -79,16 +79,15 @@ def _normalize_flashcard_model_fields(
     eff_is_cloze = effective_model == "cloze"
     eff_reverse = effective_model == "basic_reverse"
 
-    if eff_is_cloze:
-        if not re.search(r"\{\{c\d+::", front or ""):
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "Invalid cloze",
-                    "invalid_fields": ["front"],
-                    "message": "Front must contain one or more {{cN::...}} patterns",
-                },
-            )
+    if eff_is_cloze and not re.search(r"\{\{c\d+::", front or ""):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid cloze",
+                "invalid_fields": ["front"],
+                "message": "Front must contain one or more {{cN::...}} patterns",
+            },
+        )
     return effective_model, eff_is_cloze, eff_reverse
 
 
@@ -412,7 +411,7 @@ def import_flashcards(
 ):
     try:
         delimiter = payload.delimiter or '\t'
-        raw_lines = [ln for ln in (payload.content or '').splitlines()]
+        raw_lines = list((payload.content or '').splitlines())
         header_map: dict[str, int] = {}
         lines = raw_lines
         errors: list[dict] = []
@@ -582,7 +581,7 @@ def import_flashcards(
                 'notes': notes,
                 'tags_json': json.dumps(tags_list) if tags_list else None,
                 'model_type': eff_model_type,
-                'reverse': True if eff_model_type == 'basic_reverse' else False,
+                'reverse': eff_model_type == 'basic_reverse',
             }
             if extra:
                 data['extra'] = extra
@@ -645,10 +644,7 @@ async def import_flashcards_json(
                     raise HTTPException(status_code=400, detail="Invalid JSON/JSONL upload: failed to parse a line")
             data = {'items': items}
 
-        if isinstance(data, dict) and 'items' in data:
-            items = data.get('items')
-        else:
-            items = data
+        items = data.get('items') if isinstance(data, dict) and 'items' in data else data
         if not isinstance(items, list):
             raise HTTPException(status_code=400, detail="JSON content must be a list of objects or {'items': [...]} ")
 
@@ -692,10 +688,7 @@ async def import_flashcards_json(
             if not front:
                 errors.append({'index': idx, 'error': 'Missing required field: Front'})
                 continue
-            if deck_name == '':
-                eff_deck = default_deck_name
-            else:
-                eff_deck = deck_name
+            eff_deck = default_deck_name if deck_name == '' else deck_name
             # Field caps
             fields = {
                 'Deck': eff_deck,
@@ -741,7 +734,7 @@ async def import_flashcards_json(
                 'notes': notes,
                 'tags_json': _json.dumps(tags_list) if tags_list else None,
                 'model_type': eff_model_type,
-                'reverse': True if eff_model_type == 'basic_reverse' else False,
+                'reverse': eff_model_type == 'basic_reverse',
             }
             if extra:
                 data['extra'] = extra

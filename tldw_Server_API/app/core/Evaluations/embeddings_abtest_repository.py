@@ -665,10 +665,7 @@ def _sqlite_url_from_path(path: str) -> str:
 
 @lru_cache(maxsize=8)
 def get_embeddings_abtest_store(db_path_or_url: str) -> EmbeddingsABTestStore:
-    if "://" in db_path_or_url:
-        db_url = db_path_or_url
-    else:
-        db_url = _sqlite_url_from_path(db_path_or_url)
+    db_url = db_path_or_url if "://" in db_path_or_url else _sqlite_url_from_path(db_path_or_url)
     config = RepositoryConfig(db_url=db_url)
     repo = EmbeddingABTestRepository.from_config(config)
     return EmbeddingsABTestStore(repo)

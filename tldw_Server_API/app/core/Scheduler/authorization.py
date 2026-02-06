@@ -154,9 +154,8 @@ class TaskAuthorizer:
             return False, "Authentication required"
 
         # Check admin-only handlers
-        if handler in self._admin_handlers:
-            if not context.is_admin:
-                return False, f"Handler '{handler}' requires admin privileges"
+        if handler in self._admin_handlers and not context.is_admin:
+            return False, f"Handler '{handler}' requires admin privileges"
 
         # Admins bypass further permission checks
         if context.is_admin:

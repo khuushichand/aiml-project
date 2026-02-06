@@ -138,9 +138,9 @@ async def run_transaction(
                 raise
         except InputError:
             raise
-        except CharactersRAGDBError as e:
+        except CharactersRAGDBError:
             # Non-conflict DB errors: surface to caller
-            raise e
+            raise
         except Exception as e:  # noqa: BLE001
             # Unexpected error
             raise CharactersRAGDBError(f"Transaction failed: {e}")

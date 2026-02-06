@@ -108,10 +108,7 @@ async def seed_db_policies_from_yaml(
         route_map = {}
 
     referenced: set[str] = set(_iter_route_map_policy_ids(route_map))
-    if seed_all:
-        to_seed = set(str(k) for k in policies.keys() if str(k).strip())
-    else:
-        to_seed = referenced
+    to_seed = {str(k) for k in policies if str(k).strip()} if seed_all else referenced
 
     admin = AuthNZPolicyAdmin()
     await admin.initialize()

@@ -138,10 +138,7 @@ def format_toc_item(item: Union[epub.Link, epub.Section, Any], level: int) -> st
              Returns an empty string if an error occurs during formatting.
     """
     try:
-        if isinstance(item, epub.Link) or isinstance(item, epub.Section):
-            title = item.title
-        else:
-            title = str(item)
+        title = item.title if isinstance(item, (epub.Link, epub.Section)) else str(item)
 
         return f"{'  ' * (level - 1)}- [{title}](#{slugify(title)})\n"
     except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
@@ -203,7 +200,6 @@ def epub_to_markdown(epub_path: str) -> tuple[str, Optional[epub.EpubBook]]:
         logging.info(f"Converting EPUB to Markdown from {epub_path}")
         book = epub.read_epub(epub_path)
         markdown_content = "# Table of Contents\n\n"
-        chapters = []
 
         # Extract and format the table of contents
         toc = book.toc

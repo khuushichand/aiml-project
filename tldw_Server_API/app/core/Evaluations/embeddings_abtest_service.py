@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -109,9 +110,12 @@ def validate_abtest_policy(config: EmbeddingsABTestConfig, *, user: object | Non
             _should_enforce_policy,
         )
     except _ABTEST_NONCRITICAL_EXCEPTIONS:
-        _get_allowed_providers = lambda: None
-        _get_allowed_models = lambda: None
-        _should_enforce_policy = lambda _user=None: False
+        def _get_allowed_providers():
+            return None
+        def _get_allowed_models():
+            return None
+        def _should_enforce_policy(_user=None):
+            return False
 
     enforce_policy = bool(_should_enforce_policy(user))
     allowed_providers = _get_allowed_providers()
@@ -420,15 +424,13 @@ async def build_collections_vector_only(
             )
             arm_logger = arm_logger.bind(arm_id=arm_id)
             results.append({"arm_id": arm_id, "collection_name": reuse_collection_name})
-            try:
+            with contextlib.suppress(_ABTEST_NONCRITICAL_EXCEPTIONS):
                 record_abtest_arm_build(
                     duration_seconds=time.monotonic() - arm_start,
                     status="reused",
                     provider=arm.provider,
                     model=arm.model,
                 )
-            except _ABTEST_NONCRITICAL_EXCEPTIONS:
-                pass
             arm_logger.info("Embeddings A/B collection reused")
             continue
 
@@ -512,18 +514,16 @@ async def build_collections_vector_only(
             )
 
             results.append({"arm_id": arm_id, "collection_name": collection_name})
-            try:
+            with contextlib.suppress(_ABTEST_NONCRITICAL_EXCEPTIONS):
                 record_abtest_arm_build(
                     duration_seconds=time.monotonic() - arm_start,
                     status="built",
                     provider=arm.provider,
                     model=arm.model,
                 )
-            except _ABTEST_NONCRITICAL_EXCEPTIONS:
-                pass
             arm_logger.info("Embeddings A/B collection build completed")
         except _ABTEST_NONCRITICAL_EXCEPTIONS as exc:
-            try:
+            with contextlib.suppress(_ABTEST_NONCRITICAL_EXCEPTIONS):
                 db.upsert_abtest_arm(
                     test_id=test_id,
                     arm_index=i,
@@ -536,17 +536,13 @@ async def build_collections_vector_only(
                     status='failed',
                     stats_json={"error": str(exc)},
                 )
-            except _ABTEST_NONCRITICAL_EXCEPTIONS:
-                pass
-            try:
+            with contextlib.suppress(_ABTEST_NONCRITICAL_EXCEPTIONS):
                 record_abtest_arm_build(
                     duration_seconds=time.monotonic() - arm_start,
                     status="failed",
                     provider=arm.provider,
                     model=arm.model,
                 )
-            except _ABTEST_NONCRITICAL_EXCEPTIONS:
-                pass
             arm_logger.warning(f"Embeddings A/B collection build failed: {exc}")
             raise EmbeddingsABTestRunError(
                 f"Failed to build collection for arm {arm.provider}/{arm.model}: {exc}",
@@ -824,10 +820,8 @@ async def run_abtest_full(
         aggregates = await run_vector_search_and_score(db, config, test_id, user_id, arm_info)
         sig = compute_significance(db, test_id, metric='ndcg')
         db.set_abtest_status(test_id, 'completed', stats_json={"aggregates": aggregates, "significance": sig, "progress": {"phase": 1.0}})
-        try:
+        with contextlib.suppress(_ABTEST_NONCRITICAL_EXCEPTIONS):
             record_abtest_run(duration_seconds=time.monotonic() - run_start, status="completed")
-        except _ABTEST_NONCRITICAL_EXCEPTIONS:
-            pass
         run_logger.info("Embeddings A/B test run completed")
         cleanup = getattr(config, "cleanup_policy", None)
         if cleanup and bool(getattr(cleanup, "on_complete", False)):
@@ -855,17 +849,13 @@ async def run_abtest_full(
             except _ABTEST_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Failed to enqueue cleanup job for A/B test {test_id}: {exc}")
     except EmbeddingsABTestRunError as exc:
-        try:
+        with contextlib.suppress(_ABTEST_NONCRITICAL_EXCEPTIONS):
             record_abtest_run(duration_seconds=time.monotonic() - run_start, status="failed")
-        except _ABTEST_NONCRITICAL_EXCEPTIONS:
-            pass
         run_logger.warning(f"Embeddings A/B test run failed: {exc}")
         raise
     except _ABTEST_NONCRITICAL_EXCEPTIONS as exc:
-        try:
+        with contextlib.suppress(_ABTEST_NONCRITICAL_EXCEPTIONS):
             record_abtest_run(duration_seconds=time.monotonic() - run_start, status="failed")
-        except _ABTEST_NONCRITICAL_EXCEPTIONS:
-            pass
         run_logger.warning(f"Embeddings A/B test run failed: {exc}")
         raise EmbeddingsABTestRunError(f"A/B test {test_id} failed: {exc}", retryable=True) from exc
 
@@ -949,10 +939,10 @@ def compute_significance(db: EvaluationsDatabase, test_id: str, metric: str = 'n
 
     # Pairwise p-values
     pvals: dict[str, dict[str, float]] = {}
-    for i, ai in enumerate(arms):
+    for _i, ai in enumerate(arms):
         a_id = ai['arm_id']
         pvals[a_id] = {}
-        for j, aj in enumerate(arms):
+        for _j, aj in enumerate(arms):
             b_id = aj['arm_id']
             if a_id == b_id:
                 pvals[a_id][b_id] = 1.0

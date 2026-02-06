@@ -14,7 +14,7 @@ Note: This implementation requires psycopg (v3) to be installed:
 import os
 import time
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import Any, Optional, Union
 
 from loguru import logger
@@ -194,29 +194,23 @@ class PostgreSQLConnectionPool(ConnectionPool):
 
     def return_connection(self, connection: Any) -> None:
         if self._closed or connection is None:
-            try:
+            with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
                 connection.close()
-            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
-                pass
             return
         if self._use_psycopg_pool:
             # Always return via putconn
             try:
                 self._pool.putconn(connection)
             except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
-                try:
+                with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
                     connection.close()
-                except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
-                    pass
             return
         # Minimal pool: store for reuse up to capacity; else close
         if len(self._free) < self._max:
             self._free.append(connection)
         else:
-            try:
+            with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
                 connection.close()
-            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
-                pass
 
     @contextmanager
     def connection(self) -> Generator[Any, None, None]:
@@ -229,16 +223,12 @@ class PostgreSQLConnectionPool(ConnectionPool):
     def close_all(self) -> None:
         self._closed = True
         if self._use_psycopg_pool:
-            try:
+            with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
                 self._pool.close()
-            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
-                pass
             return
         for conn in self._connections:
-            try:
+            with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
-                pass
         self._connections.clear()
         self._free.clear()
 
@@ -324,10 +314,7 @@ class PostgreSQLBackend(DatabaseBackend):
         # Default: disabled; rely on set_config GUCs and row-level security predicates.
         # Role switching must be explicitly enabled via env.
         _role_env = os.getenv("TLDW_CONTENT_PG_ROLE_SWITCH", "").strip().lower()
-        if _role_env == "":
-            allow_role_switch = False
-        else:
-            allow_role_switch = _role_env in {"1", "true", "yes", "on"}
+        allow_role_switch = False if _role_env == "" else _role_env in {"1", "true", "yes", "on"}
         allowed_roles_env = os.getenv("TLDW_CONTENT_PG_ROLE_WHITELIST", "").strip()
         allowed_roles = {r.strip() for r in allowed_roles_env.split(',') if r.strip()}
         if not allow_role_switch or not session_role or (allowed_roles and session_role not in allowed_roles):
@@ -357,10 +344,8 @@ class PostgreSQLBackend(DatabaseBackend):
                 except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                     cur.execute("RESET ROLE")
 
-            try:
+            with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
                 cur.execute("SET row_security = on")
-            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
-                pass
 
             for sql_stmt, params in statements:
                 cur.execute(sql_stmt, params)
@@ -385,10 +370,8 @@ class PostgreSQLBackend(DatabaseBackend):
                         connection.execute("RESET SESSION AUTHORIZATION")
                     except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                         connection.execute("RESET ROLE")
-                try:
+                with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
                     connection.execute("SET row_security = on")
-                except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
-                    pass
                 for sql_stmt, params in statements:
                     try:
                         connection.execute(sql_stmt, params)
@@ -416,10 +399,8 @@ class PostgreSQLBackend(DatabaseBackend):
                             connection.execute("RESET SESSION AUTHORIZATION")
                         except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
                             connection.execute("RESET ROLE")
-                    try:
+                    with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
                         connection.execute("SET row_security = on")
-                    except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
-                        pass
                     for sql_stmt, params in statements:
                         try:
                             connection.execute(sql_stmt, params)
@@ -539,10 +520,7 @@ class PostgreSQLBackend(DatabaseBackend):
                 if remainder == "":
                     return ""
                 potential_tail = PostgreSQLBackend._strip_leading_comments(remainder.lstrip())
-                if potential_tail.upper().startswith("AS"):
-                    text = potential_tail
-                else:
-                    text = original_text
+                text = potential_tail if potential_tail.upper().startswith("AS") else original_text
 
             upper_tail = text.upper()
             if upper_tail.startswith("AS"):
@@ -597,10 +575,7 @@ class PostgreSQLBackend(DatabaseBackend):
                 if remainder == "":
                     return False
                 potential_tail = PostgreSQLBackend._strip_leading_comments(remainder.lstrip())
-                if potential_tail.upper().startswith("AS"):
-                    text = potential_tail
-                else:
-                    text = original_text
+                text = potential_tail if potential_tail.upper().startswith("AS") else original_text
 
             upper_tail = text.upper()
             if upper_tail.startswith("AS"):
@@ -1041,13 +1016,11 @@ class PostgreSQLBackend(DatabaseBackend):
             """)
 
             # Record the mapping for fts_search when table_name != source_table.
-            try:
+            with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
                 self._fts_table_map[table_name] = {
                     "source_table": source_table,
                     "fts_column": fts_column,
                 }
-            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
-                pass
 
             if not external_conn:
                 conn.commit()
@@ -1206,16 +1179,12 @@ class PostgreSQLBackend(DatabaseBackend):
         try:
             # Use autocommit for VACUUM
             old_autocommit = getattr(conn, 'autocommit', False)
-            try:
+            with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
                 conn.autocommit = True
-            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
-                pass
             cursor = conn.cursor()
             cursor.execute("VACUUM ANALYZE")
-            try:
+            with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
                 conn.autocommit = old_autocommit
-            except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS:
-                pass
         finally:
             if not external_conn:
                 conn.close()

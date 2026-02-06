@@ -123,10 +123,7 @@ async def run_image_gen_adapter(config: dict[str, Any], context: dict[str, Any])
     if img_format not in ("png", "jpg", "jpeg", "webp"):
         img_format = "png"
     save_artifact = config.get("save_artifact")
-    if save_artifact is None:
-        save_artifact = True
-    else:
-        save_artifact = bool(save_artifact)
+    save_artifact = True if save_artifact is None else bool(save_artifact)
 
     # Test mode simulation
     if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):

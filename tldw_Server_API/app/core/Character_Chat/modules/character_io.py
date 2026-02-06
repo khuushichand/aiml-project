@@ -6,6 +6,7 @@ This module contains functions for importing and exporting character cards.
 
 import base64
 import binascii
+import contextlib
 import io
 import json
 import os
@@ -124,10 +125,8 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
         elif hasattr(image_file_input, 'read'):  # File-like object
             if hasattr(image_file_input, 'name') and image_file_input.name:
                 file_name_for_log = image_file_input.name
-            try:
+            with contextlib.suppress(_CHARACTER_IO_NONCRITICAL_EXCEPTIONS):
                 image_file_input.seek(0)
-            except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS:
-                pass
             raw_bytes = image_file_input.read()
             try:
                 image_file_input.seek(0)  # Reset original stream pointer
@@ -466,10 +465,8 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                     return _extract_metadata(img_obj, raw_bytes)
                 finally:
                     if hasattr(img_obj, "close"):
-                        try:
+                        with contextlib.suppress(_CHARACTER_IO_NONCRITICAL_EXCEPTIONS):
                             img_obj.close()
-                        except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS:
-                            pass
         except (OSError, SyntaxError) as e:
             # Catches PIL.UnidentifiedImageError and other file I/O issues
             logger.error(
@@ -553,7 +550,7 @@ def import_character_card_from_json_string(
         is_explicit_v2_version = is_explicit_v2_version_str.startswith("2.")
 
         # Check for Tavern/SillyTavern format
-        has_tavern_fields = all(field in card_data_dict for field in ['name', 'description', 'first_mes'])
+        all(field in card_data_dict for field in ['name', 'description', 'first_mes'])
 
         # Check for Pygmalion format
         has_pygmalion_fields = 'char_name' in card_data_dict and 'char_persona' in card_data_dict
@@ -949,10 +946,7 @@ def import_and_save_character_from_file(
         elif file_type in ['json', 'yaml', 'text'] or file_content:
             # Handle text-based formats
             if file_content:
-                if isinstance(file_content, bytes):
-                    content_str = file_content.decode('utf-8')
-                else:
-                    content_str = file_content
+                content_str = file_content.decode('utf-8') if isinstance(file_content, bytes) else file_content
             elif file_path:
                 with open(file_path, encoding='utf-8') as f:
                     content_str = f.read()
@@ -1213,7 +1207,6 @@ def load_chat_history_from_file_and_save_to_db(
             return None, None
 
         character_name = (char_data or {}).get("name") or inferred_char_name or "Character"
-        user_name = inferred_user_name or "User"
 
         def _cleanup_failed_import() -> None:
             try:

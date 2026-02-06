@@ -3,6 +3,7 @@
 #
 # Imports
 import base64
+import contextlib
 import os
 import re
 from typing import Any, Optional, Union
@@ -29,7 +30,7 @@ from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
 from tldw_Server_API.app.core.Prompt_Management.Prompts_Interop import (
     db_export_prompt_keywords_to_csv,
     db_export_prompts_formatted,  # Using the standalone function from interop
-    )
+)
 
 #
 # DB Mgmt
@@ -1048,8 +1049,7 @@ async def delete_prompt(
 ) -> Response:
     try:
         processed_identifier: Union[int, str] = prompt_identifier
-        try: processed_identifier = int(prompt_identifier)
-        except ValueError: pass
+        with contextlib.suppress(ValueError): processed_identifier = int(prompt_identifier)
 
         success = db.soft_delete_prompt(processed_identifier)
         if not success:

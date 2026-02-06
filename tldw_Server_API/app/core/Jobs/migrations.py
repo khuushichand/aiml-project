@@ -7,6 +7,7 @@ database path. This scaffolds the future core JobManager backend.
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from pathlib import Path
 
@@ -231,10 +232,8 @@ def ensure_jobs_tables(db_path: Path | None = None) -> Path:
                 db_path = (Path(_gpr()) / db_path).resolve()
         except _JOBS_PATH_EXCEPTIONS:
             db_path = Path(db_path)
-    try:
+    with contextlib.suppress(_JOBS_PATH_EXCEPTIONS):
         db_path.parent.mkdir(parents=True, exist_ok=True)
-    except _JOBS_PATH_EXCEPTIONS:
-        pass
     try:
         with sqlite3.connect(db_path) as conn:
             # SQLite tuning for better concurrency
@@ -246,14 +245,10 @@ def ensure_jobs_tables(db_path: Path | None = None) -> Path:
                 pass
             conn.executescript(JOBS_SQLITE_DDL)
             conn.commit()
-            try:
+            with contextlib.suppress(_JOBS_DB_EXCEPTIONS):
                 conn.execute("ALTER TABLE jobs ADD COLUMN batch_group TEXT")
-            except _JOBS_DB_EXCEPTIONS:
-                pass
-            try:
+            with contextlib.suppress(_JOBS_DB_EXCEPTIONS):
                 conn.execute("ALTER TABLE jobs_archive ADD COLUMN batch_group TEXT")
-            except _JOBS_DB_EXCEPTIONS:
-                pass
             conn.commit()
         try:
             logger.info(f"Ensured Jobs schema at {Path(db_path).resolve()}")

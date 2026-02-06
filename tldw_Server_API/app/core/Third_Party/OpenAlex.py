@@ -5,6 +5,7 @@ standardized return signatures expected by the API layer.
 """
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 from typing import Any
@@ -117,10 +118,8 @@ def get_openalex_by_doi(doi: str) -> tuple[dict | None, str | None]:
         url = f"{BASE_URL}/works/doi:{doi_clean}"
         r = fetch(method="GET", url=url, timeout=20, headers={"Accept": "application/json", "User-Agent": "tldw_server/0.1 (+https://github.com/openai/tldw_server)"})
         if r.status_code == 404:
-            try:
+            with contextlib.suppress(Exception):
                 r.close()
-            except Exception:
-                pass
             return None, None
         data = r.json()
         return _normalize_openalex_work(data), None

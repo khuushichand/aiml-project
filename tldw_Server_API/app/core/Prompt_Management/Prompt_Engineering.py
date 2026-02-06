@@ -31,7 +31,7 @@ def _call_adapter(api_endpoint: str, request: dict[str, Any]) -> Any:
     if payload.get("model") is None:
         resolved = _resolve_model(provider, app_config)
         if not resolved:
-            raise PromptGenerationError("Model is required for provider '%s'." % provider)
+            raise PromptGenerationError(f"Model is required for provider '{provider}'.")
         payload["model"] = resolved
     return adapter.chat(payload)
 
@@ -83,7 +83,7 @@ def generate_prompt(api_endpoint: str, api_key: str, task: str, variables_str: s
         Provider-specific chat completion response (string or dict depending on backend)
     """
     # Convert variables into a list from comma-separated input
-    variables = [v.strip() for v in variables_str.split(',') if v.strip()]
+    [v.strip() for v in variables_str.split(',') if v.strip()]
 
     # Construct the metaprompt by embedding the task and variables into the defined structure
     metaprompt = f"""Today you will be writing instructions to an eager, helpful, but inexperienced and unworldly AI assistant who needs careful instruction and examples to understand how best to behave. I will explain a task to you. You will write instructions that will direct the assistant on how best to accomplish the task consistently, accurately, and correctly. Here are some examples of tasks and instructions.

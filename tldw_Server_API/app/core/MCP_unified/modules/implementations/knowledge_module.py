@@ -310,7 +310,7 @@ class KnowledgeModule(BaseModule):
         idv = args.get("id")
         retrieval: dict[str, Any] = args.get("retrieval") or {}
         mode = retrieval.get("mode", "snippet")
-        snippet_len = int(retrieval.get("snippet_length", 300))
+        int(retrieval.get("snippet_length", 300))
         # If auto and a token budget is provided, prefer chunk_with_siblings
         if mode == "auto" and isinstance(retrieval.get("max_tokens"), (int, float)):
             retrieval = dict(retrieval)

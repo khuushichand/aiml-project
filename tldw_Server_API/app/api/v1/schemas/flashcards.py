@@ -61,7 +61,7 @@ class Flashcard(BaseModel):
     reverse: bool
 
     @model_validator(mode="before")
-    def _populate_tags(cls, data):
+    def _populate_tags(self, data):
         if not isinstance(data, dict):
             return data
         if data.get("tags") is not None:

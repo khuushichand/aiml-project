@@ -182,7 +182,7 @@ def _get_slide_value(slide: Any, key: str, default: Any = None) -> Any:
 
 
 def _sorted_slides(slides: Iterable[Any]) -> list[Any]:
-    return sorted(list(slides), key=lambda s: int(_get_slide_value(s, "order", 0)))
+    return sorted(slides, key=lambda s: int(_get_slide_value(s, "order", 0)))
 
 
 def _env_str(name: str, default: str) -> str:

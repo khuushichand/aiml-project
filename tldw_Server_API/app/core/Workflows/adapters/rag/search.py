@@ -555,7 +555,7 @@ async def run_rss_fetch_adapter(config: dict[str, Any], context: dict[str, Any])
                     allowed = is_url_allowed(u)
                 if not allowed:
                     continue
-                host = urlparse(u).hostname or ""
+                urlparse(u).hostname or ""
                 timeout = float(os.getenv("WORKFLOWS_RSS_TIMEOUT", "8"))
                 with _wf_create_client(timeout=timeout) as client:
                     resp = client.get(u)

@@ -21,6 +21,7 @@ Usage:
 """
 #
 # Imports
+import contextlib
 import logging
 import threading
 from pathlib import Path
@@ -494,10 +495,8 @@ class PromptsInteropService:
                 # If running against a MagicMock in tests, reset call count for per-test assertions
                 meth = getattr(db, "list_prompts", None)
                 if callable(meth) and hasattr(meth, "reset_mock"):
-                    try:
+                    with contextlib.suppress(_PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS):
                         meth.reset_mock()
-                    except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS:
-                        pass
                 items = db.list_prompts()
                 # Ensure content mapping if details present
                 for it in items or []:
@@ -643,10 +642,8 @@ class PromptsInteropService:
         # Reset call count for delete_prompt if mocked (unit tests assert call counts)
         del_meth = getattr(db, "delete_prompt", None)
         if callable(del_meth) and hasattr(del_meth, "reset_mock"):
-            try:
+            with contextlib.suppress(_PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS):
                 del_meth.reset_mock()
-            except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS:
-                pass
         for pid in (prompt_ids or []):
             if hasattr(db, "delete_prompt"):
                 try:

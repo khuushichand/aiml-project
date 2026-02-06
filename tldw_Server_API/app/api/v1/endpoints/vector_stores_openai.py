@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import pathlib
 import time
 import uuid
@@ -406,10 +407,8 @@ async def create_vector_store(
         logger.warning(f"Failed to register vector store in meta DB: {_e}")
 
     # Track expected dimension in-memory for correctness in tests and fakes
-    try:
+    with contextlib.suppress(_VECTORSTORE_NONCRITICAL_EXCEPTIONS):
         _STORE_DIMENSIONS[store_id] = payload.dimensions
-    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
-        pass
     # Track created name in this process for duplicate policies during tests
     try:
         if payload.name and payload.name.strip():
@@ -654,10 +653,8 @@ async def delete_vector_store(
     except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as _e:
         logger.warning(f"Failed to delete store from meta DB: {_e}")
     # Remove from in-memory registry
-    try:
+    with contextlib.suppress(_VECTORSTORE_NONCRITICAL_EXCEPTIONS):
         _STORE_DIMENSIONS.pop(store_id, None)
-    except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
-        pass
     return {"id": store_id, "deleted": True}
 
 
@@ -697,10 +694,8 @@ async def upsert_vectors(
             md_dim = None
         if md_dim and md_dim > 0:
             registry_dim = md_dim
-            try:
+            with contextlib.suppress(_VECTORSTORE_NONCRITICAL_EXCEPTIONS):
                 _STORE_DIMENSIONS[store_id] = md_dim
-            except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
-                pass
 
     # Determine emptiness robustly
     is_empty: bool | None = None
@@ -1679,10 +1674,8 @@ async def create_store_from_media(
             upserted_total += len(emb_list)
 
         # Persist batch status
-        try:
+        with contextlib.suppress(_VECTORSTORE_NONCRITICAL_EXCEPTIONS):
             db_update_batch(batch_id, user_id=uid, status='completed', upserted=upserted_total)
-        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
-            pass
         return {"store_id": created_store_id, "batch_id": batch_id, "upserted": upserted_total}
 
     # Chunk and embed texts in batches (use full Chunker)
@@ -1782,10 +1775,8 @@ async def create_store_from_media(
             await adapter.initialize()
         await adapter.upsert_vectors(created_store_id, ids=slice_ids, vectors=vecs, documents=slice_docs, metadatas=slice_meta)
         upserted_total += len(vecs)
-        try:
+        with contextlib.suppress(_VECTORSTORE_NONCRITICAL_EXCEPTIONS):
             db_update_batch(batch_id, user_id=uid, upserted=upserted_total)
-        except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
-            pass
 
     db_update_batch(batch_id, user_id=uid, status='completed', upserted=upserted_total)
     return {"store_id": created_store_id, "batch_id": batch_id, "upserted": upserted_total}

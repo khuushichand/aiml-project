@@ -267,7 +267,7 @@ class EchoTTSAdapter(TTSAdapter):
             speaker_latent, speaker_mask = await self._compute_speaker_latent(voice_bytes)
             await self._store_speaker_latent(cache_key, speaker_latent, speaker_mask)
 
-        torch = self._import_torch()
+        self._import_torch()
         inference = self._echo_inference
         if inference is None:
             raise TTSModelLoadError(

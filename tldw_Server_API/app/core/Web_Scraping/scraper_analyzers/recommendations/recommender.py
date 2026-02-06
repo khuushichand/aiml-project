@@ -75,9 +75,9 @@ def generate_recommendations(results: dict[str, Any]) -> dict[str, list[str]]:
     if integrity.get("status") == "success":
         modified_functions = integrity.get("modified_functions", {}) or {}
         if modified_functions:
-            has_canvas_mods = any("Canvas" in func for func in modified_functions.keys())
+            has_canvas_mods = any("Canvas" in func for func in modified_functions)
             has_timing_mods = any(
-                ("Date.now" in func or "performance.now" in func) for func in modified_functions.keys()
+                ("Date.now" in func or "performance.now" in func) for func in modified_functions
             )
 
             if has_canvas_mods:

@@ -90,6 +90,8 @@ router = APIRouter(prefix="/evaluations", tags=["evaluations"])
 _webhook_managers: dict = {}
 _wm_lock = None
 
+import contextlib
+
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
@@ -284,10 +286,8 @@ async def admin_cleanup_idempotency(
         if target_user_id is not None:
             candidate_ids.add(int(target_user_id))
         else:
-            try:
+            with contextlib.suppress(_EVALS_NONCRITICAL_EXCEPTIONS):
                 candidate_ids.add(int(_DP.get_single_user_id()))
-            except _EVALS_NONCRITICAL_EXCEPTIONS:
-                pass
             try:
                 base = _Path(_DP.get_user_base_directory(_DP.get_single_user_id())).parent
                 if base.exists():
@@ -458,22 +458,16 @@ async def stream_embeddings_abtest_events(
         except _aio.CancelledError:
             # On client cancellation, stop the producer promptly
             if not producer.done():
-                try:
+                with contextlib.suppress(_EVALS_NONCRITICAL_EXCEPTIONS):
                     producer.cancel()
-                except _EVALS_NONCRITICAL_EXCEPTIONS:
-                    pass
-                try:
+                with contextlib.suppress(_EVALS_NONCRITICAL_EXCEPTIONS):
                     await _aio.gather(producer, return_exceptions=True)
-                except _EVALS_NONCRITICAL_EXCEPTIONS:
-                    pass
             raise
         else:
             # Normal shutdown: ensure producer completes without forced cancel
             if not producer.done():
-                try:
+                with contextlib.suppress(_EVALS_NONCRITICAL_EXCEPTIONS):
                     await _aio.gather(producer, return_exceptions=True)
-                except _EVALS_NONCRITICAL_EXCEPTIONS:
-                    pass
 
     headers = {
         "Cache-Control": "no-cache",
@@ -2022,10 +2016,8 @@ def _promote_static_routes(_router: APIRouter) -> None:
                     _router.routes.insert(0, _router.routes.pop(idx))
                     break
     except _EVALS_NONCRITICAL_EXCEPTIONS as exc:  # Safety: never fail import due to ordering tweak
-        try:
+        with contextlib.suppress(_EVALS_NONCRITICAL_EXCEPTIONS):
             logger.debug(f"Failed to promote evaluation routes: {exc}")
-        except _EVALS_NONCRITICAL_EXCEPTIONS:
-            pass
 
 
 _promote_static_routes(router)

@@ -2,6 +2,7 @@
 # Request batching for improved throughput
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import threading
@@ -63,7 +64,7 @@ def _resolve_model_spec(
         return model_id, models[model_id]
     if model in models:
         return model, models[model]
-    suffix_matches = [key for key in models.keys() if key.endswith(f":{model}")]
+    suffix_matches = [key for key in models if key.endswith(f":{model}")]
     if len(suffix_matches) == 1:
         key = suffix_matches[0]
         return key, models[key]
@@ -213,10 +214,8 @@ class RequestBatcher:
                 limiter = getattr(self.rate_limiter, "rate_limiter", None)
                 if limiter and getattr(limiter, "user_tiers", None):
                     tier = limiter.user_tiers.get(user_id, "free")
-                try:
+                with contextlib.suppress(_BATCHER_NONCRITICAL_EXCEPTIONS):
                     self.metrics.log_rate_limit_hit(user_id, tier)
-                except _BATCHER_NONCRITICAL_EXCEPTIONS:
-                    pass
                 retry_after_msg = f" Retry after {retry_after}s." if retry_after else ""
                 raise EmbeddingsRateLimitError(
                     f"Rate limit exceeded for user '{user_id}'.{retry_after_msg}",
@@ -709,10 +708,8 @@ class RequestBatcher:
             payload = json.dumps(normalized, sort_keys=True, separators=(",", ":"), default=str)
             return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
         except _BATCHER_FINGERPRINT_EXCEPTIONS as exc:
-            try:
+            with contextlib.suppress(_BATCHER_NONCRITICAL_EXCEPTIONS):
                 logger.debug(f"Falling back to identity fingerprint for config override due to: {exc}")
-            except _BATCHER_NONCRITICAL_EXCEPTIONS:
-                pass
             return f"cfg_fallback:{id(config)}"
 
     def _queue_key(

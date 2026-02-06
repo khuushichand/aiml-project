@@ -56,6 +56,7 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_his
 from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 from tldw_Server_API.app.core.Utils.Utils import downloaded_files, get_project_root, logging, sanitize_filename
 
+
 def speech_to_text(*args, **kwargs):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
         speech_to_text as _speech_to_text,
@@ -67,6 +68,8 @@ def convert_to_wav(*args, **kwargs):
         convert_to_wav as _convert_to_wav,
     )
     return _convert_to_wav(*args, **kwargs)
+import contextlib
+
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
 
 #
@@ -392,14 +395,10 @@ def download_audio_file(
                         continue
                     total += len(chunk)
                     if MAX_FILE_SIZE and total > MAX_FILE_SIZE:
-                        try:
+                        with contextlib.suppress(_AUDIO_FILES_NONCRITICAL_EXCEPTIONS):
                             f.close()
-                        except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS:
-                            pass
-                        try:
+                        with contextlib.suppress(_AUDIO_FILES_NONCRITICAL_EXCEPTIONS):
                             Path(save_path).unlink(missing_ok=True)
-                        except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS:
-                            pass
                         raise AudioFileSizeError(
                             f"Downloaded content for {url} exceeded the {MAX_FILE_SIZE / (1024*1024):.0f}MB limit."
                         )
@@ -427,18 +426,14 @@ def download_audio_file(
             # Map size-related failures to AudioFileSizeError
             msg = str(e)
             if any(k in msg.lower() for k in ["disk quota exceeded", "quota exceeded", "exceed", "exceeds"]):
-                try:
+                with contextlib.suppress(_AUDIO_FILES_NONCRITICAL_EXCEPTIONS):
                     Path(save_path).unlink(missing_ok=True)
-                except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS:
-                    pass
                 raise AudioFileSizeError(
                     f"Downloaded content for {url} exceeded the configured limit."
                 ) from e
             # Clean up and wrap remaining errors
-            try:
+            with contextlib.suppress(_AUDIO_FILES_NONCRITICAL_EXCEPTIONS):
                 Path(save_path).unlink(missing_ok=True)
-            except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS:
-                pass
             raise AudioDownloadError(f"Download failed for {url}: {e}") from e
         # Success path
         try:
@@ -884,10 +879,8 @@ def process_audio_files(
                             item_result["content"] = "[Test placeholder transcript]"
                             item_result["segments"] = [{"start_seconds": 0, "end_seconds": 0, "Text": item_result["content"]}]
                             # Update processing_source to reflect intended WAV target (test expectation)
-                            try:
+                            with contextlib.suppress(_AUDIO_FILES_NONCRITICAL_EXCEPTIONS):
                                 item_result["processing_source"] = str(Path(current_audio_path).with_suffix('.wav'))
-                            except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS:
-                                pass
                             # Continue to chunking/analysis with placeholder
                             wav_file_path = current_audio_path  # keep a reference to avoid None
                         else:

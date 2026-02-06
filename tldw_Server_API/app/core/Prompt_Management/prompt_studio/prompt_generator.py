@@ -154,7 +154,7 @@ class PromptGenerator:
         """
         try:
             # Get template
-            template = GENERATION_TEMPLATES.get(template_name, GENERATION_TEMPLATES["default"])
+            GENERATION_TEMPLATES.get(template_name, GENERATION_TEMPLATES["default"])
 
             # Create generation prompt
             generation_prompt = f"""Generate a high-quality prompt for the following task:
@@ -300,7 +300,7 @@ INSTRUCTIONS:
         Returns:
             Generated ReAct prompt
         """
-        tools_str = "\n".join(tools) if tools else "No specific tools"
+        "\n".join(tools) if tools else "No specific tools"
 
         # Removed unused preliminary LLM call to save tokens
         return self.generate_prompt(

@@ -5,6 +5,7 @@ and normalization. Some features may require institutional entitlements.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 from typing import Any
 
@@ -117,10 +118,8 @@ def get_scopus_by_doi(doi: str) -> tuple[dict | None, str | None]:
         }
         r = fetch(method="GET", url=BASE_URL, headers=_headers(), params=params, timeout=20)
         if r.status_code == 404:
-            try:
+            with contextlib.suppress(Exception):
                 r.close()
-            except Exception:
-                pass
             return None, None
         data = r.json() or {}
         sr = data.get("search-results") or {}

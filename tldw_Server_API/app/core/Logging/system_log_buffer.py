@@ -4,7 +4,7 @@ import json
 import os
 import time
 from collections import deque
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -109,10 +109,7 @@ def _init_log_file_settings() -> None:
 
         _LOG_FILE_ENABLED = _coerce_bool(env_enabled, True)
         path_value = env_path or config_path
-        if path_value:
-            _LOG_FILE_PATH = Path(path_value)
-        else:
-            _LOG_FILE_PATH = Path(get_database_dir()) / "system_logs.jsonl"
+        _LOG_FILE_PATH = Path(path_value) if path_value else Path(get_database_dir()) / "system_logs.jsonl"
 
         max_raw = env_max_entries if env_max_entries is not None else config_max_entries
         try:
@@ -168,19 +165,13 @@ def _log_file_lock(timeout: float = _LOG_FILE_LOCK_TIMEOUT):
     finally:
         if lock_fd is not None:
             if _HAS_FCNTL:
-                try:
+                with suppress(Exception):
                     fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                except Exception:
-                    pass
-            try:
+            with suppress(Exception):
                 os.close(lock_fd)
-            except Exception:
-                pass
         if not _HAS_FCNTL:
-            try:
+            with suppress(Exception):
                 lock_path.unlink(missing_ok=True)
-            except Exception:
-                pass
 
 
 def _coerce_timestamp(value: Any) -> datetime | None:
@@ -347,9 +338,8 @@ def query_system_logs(
                 continue
         if query_norm and query_norm not in (entry.get("message") or "").lower():
             continue
-        if org_id_set:
-            if entry.get("org_id") not in org_id_set:
-                continue
+        if org_id_set and entry.get("org_id") not in org_id_set:
+            continue
         if user_id is not None and entry.get("user_id") != user_id:
             continue
         if timestamp and not isinstance(entry.get("timestamp"), datetime):

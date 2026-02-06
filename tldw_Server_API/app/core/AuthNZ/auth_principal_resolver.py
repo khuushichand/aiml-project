@@ -32,7 +32,6 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.exceptions import InactiveUserError
 
-
 _RESOLVER_MODE_EXCEPTIONS = (
     AttributeError,
     ImportError,

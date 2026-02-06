@@ -21,6 +21,7 @@ Limits:
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from tldw_Server_API.app.core.http_client import fetch, fetch_json
@@ -190,10 +191,8 @@ def get_pubmed_by_id(pmid: str) -> tuple[dict[str, Any] | None, str | None]:
         try:
             xml_text = rf.text
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 rf.close()
-            except Exception:
-                pass
         # Simple XML parsing for AbstractText nodes
         abstract_text = None
         try:

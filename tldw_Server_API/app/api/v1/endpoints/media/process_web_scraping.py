@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
@@ -42,7 +44,7 @@ async def process_web_scraping_endpoint(
     """
     try:
         # Usage logging is best-effort; never fail the request.
-        try:
+        with contextlib.suppress(Exception):
             usage_log.log_event(
                 "webscrape.process",
                 tags=[str(payload.scrape_method or "")],
@@ -52,8 +54,6 @@ async def process_web_scraping_endpoint(
                     "max_depth": payload.max_depth,
                 },
             )
-        except Exception:
-            pass
 
         # Resolve the scraping task via the media shim so tests that
         # monkeypatch `media.process_web_scraping_task` continue to work.
@@ -97,14 +97,12 @@ async def process_web_scraping_endpoint(
     except Exception:  # pragma: no cover - defensive path
         error_detail = "Web scraping failed due to an internal error."
         logger.exception("Web scraping endpoint error")
-        try:
+        with contextlib.suppress(Exception):
             logger.error(
                 "Request details - scrape_method: {}, url_input: {}",
                 payload.scrape_method,
                 (payload.url_input[:100] if payload.url_input else "None"),
             )
-        except Exception:
-            pass
         raise HTTPException(status_code=500, detail=error_detail)
 
 

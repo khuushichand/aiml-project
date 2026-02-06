@@ -26,6 +26,8 @@ except ImportError:  # pragma: no cover - defusedxml optional dependency
     DefusedXmlException = Exception  # type: ignore
 #
 # Local Imports
+import contextlib
+
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
     open_safe_local_path,
@@ -241,15 +243,11 @@ def convert_document_to_text(
                         try:
                             t.decompose()
                         except (AttributeError, TypeError, ValueError):
-                            try:
+                            with contextlib.suppress(AttributeError, TypeError, ValueError):
                                 t.extract()
-                            except (AttributeError, TypeError, ValueError):
-                                pass
                 for c in soup.find_all(string=lambda s: isinstance(s, Comment)):
-                    try:
+                    with contextlib.suppress(AttributeError, TypeError, ValueError):
                         c.extract()
-                    except (AttributeError, TypeError, ValueError):
-                        pass
                 sanitized_html = str(soup)
             except (AttributeError, RuntimeError, TypeError, ValueError):
                 # Fallback: use original content if BeautifulSoup fails
@@ -322,7 +320,7 @@ def convert_document_to_text(
         logging.error(f"Conversion error for {file_path}: {specific_error}", exc_info=False)
         log_counter(f"{source_format_used}_conversion_error", labels={"file_path": str(file_path), "error": type(specific_error).__name__})
         # Re-raise the specific error caught to be handled by process_document_content
-        raise specific_error
+        raise
 
     except Exception as unexpected_error:
         logging.exception(f"Unexpected error converting {file_path} to text: {unexpected_error}")

@@ -49,6 +49,7 @@ Usage example:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import heapq
 from collections.abc import Awaitable
 from typing import Any, Callable
@@ -333,10 +334,8 @@ class TreeSegmenter:
                     # Cannot block a running loop; advise callers to use create_async() in async contexts.
                     raise RuntimeError("TreeSegmenter: use create_async() in async contexts")
                 # Run the coroutine to completion on our temporary loop
-                try:
+                with contextlib.suppress(Exception):
                     asyncio.set_event_loop(loop)
-                except Exception:
-                    pass
                 embs: list[list[float]] = loop.run_until_complete(run_embed())
                 if len(embs) != len(chunks):
                     raise ValueError(

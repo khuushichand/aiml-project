@@ -45,6 +45,10 @@ vi.mock("@/hooks/chat/useChatSettingsRecord", () => ({
   useChatSettingsRecord: vi.fn()
 }))
 
+vi.mock("@tanstack/react-query", () => ({
+  useQuery: vi.fn()
+}))
+
 vi.mock("antd", () => {
   const FormItem = ({ label, help, children }: any) => (
     <div>
@@ -207,9 +211,12 @@ describe("ConversationTab generation override controls", () => {
   })
 
   it("shows an inline warning when characters fail to load", async () => {
-    vi.mocked(useQuery)
-      .mockReturnValueOnce(buildQueryResult({ isError: true }))
-      .mockReturnValueOnce(buildQueryResult())
+    vi.mocked(useQuery).mockImplementation((options: any) => {
+      if (options.queryKey?.[0]?.includes("listCharacters")) {
+        return buildQueryResult({ isError: true })
+      }
+      return buildQueryResult()
+    })
 
     renderConversationTab()
 
@@ -221,9 +228,12 @@ describe("ConversationTab generation override controls", () => {
   })
 
   it("shows an inline warning when pinned messages fail to load", async () => {
-    vi.mocked(useQuery)
-      .mockReturnValueOnce(buildQueryResult())
-      .mockReturnValueOnce(buildQueryResult({ isError: true }))
+    vi.mocked(useQuery).mockImplementation((options: any) => {
+      if (options.queryKey?.[0]?.includes("pinned-messages")) {
+        return buildQueryResult({ isError: true })
+      }
+      return buildQueryResult()
+    })
 
     renderConversationTab()
 

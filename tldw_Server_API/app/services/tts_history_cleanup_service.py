@@ -9,6 +9,7 @@ Runs periodic cleanup based on:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from collections.abc import Iterable
 
@@ -153,9 +154,7 @@ async def run_tts_history_cleanup_loop(stop_event: asyncio.Event | None = None) 
                 pass
 
         if stop_event is not None:
-            try:
+            with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(stop_event.wait(), timeout=interval_sec)
-            except asyncio.TimeoutError:
-                pass
         else:
             await asyncio.sleep(interval_sec)

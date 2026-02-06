@@ -173,9 +173,9 @@ class SQLiteAdapter(DatabaseAdapter):
         try:
             yield self
             self.conn.commit()
-        except Exception as e:
+        except Exception:
             self.conn.rollback()
-            raise e
+            raise
 
     def init_schema(self, schema_sql: str):
         """Initialize database schema."""

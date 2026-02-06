@@ -147,7 +147,7 @@ class MetricsRegistry:
     def _normalize_label_key(cls, labels: dict[str, Any]) -> tuple[tuple[str, str], ...]:
         """Return a stable, sortable label key from the label dict."""
         if not labels:
-            return tuple()
+            return ()
         normalized = cls._normalize_labels(labels)
         return tuple(sorted(normalized.items()))
 

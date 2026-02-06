@@ -36,6 +36,8 @@ except ImportError:  # pragma: no cover
         pass
 #
 # 3rd-party imports
+import contextlib
+
 from loguru import logger
 
 #
@@ -497,18 +499,14 @@ class UsersDB:
                         await _add_col('storage_quota_mb', "storage_quota_mb INTEGER DEFAULT 5120")
                         await _add_col('storage_used_mb', "storage_used_mb INTEGER DEFAULT 0")
                         if added_uuid:
-                            try:
+                            with contextlib.suppress(_USERS_DB_NONCRITICAL_EXCEPTIONS):
                                 await conn.execute(
                                     "UPDATE users SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL OR uuid = ''"
                                 )
-                            except _USERS_DB_NONCRITICAL_EXCEPTIONS:
-                                pass
-                            try:
+                            with contextlib.suppress(_USERS_DB_NONCRITICAL_EXCEPTIONS):
                                 await conn.execute(
                                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid)"
                                 )
-                            except _USERS_DB_NONCRITICAL_EXCEPTIONS:
-                                pass
                     except _USERS_DB_NONCRITICAL_EXCEPTIONS:
                         # Best-effort; insertion may still succeed if columns already present
                         pass

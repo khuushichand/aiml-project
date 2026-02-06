@@ -63,8 +63,8 @@ async def process_podcast_task(
         }
 
         # For start/end time:
-        start_sec = convert_to_seconds(start_time) if start_time else 0
-        end_sec   = convert_to_seconds(end_time) if end_time else None
+        convert_to_seconds(start_time) if start_time else 0
+        convert_to_seconds(end_time) if end_time else None
         # (If your library supports partial transcription, pass these in.)
 
         # Transcription text:

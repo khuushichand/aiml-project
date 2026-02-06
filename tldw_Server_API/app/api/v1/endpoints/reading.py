@@ -355,10 +355,7 @@ def _render_archive_html(
 ) -> str:
     safe_title = html.escape(title or "Untitled")
     safe_url = html.escape(url or "")
-    if body_html:
-        content_html = _sanitize_archive_html(body_html)
-    else:
-        content_html = f"<pre>{html.escape(body_text or '')}</pre>"
+    content_html = _sanitize_archive_html(body_html) if body_html else f"<pre>{html.escape(body_text or '')}</pre>"
     header = f"<h1>{safe_title}</h1>"
     if safe_url:
         header = f"{header}<p><a href=\"{safe_url}\">{safe_url}</a></p>"
@@ -1078,12 +1075,11 @@ async def export_reading_items(
 
     def _serialize_row(row: ContentItemRow) -> dict:
         metadata = {}
-        if include_metadata or include_clean_html or include_text:
-            if getattr(row, "metadata_json", None):
-                try:
-                    metadata = json.loads(row.metadata_json) if row.metadata_json else {}
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    metadata = {}
+        if (include_metadata or include_clean_html or include_text) and getattr(row, "metadata_json", None):
+            try:
+                metadata = json.loads(row.metadata_json) if row.metadata_json else {}
+            except (json.JSONDecodeError, TypeError, ValueError):
+                metadata = {}
         if not isinstance(metadata, dict):
             metadata = {}
         payload = {

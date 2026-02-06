@@ -3,6 +3,7 @@
 #
 # Imports
 import base64
+import contextlib
 import hashlib
 import hmac
 import secrets
@@ -18,14 +19,14 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
 from tldw_Server_API.app.core.AuthNZ.exceptions import UserRegistrationException
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
-from tldw_Server_API.app.core.DB_Management.backends.base import (
-    DatabaseError as BackendDatabaseError,
-)
 
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.config import settings as global_settings
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
 
 _CSRF_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -283,10 +284,8 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
                     if isinstance(user_id, str):
                         user_id = int(user_id)
                     if isinstance(user_id, int):
-                        try:
+                        with contextlib.suppress(AttributeError):
                             request.state.user_id = user_id
-                        except AttributeError:
-                            pass
                         return user_id
                 except _CSRF_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"CSRF binding: bearer token decode failed: {exc}")
@@ -303,10 +302,8 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
                 )
                 user_id = info.get("user_id") if info else None
                 if isinstance(user_id, int):
-                    try:
+                    with contextlib.suppress(AttributeError):
                         request.state.user_id = user_id
-                    except AttributeError:
-                        pass
                     return user_id
             except _CSRF_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"CSRF binding: API key resolution failed: {exc}")
@@ -502,7 +499,7 @@ def add_csrf_protection(app):
         try:
             _normalized = str(_env_ce).strip().lower()
             _val = _normalized in {"1", "true", "yes", "on", "y"}
-            csrf_enabled = True if _val else False
+            csrf_enabled = bool(_val)
         except (AttributeError, TypeError, ValueError) as _e:
             # Invalid value provided; keep existing default and log for visibility
             logger.debug(f"Invalid CSRF_ENABLED value {repr(_env_ce)}: {_e}; using default/fallback")

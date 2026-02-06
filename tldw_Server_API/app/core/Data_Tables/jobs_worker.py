@@ -479,10 +479,7 @@ def _extract_text_from_snapshot(snapshot: Any) -> str | None:
         if isinstance(snapshot.get("documents"), list):
             parts = []
             for doc in snapshot.get("documents") or []:
-                if isinstance(doc, dict):
-                    text = doc.get("content") or doc.get("text")
-                else:
-                    text = doc
+                text = doc.get("content") or doc.get("text") if isinstance(doc, dict) else doc
                 if isinstance(text, str) and text.strip():
                     parts.append(text.strip())
             if parts:
@@ -902,10 +899,8 @@ async def _handle_job(job: dict[str, Any], jm: JobManager) -> dict[str, Any]:
             if isinstance(snapshot, str):
                 text = snapshot.strip()
                 if text.startswith("{") or text.startswith("["):
-                    try:
+                    with contextlib.suppress(json.JSONDecodeError):
                         snapshot = json.loads(text)
-                    except json.JSONDecodeError:
-                        pass
             retrieval_params = source.get("retrieval_params") or {}
             if isinstance(retrieval_params, str):
                 try:

@@ -534,7 +534,7 @@ class FlashcardsModule(BaseModule):
                 q=args.get("q"),
                 include_deleted=bool(args.get("include_deleted", False)),
             )
-            limit = int(args.get("limit", 100))
+            int(args.get("limit", 100))
             offset = int(args.get("offset", 0))
             has_more = offset + len(cards) < count
             return {

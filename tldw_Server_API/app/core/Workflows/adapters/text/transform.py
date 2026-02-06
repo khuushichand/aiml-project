@@ -11,6 +11,7 @@ This module includes adapters for text transformation operations:
 
 from __future__ import annotations
 
+import contextlib
 import html
 import re
 from pathlib import Path
@@ -338,10 +339,8 @@ async def run_text_clean_adapter(config: dict[str, Any], context: dict[str, Any]
         text = html.unescape(text)
 
     if "fix_encoding" in operations:
-        try:
+        with contextlib.suppress(Exception):
             text = text.encode('utf-8', errors='ignore').decode('utf-8')
-        except Exception:
-            pass
 
     if "normalize_whitespace" in operations:
         text = re.sub(r'\s+', ' ', text)

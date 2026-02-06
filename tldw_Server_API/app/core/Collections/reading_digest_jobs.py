@@ -150,10 +150,7 @@ def _normalize_suggestions_config(filters: dict[str, Any]) -> dict[str, Any] | N
     statuses = raw.get("status")
     if isinstance(statuses, str):
         statuses = [statuses]
-    if isinstance(statuses, list):
-        statuses = [s for s in statuses if s in _SUGGESTION_ALLOWED_STATUSES]
-    else:
-        statuses = []
+    statuses = [s for s in statuses if s in _SUGGESTION_ALLOWED_STATUSES] if isinstance(statuses, list) else []
     if not statuses:
         statuses = ["saved", "reading"]
 
@@ -324,10 +321,7 @@ def _render_default_markdown(
     for idx, itm in enumerate(items, 1):
         entry_title = itm.get("title") or f"Item {idx}"
         url = itm.get("url")
-        if url:
-            line = f"{idx}. [{entry_title}]({url})"
-        else:
-            line = f"{idx}. {entry_title}"
+        line = f"{idx}. [{entry_title}]({url})" if url else f"{idx}. {entry_title}"
         summary = itm.get("summary") or ""
         if summary:
             line += f" - {summary}"
@@ -337,10 +331,7 @@ def _render_default_markdown(
         for idx, itm in enumerate(suggestions, 1):
             entry_title = itm.get("title") or f"Suggestion {idx}"
             url = itm.get("url")
-            if url:
-                line = f"{idx}. [{entry_title}]({url})"
-            else:
-                line = f"{idx}. {entry_title}"
+            line = f"{idx}. [{entry_title}]({url})" if url else f"{idx}. {entry_title}"
             summary = itm.get("summary") or ""
             if summary:
                 line += f" - {summary}"
@@ -358,10 +349,7 @@ def _render_default_html(
         entry_title = escape(itm.get("title") or f"Item {idx}")
         summary = escape(itm.get("summary") or "")
         url = itm.get("url")
-        if url:
-            entry = f'<li><a href="{escape(url)}">{entry_title}</a>'
-        else:
-            entry = f"<li>{entry_title}"
+        entry = f'<li><a href="{escape(url)}">{entry_title}</a>' if url else f"<li>{entry_title}"
         if summary:
             entry += f" - {summary}"
         entry += "</li>"
@@ -373,10 +361,7 @@ def _render_default_html(
             entry_title = escape(itm.get("title") or f"Suggestion {idx}")
             summary = escape(itm.get("summary") or "")
             url = itm.get("url")
-            if url:
-                entry = f'<li><a href="{escape(url)}">{entry_title}</a>'
-            else:
-                entry = f"<li>{entry_title}"
+            entry = f'<li><a href="{escape(url)}">{entry_title}</a>' if url else f"<li>{entry_title}"
             if summary:
                 entry += f" - {summary}"
             entry += "</li>"

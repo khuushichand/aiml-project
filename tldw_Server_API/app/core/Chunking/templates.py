@@ -220,10 +220,7 @@ class TemplateProcessor:
 
         # Additional params may be under "params" or "config"
         extra_params_src = chunk_ops.get("params")
-        if isinstance(extra_params_src, dict):
-            extra_params = dict(extra_params_src)
-        else:
-            extra_params = dict(nested_cfg)
+        extra_params = dict(extra_params_src) if isinstance(extra_params_src, dict) else dict(nested_cfg)
         # Determine language override precedence
         language_override = None
         for candidate in (
@@ -721,7 +718,7 @@ class TemplateManager:
             for path in self.templates_dir.glob("*.json"):
                 templates.add(path.stem)
 
-        return sorted(list(templates))
+        return sorted(templates)
 
     def process(self, text: str, template_name: str, **options) -> list[str]:
         """

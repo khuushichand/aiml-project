@@ -778,10 +778,7 @@ class FileArtifactsService:
                 text = self._stringify_cell(cell)
                 total_chars += len(text)
                 escape_extra += text.count("|")
-        if columns:
-            sep_row_overhead = (3 * len(columns)) + 4 + 3 * (len(columns) - 1)
-        else:
-            sep_row_overhead = 0
+        sep_row_overhead = 3 * len(columns) + 4 + 3 * (len(columns) - 1) if columns else 0
         newline_count = len(rows_all) + (1 if columns else 0)
         return total_chars + escape_extra + row_overhead + sep_row_overhead + newline_count
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import fnmatch
 import hashlib
 import json
@@ -141,10 +142,8 @@ def _fc_api_request(sock_path: str, method: str, path: str, payload: dict | None
         except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             raise RuntimeError(f"firecracker API parse failed: {e}")
     finally:
-        try:
+        with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             sock.close()
-        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-            pass
 
 
 def _write_entry_script(workspace: str, command: list[str]) -> None:
@@ -201,10 +200,8 @@ def _copy_tree(src: str, dst: str) -> None:
         for fn in files:
             s = os.path.join(root, fn)
             t = os.path.join(tgt_root, fn)
-            try:
+            with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 shutil.copy2(s, t)
-            except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
 
 
 def _tail_log(run_id: str, log_path: str, stop_flag: dict[str, bool]) -> None:
@@ -249,10 +246,8 @@ class FirecrackerRunner:
     def _run_real(self, run_id: str, spec: RunSpec, session_workspace: str | None = None) -> RunStatus:
         started = datetime.utcnow()
         hub = get_hub()
-        try:
+        with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             hub.publish_event(run_id, "start", {"ts": started.isoformat(), "runtime": "firecracker", "net": "off"})
-        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-            pass
 
         kernel_path = os.getenv("SANDBOX_FC_KERNEL_PATH")
         rootfs_path = None
@@ -356,7 +351,6 @@ class FirecrackerRunner:
         deadline = time.time() + timeout_sec
         exit_code = None
         reason = None
-        duration_ms = None
         while time.time() < deadline:
             if os.path.exists(status_path):
                 try:
@@ -364,7 +358,7 @@ class FirecrackerRunner:
                         payload = json.load(rf)
                     exit_code = payload.get("exit_code")
                     reason = payload.get("reason")
-                    duration_ms = payload.get("duration_ms")
+                    payload.get("duration_ms")
                 except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
                 break
@@ -373,25 +367,19 @@ class FirecrackerRunner:
         if exit_code is None:
             # Timeout: kill VM
             reason = "execution_timeout"
-            try:
+            with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 fc_proc.terminate()
-            except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
             phase = RunPhase.timed_out
         else:
             phase = RunPhase.completed if int(exit_code or 0) == 0 else RunPhase.failed
 
         stop_flag["stop"] = True
         if tail_thread is not None:
-            try:
+            with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 tail_thread.join(timeout=1)
-            except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
 
-        try:
+        with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             hub.publish_event(run_id, "end", {"exit_code": exit_code})
-        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-            pass
 
         finished = datetime.utcnow()
         # Collect artifacts
@@ -431,14 +419,10 @@ class FirecrackerRunner:
                 virtiofs_proc.terminate()
         except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
-        try:
+        with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             fc_proc.terminate()
-        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-            pass
-        try:
+        with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             shutil.rmtree(run_dir, ignore_errors=True)
-        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-            pass
 
         return RunStatus(
             id="",
@@ -458,10 +442,8 @@ class FirecrackerRunner:
         started = datetime.utcnow()
         hub = get_hub()
         # Publish start
-        try:
+        with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             hub.publish_event(run_id, "start", {"ts": started.isoformat(), "runtime": "firecracker", "net": "off"})
-        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-            pass
 
         # Compute pseudo image digest (string hash or file hash)
         image_digest: str | None = None
@@ -502,10 +484,8 @@ class FirecrackerRunner:
             artifacts_map = {}
 
         # Publish end
-        try:
+        with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             hub.publish_event(run_id, "end", {"exit_code": 0})
-        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
-            pass
 
         finished = datetime.utcnow()
         # Usage accounting

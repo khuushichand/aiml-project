@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -158,10 +159,8 @@ async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None
                 # Build selections
                 cs = {}
                 for k, v in (payload.get("content_selections") or {}).items():
-                    try:
+                    with contextlib.suppress(_CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS):
                         cs[ContentType(k)] = v
-                    except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
-                        pass
                 # Start periodic lease renewal during heavy processing
                 _renew_task = await _start_renewal(int(job["id"]))
                 ok, msg, file_path = await svc._create_chatbook_sync_wrapper(
@@ -355,7 +354,5 @@ async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run_chatbooks_core_jobs_worker())
-    except KeyboardInterrupt:
-        pass

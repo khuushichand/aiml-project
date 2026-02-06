@@ -271,7 +271,7 @@ async def run_video_batch(
         # Assume all failed if execution failed.
         batch_result["processed_count"] = 0
         batch_result["errors_count"] = len(final_results_list)
-        unique_errors = set(str(e) for e in final_errors_list if e is not None)
+        unique_errors = {str(e) for e in final_errors_list if e is not None}
         batch_result["errors"] = list(unique_errors)
 
     return batch_result

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import inspect
 import json as _json
 import os
@@ -126,10 +127,8 @@ if "history_messages_limit" in _chat_config:
     )
 _env_history_limit = os.getenv("CHAT_HISTORY_LIMIT")
 if _env_history_limit:
-    try:
+    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
         _default_history_limit = max(1, min(_MAX_HISTORY_MESSAGES, int(_env_history_limit)))
-    except _CHAT_NONCRITICAL_EXCEPTIONS:
-        pass
 DEFAULT_HISTORY_MESSAGE_LIMIT = _default_history_limit
 
 _default_history_order = _chat_config.get("history_messages_order", "desc").strip().lower()
@@ -256,14 +255,10 @@ def invalidate_model_alias_caches() -> None:
     `_load_alias_overrides_cached`. Safe to call at runtime (no side effects
     beyond cache flush). Subsequent requests will repopulate from sources.
     """
-    try:
+    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
         _load_models_with_case_cached.cache_clear()
-    except _CHAT_NONCRITICAL_EXCEPTIONS:
-        pass
-    try:
+    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
         _load_alias_overrides_cached.cache_clear()
-    except _CHAT_NONCRITICAL_EXCEPTIONS:
-        pass
 
 
 def queue_is_active(queue: Any) -> bool:
@@ -835,10 +830,7 @@ def merge_api_keys_for_provider(
 
     # Prefer dynamic/runtime keys (env/config) over module-level defaults.
     # If dynamic is explicitly empty/None, fall back to module-level value.
-    if raw_dynamic is not None and str(raw_dynamic).strip() != "":
-        raw_val = raw_dynamic
-    else:
-        raw_val = raw_module
+    raw_val = raw_dynamic if raw_dynamic is not None and str(raw_dynamic).strip() != "" else raw_module
 
     norm_val = _normalize(raw_val)
 
@@ -993,9 +985,8 @@ def _extract_text_from_content(content: Any) -> str:
                 except _CHAT_NONCRITICAL_EXCEPTIONS:
                     p_type = None
                     p_text = None
-            if p_type == "text" and isinstance(p_text, str):
-                if p_text:
-                    parts.append(p_text)
+            if p_type == "text" and isinstance(p_text, str) and p_text:
+                parts.append(p_text)
         return "\n".join(parts)
     try:
         return str(content)
@@ -1171,10 +1162,8 @@ async def moderate_input_messages(
         if resolved_action == "pass":
             return text
 
-        try:
+        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
             metrics.track_moderation_input(str(req_user_id or client_id), resolved_action, category=(category or "default"))
-        except _CHAT_NONCRITICAL_EXCEPTIONS:
-            pass
         try:
             if audit_service and audit_context:
                 import asyncio as _asyncio
@@ -1244,10 +1233,8 @@ async def build_context_and_messages(
         logger.debug(f"Loaded character: {character_card.get('name')} with system_prompt: {system_prompt_preview}")
 
     if character_card:
-        try:
+        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
             metrics.track_character_access(character_id=str(request_data.character_id or "default"), cache_hit=False)
-        except _CHAT_NONCRITICAL_EXCEPTIONS:
-            pass
 
     if not character_card:
         logger.warning("No character context found; proceeding with ephemeral default context.")
@@ -1285,10 +1272,8 @@ async def build_context_and_messages(
         conversation_created = False
 
     if conv_id:
-        try:
+        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
             metrics.track_conversation(conv_id, conversation_created)
-        except _CHAT_NONCRITICAL_EXCEPTIONS:
-            pass
     if not conv_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish conversation context.")
 
@@ -1781,15 +1766,13 @@ async def execute_streaming_call(
                 try:
                     result = llm_call_func()
                     if selected_provider != provider:
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_provider_fallback_success(
                                 requested_provider=provider,
                                 selected_provider=selected_provider,
                                 streaming=True,
                                 queued=True,
                             )
-                        except _CHAT_NONCRITICAL_EXCEPTIONS:
-                            pass
                     return result
                 except _CHAT_NONCRITICAL_EXCEPTIONS as proc_error:
                     latency = time.time() - local_start
@@ -1828,24 +1811,23 @@ async def execute_streaming_call(
                                     provider_manager.record_failure(fallback_provider, refresh_error)
                                     raise
                                 model = refreshed_model or model
-                                llm_call_func_fb = lambda: perform_chat_api_call(**refreshed_args)
+                                def llm_call_func_fb():
+                                    return perform_chat_api_call(**refreshed_args)
                                 try:
                                     result = llm_call_func_fb()
                                     selected_provider = fallback_provider
                                     llm_call_func = llm_call_func_fb
-                                    try:
+                                    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                                         metrics.track_provider_fallback_success(
                                             requested_provider=provider,
                                             selected_provider=fallback_provider,
                                             streaming=True,
                                             queued=True,
                                         )
-                                    except _CHAT_NONCRITICAL_EXCEPTIONS:
-                                        pass
                                     return result
                                 except _CHAT_NONCRITICAL_EXCEPTIONS as fallback_error:
                                     provider_manager.record_failure(fallback_provider, fallback_error)
-                                    raise fallback_error
+                                    raise
                     raise
 
             queue_request_id = get_request_id() or "unknown"
@@ -1864,10 +1846,8 @@ async def execute_streaming_call(
                 )
                 _attach_queue_future_logger(queue_future, queue_request_id)
             except (ValueError, TimeoutError) as admission_error:
-                try:
+                with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                     metrics.track_rate_limit(str(client_id))
-                except _CHAT_NONCRITICAL_EXCEPTIONS:
-                    pass
                 detail = str(admission_error) or "Service busy. Please retry."
                 status_code = (
                     status.HTTP_429_TOO_MANY_REQUESTS
@@ -1924,15 +1904,13 @@ async def execute_streaming_call(
             # llm_call_func is a sync callable (partial of perform_chat_api_call or a mock).
             raw_stream_iter = await current_loop.run_in_executor(None, llm_call_func)
             if selected_provider != provider:
-                try:
+                with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                     metrics.track_provider_fallback_success(
                         requested_provider=provider,
                         selected_provider=selected_provider,
                         streaming=True,
                         queued=False,
                     )
-                except _CHAT_NONCRITICAL_EXCEPTIONS:
-                    pass
     except HTTPException as he:
         if getattr(he, "_chat_queue_admission", False):
             raise
@@ -2018,7 +1996,8 @@ async def execute_streaming_call(
                     cleaned_args = refreshed_args
                     model = refreshed_model or model
                     fallback_start_time = time.time()
-                    llm_call_func_fb = lambda: perform_chat_api_call(**cleaned_args)
+                    def llm_call_func_fb():
+                        return perform_chat_api_call(**cleaned_args)
                     try:
                         raw_stream_iter = await current_loop.run_in_executor(None, llm_call_func_fb)
                         fallback_latency = time.time() - fallback_start_time
@@ -2027,18 +2006,16 @@ async def execute_streaming_call(
                         selected_provider = fallback_provider
                         llm_call_func = llm_call_func_fb
                         # Explicit telemetry for direct (non-queued) streaming fallback success
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_provider_fallback_success(
                                 requested_provider=provider,
                                 selected_provider=fallback_provider,
                                 streaming=True,
                                 queued=False,
                             )
-                        except _CHAT_NONCRITICAL_EXCEPTIONS:
-                            pass
                     except _CHAT_NONCRITICAL_EXCEPTIONS as fallback_error:
                         provider_manager.record_failure(fallback_provider, fallback_error)
-                        raise fallback_error
+                        raise
                 else:
                     # No fallback available: stream SSE error (200) instead of raising
                     pass
@@ -2146,17 +2123,15 @@ async def execute_streaming_call(
                     if flagged:
                         action = eff_policy.output_action
                         if action == "redact":
-                            redacted = moderation.redact_text(full_reply, eff_policy)
+                            moderation.redact_text(full_reply, eff_policy)
 
                 if action == "block":
                     if not stream_mod_state["block_logged"]:
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_moderation_stream_block(
                                 str(req_user_id or client_id),
                                 category=(category or "default"),
                             )
-                        except _CHAT_NONCRITICAL_EXCEPTIONS:
-                            pass
                         try:
                             if audit_service and audit_context:
                                 import asyncio as _asyncio
@@ -2181,15 +2156,13 @@ async def execute_streaming_call(
                     full_reply_to_save = None
                 elif action == "redact":
                     if not stream_mod_state["redact_logged"]:
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_moderation_output(
                                 str(req_user_id or client_id),
                                 "redact",
                                 streaming=True,
                                 category=(category or "default"),
                             )
-                        except _CHAT_NONCRITICAL_EXCEPTIONS:
-                            pass
                         try:
                             if audit_service and audit_context:
                                 import asyncio as _asyncio
@@ -2337,10 +2310,8 @@ async def execute_streaming_call(
             def _track_audit_task(task: asyncio.Task[Any]) -> None:
                 pending_audit_tasks.append(task)
                 def _cleanup(completed: asyncio.Task[Any]) -> None:
-                    try:
+                    with contextlib.suppress(ValueError):
                         pending_audit_tasks.remove(completed)
-                    except ValueError:
-                        pass
                 task.add_done_callback(_cleanup)
 
             stream_holdback = ""
@@ -2458,10 +2429,8 @@ async def execute_streaming_call(
                     redacted_combined = moderation.redact_text(combined, eff_policy) if resolved_action == "redact" else None
                 if resolved_action == "block":
                     if not stream_mod_state["block_logged"]:
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_moderation_stream_block(str(req_user_id or client_id), category=(out_category or "default"))
-                        except _CHAT_NONCRITICAL_EXCEPTIONS:
-                            pass
                         try:
                             if audit_service and audit_context:
                                 import asyncio as _asyncio
@@ -2486,10 +2455,8 @@ async def execute_streaming_call(
                     raise StopStreamWithError(message="Output violates moderation policy", error_type="output_moderation_block")
                 if resolved_action == "redact":
                     if not stream_mod_state["redact_logged"]:
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=True, category=(out_category or "default"))
-                        except _CHAT_NONCRITICAL_EXCEPTIONS:
-                            pass
                         try:
                             if audit_service and audit_context:
                                 import asyncio as _asyncio
@@ -2520,10 +2487,8 @@ async def execute_streaming_call(
                 return _emit_with_holdback(combined)
 
             # Allow streaming handler to flush any held-back tail at stream end
-            try:
+            with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                 _out_transform.flush = _flush_holdback
-            except _CHAT_NONCRITICAL_EXCEPTIONS:
-                pass
 
             async def _finalize_stream(*, success: bool, cancelled: bool, error: bool) -> None:
                 nonlocal stream_failure_recorded, stream_metrics_recorded
@@ -2621,22 +2586,16 @@ async def execute_streaming_call(
             except asyncio.CancelledError:
                 # Cancel producer promptly on client disconnect
                 if not prod.done():
-                    try:
+                    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                         prod.cancel()
-                    except _CHAT_NONCRITICAL_EXCEPTIONS:
-                        pass
-                    try:
+                    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                         await prod
-                    except _CHAT_NONCRITICAL_EXCEPTIONS:
-                        pass
                 raise
             else:
                 # Normal shutdown: ensure producer completes cleanly
                 if not prod.done():
-                    try:
+                    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                         await prod
-                    except _CHAT_NONCRITICAL_EXCEPTIONS:
-                        pass
 
         return StreamingResponse(
             _gen(),
@@ -2719,15 +2678,13 @@ async def execute_non_stream_call(
                     if provider_manager:
                         provider_manager.record_success(selected_provider, latency)
                     if selected_provider != provider:
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_provider_fallback_success(
                                 requested_provider=provider,
                                 selected_provider=selected_provider,
                                 streaming=False,
                                 queued=True,
                             )
-                        except _CHAT_NONCRITICAL_EXCEPTIONS:
-                            pass
                     return result
                 except _CHAT_NONCRITICAL_EXCEPTIONS as proc_error:
                     latency = time.time() - local_start
@@ -2757,10 +2714,8 @@ async def execute_non_stream_call(
                     stream_channel=None,
                 )
             except (ValueError, TimeoutError) as admission_error:
-                try:
+                with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                     metrics.track_rate_limit(str(client_id))
-                except _CHAT_NONCRITICAL_EXCEPTIONS:
-                    pass
                 detail = str(admission_error) or "Service busy. Please retry."
                 status_code = (
                     status.HTTP_429_TOO_MANY_REQUESTS
@@ -2783,15 +2738,13 @@ async def execute_non_stream_call(
             if provider_manager:
                 provider_manager.record_success(selected_provider, llm_latency)
             if selected_provider != provider:
-                try:
+                with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                     metrics.track_provider_fallback_success(
                         requested_provider=provider,
                         selected_provider=selected_provider,
                         streaming=False,
                         queued=False,
                     )
-                except _CHAT_NONCRITICAL_EXCEPTIONS:
-                    pass
     except HTTPException as he:
         if getattr(he, "_chat_queue_admission", False):
             raise
@@ -2847,18 +2800,16 @@ async def execute_non_stream_call(
                         metrics.track_llm_call(fallback_provider, model, fallback_latency, success=True)
                         selected_provider = fallback_provider
                         metrics_recorded = True
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_provider_fallback_success(
                                 requested_provider=provider,
                                 selected_provider=fallback_provider,
                                 streaming=False,
                                 queued=False,
                             )
-                        except _CHAT_NONCRITICAL_EXCEPTIONS:
-                            pass
                     except _CHAT_NONCRITICAL_EXCEPTIONS as fallback_error:
                         provider_manager.record_failure(fallback_provider, fallback_error)
-                        raise fallback_error
+                        raise
                 else:
                     raise
             else:
@@ -3155,7 +3106,7 @@ async def execute_non_stream_call(
 
     # Audit success
     if audit_service and audit_context:
-        try:
+        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
             await audit_service.log_event(
                 event_type=AuditEventType.API_RESPONSE,
                 context=audit_context,
@@ -3168,8 +3119,6 @@ async def execute_non_stream_call(
                     "streaming": False,
                 },
             )
-        except _CHAT_NONCRITICAL_EXCEPTIONS:
-            pass
 
     # BYOK usage tracking (best-effort)
     try:

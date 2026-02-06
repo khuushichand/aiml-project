@@ -10,6 +10,7 @@ Updated to use upstream chatterbox package (v0.1.4):
 
 # Imports
 import asyncio
+import contextlib
 import os
 from collections.abc import AsyncGenerator
 from typing import Any, Optional
@@ -481,10 +482,8 @@ class ChatterboxAdapter(TTSAdapter):
         # Clear commonly used attributes to satisfy tests and free memory
         for attr in ("model", "vocoder", "tokenizer", "processor"):
             if hasattr(self, attr):
-                try:
+                with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                     setattr(self, attr, None)
-                except (AttributeError, RuntimeError, TypeError, ValueError):
-                    pass
         # Ensure our lazy models are cleared as well
         self.model_en = None
         self.model_multi = None

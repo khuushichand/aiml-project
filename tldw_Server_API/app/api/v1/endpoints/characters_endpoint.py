@@ -3,7 +3,6 @@
 #
 # Imports
 import base64
-import io
 import json
 import pathlib
 import struct

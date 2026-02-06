@@ -9,6 +9,7 @@ from typing import Any, Optional
 #
 # Third-party Imports
 from loguru import logger
+
 try:
     import httpx
 except ImportError:  # pragma: no cover - optional import guard
@@ -16,6 +17,8 @@ except ImportError:  # pragma: no cover - optional import guard
 
 #
 # Local Imports
+import contextlib
+
 from tldw_Server_API.app.core.http_client import afetch, astream_bytes
 
 from ..tts_exceptions import (
@@ -828,10 +831,8 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
                 retry = None
             err = rate_limit_error(self._provider_simple, retry_after=retry)
             # Expose retry_after directly for tests
-            try:
+            with contextlib.suppress(AttributeError, TypeError):
                 err.retry_after = retry
-            except (AttributeError, TypeError):
-                pass
             raise err
         if status and 400 <= status < 500 and code == "invalid_voice_id":
             from ..tts_exceptions import TTSValidationError

@@ -62,7 +62,7 @@ def process_media_update(
 
     with db.transaction() as conn:
         # Create a new document version
-        dv_info = db.create_document_version(
+        db.create_document_version(
             media_id=media_id,
             content=new_content,
             prompt=new_prompt,

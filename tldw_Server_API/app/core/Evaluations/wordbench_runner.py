@@ -76,7 +76,7 @@ class WordBenchRunner:
             }
 
         except Exception as e:
-            logger.error(f"Error analyzing prompt '{prompt}': {e}")
+            logger.exception(f"Error analyzing prompt '{prompt}': {e}")
             return {
                 "prompt": prompt,
                 "error": str(e),

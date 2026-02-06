@@ -20,6 +20,7 @@ Models must be manually downloaded before use:
 
 from __future__ import annotations
 
+import contextlib
 import threading
 from pathlib import Path
 from typing import Any, Callable
@@ -366,10 +367,7 @@ def _run_forced_alignment(
     )
 
     # Move inputs to device
-    if hasattr(aligner_model, "device"):
-        device = aligner_model.device
-    else:
-        device = next(aligner_model.parameters()).device
+    device = aligner_model.device if hasattr(aligner_model, "device") else next(aligner_model.parameters()).device
     inputs = {k: v.to(device) if hasattr(v, "to") else v for k, v in inputs.items()}
 
     with torch.no_grad():
@@ -605,10 +603,8 @@ def _transcribe_vllm_http(
     detected_language = result.get("language")
     result_duration = result.get("duration")
     if result_duration is not None:
-        try:
+        with contextlib.suppress(ValueError, TypeError):
             duration_seconds = float(result_duration)
-        except (ValueError, TypeError):
-            pass
 
     return _normalize_artifact(
         text=text,
@@ -648,10 +644,7 @@ def is_qwen3_asr_aligner_available() -> bool:
         return False
 
     aligner_path = Path(settings["aligner_path"])
-    if not aligner_path.exists():
-        return False
-
-    return True
+    return aligner_path.exists()
 
 
 def get_qwen3_asr_capabilities() -> dict[str, Any]:

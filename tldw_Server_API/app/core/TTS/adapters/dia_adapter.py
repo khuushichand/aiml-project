@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import contextlib
 import os
 import re
 from collections.abc import AsyncGenerator
@@ -323,10 +324,8 @@ class DiaAdapter(TTSAdapter):
                 "pad_token_id": self.processor.tokenizer.eos_token_id,
             }
             if extras.get("min_new_tokens") is not None:
-                try:
+                with contextlib.suppress(Exception):
                     gen_kwargs["min_new_tokens"] = int(extras.get("min_new_tokens"))
-                except Exception:
-                    pass
 
             # Add seed for consistent voice if specified
             if request.seed:

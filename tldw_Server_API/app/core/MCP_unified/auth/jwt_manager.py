@@ -322,7 +322,7 @@ class JWTManager:
             user_id: User ID whose tokens to revoke
         """
         # Revoke refresh tokens
-        for token_id, refresh_token in self._refresh_tokens.items():
+        for _token_id, refresh_token in self._refresh_tokens.items():
             if refresh_token.user_id == user_id:
                 refresh_token.revoked = True
 
@@ -367,7 +367,7 @@ class JWTManager:
 
         # Hash the API key for storage
         salt = self.config.api_key_salt.get_secret_value()
-        key_hash = hashlib.pbkdf2_hmac(
+        hashlib.pbkdf2_hmac(
             'sha256',
             raw_key.encode(),
             salt.encode(),
@@ -376,7 +376,7 @@ class JWTManager:
 
         # Store key metadata (in production, use database)
         # Only store the hash, never the raw key
-        key_id = secrets.token_hex(16)
+        secrets.token_hex(16)
 
         logger.info(
             f"API key created for user: {user_id}, name: {name}",
@@ -397,7 +397,7 @@ class JWTManager:
         """
         # Hash the provided key
         salt = self.config.api_key_salt.get_secret_value()
-        key_hash = hashlib.pbkdf2_hmac(
+        hashlib.pbkdf2_hmac(
             'sha256',
             api_key.encode(),
             salt.encode(),

@@ -12,6 +12,7 @@ Docs:
 """
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from tldw_Server_API.app.core.exceptions import (
@@ -146,10 +147,8 @@ def get_article_by_id(article_id: str) -> tuple[dict[str, Any] | None, str | Non
     try:
         r = fetch(method="GET", url=f"{BASE_URL}/articles/{article_id}", headers={"Accept": "application/json"}, timeout=20)
         if r.status_code == 404:
-            try:
+            with contextlib.suppress(_FIGSHARE_NONCRITICAL_EXCEPTIONS):
                 r.close()
-            except _FIGSHARE_NONCRITICAL_EXCEPTIONS:
-                pass
             return None, None
         data = r.json() or {}
         return _normalize_article(data), None

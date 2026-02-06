@@ -231,8 +231,7 @@ class QwenAdapter(ChatProvider):
                         normalized = normalize_provider_line(line)
                         if normalized is not None:
                             yield normalized
-                    for tail in finalize_stream(response=resp, done_already=seen_done):
-                        yield tail
+                    yield from finalize_stream(response=resp, done_already=seen_done)
             return
         except Exception as e:
             raise self.normalize_error(e)

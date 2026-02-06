@@ -617,9 +617,8 @@ class TTSAdapterRegistry:
             if provider in [TTSProvider.KOKORO, TTSProvider.HIGGS, TTSProvider.DIA,
                            TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE, TTSProvider.VIBEVOICE_REALTIME,
                            TTSProvider.SUPERTONIC, TTSProvider.SUPERTONIC2, TTSProvider.POCKET_TTS,
-                           TTSProvider.QWEN3_TTS]:
-                if enabled_flag is not True:
-                    continue
+                           TTSProvider.QWEN3_TTS] and enabled_flag is not True:
+                continue
 
             try:
                 # Try to get adapter with a timeout to avoid hanging

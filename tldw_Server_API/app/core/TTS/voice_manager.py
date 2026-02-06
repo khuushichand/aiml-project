@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -859,10 +860,8 @@ class VoiceManager:
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
             except asyncio.TimeoutError:
                 proc.kill()
-                try:
+                with contextlib.suppress(_VOICE_NONCRITICAL_EXCEPTIONS):
                     await proc.communicate()
-                except _VOICE_NONCRITICAL_EXCEPTIONS:
-                    pass
                 logger.error(f"ffprobe timed out for {file_path}")
                 return 0.0
 
@@ -917,10 +916,8 @@ class VoiceManager:
                 _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
             except asyncio.TimeoutError:
                 proc.kill()
-                try:
+                with contextlib.suppress(_VOICE_NONCRITICAL_EXCEPTIONS):
                     await proc.communicate()
-                except _VOICE_NONCRITICAL_EXCEPTIONS:
-                    pass
                 logger.error(f"FFmpeg conversion timed out for {input_path}")
                 shutil.copy2(input_path, output_path)
                 return output_path

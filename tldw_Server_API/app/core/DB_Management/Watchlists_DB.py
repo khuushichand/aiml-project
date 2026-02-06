@@ -26,6 +26,7 @@ Notes:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from collections.abc import Iterable
@@ -518,30 +519,20 @@ class WatchlistsDatabase:
                 return False
 
         if not _col_exists("scrape_jobs", "wf_schedule_id"):
-            try:
-                self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN wf_schedule_id TEXT", tuple())
-            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
-                pass
+            with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
+                self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN wf_schedule_id TEXT", ())
         if not _col_exists("scrape_jobs", "job_filters_json"):
-            try:
-                self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN job_filters_json TEXT", tuple())
-            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
-                pass
+            with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
+                self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN job_filters_json TEXT", ())
         if not _col_exists("sources", "defer_until"):
-            try:
-                self.backend.execute("ALTER TABLE sources ADD COLUMN defer_until TEXT", tuple())
-            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
-                pass
+            with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
+                self.backend.execute("ALTER TABLE sources ADD COLUMN defer_until TEXT", ())
         if not _col_exists("sources", "consec_not_modified"):
-            try:
-                self.backend.execute("ALTER TABLE sources ADD COLUMN consec_not_modified INTEGER DEFAULT 0", tuple())
-            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
-                pass
+            with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
+                self.backend.execute("ALTER TABLE sources ADD COLUMN consec_not_modified INTEGER DEFAULT 0", ())
         if not _col_exists("scrape_run_items", "source_id"):
-            try:
-                self.backend.execute("ALTER TABLE scrape_run_items ADD COLUMN source_id INTEGER", tuple())
-            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
-                pass
+            with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
+                self.backend.execute("ALTER TABLE scrape_run_items ADD COLUMN source_id INTEGER", ())
     # ------------------------
     # Tags helpers
     # ------------------------
@@ -657,8 +648,8 @@ class WatchlistsDatabase:
                     sid = int(row.get("id"))
                 else:
                     raise
-            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS as e:
-                raise e
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
+                raise
         if sid is None:
             raise RuntimeError("failed_to_create_or_lookup_source")
         if tags:

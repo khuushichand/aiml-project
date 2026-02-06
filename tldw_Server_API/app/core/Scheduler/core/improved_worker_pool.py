@@ -10,6 +10,7 @@ Key improvements:
 """
 
 import asyncio
+import contextlib
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -78,16 +79,14 @@ class ResourceTracker:
                 lease_task = self.leases.pop(task_id)
                 if not lease_task.done():
                     lease_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await lease_task
-                    except asyncio.CancelledError:
-                        pass
 
     async def cleanup_all(self, timeout: float = 5.0) -> None:
         """Clean up all tracked resources"""
         async with self._lock:
             # Cancel all lease tasks
-            for task_id, lease_task in list(self.leases.items()):
+            for _task_id, lease_task in list(self.leases.items()):
                 if not lease_task.done():
                     lease_task.cancel()
 
@@ -208,10 +207,8 @@ class ImprovedWorker:
             # Cancel main task
             if self._main_task and not self._main_task.done():
                 self._main_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await self._main_task
-                except asyncio.CancelledError:
-                    pass
 
         # Clean up all resources
         await self.resource_tracker.cleanup_all()
@@ -449,10 +446,7 @@ class ImprovedWorker:
 
         # Recycle if too many errors
         error_rate = self.metrics.tasks_failed / max(self.metrics.tasks_processed, 1)
-        if error_rate > 0.5 and self.metrics.tasks_processed > 10:
-            return True
-
-        return False
+        return bool(error_rate > 0.5 and self.metrics.tasks_processed > 10)
 
     def is_healthy(self) -> bool:
         """Check if worker is healthy"""
@@ -466,10 +460,7 @@ class ImprovedWorker:
             return False
 
         # Check consecutive errors
-        if self._consecutive_errors >= self._max_consecutive_errors:
-            return False
-
-        return True
+        return not self._consecutive_errors >= self._max_consecutive_errors
 
     def get_status(self) -> dict[str, Any]:
         """Get worker status"""
@@ -565,10 +556,8 @@ class ImprovedWorkerPool:
                 task.cancel()
         for task in bg_tasks:
             if task:
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
         self._ops_task = None
 
         # Stop all workers gracefully
@@ -582,7 +571,7 @@ class ImprovedWorkerPool:
 
         if stop_tasks:
             results = await asyncio.gather(*stop_tasks, return_exceptions=True)
-            for i, result in enumerate(results):
+            for _i, result in enumerate(results):
                 if isinstance(result, Exception):
                     logger.error(f"Error stopping worker: {result}")
 
@@ -693,16 +682,15 @@ class ImprovedWorkerPool:
                     logger.info(
                         f"Scaled up queue {queue_name}: {queue_size} tasks, {current_workers + 1} workers"
                     )
-            elif queue_size == 0 and current_workers > 1:
-                if len(self.workers) > self.config.min_workers:
-                    for worker_id in list(self.queue_workers[queue_name]):
-                        worker = self.workers.get(worker_id)
-                        if worker and worker.state == WorkerState.IDLE:
-                            await self._remove_worker(worker_id)
-                            logger.info(
-                                f"Scaled down queue {queue_name}: 0 tasks, {current_workers - 1} workers"
-                            )
-                            break
+            elif queue_size == 0 and current_workers > 1 and len(self.workers) > self.config.min_workers:
+                for worker_id in list(self.queue_workers[queue_name]):
+                    worker = self.workers.get(worker_id)
+                    if worker and worker.state == WorkerState.IDLE:
+                        await self._remove_worker(worker_id)
+                        logger.info(
+                            f"Scaled down queue {queue_name}: 0 tasks, {current_workers - 1} workers"
+                        )
+                        break
 
     async def _ops_loop(self) -> None:
         """Consolidated operations loop handling monitoring, health, scaling, recycling"""

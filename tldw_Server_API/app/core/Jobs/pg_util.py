@@ -126,7 +126,7 @@ def negotiate_pg_dsn(
         return base
 
     # Progressive fallback candidates
-    opts_full = (
+    (
         f"-c statement_timeout={int(max(1, statement_timeout_ms))} "
         f"-c lock_timeout={int(max(1, lock_timeout_ms))} "
         f"-c idle_in_transaction_session_timeout={int(max(1, idle_in_xact_timeout_ms))}"

@@ -316,10 +316,7 @@ def transcribe_with_parakeet_mlx(
 
         # The transcribe method returns an AlignedResult object
         # Extract the text from it
-        if hasattr(result, 'text'):
-            transcription = result.text
-        else:
-            transcription = result
+        transcription = result.text if hasattr(result, 'text') else result
 
         if isinstance(transcription, dict):
             # Handle structured output

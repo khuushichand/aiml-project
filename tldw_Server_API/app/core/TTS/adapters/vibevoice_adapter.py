@@ -654,7 +654,6 @@ class VibeVoiceAdapter(TTSAdapter):
     async def get_capabilities(self) -> TTSCapabilities:
         """Get VibeVoice TTS capabilities"""
         # Variant-specific max generation time
-        max_generation_minutes = 90 if self.variant == "1.5B" else 45
 
         return TTSCapabilities(
             provider_name=f"VibeVoice-{self.variant}",
@@ -701,12 +700,11 @@ class VibeVoiceAdapter(TTSAdapter):
 
         # Check if a different model variant was requested
         requested_model = getattr(request, "model", None) or request.extra_params.get("model")
-        if requested_model and requested_model in self.MODEL_VARIANTS:
-            if requested_model != self.variant:
-                logger.info(f"Switching VibeVoice model from {self.variant} to {requested_model}")
-                self.variant = requested_model
-                # Reload model with new variant
-                await self._reload_model_for_variant(requested_model)
+        if requested_model and requested_model in self.MODEL_VARIANTS and requested_model != self.variant:
+            logger.info(f"Switching VibeVoice model from {self.variant} to {requested_model}")
+            self.variant = requested_model
+            # Reload model with new variant
+            await self._reload_model_for_variant(requested_model)
 
         # Extract generation parameters
         cfg_scale = request.cfg_scale or request.extra_params.get("cfg_scale", self.default_cfg_scale)
@@ -736,7 +734,7 @@ class VibeVoiceAdapter(TTSAdapter):
         # If multi-speaker text detected, use speaker mapping
         voice_references = {}
         if speaker_mapping:
-            for speaker_num, speaker_text in speaker_mapping.items():
+            for speaker_num, _speaker_text in speaker_mapping.items():
                 # Map speaker to voice or generate synthetic
                 speaker_voice = f"speaker_{speaker_num}"
                 if speaker_voice in self.available_voices:
@@ -770,7 +768,7 @@ class VibeVoiceAdapter(TTSAdapter):
             voice_reference_path = await self._generate_synthetic_voice(speaker_id)
 
         # Process multi-speaker if needed
-        speakers = request.speakers if hasattr(request, 'speakers') else None
+        request.speakers if hasattr(request, 'speakers') else None
 
         logger.info(
             f"{self.provider_name}: Generating speech with voice={voice}, "

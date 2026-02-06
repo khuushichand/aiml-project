@@ -125,11 +125,10 @@ class CharacterBase(BaseModel):
                             f"Field '{info.field_name}' must contain only strings, "
                             f"item at index {i} is {type(item).__name__}"
                         )
-        elif info.field_name == "extensions":
-            if not isinstance(value, dict):
-                raise ValueError(
-                    f"Field 'extensions' must be a dictionary, got {type(value).__name__}"
-                )
+        elif info.field_name == "extensions" and not isinstance(value, dict):
+            raise ValueError(
+                f"Field 'extensions' must be a dictionary, got {type(value).__name__}"
+            )
 
         return value
 

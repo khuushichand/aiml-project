@@ -128,7 +128,7 @@ async def fetch_usage_daily(
             try:
                 d = dict(r)
             except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
-                d = {k: r[k] for k in r.keys()} if hasattr(r, "keys") else {}
+                d = {k: r[k] for k in r} if hasattr(r, "keys") else {}
             if not has_in:
                 d.setdefault("bytes_in_total", None)
             out.append(d)
@@ -643,10 +643,7 @@ async def get_usage_daily(
             await admin_scope_service.enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         org_ids = await admin_scope_service.get_admin_org_ids(principal)
         if org_id is not None:
-            if org_ids is None:
-                org_ids = [org_id]
-            else:
-                org_ids = [org_id] if org_id in org_ids else []
+            org_ids = [org_id] if org_ids is None else [org_id] if org_id in org_ids else []
         rows, total, _ = await fetch_usage_daily(
             db,
             user_id=user_id,
@@ -676,10 +673,7 @@ async def get_usage_top(
     try:
         org_ids = await admin_scope_service.get_admin_org_ids(principal)
         if org_id is not None:
-            if org_ids is None:
-                org_ids = [org_id]
-            else:
-                org_ids = [org_id] if org_id in org_ids else []
+            org_ids = [org_id] if org_ids is None else [org_id] if org_id in org_ids else []
         rows = await fetch_usage_top(
             db,
             start=start,
@@ -720,10 +714,7 @@ async def export_usage_daily_csv(
             await admin_scope_service.enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         org_ids = await admin_scope_service.get_admin_org_ids(principal)
         if org_id is not None:
-            if org_ids is None:
-                org_ids = [org_id]
-            else:
-                org_ids = [org_id] if org_id in org_ids else []
+            org_ids = [org_id] if org_ids is None else [org_id] if org_id in org_ids else []
         content = await export_usage_daily_csv_text(
             db,
             user_id=user_id,
@@ -754,10 +745,7 @@ async def export_usage_top_csv(
     try:
         org_ids = await admin_scope_service.get_admin_org_ids(principal)
         if org_id is not None:
-            if org_ids is None:
-                org_ids = [org_id]
-            else:
-                org_ids = [org_id] if org_id in org_ids else []
+            org_ids = [org_id] if org_ids is None else [org_id] if org_id in org_ids else []
         content = await export_usage_top_csv_text(
             db,
             start=start,
@@ -808,10 +796,7 @@ async def get_llm_usage(
             await admin_scope_service.enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         org_ids = await admin_scope_service.get_admin_org_ids(principal)
         if org_id is not None:
-            if org_ids is None:
-                org_ids = [org_id]
-            else:
-                org_ids = [org_id] if org_id in org_ids else []
+            org_ids = [org_id] if org_ids is None else [org_id] if org_id in org_ids else []
         rows, total = await fetch_llm_usage(
             db,
             user_id=user_id,
@@ -844,10 +829,7 @@ async def get_llm_usage_summary(
     try:
         org_ids = await admin_scope_service.get_admin_org_ids(principal)
         if org_id is not None:
-            if org_ids is None:
-                org_ids = [org_id]
-            else:
-                org_ids = [org_id] if org_id in org_ids else []
+            org_ids = [org_id] if org_ids is None else [org_id] if org_id in org_ids else []
         rows = await fetch_llm_usage_summary(
             db,
             group_by=group_by,
@@ -874,10 +856,7 @@ async def get_llm_top_spenders(
     try:
         org_ids = await admin_scope_service.get_admin_org_ids(principal)
         if org_id is not None:
-            if org_ids is None:
-                org_ids = [org_id]
-            else:
-                org_ids = [org_id] if org_id in org_ids else []
+            org_ids = [org_id] if org_ids is None else [org_id] if org_id in org_ids else []
         rows = await fetch_llm_top_spenders(db, start=start, end=end, limit=limit, org_ids=org_ids)
         return LLMTopSpendersResponse(items=[LLMTopSpenderRow(**r) for r in rows])
     except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
@@ -904,10 +883,7 @@ async def export_llm_usage_csv(
             await admin_scope_service.enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         org_ids = await admin_scope_service.get_admin_org_ids(principal)
         if org_id is not None:
-            if org_ids is None:
-                org_ids = [org_id]
-            else:
-                org_ids = [org_id] if org_id in org_ids else []
+            org_ids = [org_id] if org_ids is None else [org_id] if org_id in org_ids else []
         is_pg = await is_postgres_backend()
         conditions: list[str] = []
         params: list[Any] = []

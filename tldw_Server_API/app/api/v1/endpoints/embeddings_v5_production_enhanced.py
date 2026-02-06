@@ -22,12 +22,12 @@ import threading
 import time
 import uuid
 from asyncio import Lock
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from enum import Enum
 from fnmatch import fnmatch
 from functools import lru_cache
-from typing import Any, Union
+from typing import Any
 
 import numpy as np
 import redis.asyncio as aioredis
@@ -38,7 +38,10 @@ from loguru import logger
 
 # Rate limiting
 # Monitoring
-from prometheus_client import Counter, Gauge, Histogram
+# ============================================================================
+# Metrics and Monitoring
+# ============================================================================
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
@@ -83,6 +86,12 @@ from tldw_Server_API.app.core.Embeddings.circuit_breaker import CircuitBreaker, 
 from tldw_Server_API.app.core.Embeddings.circuit_breaker import registry as circuit_breaker_registry
 from tldw_Server_API.app.core.Embeddings.dlq_crypto import decrypt_payload_if_present
 from tldw_Server_API.app.core.Embeddings.messages import validate_schema
+from tldw_Server_API.app.core.Embeddings.request_batching import (
+    EmbeddingsRateLimitError,
+)
+from tldw_Server_API.app.core.Embeddings.request_batching import (
+    create_embeddings_batch_async as batching_create_embeddings_batch_async,
+)
 from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.http_client import (
     RetryPolicy as _RetryPolicy,
@@ -105,18 +114,6 @@ from tldw_Server_API.app.core.Streaming.streams import SSEStream
 from tldw_Server_API.app.core.Usage.usage_tracker import (
     backfill_legacy_tokens_to_ledger,
     log_llm_usage,
-)
-
-# ============================================================================
-# Metrics and Monitoring
-# ============================================================================
-from prometheus_client import REGISTRY
-
-from tldw_Server_API.app.core.Embeddings.request_batching import (
-    EmbeddingsRateLimitError,
-)
-from tldw_Server_API.app.core.Embeddings.request_batching import (
-    create_embeddings_batch_async as batching_create_embeddings_batch_async,
 )
 
 # Exception buckets to replace broad Exception catches while preserving behavior.
@@ -561,10 +558,8 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> HTTPEx
                         except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                             pass
             finally:
-                try:
+                with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                     await ensure_async_client_closed(client2)
-                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                    pass
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     return None
@@ -819,10 +814,8 @@ class TTLCache:
                 def _runner():
                     try:
                         while self._cleanup_stop and not self._cleanup_stop.is_set():
-                            try:
+                            with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                                 self._cleanup_expired_locked()
-                            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                                pass
                             if self._cleanup_stop:
                                 self._cleanup_stop.wait(CACHE_CLEANUP_INTERVAL)
                             else:
@@ -857,10 +850,8 @@ class TTLCache:
         else:
             if self.cleanup_task:
                 self.cleanup_task.cancel()
-                try:
+                with suppress(asyncio.CancelledError):
                     await self.cleanup_task
-                except asyncio.CancelledError:
-                    pass
                 self.cleanup_task = None
 
     async def _cleanup_loop(self):
@@ -921,10 +912,8 @@ class TTLCache:
                     self.cache.keys(),
                     key=lambda k: self.cache[k].get('last_access', 0)
                 )
-                try:
+                with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                     logger.debug(f"Embeddings TTLCache evict LRU key={lru_key[:8]}..., size={len(self.cache)}")
-                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                    pass
                 del self.cache[lru_key]
 
             self.cache[key] = {
@@ -1153,10 +1142,8 @@ def cleanup_on_exit():
         except RuntimeError:
             # If a running loop prevents asyncio.run, fall back to best-effort
             pass
-        try:
+        with suppress(RuntimeError):
             asyncio.run(connection_manager.close_all())
-        except RuntimeError:
-            pass
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         # Swallow any errors during interpreter teardown
         pass
@@ -1246,7 +1233,7 @@ async def run_compactor_once(
 # ============================================================================
 
 def tokens_to_texts(
-    tokens_input: Union[list[int], list[list[int]]],
+    tokens_input: list[int] | list[list[int]],
     model_name: str
 ) -> tuple[list[str], int, list[int]]:
     """Convert token arrays to text using model tokenizer when possible.
@@ -1397,7 +1384,7 @@ def adjust_dimensions(
     return adjusted
 
 def decide_and_apply_l2(
-    embedding: Union[list[float], np.ndarray],
+    embedding: list[float] | np.ndarray,
     encoding_format: str,
     embeddings_from_adapter: bool,
 ) -> tuple[np.ndarray, bool]:
@@ -1430,10 +1417,7 @@ def decide_and_apply_l2(
 
     # Adapter vectors: preserve as-is unless normalization explicitly requested
     if embeddings_from_adapter:
-        if normalize_requested is True:
-            do_l2 = encoding_format != "base64"
-        else:
-            do_l2 = False
+        do_l2 = encoding_format != "base64" if normalize_requested is True else False
 
     try:
         arr = np.asarray(embedding, dtype=np.float32)
@@ -1616,12 +1600,11 @@ def guess_provider_for_model(model: str, explicit_provider: str | None = None) -
         p, _ = model.split(":", 1)
         return p.lower()
     # Heuristic for HF-style ids
-    if "/" in model or model.startswith((
+    if ("/" in model or model.startswith((
         "sentence-transformers/","BAAI/","thenlper/","intfloat/","hkunlp/","Qwen/","microsoft/",
         "google/","facebook/","all-MiniLM-","all-mpnet-","bert-","roberta-","xlm-","distilbert-"
-    )):
-        if model not in ["text-embedding-3-small","text-embedding-3-large","text-embedding-ada-002"]:
-            return "huggingface"
+    ))) and model not in ["text-embedding-3-small","text-embedding-3-large","text-embedding-ada-002"]:
+        return "huggingface"
     return "openai"
 
 # ============================================================================
@@ -2141,7 +2124,7 @@ async def create_embedding_endpoint(
         provider = (provider or "").lower()
 
         try:
-            provider_enum = EmbeddingProvider(provider)
+            EmbeddingProvider(provider)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -2246,7 +2229,7 @@ async def create_embedding_endpoint(
 
         # Guard: return 501 for unsupported/unstyled providers (prevents silent fallback)
         try:
-            prov_enum = EmbeddingProvider(provider)
+            EmbeddingProvider(provider)
         except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             # Unknown provider is handled as 400 elsewhere, keep behavior consistent
             pass
@@ -3272,16 +3255,12 @@ async def health_check():
         hyde_info["model"] = hyde_model
     hyde_weight = settings.get("HYDE_WEIGHT_QUESTION_MATCH")
     if hyde_weight is not None:
-        try:
+        with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
             hyde_info["weight"] = float(hyde_weight)
-        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-            pass
     hyde_k_fraction = settings.get("HYDE_K_FRACTION")
     if hyde_k_fraction is not None:
-        try:
+        with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
             hyde_info["k_fraction"] = float(hyde_k_fraction)
-        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-            pass
 
     health_status = {
         "status": "healthy" if EMBEDDINGS_AVAILABLE else "degraded",
@@ -3382,10 +3361,8 @@ async def get_metrics(
             for m in metric.collect():
                 for s in m.samples:
                     entry = {"name": s.name, "value": float(s.value)}
-                    try:
+                    with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                         entry.update(s.labels)
-                    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                        pass
                     samples.append(entry)
             return samples
         except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
@@ -3456,9 +3433,8 @@ def _redact_obj(obj: Any, depth: int = 0) -> Any:
         return out
     if isinstance(obj, list):
         return [_redact_obj(x, depth + 1) for x in obj]
-    if isinstance(obj, str):
-        if len(obj) > 12 and any(x in obj.lower() for x in ("sk-", "api_key", "bearer ")):
-            return "***REDACTED***"
+    if isinstance(obj, str) and len(obj) > 12 and any(x in obj.lower() for x in ("sk-", "api_key", "bearer ")):
+        return "***REDACTED***"
     return obj
 
 
@@ -3600,10 +3576,8 @@ async def requeue_dlq_item(
         await client.xadd(live_stream, requeue_fields)
         # Optionally delete from DLQ
         if req.delete_from_dlq:
-            try:
+            with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 await client.xdel(dlq_stream, entry_id)
-            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                pass
         dlq_requeued_total.labels(queue_name=dlq_stream, status="success").inc()
         out = {"message": "requeued", "from": dlq_stream, "to": live_stream, "entry_id": entry_id}
         if warning:
@@ -3700,10 +3674,8 @@ async def requeue_dlq_bulk(
                         requeue_fields.update(req.override_fields)
                     await client.xadd(live_stream, requeue_fields)
                     if req.delete_from_dlq:
-                        try:
+                        with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                             await client.xdel(dlq_stream, eid)
-                        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                            pass
             except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
                 status = f"error:{type(e).__name__}"
                 dlq_requeue_errors_total.labels(queue_name=dlq_stream, error_type=type(e).__name__).inc()
@@ -4023,7 +3995,7 @@ class LedgerEntry(BaseModel):
     status: str | None = None
     ts: int | None = None
     job_id: str | None = None
-    raw: Union[dict[str, Any], str] | None = None
+    raw: dict[str, Any] | str | None = None
     ttl_seconds: int | None = None
 
 
@@ -4145,7 +4117,6 @@ async def schedule_reembed(
     }
     # Construct default idempotency/dedupe if not provided
     idempotency_key = req.idempotency_key or f"reembed:{uid}:{int(req.media_id)}:{req.embedder_name or ''}:{req.embedder_version or ''}"
-    dedupe_key = req.dedupe_key or idempotency_key
 
     # Create job via JobManager
     try:
@@ -4190,15 +4161,13 @@ async def schedule_reembed(
                 require_redis=not redis_pipeline.allow_stub(),
             )
         except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-            try:
+            with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 jm.fail_job(
                     int(root_row["id"]),
                     error="Failed to enqueue re-embed job to Redis",
                     retryable=False,
                     enforce=False,
                 )
-            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                pass
             raise
         get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="reembed", traceparent=tp).info(
             "Scheduled re-embed job: root_id=%s stream_id=%s media_id=%s",
@@ -4271,10 +4240,8 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: float | N
             dlq_depths[dq] = await client.xlen(dq)
         except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             dlq_depths[dq] = 0
-        try:
+        with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
             embedding_queue_age_current_seconds.labels(queue_name=q).set(float(ages.get(q, 0.0)))
-        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-            pass
 
     # stage counters (aggregate from worker snapshots)
     stages: dict[str, dict[str, int]] = {
@@ -4415,22 +4382,16 @@ async def orchestrator_events(_current_user: User = Depends(get_request_user)):
             except asyncio.CancelledError:
                 # Client cancelled: cancel producer promptly and re-raise
                 if not producer.done():
-                    try:
+                    with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                         producer.cancel()
-                    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                        pass
-                    try:
+                    with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                         await asyncio.gather(producer, return_exceptions=True)
-                    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                        pass
                 raise
             else:
                 # Normal shutdown: ensure producer completes without forced cancel
                 if not producer.done():
-                    try:
+                    with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                         await asyncio.gather(producer, return_exceptions=True)
-                    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                        pass
         finally:
             try:
                 orchestrator_sse_connections.dec()
@@ -4463,27 +4424,21 @@ async def orchestrator_summary(current_user: User = Depends(get_request_user)):
     try:
         client = await _get_redis_client()
         if getattr(client, "_tldw_is_stub", False):
-            try:
+            with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 orchestrator_summary_failures_total.inc()
-            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                pass
             snapshot = _zero_snapshot()
             await ensure_async_client_closed(client)
             client = None
             return snapshot
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-        try:
+        with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
             orchestrator_summary_failures_total.inc()
-        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-            pass
         return _zero_snapshot()
     try:
         return await _build_orchestrator_snapshot(client)
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-        try:
+        with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
             orchestrator_summary_failures_total.inc()
-        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-            pass
         return _zero_snapshot()
     finally:
         await ensure_async_client_closed(client)

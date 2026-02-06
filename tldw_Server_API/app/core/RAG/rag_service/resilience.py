@@ -7,6 +7,7 @@ and health monitoring to ensure robust operation of the RAG pipeline.
 """
 
 import asyncio
+import contextlib
 import random
 import time
 import traceback
@@ -181,11 +182,8 @@ class CircuitBreaker:
         self.failure_count += 1
         self.last_failure_time = time.time()
 
-        if self.state == CircuitState.HALF_OPEN:
+        if self.state == CircuitState.HALF_OPEN or self.state == CircuitState.CLOSED and self.failure_count >= self.config.failure_threshold:
             self._transition_to_open()
-        elif self.state == CircuitState.CLOSED:
-            if self.failure_count >= self.config.failure_threshold:
-                self._transition_to_open()
 
     def _transition_to_open(self):
         """Transition to open state."""
@@ -328,11 +326,7 @@ class RetryPolicy:
                 return False
 
         # Check retry_on
-        for exc_type in self.config.retry_on:
-            if isinstance(exception, exc_type):
-                return True
-
-        return False
+        return any(isinstance(exception, exc_type) for exc_type in self.config.retry_on)
 
     def _calculate_delay(self, attempt: int) -> float:
         """Calculate retry delay with exponential backoff."""
@@ -406,7 +400,7 @@ class FallbackChain:
 
             # All fallbacks failed
             logger.error("All fallback strategies failed")
-            raise primary_error
+            raise
 
 
 class HealthMonitor:
@@ -447,10 +441,8 @@ class HealthMonitor:
         """Stop health monitoring."""
         if self.monitoring_task:
             self.monitoring_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self.monitoring_task
-            except asyncio.CancelledError:
-                pass
             self.monitoring_task = None
 
     async def _monitoring_loop(self):

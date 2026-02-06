@@ -47,7 +47,7 @@ def _interactive_health_check(cli_context):
 
 def _interactive_evaluation(cli_context):
     """Interactive evaluation setup."""
-    console = Console()
+    Console()
 
     eval_type = Prompt.ask(
         "Select evaluation type",
@@ -56,8 +56,8 @@ def _interactive_evaluation(cli_context):
     )
 
     if eval_type == "geval":
-        text = Prompt.ask("Enter original text (or file://path)")
-        summary = Prompt.ask("Enter summary text (or file://path)")
+        Prompt.ask("Enter original text (or file://path)")
+        Prompt.ask("Enter summary text (or file://path)")
         provider = Prompt.ask("Select provider", choices=["openai", "anthropic", "google"], default="openai")
 
         print_info(f"Would run G-Eval with {provider} on provided text...")
@@ -68,7 +68,7 @@ def _interactive_evaluation(cli_context):
 
 def _interactive_config(cli_context):
     """Interactive configuration management."""
-    console = Console()
+    Console()
 
     action = Prompt.ask(
         "Configuration action",
@@ -84,7 +84,7 @@ def _interactive_config(cli_context):
 
 def _interactive_database(cli_context):
     """Interactive database operations."""
-    console = Console()
+    Console()
 
     action = Prompt.ask(
         "Database action",

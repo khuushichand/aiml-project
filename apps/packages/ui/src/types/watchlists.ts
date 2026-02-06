@@ -443,6 +443,27 @@ export interface JobPreviewResult {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Dedup / Seen Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SourceSeenStats {
+  source_id: number
+  user_id: number
+  seen_count: number
+  latest_seen_at: string | null
+  defer_until: string | null
+  consec_not_modified: number | null
+  recent_keys: string[]
+}
+
+export interface SourceSeenResetResponse {
+  source_id: number
+  user_id: number
+  cleared: number
+  cleared_backoff: boolean
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // UI State Types
 // ─────────────────────────────────────────────────────────────────────────────
 

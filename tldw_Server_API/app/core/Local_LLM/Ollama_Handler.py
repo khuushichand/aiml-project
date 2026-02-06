@@ -16,11 +16,11 @@ except ImportError:
     psutil = None  # type: ignore
     PSUTIL_AVAILABLE = False
 
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.Local_LLM import handler_utils, http_utils
 from tldw_Server_API.app.core.Local_LLM.LLM_Base_Handler import BaseLLMHandler
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import InferenceError, ModelDownloadError, ServerError
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import OllamaConfig
-from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 
 _OLLAMA_NONCRITICAL_EXCEPTIONS = (
     OSError,
@@ -147,10 +147,10 @@ class OllamaHandler(BaseLLMHandler):
             self.logger.debug(f"Available Ollama models: {model_names}")
             return model_names
         except ServerError as e:  # Catching generic server error from _run_subprocess
-            self.logger.error(f"Error executing Ollama 'list': {e}")
+            self.logger.exception(f"Error executing Ollama 'list': {e}")
             return []
         except _OLLAMA_NONCRITICAL_EXCEPTIONS as e:
-            self.logger.error(f"Unexpected error in get_ollama_models: {e}")
+            self.logger.exception(f"Unexpected error in get_ollama_models: {e}")
             return []
 
     async def is_model_available(self, model_name: str) -> bool:
@@ -184,19 +184,19 @@ class OllamaHandler(BaseLLMHandler):
                 raise ModelDownloadError(f"Failed to pull model '{model_name}': {err_msg}")
 
         except asyncio.TimeoutError:
-            self.logger.error(f"Pulling model '{model_name}' timed out after {timeout}s.")
+            self.logger.exception(f"Pulling model '{model_name}' timed out after {timeout}s.")
             # Attempt to terminate the process if it's still running
             if process.returncode is None:
                 try:
                     process.terminate()
                     await asyncio.wait_for(process.wait(), timeout=5)
                 except _OLLAMA_PROCESS_CONTROL_EXCEPTIONS as e_term:
-                    self.logger.error(f"Error terminating timed-out ollama pull process: {e_term}")
+                    self.logger.exception(f"Error terminating timed-out ollama pull process: {e_term}")
                     process.kill()  # Force kill if terminate fails
                     await process.wait()
             raise ModelDownloadError(f"Failed to pull model '{model_name}': Operation timed out.")
         except _OLLAMA_NONCRITICAL_EXCEPTIONS as e:
-            self.logger.error(f"Unexpected error in pull_ollama_model: {e}")
+            self.logger.exception(f"Unexpected error in pull_ollama_model: {e}")
             raise ModelDownloadError(f"Failed to pull model '{model_name}': {e}")
 
     async def serve_model(self, model_name: str, port: Optional[int] = None, host: str = "127.0.0.1") -> dict[str, Any]:
@@ -308,10 +308,10 @@ class OllamaHandler(BaseLLMHandler):
 
         except FileNotFoundError:
             msg = "Ollama executable not found."
-            self.logger.error(msg)
+            self.logger.exception(msg)
             raise ServerError(msg)
         except _OLLAMA_NONCRITICAL_EXCEPTIONS as e:
-            self.logger.error(f"Error starting Ollama server: {e}")
+            self.logger.exception(f"Error starting Ollama server: {e}")
             raise ServerError(f"Error starting Ollama server: {e}")
 
     async def stop_server(self, pid: Optional[int] = None, port: Optional[int] = None) -> str:
@@ -335,7 +335,7 @@ class OllamaHandler(BaseLLMHandler):
                 self.logger.warning(f"No process found with PID {pid}")
                 return f"No process found with PID {pid}"
             except _OLLAMA_NONCRITICAL_EXCEPTIONS as e:
-                self.logger.error(f"Error stopping Ollama server PID {pid}: {e}")
+                self.logger.exception(f"Error stopping Ollama server PID {pid}: {e}")
                 return f"Error stopping Ollama server PID {pid}: {e}"
         elif port:
             if not PSUTIL_AVAILABLE:
@@ -357,7 +357,7 @@ class OllamaHandler(BaseLLMHandler):
                 else:
                     return f"No Ollama server found listening on port {port}"
             except _OLLAMA_PSUTIL_EXCEPTIONS as e:
-                self.logger.error(f"Error stopping Ollama server on port {port}: {e}")
+                self.logger.exception(f"Error stopping Ollama server on port {port}: {e}")
                 return f"Error stopping Ollama server on port {port}: {e}"
         else:
             # General stop command `ollama stop` - this might not exist or work as expected for `ollama serve`
@@ -447,7 +447,7 @@ class OllamaHandler(BaseLLMHandler):
                 status = http_utils.get_http_status_from_exception(e)
                 if status is not None:
                     text = http_utils.get_http_error_text(e)
-                    self.logger.error(f"Ollama API error ({status}): {text}")
+                    self.logger.exception(f"Ollama API error ({status}): {text}")
                     # Attempt model pull on 404 or message indicating not found
                     if status == 404 or (isinstance(text, str) and "model not found" in text.lower()):
                         self.logger.info(f"Model {model_name} not found on server, attempting to pull.")
@@ -460,7 +460,7 @@ class OllamaHandler(BaseLLMHandler):
                                 f"Model {model_name} could not be pulled: {e_pull}. Original API error: {text}")
                     raise InferenceError(f"Ollama API error ({status}): {text}")
                 # Likely connection error; attempt to start server then retry
-                self.logger.error(f"Could not connect to Ollama server at {api_url}: {e}")
+                self.logger.exception(f"Could not connect to Ollama server at {api_url}: {e}")
                 self.logger.info("Attempting to start Ollama server...")
                 try:
                     await self.serve_model(model_name, port=port, host=host)

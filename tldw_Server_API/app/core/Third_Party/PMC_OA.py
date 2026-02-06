@@ -8,6 +8,7 @@ exposes a simple PDF download helper for PMC articles.
 """
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 from xml.etree import ElementTree as ET
 
@@ -23,10 +24,8 @@ def _get_xml(params: dict[str, Any]) -> ET.Element:
     try:
         return ET.fromstring(r.text)
     finally:
-        try:
+        with contextlib.suppress(Exception):
             r.close()
-        except Exception:
-            pass
 
 
 def pmc_oa_identify() -> tuple[dict[str, Any] | None, str | None]:

@@ -576,7 +576,7 @@ class _LightRAGCustomMetrics(RAGCustomMetrics):
 
         # Simple lexical Jaccard similarity over tokens instead of embeddings
         def tokenize(s: str):
-            return set(w for w in s.lower().split() if w)
+            return {w for w in s.lower().split() if w}
 
         toks = [tokenize(c) for c in retrieved_contexts[:10]]
         similarities = []

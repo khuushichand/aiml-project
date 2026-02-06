@@ -12,8 +12,8 @@ avoid breaking request flows during upgrades.
 """
 
 import asyncio
-from sqlite3 import Error as SQLiteError
 from datetime import datetime, timedelta, timezone
+from sqlite3 import Error as SQLiteError
 from typing import Any
 
 from loguru import logger

@@ -932,7 +932,7 @@ def _get_api_key_from_config(config: dict[str, Any], provider: str) -> Optional[
     key_name = provider_key_map.get(provider.lower())
     if key_name:
         # Try to get from config
-        for section, values in config.items():
+        for _section, values in config.items():
             if isinstance(values, dict) and key_name in values:
                 return values[key_name]
 

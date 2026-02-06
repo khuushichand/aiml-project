@@ -473,7 +473,7 @@ class VoiceCommandRouter:
             from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Unified import chat_api_call_async
 
             # Build conversation context
-            context_messages = session.get_context_messages(max_turns=5)
+            session.get_context_messages(max_turns=5)
 
             # System prompt for voice assistant
             system_prompt = """You are a helpful voice assistant. Keep your responses concise and natural-sounding for speech.

@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from typing import Any
@@ -231,10 +232,8 @@ async def run_prompt_studio_jobs_worker(stop_event: asyncio.Event | None = None)
     finally:
         if stop_task is not None and not stop_task.done():
             stop_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await stop_task
-            except asyncio.CancelledError:
-                pass
 
 
 async def main() -> None:

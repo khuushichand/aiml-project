@@ -242,7 +242,7 @@ class ParakeetStreamingTranscriber:
             return result
 
         except Exception as e:
-            logger.error(f"Error processing audio chunk: {e}")
+            logger.exception(f"Error processing audio chunk: {e}")
             return {"type": "error", "message": str(e)}
 
     async def _transcribe_chunk(self, audio_chunk: np.ndarray) -> Optional[str]:
@@ -276,7 +276,7 @@ class ParakeetStreamingTranscriber:
                 )
                 return result
         except Exception as e:
-            logger.error(f"Transcription error: {e}")
+            logger.exception(f"Transcription error: {e}")
             return None
 
     async def flush(self) -> Optional[dict[str, Any]]:
@@ -325,7 +325,7 @@ async def handle_websocket_transcription(
         # Defer imports to avoid circular dependencies during module import
         from .Audio_Streaming_Unified import UnifiedStreamingConfig, handle_unified_websocket
     except Exception as import_err:
-        logger.error(f"Failed to import unified streaming handler: {import_err}")
+        logger.exception(f"Failed to import unified streaming handler: {import_err}")
         raise
 
     # Map legacy StreamingConfig to UnifiedStreamingConfig
@@ -426,7 +426,7 @@ def create_streaming_generator(
                     yield result["text"]
 
         except Exception as e:
-            logger.error(f"Streaming error: {e}")
+            logger.exception(f"Streaming error: {e}")
             yield f"[Error: {str(e)}]"
 
     return generate()

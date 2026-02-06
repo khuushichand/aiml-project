@@ -428,7 +428,7 @@ def list_benchmarks(detailed):
 def run(ctx, benchmark, limit, api, model, output, parallel, dry_run):
     """Run a benchmark evaluation using specified API."""
     registry = ctx.obj['registry']
-    manager = ctx.obj['manager']
+    ctx.obj['manager']
 
     # Check if benchmark exists
     config = registry.get(benchmark)
@@ -674,7 +674,7 @@ def validate(benchmark, samples):
             # Try formatting a sample
             if dataset:
                 try:
-                    formatted = evaluator.format_for_custom_metric(dataset[0])
+                    evaluator.format_for_custom_metric(dataset[0])
                     click.echo("Sample formatted successfully for evaluation")
                 except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
                     click.echo(f"Warning: Could not format sample: {e}", err=True)

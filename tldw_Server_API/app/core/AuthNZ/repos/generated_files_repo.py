@@ -6,6 +6,7 @@ mindmaps, spreadsheets).
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid as uuid_module
 from dataclasses import dataclass
@@ -79,39 +80,28 @@ class AuthnzGeneratedFilesRepo:
         if row is None:
             return {}
         try:
-            if hasattr(row, "keys") or isinstance(row, dict):
-                record = dict(row)
-            else:
-                record = {}
+            record = dict(row) if hasattr(row, "keys") or isinstance(row, dict) else {}
         except Exception:
             record = {}
 
         # Type conversions
         if "id" in record and record["id"] is not None:
-            try:
+            with contextlib.suppress(Exception):
                 record["id"] = int(record["id"])
-            except Exception:
-                pass
 
         if "user_id" in record and record["user_id"] is not None:
-            try:
+            with contextlib.suppress(Exception):
                 record["user_id"] = int(record["user_id"])
-            except Exception:
-                pass
 
         for field in ("org_id", "team_id", "file_size_bytes"):
             if field in record and record[field] is not None:
-                try:
+                with contextlib.suppress(Exception):
                     record[field] = int(record[field])
-                except Exception:
-                    pass
 
         for field in ("is_transient", "is_deleted"):
             if field in record:
-                try:
+                with contextlib.suppress(Exception):
                     record[field] = bool(record[field])
-                except Exception:
-                    pass
 
         # Parse JSON tags field
         if "tags" in record and record["tags"]:

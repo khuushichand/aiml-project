@@ -10,6 +10,7 @@ This avoids cross-tenant leakage by isolating data per user.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -184,8 +185,6 @@ class UserPersonalizationStore:
             except Exception:
                 boosted.append(d)
         # Keep ordering by updated score
-        try:
+        with contextlib.suppress(Exception):
             boosted.sort(key=lambda x: getattr(x, "score", x.get("score", 0.0) if isinstance(x, dict) else 0.0), reverse=True)
-        except Exception:
-            pass
         return boosted

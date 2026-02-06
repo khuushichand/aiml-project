@@ -8,6 +8,7 @@
 #######################################################################################################################
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import time
@@ -1186,10 +1187,8 @@ async def websocket_voice_assistant(
     finally:
         # Cleanup
         if transcriber:
-            try:
+            with contextlib.suppress(AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 await transcriber.finalize()
-            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
-                pass
 
 
 async def _process_audio_command(

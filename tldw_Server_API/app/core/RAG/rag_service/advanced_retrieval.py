@@ -17,6 +17,7 @@ Notes:
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -180,10 +181,8 @@ async def apply_multi_vector_passages(
         }
         d.metadata = meta
         # Keep original score but expose mv_score for downstream consumers
-        try:
+        with contextlib.suppress(AttributeError, TypeError, ValueError):
             d.metadata["mv_score"] = float(sim)
-        except (AttributeError, TypeError, ValueError):
-            pass
         ranked.append((sim, doc_idx))
 
     ranked.sort(key=lambda x: x[0], reverse=True)

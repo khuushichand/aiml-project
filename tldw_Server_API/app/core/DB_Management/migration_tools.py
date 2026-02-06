@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import sqlite3
 from collections.abc import Iterable, Iterator, Sequence
@@ -225,10 +226,8 @@ def migrate_workflows_sqlite_to_postgres(
             run_count,
         )
     finally:
-        try:
+        with contextlib.suppress(_MIGRATION_NONCRITICAL_EXCEPTIONS):
             backend.get_pool().close_all()
-        except _MIGRATION_NONCRITICAL_EXCEPTIONS:
-            pass
         sqlite_conn.close()
 
 
@@ -391,7 +390,7 @@ def _copy_table(
                             coerced = bool(val)
                         elif isinstance(val, str) and val.strip() in {'0', '1', 't', 'f', 'true', 'false'}:
                             low = val.strip().lower()
-                            coerced = True if low in {'1', 't', 'true'} else False
+                            coerced = low in {'1', 't', 'true'}
                         else:
                             coerced = bool(val)
                         values.append(coerced)
@@ -495,10 +494,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             _backend = _Fac.create_backend(config)
             # Instantiate to create tables/indexes; uses provided backend
             _ = _Evals(db_path=':memory:', backend=_backend)
-            try:
+            with contextlib.suppress(_MIGRATION_NONCRITICAL_EXCEPTIONS):
                 _backend.get_pool().close_all()
-            except _MIGRATION_NONCRITICAL_EXCEPTIONS:
-                pass
     except _MIGRATION_NONCRITICAL_EXCEPTIONS as _init_exc:  # pragma: no cover - defensive
         logger.warning('Could not pre-initialize PostgreSQL schema: %s', _init_exc)
     for label, path in targets:

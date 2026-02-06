@@ -31,9 +31,8 @@ def _join_authors(creators: Any) -> str | None:
 
 def _pdf_url(urls: Any) -> str | None:
     for u in urls or []:
-        if (u.get("format") or "").lower() == "pdf":
-            if u.get("value"):
-                return u.get("value")
+        if (u.get("format") or "").lower() == "pdf" and u.get("value"):
+            return u.get("value")
     return None
 
 

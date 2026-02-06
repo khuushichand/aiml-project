@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import time
@@ -267,10 +268,7 @@ def _merge_metadata_with_bytes(metadata_json: str | None, size_bytes: int | None
             raw = json.loads(metadata_json)
         except json.JSONDecodeError:
             raw = None
-        if isinstance(raw, dict):
-            payload = raw
-        else:
-            payload = {"metadata": raw}
+        payload = raw if isinstance(raw, dict) else {"metadata": raw}
     else:
         payload = {}
     payload["byte_size"] = int(size_bytes)
@@ -345,10 +343,7 @@ def _resolve_item_requests(payload: dict[str, Any]) -> list[dict[str, Any]]:
         tts_provider = _normalize_tts_provider(item.get("tts_provider") or default_tts_provider)
         tts_model = item.get("tts_model") or default_tts_model
         output_cfg = item.get("output") or default_output
-        if "subtitles" in item:
-            subtitle_cfg = item.get("subtitles")
-        else:
-            subtitle_cfg = default_subtitles
+        subtitle_cfg = item.get("subtitles") if "subtitles" in item else default_subtitles
         if not output_cfg:
             raise AudiobookJobError("missing_item_output", retryable=False)
         if _is_kokoro_request(tts_provider, tts_model) and not subtitle_cfg:
@@ -1273,10 +1268,8 @@ async def process_audiobook_job(
                     for path in segment_paths:
                         if path == base_path:
                             continue
-                        try:
+                        with contextlib.suppress(_AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS):
                             path.unlink(missing_ok=True)
-                        except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS:
-                            pass
 
                 if segment_alignments and all(segment_alignments):
                     payloads = [AlignmentPayload(**payload) for payload in segment_alignments if payload]
@@ -1316,10 +1309,8 @@ async def process_audiobook_job(
                     )
                     if ok_stretch:
                         replaced = False
-                        try:
+                        with contextlib.suppress(_AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS):
                             base_path.unlink(missing_ok=True)
-                        except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS:
-                            pass
                         try:
                             stretched_path.replace(base_path)
                             replaced = True
@@ -1330,10 +1321,8 @@ async def process_audiobook_job(
                                 "audiobook worker: time-stretch replace failed for %s",
                                 chapter.chapter_id,
                             )
-                            try:
+                            with contextlib.suppress(_AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS):
                                 stretched_path.unlink(missing_ok=True)
-                            except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS:
-                                pass
                         if replaced and alignment_payload:
                             alignment_model = AlignmentPayload(**alignment_payload)
                             alignment_model = scale_alignment_payload(alignment_model, time_stretch_ratio)
@@ -1837,7 +1826,5 @@ async def run_audiobook_jobs_worker(stop_event: asyncio.Event | None = None) -> 
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run_audiobook_jobs_worker())
-    except KeyboardInterrupt:
-        pass

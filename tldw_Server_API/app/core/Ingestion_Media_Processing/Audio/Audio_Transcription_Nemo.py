@@ -205,10 +205,7 @@ def load_canary_model():
             stt_cfg = {}
         device = stt_cfg.get('nemo_device', device)
 
-        if device == 'cuda' and torch.cuda.is_available():
-            model = model.cuda()
-        else:
-            model = model.cpu()
+        model = model.cuda() if device == 'cuda' and torch.cuda.is_available() else model.cpu()
 
         model.eval()
 
@@ -276,10 +273,7 @@ def _load_parakeet_standard(device: str):
     # Configure for efficient inference
     model.change_decoding_strategy(None)  # Use greedy decoding for speed
 
-    if device == 'cuda' and torch.cuda.is_available():
-        model = model.cuda()
-    else:
-        model = model.cpu()
+    model = model.cuda() if device == 'cuda' and torch.cuda.is_available() else model.cpu()
 
     model.eval()
 

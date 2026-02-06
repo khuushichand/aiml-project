@@ -8,6 +8,7 @@ This is a thin adapter for Stage 1/2 validation and can be replaced by a
 full-featured middleware later.
 """
 
+import contextlib
 import os
 import re
 import uuid
@@ -184,10 +185,8 @@ class RGSimpleMiddleware:
         # Make sure loader (and its route_map) tracks current env path
         await self._ensure_loader_matches_env(request)
         # Compile route map for fast path matches (best-effort)
-        try:
+        with contextlib.suppress(_RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS):
             self._init_route_map(request)
-        except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
-            pass
         # If governor not initialized, lazily create one using loader + backend env
         gov = getattr(request.app.state, "rg_governor", None)
         if gov is None:
@@ -214,10 +213,8 @@ class RGSimpleMiddleware:
             return
         # Attach policy_id to request.state so downstream dependencies can
         # detect RG-governed routes and avoid double-enforcement.
-        try:
+        with contextlib.suppress(_RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS):
             request.state.rg_policy_id = policy_id
-        except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
-            pass
 
         # Build RG request. Always include 'requests'. Specialized categories
         # (tokens/streams/jobs/minutes/etc.) are enforced at endpoint level.

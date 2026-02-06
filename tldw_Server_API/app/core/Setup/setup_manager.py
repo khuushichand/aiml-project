@@ -313,10 +313,7 @@ def _normalize_root_path(raw: str, *, project_root: Path) -> Path | None:
         candidate = Path(value).expanduser()
     except Exception:
         candidate = Path(value)
-    if not candidate.is_absolute():
-        candidate = (project_root / candidate).resolve()
-    else:
-        candidate = candidate.resolve()
+    candidate = (project_root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
     return candidate
 
 

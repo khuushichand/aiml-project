@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import io
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -195,24 +196,18 @@ class SwarmUIAdapter:
         except Exception:
             status = None
         if status and int(status) >= 400:
-            try:
+            with contextlib.suppress(Exception):
                 response.close()
-            except Exception:
-                pass
             raise ImageGenerationError(f"SwarmUI image fetch failed with status {status}")
         try:
             content = response.content
         except Exception as exc:
-            try:
+            with contextlib.suppress(Exception):
                 response.close()
-            except Exception:
-                pass
             raise ImageGenerationError(f"SwarmUI image fetch failed: {exc}") from exc
         content_type = response.headers.get("content-type", "application/octet-stream")
-        try:
+        with contextlib.suppress(Exception):
             response.close()
-        except Exception:
-            pass
         return content, content_type.split(";")[0].strip().lower()
 
 
@@ -222,10 +217,7 @@ def _decode_data_url(data_url: str) -> tuple[bytes, str]:
         raise ImageGenerationError("invalid data URL")
     meta = header[5:]
     content_type = "application/octet-stream"
-    if ";" in meta:
-        content_type = meta.split(";", 1)[0] or content_type
-    else:
-        content_type = meta or content_type
+    content_type = meta.split(";", 1)[0] or content_type if ";" in meta else meta or content_type
     if ";base64" not in header:
         raise ImageGenerationError("unsupported data URL encoding")
     try:

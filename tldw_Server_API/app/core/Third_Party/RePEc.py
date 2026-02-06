@@ -56,10 +56,9 @@ def _normalize_getref_payload(obj: dict[str, Any]) -> dict[str, Any]:
     for lk in (obj.get("link") or []):
         try:
             if (lk.get("function") or "").lower() == "full text":
-                if (lk.get("format") or "").lower() in ("application/pdf", "pdf"):
-                    if lk.get("url"):
-                        pdf_url = lk.get("url")
-                        break
+                if (lk.get("format") or "").lower() in ("application/pdf", "pdf") and lk.get("url"):
+                    pdf_url = lk.get("url")
+                    break
         except Exception:
             continue
 

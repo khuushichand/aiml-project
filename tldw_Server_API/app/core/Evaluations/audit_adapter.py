@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import contextlib
 import os
 import threading
 import warnings
@@ -109,10 +110,8 @@ def _stop_sync_loop() -> None:
     thread = _SYNC_LOOP_THREAD
 
     if loop and loop.is_running():
-        try:
+        with contextlib.suppress(Exception):
             loop.call_soon_threadsafe(loop.stop)
-        except Exception:
-            pass
 
     if thread and thread.is_alive() and threading.current_thread() is not thread:
         thread.join(timeout=2.0)
@@ -291,15 +290,11 @@ def _shutdown_on_exit() -> None:
     try:
         try:
             loop = asyncio.get_running_loop()
-            try:
+            with contextlib.suppress(Exception):
                 loop.create_task(shutdown_evaluations_audit_services())
-            except Exception:
-                pass
         except RuntimeError:
-            try:
+            with contextlib.suppress(Exception):
                 asyncio.run(shutdown_evaluations_audit_services())
-            except Exception:
-                pass
     except Exception:
         pass
 

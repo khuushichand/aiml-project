@@ -8,6 +8,7 @@ single implementation rather than importing functionality from each other.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -27,10 +28,8 @@ def _module_spec_available(module_name: str) -> bool:
     try:
         return importlib.util.find_spec(module_name) is not None
     except Exception as exc:  # pragma: no cover - defensive logging
-        try:
+        with contextlib.suppress(Exception):
             logger.debug(f"Module spec probe failed for {module_name}: {exc}")
-        except Exception:
-            pass
         return False
 
 

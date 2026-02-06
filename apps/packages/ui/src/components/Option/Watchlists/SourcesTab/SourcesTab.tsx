@@ -12,7 +12,7 @@ import {
   message
 } from "antd"
 import type { ColumnsType } from "antd/es/table"
-import { Download, Edit2, ExternalLink, Plus, RefreshCw, Trash2, UploadCloud } from "lucide-react"
+import { Download, Edit2, ExternalLink, Eye, Plus, RefreshCw, Trash2, UploadCloud } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useWatchlistsStore } from "@/store/watchlists"
 import {
@@ -29,6 +29,7 @@ import { formatRelativeTime } from "@/utils/dateFormatters"
 import { SourceFormModal } from "./SourceFormModal"
 import { GroupsTree } from "./GroupsTree"
 import { SourcesBulkImport } from "./SourcesBulkImport"
+import { SourceSeenDrawer } from "./SourceSeenDrawer"
 
 const { Search } = Input
 
@@ -82,6 +83,7 @@ export const SourcesTab: React.FC = () => {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
   const [bulkWorking, setBulkWorking] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [seenDrawerSourceId, setSeenDrawerSourceId] = useState<number | null>(null)
 
   const selectedSources = useMemo(
     () => sources.filter((source) => selectedRowKeys.includes(source.id)),
@@ -431,7 +433,7 @@ export const SourcesTab: React.FC = () => {
     {
       title: t("watchlists:sources.columns.actions", "Actions"),
       key: "actions",
-      width: 100,
+      width: 140,
       align: "center",
       render: (_, record) => (
         <Space size="small">
@@ -441,6 +443,14 @@ export const SourcesTab: React.FC = () => {
               size="small"
               icon={<Edit2 className="h-4 w-4" />}
               onClick={() => openSourceForm(record.id)}
+            />
+          </Tooltip>
+          <Tooltip title={t("watchlists:sources.seenInfo", "Dedup / Seen")}>
+            <Button
+              type="text"
+              size="small"
+              icon={<Eye className="h-4 w-4" />}
+              onClick={() => setSeenDrawerSourceId(record.id)}
             />
           </Tooltip>
           <Popconfirm
@@ -620,6 +630,13 @@ export const SourcesTab: React.FC = () => {
           loadTags()
           loadGroups()
         }}
+      />
+
+      <SourceSeenDrawer
+        open={seenDrawerSourceId !== null}
+        onClose={() => setSeenDrawerSourceId(null)}
+        sourceId={seenDrawerSourceId}
+        sourceName={sources.find((s) => s.id === seenDrawerSourceId)?.name}
       />
     </div>
   )

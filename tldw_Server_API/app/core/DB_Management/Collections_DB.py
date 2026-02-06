@@ -13,6 +13,7 @@ Notes:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -404,7 +405,7 @@ class CollectionsDatabase:
         if table not in _SQLITE_PRAGMA_TABLES:
             return set()
         try:
-            result = self.backend.execute(f"PRAGMA table_info({table})", tuple())
+            result = self.backend.execute(f"PRAGMA table_info({table})", ())
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.exception(
                 "collections_db: failed to read sqlite columns for table {}: {}",
@@ -423,7 +424,7 @@ class CollectionsDatabase:
         try:
             rows = self.backend.execute(
                 "SELECT id, settings_json FROM audiobook_projects WHERE project_id IS NULL OR project_id = ''",
-                tuple(),
+                (),
             ).rows
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("collections backfill: audiobook_projects.project_id fetch failed: %s", exc)
@@ -809,7 +810,7 @@ class CollectionsDatabase:
         if "metadata_json" not in output_template_columns:
             try:
                 # Attempt to add metadata_json if missing
-                self.backend.execute("ALTER TABLE output_templates ADD COLUMN metadata_json TEXT", tuple())
+                self.backend.execute("ALTER TABLE output_templates ADD COLUMN metadata_json TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: output_templates.metadata_json already exists or skipped")
@@ -822,7 +823,7 @@ class CollectionsDatabase:
                 deleted_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
                 self.backend.execute(
                     f"ALTER TABLE outputs ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
-                    tuple(),
+                    (),
                 )
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
@@ -831,7 +832,7 @@ class CollectionsDatabase:
                     raise
         if "deleted_at" not in output_columns:
             try:
-                self.backend.execute("ALTER TABLE outputs ADD COLUMN deleted_at TEXT", tuple())
+                self.backend.execute("ALTER TABLE outputs ADD COLUMN deleted_at TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: outputs.deleted_at already exists or skipped")
@@ -839,7 +840,7 @@ class CollectionsDatabase:
                     raise
         if "retention_until" not in output_columns:
             try:
-                self.backend.execute("ALTER TABLE outputs ADD COLUMN retention_until TEXT", tuple())
+                self.backend.execute("ALTER TABLE outputs ADD COLUMN retention_until TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: outputs.retention_until already exists or skipped")
@@ -847,21 +848,21 @@ class CollectionsDatabase:
                     raise
         if "workspace_tag" not in output_columns:
             try:
-                self.backend.execute("ALTER TABLE outputs ADD COLUMN workspace_tag TEXT", tuple())
+                self.backend.execute("ALTER TABLE outputs ADD COLUMN workspace_tag TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: outputs.workspace_tag already exists or skipped")
                 else:
                     raise
         try:
-            self.backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0", tuple())
+            self.backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0", ())
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             if _is_backfill_noop_error(exc):
                 logger.debug("collections backfill: outputs unique index already exists or skipped")
             else:
                 raise
         try:
-            self.backend.execute("CREATE INDEX IF NOT EXISTS idx_outputs_workspace_tag ON outputs(workspace_tag)", tuple())
+            self.backend.execute("CREATE INDEX IF NOT EXISTS idx_outputs_workspace_tag ON outputs(workspace_tag)", ())
         except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             if _is_backfill_noop_error(exc):
                 logger.debug("collections backfill: outputs workspace_tag index already exists or skipped")
@@ -874,7 +875,7 @@ class CollectionsDatabase:
                 enabled_default = "TRUE" if self.backend.backend_type == BackendType.POSTGRESQL else "1"
                 self.backend.execute(
                     f"ALTER TABLE reading_digest_schedules ADD COLUMN enabled {enabled_type} NOT NULL DEFAULT {enabled_default}",
-                    tuple(),
+                    (),
                 )
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
@@ -887,7 +888,7 @@ class CollectionsDatabase:
                 online_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
                 self.backend.execute(
                     f"ALTER TABLE reading_digest_schedules ADD COLUMN require_online {online_type} NOT NULL DEFAULT {online_default}",
-                    tuple(),
+                    (),
                 )
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
@@ -896,7 +897,7 @@ class CollectionsDatabase:
                     raise
         if "filters_json" not in digest_columns:
             try:
-                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN filters_json TEXT", tuple())
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN filters_json TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.filters_json already exists or skipped")
@@ -905,7 +906,7 @@ class CollectionsDatabase:
         if "template_id" not in digest_columns:
             try:
                 template_id_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
-                self.backend.execute(f"ALTER TABLE reading_digest_schedules ADD COLUMN template_id {template_id_type}", tuple())
+                self.backend.execute(f"ALTER TABLE reading_digest_schedules ADD COLUMN template_id {template_id_type}", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.template_id already exists or skipped")
@@ -913,7 +914,7 @@ class CollectionsDatabase:
                     raise
         if "template_name" not in digest_columns:
             try:
-                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN template_name TEXT", tuple())
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN template_name TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.template_name already exists or skipped")
@@ -921,7 +922,7 @@ class CollectionsDatabase:
                     raise
         if "format" not in digest_columns:
             try:
-                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN format TEXT", tuple())
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN format TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.format already exists or skipped")
@@ -929,7 +930,7 @@ class CollectionsDatabase:
                     raise
         if "retention_days" not in digest_columns:
             try:
-                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN retention_days INTEGER", tuple())
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN retention_days INTEGER", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.retention_days already exists or skipped")
@@ -937,7 +938,7 @@ class CollectionsDatabase:
                     raise
         if "last_run_at" not in digest_columns:
             try:
-                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_run_at TEXT", tuple())
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_run_at TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.last_run_at already exists or skipped")
@@ -945,7 +946,7 @@ class CollectionsDatabase:
                     raise
         if "next_run_at" not in digest_columns:
             try:
-                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN next_run_at TEXT", tuple())
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN next_run_at TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.next_run_at already exists or skipped")
@@ -953,7 +954,7 @@ class CollectionsDatabase:
                     raise
         if "last_status" not in digest_columns:
             try:
-                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_status TEXT", tuple())
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_status TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.last_status already exists or skipped")
@@ -966,7 +967,7 @@ class CollectionsDatabase:
                 deleted_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
                 self.backend.execute(
                     f"ALTER TABLE file_artifacts ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
-                    tuple(),
+                    (),
                 )
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
@@ -975,7 +976,7 @@ class CollectionsDatabase:
                     raise
         if "deleted_at" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN deleted_at TEXT", tuple())
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN deleted_at TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.deleted_at already exists or skipped")
@@ -983,7 +984,7 @@ class CollectionsDatabase:
                     raise
         if "retention_until" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN retention_until TEXT", tuple())
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN retention_until TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.retention_until already exists or skipped")
@@ -991,7 +992,7 @@ class CollectionsDatabase:
                     raise
         if "export_status" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_status TEXT NOT NULL DEFAULT 'none'", tuple())
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_status TEXT NOT NULL DEFAULT 'none'", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_status already exists or skipped")
@@ -999,7 +1000,7 @@ class CollectionsDatabase:
                     raise
         if "export_format" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_format TEXT", tuple())
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_format TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_format already exists or skipped")
@@ -1007,7 +1008,7 @@ class CollectionsDatabase:
                     raise
         if "export_storage_path" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_storage_path TEXT", tuple())
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_storage_path TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_storage_path already exists or skipped")
@@ -1016,7 +1017,7 @@ class CollectionsDatabase:
         if "export_bytes" not in file_artifact_columns:
             try:
                 export_bytes_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
-                self.backend.execute(f"ALTER TABLE file_artifacts ADD COLUMN export_bytes {export_bytes_type}", tuple())
+                self.backend.execute(f"ALTER TABLE file_artifacts ADD COLUMN export_bytes {export_bytes_type}", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_bytes already exists or skipped")
@@ -1024,7 +1025,7 @@ class CollectionsDatabase:
                     raise
         if "export_content_type" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_content_type TEXT", tuple())
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_content_type TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_content_type already exists or skipped")
@@ -1032,7 +1033,7 @@ class CollectionsDatabase:
                     raise
         if "export_job_id" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_job_id TEXT", tuple())
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_job_id TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_job_id already exists or skipped")
@@ -1040,7 +1041,7 @@ class CollectionsDatabase:
                     raise
         if "export_expires_at" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_expires_at TEXT", tuple())
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_expires_at TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_expires_at already exists or skipped")
@@ -1048,7 +1049,7 @@ class CollectionsDatabase:
                     raise
         if "export_consumed_at" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_consumed_at TEXT", tuple())
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_consumed_at TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_consumed_at already exists or skipped")
@@ -1057,7 +1058,7 @@ class CollectionsDatabase:
         # Audiobook projects backfills
         if self.backend.backend_type == BackendType.POSTGRESQL:
             try:
-                self.backend.execute("ALTER TABLE audiobook_projects ADD COLUMN IF NOT EXISTS project_id TEXT", tuple())
+                self.backend.execute("ALTER TABLE audiobook_projects ADD COLUMN IF NOT EXISTS project_id TEXT", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: audiobook_projects.project_id already exists or skipped")
@@ -1066,7 +1067,7 @@ class CollectionsDatabase:
             try:
                 self.backend.execute(
                     "CREATE INDEX IF NOT EXISTS idx_audiobook_projects_project_id ON audiobook_projects(user_id, project_id)",
-                    tuple(),
+                    (),
                 )
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
@@ -1076,7 +1077,7 @@ class CollectionsDatabase:
         else:
             if "project_id" not in audiobook_project_columns:
                 try:
-                    self.backend.execute("ALTER TABLE audiobook_projects ADD COLUMN project_id TEXT", tuple())
+                    self.backend.execute("ALTER TABLE audiobook_projects ADD COLUMN project_id TEXT", ())
                 except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                     if _is_backfill_noop_error(exc):
                         logger.debug("collections backfill: audiobook_projects.project_id already exists or skipped")
@@ -1085,7 +1086,7 @@ class CollectionsDatabase:
             try:
                 self.backend.execute(
                     "CREATE INDEX IF NOT EXISTS idx_audiobook_projects_project_id ON audiobook_projects(user_id, project_id)",
-                    tuple(),
+                    (),
                 )
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
@@ -1227,7 +1228,7 @@ class CollectionsDatabase:
             if column in content_columns:
                 continue
             try:
-                self.backend.execute(f"ALTER TABLE content_items ADD COLUMN {column} {col_type}", tuple())
+                self.backend.execute(f"ALTER TABLE content_items ADD COLUMN {column} {col_type}", ())
             except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: content_items.%s already exists or skipped", column)
@@ -1918,10 +1919,7 @@ class CollectionsDatabase:
                 f"UPDATE content_items SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
                 params,
             )
-            if prev_hash == content_hash or (prev_hash is None and content_hash is None):
-                content_changed = False
-            else:
-                content_changed = True
+            content_changed = not (prev_hash == content_hash or prev_hash is None and content_hash is None)
 
         if tags is not None:
             tag_list = list(tags)
@@ -1933,7 +1931,7 @@ class CollectionsDatabase:
             self._replace_item_tags(item_id, tag_ids)
 
         row = self.get_content_item(item_id)
-        try:
+        with contextlib.suppress(_COLLECTIONS_NONCRITICAL_EXCEPTIONS):
             self._update_content_fts_entry(
                 item_id,
                 title=row.title,
@@ -1942,8 +1940,6 @@ class CollectionsDatabase:
                 tags=row.tags,
                 metadata_json=row.metadata_json,
             )
-        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
-            pass
         row.is_new = created
         row.content_changed = content_changed
         return row
@@ -2006,10 +2002,7 @@ class CollectionsDatabase:
 
         status_filters: list[str] = []
         if status:
-            if isinstance(status, str):
-                status_filters = [status.lower()]
-            else:
-                status_filters = [str(s).lower() for s in status if s]
+            status_filters = [status.lower()] if isinstance(status, str) else [str(s).lower() for s in status if s]
         if status_filters:
             placeholders = ",".join("?" for _ in status_filters)
             where.append(f"LOWER(ci.status) IN ({placeholders})")
@@ -2064,10 +2057,7 @@ class CollectionsDatabase:
             total = int(self.backend.execute(count_sql, tuple(clause_params)).scalar or 0)
 
             resolved_limit = limit if isinstance(limit, int) and limit > 0 else size
-            if isinstance(offset, int) and offset >= 0:
-                resolved_offset = offset
-            else:
-                resolved_offset = max(0, (page - 1) * size)
+            resolved_offset = offset if isinstance(offset, int) and offset >= 0 else max(0, (page - 1) * size)
 
             sort_key = (sort or "").strip().lower()
             order_by = "ci.updated_at DESC, ci.id DESC"
@@ -2228,10 +2218,8 @@ class CollectionsDatabase:
             "DELETE FROM content_items WHERE id = ? AND user_id = ?",
             (item_id, self.user_id),
         )
-        try:
+        with contextlib.suppress(_COLLECTIONS_NONCRITICAL_EXCEPTIONS):
             self._delete_content_fts_entry(item_id)
-        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
-            pass
 
     # ------------------------
     # Output Templates API
@@ -2850,7 +2838,7 @@ class CollectionsDatabase:
         except (TypeError, ValueError):
             logger.warning("audiobook_quota: invalid user id for recompute: %s", self.user_id)
             return 0
-        outputs_dir = DatabasePaths.get_user_outputs_dir(user_int)
+        DatabasePaths.get_user_outputs_dir(user_int)
         total_bytes = 0
         offset = 0
         limit = 200
@@ -3348,7 +3336,7 @@ class CollectionsDatabase:
             "SELECT * FROM reading_digest_schedules "
             f"WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         )
-        rows = self.backend.execute(q, tuple([*params, limit, offset])).rows
+        rows = self.backend.execute(q, (*params, limit, offset)).rows
         return [self._reading_digest_row_from_db(row) for row in rows], total
 
     def set_reading_digest_history(

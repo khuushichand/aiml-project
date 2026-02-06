@@ -243,10 +243,7 @@ class EvidenceChainBuilder:
         chains = self._build_chains_from_nodes(query, all_nodes, claims)
 
         # Compute overall confidence
-        if chains:
-            overall_confidence = sum(c.chain_confidence for c in chains) / len(chains)
-        else:
-            overall_confidence = 0.0
+        overall_confidence = sum(c.chain_confidence for c in chains) / len(chains) if chains else 0.0
 
         # Detect multi-hop reasoning
         multi_hop = any(c.hop_count > 1 for c in chains)
@@ -463,9 +460,9 @@ class EvidenceChainBuilder:
         # Also create an overall chain if multiple claims share evidence
         shared_nodes = [n for n in nodes if len(n.supports) > 1]
         if shared_nodes:
-            all_claim_ids = list(set(
+            all_claim_ids = list({
                 cid for node in shared_nodes for cid in node.supports
-            ))
+            })
             overall_chain = EvidenceChain(
                 query=query,
                 nodes=shared_nodes[:self.max_chain_length],

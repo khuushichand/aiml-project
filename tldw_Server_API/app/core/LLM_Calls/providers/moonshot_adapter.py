@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterable
-from typing import Any, Union
+from typing import Any
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError, ChatProviderError
 from tldw_Server_API.app.core.config import load_and_log_configs
@@ -43,9 +44,9 @@ def _moonshot_request(
     presence_penalty: float | None = None,
     response_format: dict[str, str] | None = None,
     seed: int | None = None,
-    stop: Union[str, list[str]] | None = None,
+    stop: str | list[str] | None = None,
     tools: list[dict[str, Any]] | None = None,
-    tool_choice: Union[str, dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
     user: str | None = None,
     custom_prompt_arg: str | None = None,
     app_config: dict[str, Any] | None = None,
@@ -206,15 +207,11 @@ def _moonshot_request(
 
             def stream_generator():
                 try:
-                    for chunk in iter_sse_lines_requests(response, decode_unicode=True, provider="moonshot"):
-                        yield chunk
-                    for tail in finalize_stream(response, done_already=False):
-                        yield tail
+                    yield from iter_sse_lines_requests(response, decode_unicode=True, provider="moonshot")
+                    yield from finalize_stream(response, done_already=False)
                 finally:
-                    try:
+                    with contextlib.suppress(Exception):
                         session.close()
-                    except Exception:
-                        pass
 
             return stream_generator()
 
@@ -233,17 +230,13 @@ def _moonshot_request(
             try:
                 response_data = response.json()
             finally:
-                try:
+                with contextlib.suppress(Exception):
                     response.close()
-                except Exception:
-                    pass
             logging.debug("Moonshot: Non-streaming request successful.")
             return response_data
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 session.close()
-            except Exception:
-                pass
 
     except Exception as e:
         if is_http_status_error(e):

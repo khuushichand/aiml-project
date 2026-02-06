@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import threading
 import time
@@ -98,10 +99,8 @@ class ClaimsRebuildService:
         for _ in self._threads:
             self._queue.put_nowait(ClaimsRebuildTask(media_id=-1, db_path=""))
         for t in self._threads:
-            try:
+            with contextlib.suppress(_CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS):
                 t.join(timeout=1.0)
-            except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS:
-                pass
         self._threads.clear()
         self._stop.clear()
         stats = self.get_stats()
@@ -168,10 +167,8 @@ class ClaimsRebuildService:
         except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Claims rebuild health persistence failed: %s", exc)
         finally:
-            try:
+            with contextlib.suppress(_CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS):
                 db.close_connection()
-            except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS:
-                pass
 
     def _worker_loop(self) -> None:
         while not self._stop.is_set():
@@ -257,10 +254,8 @@ class ClaimsRebuildService:
             inserted = store_claims(db, media_id=task.media_id, chunk_texts_by_index=chunk_text_map, claims=claims)
             logger.info(f"Claims rebuild: media_id={task.media_id} deleted={deleted} inserted={inserted}")
         finally:
-            try:
+            with contextlib.suppress(_CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS):
                 db.close_connection()
-            except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS:
-                pass
 
     def get_stats(self) -> dict[str, int]:
         with self._stats_lock:

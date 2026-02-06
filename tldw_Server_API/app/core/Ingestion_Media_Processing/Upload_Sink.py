@@ -26,6 +26,7 @@ try:
     import yara  # type: ignore
 except ImportError:  # yara rules are optional; disable malware scanning if missing
     yara = None
+import contextlib
 import tarfile
 import zipfile
 
@@ -1037,16 +1038,12 @@ class FileValidator:
                         try:
                             t.decompose()
                         except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
-                            try:
+                            with contextlib.suppress(_UPLOAD_SINK_NONCRITICAL_EXCEPTIONS):
                                 t.extract()
-                            except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
-                                pass
                 # Remove HTML comments which may contain scripts
                 for c in soup.find_all(string=lambda s: isinstance(s, Comment)):
-                    try:
+                    with contextlib.suppress(_UPLOAD_SINK_NONCRITICAL_EXCEPTIONS):
                         c.extract()
-                    except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
-                        pass
                 preprocessed = str(soup)
             except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS:
                 try:

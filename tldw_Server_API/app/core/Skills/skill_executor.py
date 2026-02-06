@@ -173,10 +173,7 @@ class SkillExecutor:
         # Extract base tool names from patterns
         allowed_base_names = set()
         for tool_spec in allowed_tools:
-            if "(" in tool_spec:
-                base_name = tool_spec.split("(")[0].strip()
-            else:
-                base_name = tool_spec.strip()
+            base_name = tool_spec.split("(")[0].strip() if "(" in tool_spec else tool_spec.strip()
             allowed_base_names.add(base_name)
 
         # Filter tools

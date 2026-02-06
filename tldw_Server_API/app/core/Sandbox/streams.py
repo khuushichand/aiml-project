@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import threading
@@ -237,10 +238,8 @@ class RunStreamHub:
             q.put_nowait(item)
         except asyncio.QueueFull:
             # Drop oldest by draining one, then put
-            try:
+            with contextlib.suppress(_SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS):
                 _ = q.get_nowait()
-            except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
-                pass
             # Metrics: queue overflow/drop
             try:
                 from tldw_Server_API.app.core.Metrics import increment_counter
@@ -250,10 +249,8 @@ class RunStreamHub:
                 )
             except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                 pass
-            try:
+            with contextlib.suppress(_SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS):
                 q.put_nowait(item)
-            except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
-                pass
 
     def publish_event(self, run_id: str, event: str, data: dict | None = None) -> None:
         # Deduplicate final end event to avoid double-emission from runner and service
@@ -523,10 +520,8 @@ class RunStreamHub:
             # Clear sequence counter
             self._seq.pop(run_id, None)
             # Drop stdin queues and state
-            try:
+            with contextlib.suppress(_SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS):
                 self._stdin_queues.pop(run_id, None)
-            except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
-                pass
 
     # -----------------
     # Redis fan-out (optional)

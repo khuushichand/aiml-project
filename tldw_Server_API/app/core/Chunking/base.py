@@ -259,10 +259,7 @@ class BaseChunkingStrategy(ABC):
             if chunk_start == -1:
                 # Backtrack up to one chunk length to handle non-char overlap units
                 try:
-                    if chunk:
-                        backtrack = min(current_pos, len(chunk))
-                    else:
-                        backtrack = 0
+                    backtrack = min(current_pos, len(chunk)) if chunk else 0
                 except Exception:
                     backtrack = 0
                 if backtrack > 0:
@@ -369,8 +366,7 @@ class BaseChunkingStrategy(ABC):
             Individual text chunks
         """
         chunks = self.chunk(text, max_size, overlap, **options)
-        for chunk in chunks:
-            yield chunk
+        yield from chunks
 
 
 class ChunkerConfig:

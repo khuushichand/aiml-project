@@ -148,11 +148,10 @@ class CircuitBreaker:
 
     def _update_state(self):
         """Update circuit state based on current conditions"""
-        if self._state == CircuitState.OPEN:
-            if self._last_failure_time and \
+        if self._state == CircuitState.OPEN and self._last_failure_time and \
                time.time() - self._last_failure_time >= self.recovery_timeout:
-                # Enough time has passed, try half-open
-                self._transition_to_half_open()
+            # Enough time has passed, try half-open
+            self._transition_to_half_open()
 
     def _transition_to_closed(self):
         """Transition to closed state"""
@@ -321,9 +320,8 @@ class CircuitBreaker:
             if self._state == CircuitState.HALF_OPEN:
                 # Single failure in half-open reopens circuit
                 self._transition_to_open("half_open_failure")
-            elif self._state == CircuitState.CLOSED:
-                if self._failure_count >= self.failure_threshold:
-                    self._transition_to_open("failure_threshold")
+            elif self._state == CircuitState.CLOSED and self._failure_count >= self.failure_threshold:
+                self._transition_to_open("failure_threshold")
 
     def reset(self):
         """Manually reset circuit breaker to closed state"""

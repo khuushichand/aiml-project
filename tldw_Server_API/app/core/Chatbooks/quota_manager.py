@@ -255,7 +255,7 @@ class QuotaManager:
         # Format limits for display (handle unlimited sentinel)
         exports_limit = self.quotas['max_exports_per_day']
         imports_limit = self.quotas['max_imports_per_day']
-        chatbooks_limit = self.quotas.get('max_chatbooks', 50)
+        self.quotas.get('max_chatbooks', 50)
 
         return {
             'storage': {

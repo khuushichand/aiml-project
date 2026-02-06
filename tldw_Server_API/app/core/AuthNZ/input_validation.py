@@ -265,11 +265,7 @@ class InputValidator:
         username_chars = set(username)
 
         # Check for high-risk pairs - if both characters from a pair are present
-        for char1, char2 in high_risk_pairs:
-            if char1 in username_chars and char2 in username_chars:
-                return True
-
-        return False
+        return any(char1 in username_chars and char2 in username_chars for char1, char2 in high_risk_pairs)
 
     def validate_registration_code(self, code: str) -> tuple[bool, Optional[str]]:
         """

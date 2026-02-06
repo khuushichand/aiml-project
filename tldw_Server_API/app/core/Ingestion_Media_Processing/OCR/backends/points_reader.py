@@ -191,14 +191,8 @@ def _load_transformers():
         model_path = os.getenv("POINTS_MODEL_PATH", "tencent/POINTS-Reader")
         # device and dtype selection
         device_env = os.getenv("POINTS_DEVICE")
-        if device_env:
-            device_map = device_env
-        else:
-            device_map = "auto"
-        if torch.cuda.is_available():
-            dtype = torch.float16
-        else:
-            dtype = torch.float32
+        device_map = device_env or "auto"
+        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
         _TF_MODEL = AutoModelForCausalLM.from_pretrained(
             model_path,

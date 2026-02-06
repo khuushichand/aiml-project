@@ -6,6 +6,7 @@ Uses the project's AuthNZ roles/permissions tables instead of in-memory roles.
 
 from __future__ import annotations
 
+import contextlib
 from functools import lru_cache
 
 from loguru import logger
@@ -207,7 +208,5 @@ def reset_rbac_policy() -> None:
     """Reset cached RBAC policy (used in tests when DB/config changes)."""
     global _authnz_rbac
     _authnz_rbac = None
-    try:
+    with contextlib.suppress(Exception):
         _map_to_permission.cache_clear()
-    except Exception:
-        pass

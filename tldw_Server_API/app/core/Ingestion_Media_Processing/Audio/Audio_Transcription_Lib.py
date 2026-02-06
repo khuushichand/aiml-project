@@ -55,9 +55,12 @@ except ImportError:
     DIARIZATION_AVAILABLE = False
     DiarizationService = None
     DiarizationError = Exception  # Fallback to base Exception
-    load_diarization_config = lambda: {}  # type: ignore[assignment]
+    def load_diarization_config():
+        return {}  # type: ignore[assignment]
 #
 # Import Local
+import contextlib
+
 from tldw_Server_API.app.core.config import (
     get_stt_config,
     load_and_log_configs,
@@ -447,10 +450,7 @@ def _resolve_whisper_download_root(download_root: Optional[Union[str, Path]]) ->
     base_root = WHISPER_MODEL_BASE_DIR
     root = Path(download_root).expanduser() if download_root else base_root
 
-    if not root.is_absolute():
-        root = (base_root / root).resolve(strict=False)
-    else:
-        root = root.resolve(strict=False)
+    root = (base_root / root).resolve(strict=False) if not root.is_absolute() else root.resolve(strict=False)
 
     safe_root = resolve_safe_local_path(root, base_root)
     if safe_root is None:
@@ -723,9 +723,6 @@ def perform_transcription(
         - `(audio_file_path, None)`: If conversion succeeds but transcription fails,
           or if diarization is attempted and fails (as it's a placeholder).
     """
-    local_media_path_to_convert = None
-    temp_dir_manager = None
-    downloaded_file_path = None  # Track the specific downloaded file
     audio_file_path = None  # Track generated WAV path even if conversion fails early
     try:
         logging.info(f"Initiating transcription process for: {video_path}")
@@ -1459,10 +1456,7 @@ def strip_whisper_metadata_header(segments):
         The same segments object that was passed in (mutated if a header was removed).
     """
     try:
-        if isinstance(segments, dict):
-            seg_list = segments.get("segments") or []
-        else:
-            seg_list = segments
+        seg_list = segments.get("segments") or [] if isinstance(segments, dict) else segments
 
         if not seg_list:
             return segments
@@ -2519,10 +2513,7 @@ def create_segments_from_text(text: str, audio_duration: float = None, segmentat
         if audio_duration:
             # Calculate time per character for even distribution
             total_chars = sum(len(s) for s in sentences)
-            if total_chars > 0:
-                time_per_char = audio_duration / total_chars
-            else:
-                time_per_char = 0
+            time_per_char = audio_duration / total_chars if total_chars > 0 else 0
 
             current_time = 0.0
             for sentence in sentences:
@@ -3143,7 +3134,7 @@ def speech_to_text(
             out_file = cache_dir / f"{file_path.stem}-whisper_model-{sanitized_whisper_model_name}.segments.json"
             prettified_out_file = cache_dir / f"{file_path.stem}-whisper_model-{sanitized_whisper_model_name}.segments_pretty.json"
 
-        options = dict(beam_size=5, best_of=5, vad_filter=vad_filter)  # Simplified beam options
+        options = {'beam_size': 5, 'best_of': 5, 'vad_filter': vad_filter}  # Simplified beam options
         if selected_source_lang:
             options["language"] = selected_source_lang
         if word_timestamps:
@@ -3162,10 +3153,7 @@ def speech_to_text(
             if _init_prompt:
                 _init_prompt = str(_init_prompt).strip()
                 if _init_prompt:
-                    if combined_prompt:
-                        combined_prompt = f"{_init_prompt}\n{combined_prompt}"
-                    else:
-                        combined_prompt = _init_prompt
+                    combined_prompt = f"{_init_prompt}\n{combined_prompt}" if combined_prompt else _init_prompt
         except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as _cv_err:
             logging.debug(f"Custom vocab initial_prompt injection skipped: {_cv_err}")
 
@@ -3307,10 +3295,8 @@ def _check_cancel(cancel_check: Optional[Callable[[], bool]], *, label: str) -> 
             except RuntimeError:
                 loop = None
             if loop is not None and loop.is_running():
-                try:
+                with contextlib.suppress(_AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS):
                     should_cancel.close()
-                except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS:
-                    pass
                 raise CancelCheckError(
                     "_check_cancel received an awaitable cancel_check in the cancel_check handling branch "
                     "while an event loop is running; provide a synchronous cancel_check or update the API "
@@ -3603,8 +3589,7 @@ def convert_to_wav(
             subprocess.run(
                 [ffmpeg_cmd, "-version"],
                 check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 stdin=subprocess.DEVNULL,
             )
             logging.debug(f"Confirmed ffmpeg command '{ffmpeg_cmd}' is available.")
@@ -3778,8 +3763,7 @@ def convert_to_wav(
                 error_details = result.stderr or result.stdout or "No output captured"
                 # Clean up potentially corrupted output file
                 if out_path.exists():
-                    try: out_path.unlink()
-                    except OSError: pass
+                    with contextlib.suppress(OSError): out_path.unlink()
                 raise ConversionError(f"FFmpeg conversion failed (code {result.returncode}) for '{input_path.name}'. Error: {error_details.strip()}")
         else:
             logging.info(f"Conversion to WAV completed successfully: {out_path}")
@@ -3789,10 +3773,8 @@ def convert_to_wav(
 
     except TranscriptionCancelled:
          if out_path.exists():
-             try:
+             with contextlib.suppress(OSError):
                  out_path.unlink()
-             except OSError:
-                 pass
          raise
     except ConversionError:
          # Re-raise ConversionError explicitly to ensure it's caught
@@ -3805,8 +3787,7 @@ def convert_to_wav(
         log_counter("convert_to_wav_error", labels={"file_path": video_file_path, "error": str(e)})
         # Clean up potentially corrupted output file
         if out_path.exists():
-             try: out_path.unlink()
-             except OSError: pass
+             with contextlib.suppress(OSError): out_path.unlink()
         raise ConversionError(error_msg) from e # Wrap other errors in ConversionError
 
     conversion_time = time.time() - start_time

@@ -142,13 +142,12 @@ def normalize_output_storage_filename(
 
     storage_path_str = str(storage_path)
 
-    if not check_relative_containment and isinstance(storage_path, str):
-        if (
-            _SAFE_OUTPUT_NAME_RE.match(storage_path)
-            and os.sep not in storage_path
-            and (os.altsep is None or os.altsep not in storage_path)
-        ):
-            return storage_path
+    if not check_relative_containment and isinstance(storage_path, str) and (
+        _SAFE_OUTPUT_NAME_RE.match(storage_path)
+        and os.sep not in storage_path
+        and (os.altsep is None or os.altsep not in storage_path)
+    ):
+        return storage_path
 
     candidate = Path(storage_path_str)
     if expand_user:
@@ -558,7 +557,7 @@ class DatabasePaths:
             True if all directories exist or were created successfully
         """
         try:
-            paths = DatabasePaths.get_all_user_db_paths(user_id)
+            DatabasePaths.get_all_user_db_paths(user_id)
             logger.info(f"Database structure validated for user {user_id}")
             return True
         except Exception as e:

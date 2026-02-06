@@ -562,7 +562,7 @@ class ChromaDBOptimizer:
                 metadata_fields: dict[str, int] = defaultdict(int)
                 for metadata in sample["metadatas"]:
                     if metadata:
-                        for key in metadata.keys():
+                        for key in metadata:
                             metadata_fields[key] += 1
 
                 # Log most common fields for optimization hints

@@ -2,6 +2,7 @@
 # Description: TTS history endpoints.
 import base64
 import binascii
+import contextlib
 import json
 import time
 from typing import Any, Optional
@@ -181,7 +182,7 @@ async def list_tts_history(
         limit=limit + 1,
         offset=offset,
     )
-    try:
+    with contextlib.suppress(_TTS_HISTORY_NONCRITICAL_EXCEPTIONS):
         log_counter(
             "tts_history_reads_total",
             labels={
@@ -190,17 +191,13 @@ async def list_tts_history(
                 "mode": "list",
             },
         )
-    except _TTS_HISTORY_NONCRITICAL_EXCEPTIONS:
-        pass
     if list_start is not None:
-        try:
+        with contextlib.suppress(_TTS_HISTORY_NONCRITICAL_EXCEPTIONS):
             log_histogram(
                 "tts_history_read_latency_ms",
                 value=max(0.0, (time.monotonic() - list_start) * 1000),
                 labels={"mode": "list"},
             )
-        except _TTS_HISTORY_NONCRITICAL_EXCEPTIONS:
-            pass
 
     has_more = len(rows) > limit
     if has_more:
@@ -260,14 +257,12 @@ async def list_tts_history(
             created_to=to,
         )
         if total_start is not None:
-            try:
+            with contextlib.suppress(_TTS_HISTORY_NONCRITICAL_EXCEPTIONS):
                 log_histogram(
                     "tts_history_read_latency_ms",
                     value=max(0.0, (time.monotonic() - total_start) * 1000),
                     labels={"mode": "count"},
                 )
-            except _TTS_HISTORY_NONCRITICAL_EXCEPTIONS:
-                pass
 
     return TTSHistoryListResponse(
         items=items,
@@ -302,22 +297,18 @@ async def get_tts_history_entry(
         history_id=int(history_id),
         include_deleted=False,
     )
-    try:
+    with contextlib.suppress(_TTS_HISTORY_NONCRITICAL_EXCEPTIONS):
         log_counter(
             "tts_history_reads_total",
             labels={"mode": "detail"},
         )
-    except _TTS_HISTORY_NONCRITICAL_EXCEPTIONS:
-        pass
     if detail_start is not None:
-        try:
+        with contextlib.suppress(_TTS_HISTORY_NONCRITICAL_EXCEPTIONS):
             log_histogram(
                 "tts_history_read_latency_ms",
                 value=max(0.0, (time.monotonic() - detail_start) * 1000),
                 labels={"mode": "detail"},
             )
-        except _TTS_HISTORY_NONCRITICAL_EXCEPTIONS:
-            pass
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="History entry not found")
 

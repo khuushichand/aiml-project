@@ -352,10 +352,7 @@ class RegistrationService:
 
                 is_verified = not self.require_code
                 if created_by is not None:
-                    if is_verified_override is not None:
-                        is_verified = bool(is_verified_override)
-                    else:
-                        is_verified = True
+                    is_verified = bool(is_verified_override) if is_verified_override is not None else True
 
                 if hasattr(conn, 'fetchval'):
                     # PostgreSQL

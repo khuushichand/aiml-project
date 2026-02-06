@@ -6,6 +6,7 @@ diff detection, document operations, sandbox execution, and scheduling.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import difflib
 import json
@@ -404,13 +405,11 @@ async def run_embed_adapter(config: dict[str, Any], context: dict[str, Any]) -> 
 
     ids = [f"wf_{_uuid.uuid4().hex}" for _ in texts]
     metadatas = []
-    for t in texts:
+    for _t in texts:
         m = {"run_id": context.get("run_id"), "step_run_id": context.get("step_run_id")}
         if md_global:
-            try:
-                m.update({k: v for k, v in md_global.items()})
-            except Exception:
-                pass
+            with contextlib.suppress(Exception):
+                m.update(dict(md_global.items()))
         metadatas.append(m)
 
     # Upsert into per-user collection
@@ -661,10 +660,8 @@ async def run_screenshot_capture_adapter(config: dict[str, Any], context: dict[s
             browser = await p.chromium.launch()
             page = await browser.new_page(viewport={"width": width, "height": height})
             await page.goto(url, wait_until="load", timeout=nav_timeout)
-            try:
+            with contextlib.suppress(Exception):
                 await page.wait_for_load_state("networkidle", timeout=5000)
-            except Exception:
-                pass
             await page.screenshot(path=str(screenshot_path), full_page=full_page, type=img_format)
             await browser.close()
 
@@ -737,10 +734,7 @@ async def run_schedule_workflow_adapter(config: dict[str, Any], context: dict[st
 
     try:
         # Calculate run time
-        if delay_seconds:
-            run_at = datetime.datetime.utcnow() + timedelta(seconds=int(delay_seconds))
-        else:
-            run_at = None
+        run_at = datetime.datetime.utcnow() + timedelta(seconds=int(delay_seconds)) if delay_seconds else None
 
         schedule_id = f"sched_{int(time.time() * 1000)}"
 

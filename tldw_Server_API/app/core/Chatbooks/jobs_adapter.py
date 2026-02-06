@@ -171,9 +171,7 @@ class ChatbooksJobsAdapter:
         if owner is not None and self._owner_user_id is not None and str(owner) != str(self._owner_user_id):
             return False
         cid = _job_id_from_row(job)
-        if cid and str(cid) == str(job_id):
-            return True
-        return False
+        return bool(cid and str(cid) == str(job_id))
 
 
 __all__ = ["ChatbooksJobsAdapter"]

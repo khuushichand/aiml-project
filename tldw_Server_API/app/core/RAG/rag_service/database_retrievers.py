@@ -7,6 +7,7 @@ including media database, notes, prompts, and character cards.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import sqlite3
@@ -979,10 +980,7 @@ class MediaDBRetriever(BaseRetriever):
                 # Merge kind filter with base_filter
                 f: Optional[dict[str, Any]]
                 if kind_filter:
-                    if base_filter:
-                        f = {"$and": [base_filter, {"kind": kind_filter}]}
-                    else:
-                        f = {"kind": kind_filter}
+                    f = {"$and": [base_filter, {"kind": kind_filter}]} if base_filter else {"kind": kind_filter}
                 else:
                     f = base_filter if base_filter else None
 
@@ -1020,7 +1018,7 @@ class MediaDBRetriever(BaseRetriever):
                 # Convert and return baseline
                 documents: list[Document] = []
                 allowed_media_ids = kwargs.get("allowed_media_ids")
-                allowed_set = set(int(x) for x in allowed_media_ids) if allowed_media_ids else None
+                allowed_set = {int(x) for x in allowed_media_ids} if allowed_media_ids else None
                 for result in base_results:
                     doc_media_id = result.metadata.get("media_id", result.id)
                     try:
@@ -1096,7 +1094,7 @@ class MediaDBRetriever(BaseRetriever):
                             )
 
                 allowed_media_ids = kwargs.get("allowed_media_ids")
-                allowed_set = set(int(x) for x in allowed_media_ids) if allowed_media_ids else None
+                allowed_set = {int(x) for x in allowed_media_ids} if allowed_media_ids else None
                 merged = list(doc_map.values())
                 if allowed_set is not None:
                     tmp = []
@@ -1154,7 +1152,7 @@ class MediaDBRetriever(BaseRetriever):
 
             # Apply allowed_media_ids filter
             allowed_media_ids = kwargs.get("allowed_media_ids")
-            allowed_set = set(int(x) for x in allowed_media_ids) if allowed_media_ids else None
+            allowed_set = {int(x) for x in allowed_media_ids} if allowed_media_ids else None
             if allowed_set is not None:
                 filtered: list[Document] = []
                 for d in chunk_docs:
@@ -1342,7 +1340,7 @@ class NotesDBRetriever(BaseRetriever):
             # Optional restriction to specific note IDs
             allowed_note_ids = kwargs.get("allowed_note_ids")
             if allowed_note_ids and isinstance(allowed_note_ids, (list, tuple)):
-                allowed_set = set(str(x) for x in allowed_note_ids)
+                allowed_set = {str(x) for x in allowed_note_ids}
                 docs = [d for d in docs if str(d.id).replace("note_", "") in allowed_set]
             return docs
 
@@ -2224,10 +2222,8 @@ class MultiDatabaseRetriever:
             for retr in list(self.retrievers.values()):
                 close_fn = getattr(retr, "close", None)
                 if callable(close_fn):
-                    try:
+                    with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                         close_fn()
-                    except (AttributeError, RuntimeError, TypeError, ValueError):
-                        pass
         finally:
             self.retrievers.clear()
 
@@ -2235,18 +2231,14 @@ class MultiDatabaseRetriever:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        try:
+        with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
             self.close()
-        except (AttributeError, RuntimeError, TypeError, ValueError):
-            pass
         # Do not suppress exceptions
         return False
 
     def __del__(self):
-        try:
+        with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
             self.close()
-        except (AttributeError, RuntimeError, TypeError, ValueError):
-            pass
 
     async def retrieve(
         self,
@@ -2466,7 +2458,7 @@ class MultiDatabaseRetriever:
                     getattr(existing, "score", 0.0)
                 ):
                     doc_map[doc.id] = doc
-        return sorted(list(doc_map.values()), key=lambda d: getattr(d, "score", 0.0), reverse=True)
+        return sorted(doc_map.values(), key=lambda d: getattr(d, "score", 0.0), reverse=True)
 
 class ClaimsRetriever(BaseRetriever):
     """Retriever for Claims table (ingestion-time factual statements)."""

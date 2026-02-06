@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -68,9 +69,7 @@ async def run_workflows_artifact_gc_worker(stop_event: asyncio.Event) -> None:
         except _GC_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Artifact GC loop error: {e}")
 
-        try:
+        with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(stop_event.wait(), timeout=interval)
-        except asyncio.TimeoutError:
-            pass
 
     logger.info("Workflows artifact GC worker stopped")

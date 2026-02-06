@@ -279,7 +279,7 @@ def load_config(path: Optional[str] = None) -> EmbeddingsConfig:
     provider_overrides: list[tuple[str, str, dict[str, Any]]] = []
     provider_overrides.extend(_provider_updates_from_config_txt())
     provider_overrides.extend(_provider_updates_from_env())
-    for source, name, updates in provider_overrides:
+    for _source, name, updates in provider_overrides:
         if isinstance(providers, list):
             _apply_provider_override(providers, name, updates)
 

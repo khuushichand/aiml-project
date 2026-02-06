@@ -2,6 +2,7 @@
 Database management commands for tldw Evaluations CLI.
 """
 
+import contextlib
 import sys
 from pathlib import Path
 
@@ -128,16 +129,12 @@ def cleanup_db(ctx, days, dry_run):
             # Cleanup unified audit logs by retention window
             svc = UnifiedAuditService()
             import asyncio as _asyncio
-            try:
+            with contextlib.suppress(RuntimeError):
                 _asyncio.run(svc.initialize())
-            except RuntimeError:
-                pass
             # Set retention_days temporarily and execute cleanup
             svc.retention_days = days
-            try:
+            with contextlib.suppress(RuntimeError):
                 _asyncio.run(svc.cleanup_old_logs())
-            except RuntimeError:
-                pass
             print_success(f"Unified audit cleanup completed for records older than {days} days")
 
     except Exception as e:

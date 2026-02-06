@@ -69,10 +69,7 @@ def _hf_trusts_remote_code(model_name: str, patterns: Optional[Iterable[Any]]) -
     if not pats:
         return False
     model_l = str(model_name).lower()
-    for pat in pats:
-        if fnmatch(model_name, pat) or fnmatch(model_l, str(pat).lower()):
-            return True
-    return False
+    return any(fnmatch(model_name, pat) or fnmatch(model_l, str(pat).lower()) for pat in pats)
 
 
 def _repo_root_dir() -> Path:
@@ -825,7 +822,6 @@ class Qwen3CausalLMReranker(BaseReranker):
     def _process_inputs(self, pairs: list[str]):
         tok = self.tokenizer
         model = self.model
-        torch = self._torch
 
         inputs = tok(
             pairs,

@@ -15,6 +15,7 @@ Notes:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -159,7 +160,7 @@ class ModerationService:
                 parser = load_comprehensive_config()
                 if parser and parser.has_section('Moderation'):
                     # Convert to plain dict
-                    mod_cfg = {k: v for k, v in parser.items('Moderation')}
+                    mod_cfg = dict(parser.items('Moderation'))
             except _MODERATION_NONCRITICAL_EXCEPTIONS:
                 mod_cfg = {}
 
@@ -198,18 +199,12 @@ class ModerationService:
         else:
             runtime_overrides_path = _anchor("tldw_Server_API/Config_Files/moderation_runtime_overrides.json")
         # Optional safety/perf overrides
-        try:
+        with contextlib.suppress(_MODERATION_NONCRITICAL_EXCEPTIONS):
             self._max_scan_chars = int(mod_cfg.get("max_scan_chars", self._max_scan_chars))
-        except _MODERATION_NONCRITICAL_EXCEPTIONS:
-            pass
-        try:
+        with contextlib.suppress(_MODERATION_NONCRITICAL_EXCEPTIONS):
             self._max_replacements_per_pattern = int(mod_cfg.get("max_replacements_per_pattern", self._max_replacements_per_pattern))
-        except _MODERATION_NONCRITICAL_EXCEPTIONS:
-            pass
-        try:
+        with contextlib.suppress(_MODERATION_NONCRITICAL_EXCEPTIONS):
             self._match_window_chars = int(mod_cfg.get("match_window_chars", self._match_window_chars))
-        except _MODERATION_NONCRITICAL_EXCEPTIONS:
-            pass
         # Optional debounce for blocklist writes (ms)
         try:
             if "blocklist_write_debounce_ms" in mod_cfg:
@@ -481,9 +476,7 @@ class ModerationService:
             return True
         if self._has_nested_quantifiers(expr):
             return True
-        if self._too_many_groups(expr):
-            return True
-        return False
+        return bool(self._too_many_groups(expr))
 
     def _load_user_overrides(self) -> dict[str, dict[str, object]]:
         overrides: dict[str, dict[str, object]] = {}
@@ -619,7 +612,7 @@ class ModerationService:
             if "categories_enabled" in self._runtime_override:
                 cats = self._runtime_override.get("categories_enabled")
                 if isinstance(cats, set):
-                    out["categories_enabled"] = sorted(list(cats))
+                    out["categories_enabled"] = sorted(cats)
                 elif isinstance(cats, list):
                     out["categories_enabled"] = cats
             with open(path, "w", encoding="utf-8") as f:
@@ -771,10 +764,7 @@ class ModerationService:
             if not match_span:
                 continue
             action = None
-            if isinstance(rule, PatternRule) and rule.action:
-                action = rule.action
-            else:
-                action = default_action
+            action = rule.action if isinstance(rule, PatternRule) and rule.action else default_action
             action = (action or "warn").lower()
             if action not in {"block", "redact", "warn"}:
                 action = "warn"
@@ -947,10 +937,7 @@ class ModerationService:
                 continue
             # Prefer rule action if specified, else global
             action = None
-            if isinstance(rule, PatternRule) and rule.action:
-                action = rule.action
-            else:
-                action = default_action
+            action = rule.action if isinstance(rule, PatternRule) and rule.action else default_action
             action = (action or 'warn').lower()
             if action not in {"block", "redact", "warn"}:
                 action = "warn"
@@ -1166,10 +1153,7 @@ class ModerationService:
                 if dirpath:
                     os.makedirs(dirpath, exist_ok=True)
                 # Normalize line endings; ensure trailing newline for POSIX friendliness
-                if lines:
-                    text = "\n".join(lines).rstrip("\n") + "\n"
-                else:
-                    text = ""
+                text = "\n".join(lines).rstrip("\n") + "\n" if lines else ""
                 tmp_path = None
                 try:
                     tmp_dir = dirpath if dirpath else None
@@ -1186,10 +1170,8 @@ class ModerationService:
                     os.replace(tmp_path, path)
                 finally:
                     if tmp_path and os.path.exists(tmp_path):
-                        try:
+                        with contextlib.suppress(_MODERATION_NONCRITICAL_EXCEPTIONS):
                             os.unlink(tmp_path)
-                        except _MODERATION_NONCRITICAL_EXCEPTIONS:
-                            pass
                 # Reload patterns (preserve built-in PII rules when enabled)
                 self._global_policy.block_patterns = self._build_block_patterns(path)
                 logger.info(f"Updated moderation blocklist at {path} ({len(lines)} lines)")
@@ -1302,7 +1284,7 @@ class ModerationService:
                 item.update({
                     "action": action,
                     "replacement": repl,
-                    "categories": sorted(list(cats)) if cats else [],
+                    "categories": sorted(cats) if cats else [],
                 })
                 if is_regex:
                     raw_pat, flags_part = regex_parts

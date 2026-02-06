@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import contextlib
 import json
 import time
 from collections import deque
@@ -142,10 +143,8 @@ class RequestQueue:
         # Wait for workers to finish
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
-        try:
+        with contextlib.suppress(_REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS):
             self._executor.shutdown(wait=True)
-        except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
-            pass
 
         logger.info("Stopped queue workers")
 
@@ -379,10 +378,8 @@ class RequestQueue:
                 except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
                     pass
                 # Signal completion
-                try:
+                with contextlib.suppress(_REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS):
                     await request.stream_channel.put(None)
-                except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
-                    pass
 
         def _pump_sync_iterator(sync_iter):
             def _put_with_backpressure(item: Any) -> bool:
@@ -397,10 +394,8 @@ class RequestQueue:
                         return True
                     except TimeoutError:
                         if request.future.cancelled() or loop.is_closed() or not self._running:
-                            try:
+                            with contextlib.suppress(_REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS):
                                 fut.cancel()
-                            except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
-                                pass
                             return False
                     except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS as ch_e:
                         logger.warning(f"Failed to enqueue stream chunk (sync) for {request.request_id}: {ch_e}")
@@ -415,10 +410,8 @@ class RequestQueue:
                         logger.warning(f"Failed to enqueue stream chunk (sync) for {request.request_id}: {ch_e}")
                         break
             finally:
-                try:
+                with contextlib.suppress(_REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS):
                     _put_with_backpressure(None)
-                except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
-                    pass
 
         # Run the processor to obtain the stream (potentially blocking)
         try:
@@ -687,15 +680,11 @@ class RateLimitedQueue(RequestQueue):
     async def _rollback_rate_limit(self, client_id: str, reservation_ts: float) -> None:
         """Rollback a previously reserved rate-limit slot."""
         async with self._rate_limit_lock:
-            try:
+            with contextlib.suppress(ValueError):
                 self.global_request_times.remove(reservation_ts)
-            except ValueError:
-                pass
             client_times = self.client_request_times.get(client_id, [])
-            try:
+            with contextlib.suppress(ValueError):
                 client_times.remove(reservation_ts)
-            except ValueError:
-                pass
             if client_times:
                 self.client_request_times[client_id] = client_times
             else:

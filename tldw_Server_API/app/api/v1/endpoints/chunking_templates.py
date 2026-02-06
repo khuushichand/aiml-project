@@ -3,6 +3,7 @@
 API endpoints for managing chunking templates.
 """
 
+import contextlib
 import json
 import os
 from typing import Any, Optional
@@ -193,10 +194,7 @@ async def list_templates(
             increment_counter("chunking_templates_fallback_list_total", labels={"mode": "fallback"})
             # Fallback: aggregate from in-memory store
             templates = []
-            if user_id is not None:
-                buckets = [_fb_bucket(user_id)]
-            else:
-                buckets = list(_FALLBACK_TEMPLATES.values())
+            buckets = [_fb_bucket(user_id)] if user_id is not None else list(_FALLBACK_TEMPLATES.values())
             for bucket in buckets:
                 for _, rec in bucket.items():
                     if tags and not any(t in (rec.get('tags') or []) for t in tags):
@@ -528,10 +526,8 @@ async def update_template(
                     updated = bucket[template_name]
                     break
 
-        try:
+        with contextlib.suppress(_CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS):
             increment_counter("chunking_templates_update_total", labels={"mode": "native" if _supports(db, 'update_chunking_template') else 'fallback', "success": str(bool(updated)).lower()})
-        except _CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS:
-            pass
         return ChunkingTemplateResponse(
             id=updated['id'],
             uuid=updated['uuid'],
@@ -650,10 +646,8 @@ async def delete_template(
             if existing.get('is_builtin'):
                 raise HTTPException(status_code=400, detail={"success": False, "error": "Cannot delete built-in templates", "error_code": "BUILTIN"})
             raise HTTPException(status_code=500, detail={"success": False, "error": "Failed to delete template", "error_code": "SERVER_ERROR"})
-        try:
+        with contextlib.suppress(_CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS):
             increment_counter("chunking_templates_delete_total", labels={"mode": "native" if _supports(db, 'delete_chunking_template') else 'fallback', "hard": str(bool(hard_delete)).lower(), "success": str(bool(success)).lower()})
-        except _CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS:
-            pass
 
     except HTTPException:
         raise
@@ -882,10 +876,8 @@ async def validate_template(
                     # Safety check (length + nested quantifier guard + compile test)
                     err = _rx_check(pat, max_len=256)
                     if err:
-                        try:
+                        with contextlib.suppress(_CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS):
                             increment_counter("chunking_templates_regex_reject_total", labels={"reason": "safety_check"})
-                        except _CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS:
-                            pass
                         errors.append(TemplateValidationError(
                             field=f'chunking.config.hierarchical_template.boundaries[{i}].pattern',
                             message=err
@@ -893,10 +885,8 @@ async def validate_template(
                     flags_str = str(rule.get('flags') or '').lower()
                     re_flags, ferr = _rx_flags(flags_str)
                     if ferr:
-                        try:
+                        with contextlib.suppress(_CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS):
                             increment_counter("chunking_templates_regex_reject_total", labels={"reason": "flags"})
-                        except _CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS:
-                            pass
                         errors.append(TemplateValidationError(
                             field=f'chunking.config.hierarchical_template.boundaries[{i}].flags',
                             message=ferr
@@ -941,10 +931,8 @@ async def validate_template(
                     continue
                 perr = _rx_check(pat, max_len=128)
                 if perr:
-                    try:
+                    with contextlib.suppress(_CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS):
                         increment_counter("chunking_templates_regex_reject_total", labels={"reason": "classifier"})
-                    except _CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS:
-                        pass
                     errors.append(TemplateValidationError(field=f'classifier.{key}', message=perr))
 
         # Validate preprocessing operations

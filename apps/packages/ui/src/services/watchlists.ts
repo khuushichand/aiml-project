@@ -11,6 +11,8 @@ import type {
   RunDetailResponse,
   ScrapedItem,
   ScrapedItemUpdate,
+  SourceSeenResetResponse,
+  SourceSeenStats,
   SourcesBulkCreateResponse,
   SourcesImportResponse,
   WatchlistClusterSubscription,
@@ -143,6 +145,28 @@ export const exportOpml = async (params?: {
   return bgRequest<string>({
     path: `/api/v1/watchlists/sources/export${qs}` as any,
     method: "GET"
+  })
+}
+
+export const getSourceSeenStats = async (
+  sourceId: number,
+  params?: { target_user_id?: number; keys_limit?: number }
+): Promise<SourceSeenStats> => {
+  const qs = buildQuery(params || {})
+  return bgRequest<SourceSeenStats>({
+    path: `/api/v1/watchlists/sources/${sourceId}/seen${qs}` as any,
+    method: "GET"
+  })
+}
+
+export const clearSourceSeen = async (
+  sourceId: number,
+  params?: { target_user_id?: number; clear_backoff?: boolean }
+): Promise<SourceSeenResetResponse> => {
+  const qs = buildQuery(params || {})
+  return bgRequest<SourceSeenResetResponse>({
+    path: `/api/v1/watchlists/sources/${sourceId}/seen${qs}` as any,
+    method: "DELETE"
   })
 }
 

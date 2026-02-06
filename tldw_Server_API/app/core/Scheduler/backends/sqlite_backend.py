@@ -624,7 +624,7 @@ class SQLiteBackend(QueueBackend):
 
     async def get_dead_letter_queue(self) -> list[Task]:
         """Get DLQ tasks"""
-        rows = await self.fetch("SELECT * FROM dead_letter_queue")
+        await self.fetch("SELECT * FROM dead_letter_queue")
         # Convert to tasks (simplified)
         return []  # TODO: Implement if needed
 

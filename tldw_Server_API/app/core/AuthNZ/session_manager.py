@@ -10,7 +10,7 @@ import json
 import os
 import stat
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -563,20 +563,14 @@ class SessionManager:
             # Release lock
             if lock_fd is not None:
                 if _HAS_FCNTL:
-                    try:
+                    with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                         fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                    except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
-                        pass
-                try:
+                with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                     os.close(lock_fd)
-                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
-                    pass
             # Clean up lock file (best effort)
             if not _HAS_FCNTL:
-                try:
+                with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                     lock_path.unlink(missing_ok=True)
-                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
-                    pass
 
     def _persist_session_key(self, key: bytes) -> bool:
         """Persist generated session key to disk for reuse across restarts."""
@@ -624,10 +618,8 @@ class SessionManager:
                     with os.fdopen(fd, "w", encoding="utf-8") as handle:
                         handle.write(key.decode("utf-8"))
                 except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
-                    try:
+                    with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                         os.close(fd)
-                    except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
-                        pass
                     raise
             except OSError as exc:
                 raise RuntimeError(f"Failed to open session encryption key file {path}: {exc}") from exc
@@ -658,10 +650,8 @@ class SessionManager:
                             "Expected 0o600 (owner read/write only)."
                         )
             except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
-                try:
+                with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                     path.unlink(missing_ok=True)
-                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
-                    pass
                 raise RuntimeError(f"Persisted session encryption key failed validation: {exc}") from exc
             self._persisted_key_path = path
             return True
@@ -685,10 +675,7 @@ class SessionManager:
         api_path: Optional[Path] = None
         # Resolve both paths safely
         try:
-            if self._persisted_key_path:
-                api_path = self._persisted_key_path
-            else:
-                api_path = self._resolve_api_key_path()
+            api_path = self._persisted_key_path or self._resolve_api_key_path()
         except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"failed to resolve persisted API key path: {e}")
             api_path = None
@@ -829,10 +816,8 @@ class SessionManager:
             # If source has a valid key, copy to dest
             if not self._is_valid_key_file(source_primary):
                 return
-            try:
+            with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                 dest_api.parent.mkdir(parents=True, exist_ok=True)
-            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
-                pass
             payload = source_primary.read_text(encoding="utf-8").strip()
 
             # Write atomically; if file exists but is invalid, replace it
@@ -846,10 +831,8 @@ class SessionManager:
                     tmp_path.replace(dest_api)
                 except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                     # If replace fails, try unlink + rename
-                    try:
+                    with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                         dest_api.unlink(missing_ok=True)
-                    except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
-                        pass
                     tmp_path.rename(dest_api)
             finally:
                 try:
@@ -1570,9 +1553,7 @@ class SessionManager:
             # Check database for revoked sessions
             db_pool = await self._ensure_db_pool()
             repo = AuthnzSessionsRepo(db_pool)
-            if await repo.has_revoked_session_for_token_hash_candidates(token_hashes):
-                return True
-            return False
+            return bool(await repo.has_revoked_session_for_token_hash_candidates(token_hashes))
 
         except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error checking token blacklist; treating token as revoked: {e}")
@@ -1645,10 +1626,7 @@ class SessionManager:
             }
 
             # Calculate TTL - ensure expires_at is timezone-aware for comparison
-            if expires_at.tzinfo is None:
-                expires_at_aware = expires_at.replace(tzinfo=timezone.utc)
-            else:
-                expires_at_aware = expires_at
+            expires_at_aware = expires_at.replace(tzinfo=timezone.utc) if expires_at.tzinfo is None else expires_at
             ttl = int((expires_at_aware - datetime.now(timezone.utc)).total_seconds())
             if ttl > 0:
                 # Cache session data
@@ -1860,10 +1838,8 @@ class SessionManager:
             refresh_exp = self._coerce_datetime(entry.get("refresh_expires_at"))
 
             if access_jti and access_exp:
-                try:
+                with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                     blacklist.hint_blacklisted(access_jti, access_exp)
-                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
-                    pass
                 try:
                     await blacklist.revoke_token(
                         jti=access_jti,
@@ -1878,10 +1854,8 @@ class SessionManager:
                     logger.debug(f"Failed to persist access-token blacklist entry {access_jti}: {exc}")
 
             if refresh_jti and refresh_exp:
-                try:
+                with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                     blacklist.hint_blacklisted(refresh_jti, refresh_exp)
-                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
-                    pass
                 try:
                     await blacklist.revoke_token(
                         jti=refresh_jti,

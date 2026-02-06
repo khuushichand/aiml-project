@@ -6,6 +6,7 @@
 #
 ########################################################################################################################
 
+import contextlib
 import os
 from pathlib import Path
 from typing import Any, Optional
@@ -120,10 +121,7 @@ class AuthDatabaseConfig:
 
         if base_scheme in {"sqlite", "file", ""}:
             combined = _combine_path()
-            if combined == ":memory:":
-                sqlite_path = ":memory:"
-            else:
-                sqlite_path = combined
+            sqlite_path = ":memory:" if combined == ":memory:" else combined
         else:
             # Fallback for unexpected schemes, treat as direct path
             sqlite_path = raw_url
@@ -244,10 +242,8 @@ class AuthDatabaseConfig:
                             exc_info=pool_exc,
                         )
         self._user_db = None
-        try:
+        with contextlib.suppress(Exception):
             delattr(self, "_initialized")
-        except Exception:
-            pass
 
     @staticmethod
     def _get_bool_env(key: str, default: bool) -> bool:

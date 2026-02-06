@@ -11,6 +11,7 @@ Handles:
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import sqlite3
@@ -184,10 +185,8 @@ class EvaluationManager:
                 "CREATE INDEX IF NOT EXISTS idx_metric ON evaluation_metrics(metric_name)",
                 "CREATE INDEX IF NOT EXISTS idx_metric_created ON evaluation_metrics(created_at)"
             ]:
-                try:
+                with contextlib.suppress(sqlite3.OperationalError):
                     conn.execute(index_sql)
-                except sqlite3.OperationalError:
-                    pass
 
             # Create webhook registrations table (needed for webhook tests)
             conn.execute("""
@@ -293,10 +292,8 @@ class EvaluationManager:
 
         logger.info(f"Stored evaluation {evaluation_id} of type {evaluation_type}")
         # Track recent creations for this manager instance
-        try:
+        with contextlib.suppress(Exception):
             self._recent_created_ids.append(evaluation_id)
-        except Exception:
-            pass
         return evaluation_id
 
     async def get_history(

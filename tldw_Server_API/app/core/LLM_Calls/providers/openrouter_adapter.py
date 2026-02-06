@@ -66,9 +66,7 @@ class OpenRouterAdapter(ChatProvider):
     def _use_native_http(self) -> bool:
         # Always native unless explicitly disabled
         v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_OPENROUTER") or "").lower()
-        if v in {"0", "false", "no", "off"}:
-            return False
-        return True
+        return v not in {"0", "false", "no", "off"}
 
     def _base_url(self) -> str:
         import os
@@ -231,8 +229,7 @@ class OpenRouterAdapter(ChatProvider):
                             normalized = normalize_provider_line(line)
                             if normalized is not None:
                                 yield normalized
-                        for tail in finalize_stream(response=resp, done_already=seen_done):
-                            yield tail
+                        yield from finalize_stream(response=resp, done_already=seen_done)
                 return
             except _OPENROUTER_CLIENT_EXCEPTIONS as e:
                 raise self.normalize_error(e)

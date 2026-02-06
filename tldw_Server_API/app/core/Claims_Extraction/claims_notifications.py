@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import random
 import socket
@@ -382,10 +383,8 @@ def dispatch_claim_review_notifications(
         except _CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS:
             return
         try:
-            try:
+            with contextlib.suppress(_CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS):
                 db.initialize_db()
-            except _CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS:
-                pass
             config_row = db.get_claims_monitoring_settings(str(owner_user_id)) or {}
             if config_row and not bool(config_row.get("enabled", True)):
                 return
@@ -432,9 +431,7 @@ def dispatch_claim_review_notifications(
         except _CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Claims review notification delivery failed: {exc}")
         finally:
-            try:
+            with contextlib.suppress(_CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS):
                 db.close_connection()
-            except _CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS:
-                pass
 
     threading.Thread(target=_deliver, daemon=True).start()

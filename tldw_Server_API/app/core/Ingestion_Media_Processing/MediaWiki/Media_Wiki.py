@@ -4,6 +4,7 @@
 #
 # Imports
 import bz2
+import contextlib
 import gzip
 import json
 import os
@@ -143,7 +144,7 @@ def get_safe_log_path(log_filename: str) -> Optional[Path]:
 
         return log_path
     except (OSError, ValueError, TypeError) as e:
-        logger.error(f"Error creating safe log path: {e}")
+        logger.exception(f"Error creating safe log path: {e}")
         return None
 
 
@@ -276,7 +277,7 @@ def validate_file_path(file_path: str, allowed_dir: Optional[Path] = None) -> Pa
         return path
     except (InvalidStoragePathError, OSError) as e:
         # Log the error internally but don't expose the path in the error message
-        logger.error(f"Path validation failed: {e}")
+        logger.exception(f"Path validation failed: {e}")
         raise InvalidStoragePathError(
             f"Invalid file path: {str(e).replace(file_path, '[REDACTED]')}"
         ) from e
@@ -398,10 +399,7 @@ def parse_mediawiki_dump(
                 # Normalize timestamp to a timezone-aware datetime when possible
                 _ts = getattr(revision, "timestamp", None)
                 if isinstance(_ts, datetime):
-                    if _ts.tzinfo is None:
-                        timestamp_obj = _ts.replace(tzinfo=timezone.utc)
-                    else:
-                        timestamp_obj = _ts
+                    timestamp_obj = _ts.replace(tzinfo=timezone.utc) if _ts.tzinfo is None else _ts
                 elif _ts is not None:
                     # Attempt to parse from string representation (e.g., 'YYYY-MM-DDTHH:MM:SSZ')
                     try:
@@ -907,10 +905,8 @@ def save_checkpoint(file_path: str, last_processed_id: int):
         Path(temp_path).replace(safe_path)
     except Exception:
         # Clean up temp file on error
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(temp_path)
-        except OSError:
-            pass
         raise
 
 
@@ -1025,10 +1021,10 @@ def import_mediawiki_dump(
                "message": f"Successfully processed MediaWiki dump: {wiki_name}. Processed {processed_pages_count}/{total_pages} pages."}
 
     except FileNotFoundError:
-        logger.error(f"MediaWiki dump file not found: {file_path}")
+        logger.exception(f"MediaWiki dump file not found: {file_path}")
         yield {"type": "error", "message": f"Error: File not found - {file_path}"}
     except PermissionError:
-        logger.error(f"Permission denied when trying to read: {file_path}")
+        logger.exception(f"Permission denied when trying to read: {file_path}")
         yield {"type": "error", "message": f"Error: Permission denied - {file_path}"}
     except Exception as e:
         logger.exception(f"Error during MediaWiki import: {str(e)}")

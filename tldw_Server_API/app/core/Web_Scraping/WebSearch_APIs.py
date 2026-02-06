@@ -103,7 +103,7 @@ def _get_relevance_jitter_ms() -> int:
     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
         try:
             # support min/max pair
-            min_v = int(section.get('relevance_jitter_min_ms', 0) or 0)
+            int(section.get('relevance_jitter_min_ms', 0) or 0)
             max_v = int(section.get('relevance_jitter_max_ms', 0) or 0)
             return max(0, max_v)
         except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
@@ -946,43 +946,6 @@ def aggregate_results(
     current_date = time.strftime("%Y-%m-%d")
 
     # Aggregation Prompt #1
-    analyze_search_results_prompt_1 = f"""
-        Generate a comprehensive, well-structured, and informative answer for a given question,
-        using ONLY the information found in the provided web Search Results (URL, Page Title, Summary).
-        Use an unbiased, journalistic tone, adapting the level of formality to match the user’s question.
-
-        • Cite your statements using [number] notation, placing citations at the end of the relevant sentence.
-        • Only cite the most relevant results. If multiple sources support the same point, cite all relevant sources [e.g., 1, 2, 3].
-        • If sources conflict, present both perspectives clearly and cite the respective sources.
-        • If different sources refer to different entities with the same name, provide separate answers.
-        • Do not add any external or fabricated information.
-        • Do not include URLs or a reference section; cite inline with [number] format only.
-        • Do not repeat the question or include unnecessary redundancy.
-        • Use markdown formatting (e.g., **bold**, bullet points, ## headings) to organize the information.
-        • If the provided results are insufficient to answer the question, explicitly state what information is missing or unclear.
-
-        Structure your answer like this:
-        1. **Short introduction**: Briefly summarize the topic (1-2 sentences).
-        2. **Bulleted points**: Present key details, each with appropriate citations.
-        3. **Conclusion**: Summarize the findings or restate the core answer (with citations if needed).
-
-        Example:
-        1. **Short introduction**: This topic explores the impact of climate change on agriculture.
-        2. **Bulleted points**:
-           - Rising temperatures have reduced crop yields in some regions [1].
-           - Changes in rainfall patterns are affecting irrigation practices [2, 3].
-        3. **Conclusion**: Climate change poses significant challenges to global agriculture [1, 2, 3].
-
-        <context>
-        {context_payload}
-        </context>
-        ---------------------
-
-        Make sure to match the language of the user's question.
-
-        Question: {question}
-        Answer (in the language of the user's question):
-        """
 
     # Aggregation Prompt #2
     analyze_search_results_prompt_2 = f"""INITIAL_QUERY: Here are some sources {context_payload}. Read these carefully, as you will be asked a Query about them.
@@ -1291,7 +1254,7 @@ def test_perform_websearch_google():
         # FIXME - Fails. Need to fix arg formatting
         test_2 = perform_websearch("google", "What is the capital of France?", "US", "en", "en", 10, date_range="y", safesearch="active", site_blacklist=["spam-site.com"])
         print(f"Test 2: {test_2}")
-        test_3 = results = perform_websearch("google", "What is the capital of France?", "US", "en", "en", 10)
+        test_3 = perform_websearch("google", "What is the capital of France?", "US", "en", "en", 10)
         print(f"Test 3: {test_3}")
     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as e:
         print(f"Error performing google searches: {str(e)}")
@@ -1455,27 +1418,27 @@ def process_web_search_results(search_results: dict, search_engine: str) -> dict
         if search_engine.lower() == "baidu":
             pass  # Placeholder for Baidu-specific parsing
         elif search_engine.lower() == "bing":
-            parsed_results = parse_bing_results(search_results, web_search_results_dict)
+            parse_bing_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "brave":
-            parsed_results = parse_brave_results(search_results, web_search_results_dict)
+            parse_brave_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "duckduckgo":
-            parsed_results = parse_duckduckgo_results(search_results, web_search_results_dict)
+            parse_duckduckgo_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "google":
-            parsed_results = parse_google_results(search_results, web_search_results_dict)
+            parse_google_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "kagi":
-            parsed_results = parse_kagi_results(search_results, web_search_results_dict)
+            parse_kagi_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "serper":
-            parsed_results = parse_serper_results(search_results, web_search_results_dict)
+            parse_serper_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "tavily":
-            parsed_results = parse_tavily_results(search_results, web_search_results_dict)
+            parse_tavily_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "exa":
-            parsed_results = parse_exa_results(search_results, web_search_results_dict)
+            parse_exa_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "firecrawl":
-            parsed_results = parse_firecrawl_results(search_results, web_search_results_dict)
+            parse_firecrawl_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "searx":
-            parsed_results = parse_searx_results(search_results, web_search_results_dict)
+            parse_searx_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "yandex":
-            parsed_results = parse_yandex_results(search_results, web_search_results_dict)
+            parse_yandex_results(search_results, web_search_results_dict)
         else:
             raise ValueError(f"Error: Invalid Search Engine Name {search_engine}")
 
@@ -2706,10 +2669,7 @@ def parse_firecrawl_results(firecrawl_search_results, web_search_results_dict):
         if "results" not in web_search_results_dict:
             web_search_results_dict["results"] = []
 
-        if isinstance(firecrawl_search_results, dict):
-            data = firecrawl_search_results.get("data", [])
-        else:
-            data = []
+        data = firecrawl_search_results.get("data", []) if isinstance(firecrawl_search_results, dict) else []
 
         items: list[dict[str, Any]] = []
         if isinstance(data, dict):

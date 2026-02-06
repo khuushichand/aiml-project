@@ -18,6 +18,7 @@ This scheduler runs inside the FastAPI lifespan if enabled.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from dataclasses import dataclass
@@ -98,10 +99,8 @@ async def _run_eval_once(dataset_path: Path, dataset_label: str) -> None:
                 hc = md.get("hard_citations") or {}
                 cov = hc.get("coverage")
                 if cov is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         coverage_scores.append(max(0.0, min(1.0, float(cov))))
-                    except Exception:
-                        pass
             except Exception as e:
                 logger.debug(f"Eval query failed: {e}")
                 continue

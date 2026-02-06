@@ -30,7 +30,6 @@ import {
   Headphones,
   SlidersHorizontal,
   StopCircleIcon,
-  Star,
   X,
   FileIcon,
   FileText,
@@ -79,17 +78,13 @@ import { fetchChatModels, fetchImageModels } from "@/services/tldw-server"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useTldwAudioStatus } from "@/hooks/useTldwAudioStatus"
 import { useMcpTools } from "@/hooks/useMcpTools"
-import { tldwChat, tldwModels, type ChatMessage } from "@/services/tldw"
 import { tldwClient, type ConversationState } from "@/services/tldw/TldwApiClient"
 import { CharacterSelect } from "@/components/Common/CharacterSelect"
 import { ProviderIcons } from "@/components/Common/ProviderIcon"
 import type { Character } from "@/types/character"
 import { KnowledgePanel, type KnowledgeTab } from "@/components/Knowledge"
 import { BetaTag } from "@/components/Common/Beta"
-import {
-  SlashCommandMenu,
-  type SlashCommandItem
-} from "@/components/Sidepanel/Chat/SlashCommandMenu"
+import type { SlashCommandItem } from "@/components/Sidepanel/Chat/SlashCommandMenu"
 import { DocumentGeneratorDrawer } from "@/components/Common/Playground/DocumentGeneratorDrawer"
 import { useUiModeStore } from "@/store/ui-mode"
 import { useStoreChatModelSettings } from "@/store/model"
@@ -110,50 +105,18 @@ import { DISCUSS_MEDIA_PROMPT_SETTING } from "@/services/settings/ui-settings"
 import { Button as TldwButton } from "@/components/Common/Button"
 import { useSimpleForm } from "@/hooks/useSimpleForm"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
-
-const getPersistenceModeLabel = (
-  t: (...args: any[]) => any,
-  temporaryChat: boolean,
-  isConnectionReady: boolean,
-  serverChatId: string | null
-) => {
-  if (temporaryChat) {
-    return t(
-      "playground:composer.persistence.ephemeral",
-      "Not saved: cleared when you close this window."
-    )
-  }
-  if (serverChatId || isConnectionReady) {
-    return t(
-      "playground:composer.persistence.server",
-      "Saved to your tldw server (and locally)."
-    )
-  }
-  return t(
-    "playground:composer.persistence.local",
-    "Saved locally until your tldw server is connected."
-  )
-}
-
-type CollapsedRange = {
-  start: number
-  end: number
-}
-
-type ModelSortMode = "favorites" | "az" | "provider" | "localFirst"
-
-const LOCAL_PROVIDERS = new Set([
-  "lmstudio",
-  "llamafile",
-  "ollama",
-  "ollama2",
-  "llamacpp",
-  "vllm",
-  "custom",
-  "local",
-  "tldw",
-  "chrome"
-])
+import {
+  useModelSelector,
+  useComposerTokens,
+  useImageBackend,
+  useActionBarVisibility,
+  usePersistenceMode,
+  useSlashCommands,
+  useMessageCollapse,
+  useMcpToolsControl,
+  type CollapsedRange,
+  type ModelSortMode
+} from "@/hooks/playground"
 
 type Props = {
   droppedFiles: File[]
@@ -234,18 +197,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const isMobileViewport = useMobile()
   const [openModelSettings, setOpenModelSettings] = React.useState(false)
   const [openActorSettings, setOpenActorSettings] = React.useState(false)
-  const [modelDropdownOpen, setModelDropdownOpen] = React.useState(false)
-  const [modelSearchQuery, setModelSearchQuery] = React.useState("")
-  const [favoriteModels, setFavoriteModels] = useStorage<string[]>(
-    "favoriteChatModels",
-    []
-  )
-  const [modelSortMode, setModelSortMode] = useStorage<ModelSortMode>(
-    "modelSelectSortMode",
-    "provider"
-  )
-  const apiProvider = useStoreChatModelSettings((state) => state.apiProvider)
-  const numCtx = useStoreChatModelSettings((state) => state.numCtx)
   const systemPrompt = useStoreChatModelSettings((state) => state.systemPrompt)
   const setSystemPrompt = useStoreChatModelSettings(
     (state) => state.setSystemPrompt
@@ -296,64 +247,18 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     setToolModules,
     setToolCatalogStrict
   } = useMcpTools()
-  const [catalogDraft, setCatalogDraft] = React.useState(toolCatalog)
-
-  React.useEffect(() => {
-    setCatalogDraft(toolCatalog)
-  }, [toolCatalog])
-
-  const commitCatalog = React.useCallback(() => {
-    const next = catalogDraft.trim()
-    if (next !== toolCatalog) {
-      setToolCatalog(next)
-    }
-    if (toolCatalogId !== null && next !== toolCatalog) {
-      setToolCatalogId(null)
-    }
-  }, [catalogDraft, setToolCatalog, toolCatalog, toolCatalogId, setToolCatalogId])
-
-  const catalogGroups = React.useMemo(() => {
-    const global: typeof mcpCatalogs = []
-    const org: typeof mcpCatalogs = []
-    const team: typeof mcpCatalogs = []
-    for (const catalog of mcpCatalogs) {
-      if (!catalog) continue
-      if (catalog.team_id != null) {
-        team.push(catalog)
-      } else if (catalog.org_id != null) {
-        org.push(catalog)
-      } else {
-        global.push(catalog)
-      }
-    }
-    return { global, org, team }
-  }, [mcpCatalogs])
-
-  const catalogById = React.useMemo(() => {
-    const map = new Map<number, (typeof mcpCatalogs)[number]>()
-    for (const catalog of mcpCatalogs) {
-      if (catalog?.id == null) continue
-      map.set(catalog.id, catalog)
-    }
-    return map
-  }, [mcpCatalogs])
-
-  const handleCatalogSelect = React.useCallback(
-    (value?: number) => {
-      if (value === null || value === undefined) {
-        setToolCatalogId(null)
-        setToolCatalog("")
-        return
-      }
-      const catalog = catalogById.get(value)
-      setToolCatalogId(value)
-      if (catalog?.name) {
-        setToolCatalog(catalog.name)
-      }
-    },
-    [catalogById, setToolCatalog, setToolCatalogId]
-  )
-
+  const mcpCtrl = useMcpToolsControl({
+    hasMcp,
+    mcpHealthState,
+    mcpTools,
+    mcpToolsLoading,
+    mcpCatalogs,
+    toolCatalog,
+    toolCatalogId,
+    setToolCatalog,
+    setToolCatalogId,
+    toolChoice
+  })
   const handleModuleSelect = React.useCallback(
     (value?: string[]) => {
       setToolModules(Array.isArray(value) ? value : [])
@@ -398,13 +303,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     React.useState(false)
   const [voiceModeSelectorOpen, setVoiceModeSelectorOpen] = React.useState(false)
   const [promptInsertOpen, setPromptInsertOpen] = React.useState(false)
-  const [mcpPopoverOpen, setMcpPopoverOpen] = React.useState(false)
   const [toolsPopoverOpen, setToolsPopoverOpen] = React.useState(false)
   const [attachmentMenuOpen, setAttachmentMenuOpen] = React.useState(false)
   const [sendMenuOpen, setSendMenuOpen] = React.useState(false)
-  const [composerHovering, setComposerHovering] = React.useState(false)
-  const [composerFocusWithin, setComposerFocusWithin] = React.useState(false)
-  const [actionBarVisible, setActionBarVisible] = React.useState(true)
   const [promptInsertChoice, setPromptInsertChoice] =
     React.useState<PromptInsertItem | null>(null)
   const [documentGeneratorSeed, setDocumentGeneratorSeed] = React.useState<{
@@ -432,10 +333,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   )
   const [sttSegEmbeddingsProvider] = useStorage("sttSegEmbeddingsProvider", "")
   const [sttSegEmbeddingsModel] = useStorage("sttSegEmbeddingsModel", "")
-  const [imageBackendDefault, setImageBackendDefault] = useStorage(
-    "imageBackendDefault",
-    ""
-  )
   const [selectedCharacter] = useSelectedCharacter<Character | null>(null)
   const [serverPersistenceHintSeen, setServerPersistenceHintSeen] = useStorage(
     "serverPersistenceHintSeen",
@@ -519,6 +416,35 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     enabled: true
   })
 
+  const {
+    modelDropdownOpen,
+    setModelDropdownOpen,
+    modelSearchQuery,
+    setModelSearchQuery,
+    modelSortMode,
+    setModelSortMode,
+    selectedModelMeta,
+    modelContextLength,
+    modelCapabilities,
+    resolvedMaxContext,
+    resolvedProviderKey,
+    providerLabel,
+    modelSummaryLabel,
+    apiModelLabel,
+    modelSelectorWarning,
+    favoriteModels,
+    favoriteModelSet,
+    toggleFavoriteModel,
+    filteredModels,
+    modelDropdownMenuItems,
+    isSmallModel
+  } = useModelSelector({
+    composerModels,
+    selectedModel,
+    setSelectedModel,
+    navigate
+  })
+
   // Ensure compare selection has a sensible default when enabling compare mode
   React.useEffect(() => {
     if (
@@ -568,22 +494,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   const compareModeActive = compareFeatureEnabled && compareMode
 
-  const modelSummaryLabel = React.useMemo(() => {
-    if (!selectedModel) {
-      return t(
-        "playground:composer.modelPlaceholder",
-        "API / model"
-      )
-    }
-    const models = (composerModels as any[]) || []
-    const match = models.find((m) => m.model === selectedModel)
-    return (
-      match?.nickname ||
-      match?.model ||
-      selectedModel
-    )
-  }, [composerModels, selectedModel, t])
-
   const voiceChatModelOptions = React.useMemo(() => {
     const options = [
       {
@@ -593,10 +503,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     ]
     const models = (composerModels as any[]) || []
     for (const model of models) {
-      const providerLabel = getProviderDisplayName(model.provider || "")
+      const pLabel = getProviderDisplayName(model.provider || "")
       const modelLabel = model.nickname || model.model || model.name
-      const label = providerLabel
-        ? `${providerLabel} - ${modelLabel}`
+      const label = pLabel
+        ? `${pLabel} - ${modelLabel}`
         : modelLabel
       options.push({
         value: model.model || model.name,
@@ -605,350 +515,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
     return options
   }, [composerModels, t])
-
-  const selectedModelMeta = React.useMemo(() => {
-    if (!selectedModel) return null
-    const models = (composerModels as any[]) || []
-    return models.find((model) => model.model === selectedModel) || null
-  }, [composerModels, selectedModel])
-
-  const modelContextLength = React.useMemo(() => {
-    const value =
-      selectedModelMeta?.context_length ??
-      selectedModelMeta?.contextLength ??
-      selectedModelMeta?.details?.context_length
-    return typeof value === "number" && Number.isFinite(value) ? value : null
-  }, [selectedModelMeta])
-
-  const modelCapabilities = React.useMemo(() => {
-    const caps =
-      selectedModelMeta?.details?.capabilities ??
-      (selectedModelMeta as any)?.capabilities
-    return Array.isArray(caps) ? caps.map((cap) => String(cap).toLowerCase()) : []
-  }, [selectedModelMeta])
-
-  const isSmallModel =
-    modelCapabilities.includes("fast") ||
-    (typeof modelContextLength === "number" && modelContextLength <= 8192)
-
-  const resolvedMaxContext = React.useMemo(() => {
-    if (typeof numCtx === "number" && Number.isFinite(numCtx) && numCtx > 0) {
-      return numCtx
-    }
-    if (typeof modelContextLength === "number" && modelContextLength > 0) {
-      return modelContextLength
-    }
-    return null
-  }, [modelContextLength, numCtx])
-
-  const resolvedProviderKey = React.useMemo(() => {
-    const fromOverride = typeof apiProvider === "string" ? apiProvider.trim() : ""
-    if (fromOverride) return fromOverride.toLowerCase()
-    const provider =
-      typeof selectedModelMeta?.provider === "string"
-        ? selectedModelMeta.provider
-        : "custom"
-    return provider.toLowerCase()
-  }, [apiProvider, selectedModelMeta])
-
-  const providerLabel = React.useMemo(
-    () => tldwModels.getProviderDisplayName(resolvedProviderKey || "custom"),
-    [resolvedProviderKey]
-  )
-
-  const apiModelLabel = React.useMemo(() => {
-    if (!selectedModel) {
-      return t(
-        "playground:composer.selectModel",
-        "Select a model"
-      )
-    }
-    return `${providerLabel} / ${modelSummaryLabel}`
-  }, [modelSummaryLabel, providerLabel, selectedModel, t])
-
-  // Whether model selector should show warning state (no model selected)
-  const modelSelectorWarning = !selectedModel
-
-  const favoriteModelSet = React.useMemo(
-    () => new Set((favoriteModels || []).map((value) => String(value))),
-    [favoriteModels]
-  )
-
-  const toggleFavoriteModel = React.useCallback(
-    (modelId: string) => {
-      void setFavoriteModels((prev) => {
-        const list = Array.isArray(prev) ? prev.map(String) : []
-        const next = new Set(list)
-        if (next.has(modelId)) {
-          next.delete(modelId)
-        } else {
-          next.add(modelId)
-        }
-        return Array.from(next)
-      })
-      setModelDropdownOpen(true)
-    },
-    [setFavoriteModels]
-  )
-
-  const filteredModels = React.useMemo(() => {
-    const list = (composerModels as any[]) || []
-    const q = modelSearchQuery.trim().toLowerCase()
-    if (!q) return list
-    return list.filter((model) => {
-      const providerRaw = String(model.provider || "").toLowerCase()
-      const providerLabel = getProviderDisplayName(providerRaw).toLowerCase()
-      const name = String(model.nickname || model.model || "").toLowerCase()
-      const modelId = String(model.model || "").toLowerCase()
-      return (
-        providerRaw.includes(q) ||
-        providerLabel.includes(q) ||
-        name.includes(q) ||
-        modelId.includes(q)
-      )
-    })
-  }, [composerModels, modelSearchQuery])
-
-  const modelDropdownMenuItems = React.useMemo(() => {
-    const models = filteredModels || []
-    const allModels = (composerModels as any[]) || []
-
-    if (allModels.length === 0) {
-      return [
-        {
-          key: "no-models",
-          disabled: true,
-          label: (
-            <div className="px-1 py-1 text-xs text-text-muted">
-              {t(
-                "playground:composer.noModelsAvailable",
-                "No models available. Connect your server in Settings."
-              )}
-            </div>
-          )
-        },
-        {
-          type: "divider" as const,
-          key: "no-models-divider"
-        },
-        {
-          key: "open-model-settings",
-          label: t(
-            "playground:composer.openModelSettings",
-            "Open model settings"
-          ),
-          onClick: () => navigate("/settings/tldw")
-        }
-      ]
-    }
-
-    if (models.length === 0) {
-      return [
-        {
-          key: "no-matches",
-          disabled: true,
-          label: (
-            <div className="px-1 py-1 text-xs text-text-muted">
-              {t(
-                "playground:composer.noModelsMatch",
-                "No models match your search."
-              )}
-            </div>
-          )
-        }
-      ]
-    }
-
-    const toProviderKey = (provider?: string) =>
-      typeof provider === "string" && provider.trim()
-        ? provider.trim().toLowerCase()
-        : "other"
-
-    const toGroupKey = (providerRaw: string) =>
-      providerRaw === "chrome"
-        ? "default"
-        : LOCAL_PROVIDERS.has(providerRaw)
-          ? "custom"
-          : providerRaw
-
-    const byLabel = (a: any, b: any) => {
-      const aProvider = getProviderDisplayName(toProviderKey(a.provider))
-      const bProvider = getProviderDisplayName(toProviderKey(b.provider))
-      const aLabel = `${aProvider} ${a.nickname || a.model}`.toLowerCase()
-      const bLabel = `${bProvider} ${b.nickname || b.model}`.toLowerCase()
-      return aLabel.localeCompare(bLabel)
-    }
-
-    // Find first favorite for "(Recommended)" tag
-    const firstFavoriteModel = favoriteModels?.length
-      ? models.find(m => favoriteModels.includes(String(m.model)))?.model
-      : null
-
-    // Generate a brief description for a model based on its capabilities
-    const getModelDescription = (model: any, capabilities: string[], contextLength: number | undefined) => {
-      const parts: string[] = []
-      const providerDisplay = getProviderDisplayName(toProviderKey(model.provider))
-
-      // Add provider context
-      parts.push(`${providerDisplay} model.`)
-
-      // Add capability descriptions
-      if (capabilities.includes("vision") || model.supportsVision) {
-        parts.push("Can analyze images.")
-      }
-      if (capabilities.includes("tools") || model.supportsTools) {
-        parts.push("Supports tool use and function calling.")
-      }
-      if (typeof contextLength === "number") {
-        if (contextLength > 100000) {
-          parts.push(`Long context (${Math.round(contextLength / 1000)}k tokens).`)
-        } else if (contextLength > 0) {
-          parts.push(`Context: ${Math.round(contextLength / 1000)}k tokens.`)
-        }
-      }
-      if (capabilities.includes("fast") || model.fast) {
-        parts.push("Optimized for speed.")
-      }
-
-      return parts.join(" ")
-    }
-
-    const buildItem = (model: any) => {
-      const providerRaw = toProviderKey(model.provider)
-      const modelLabel = model.nickname || model.model
-      const isFavorite = favoriteModelSet.has(String(model.model))
-      const isRecommended = firstFavoriteModel && String(model.model) === String(firstFavoriteModel)
-      const favoriteTitle = isFavorite
-        ? t("playground:composer.favoriteRemove", "Remove from favorites")
-        : t("playground:composer.favoriteAdd", "Add to favorites")
-
-      // Build capability badges (max 2)
-      const capabilities = model.details?.capabilities || model.capabilities || []
-      const contextLength = model.context_length ?? model.contextLength ?? model.details?.context_length
-      const capabilityBadges: string[] = []
-      if (capabilities.includes("vision") || model.supportsVision) capabilityBadges.push("Vision")
-      if (capabilities.includes("fast") || model.fast) capabilityBadges.push("Fast")
-      if (typeof contextLength === "number" && contextLength > 100000) capabilityBadges.push("Long context")
-      if (capabilities.includes("tools") || model.supportsTools) capabilityBadges.push("Tools")
-
-      // Generate tooltip description
-      const modelDescription = getModelDescription(model, capabilities, contextLength)
-
-      return {
-        key: model.model,
-        label: (
-          <Tooltip
-            title={modelDescription}
-            placement="right"
-            mouseEnterDelay={0.5}
-            styles={{ root: { maxWidth: 280 } }}
-          >
-            <div className="flex items-center gap-2 text-sm">
-              <ProviderIcons provider={providerRaw} className="h-3 w-3 text-text-subtle" />
-              <span className="truncate flex-1">{modelLabel}</span>
-              {isRecommended && (
-                <span className="rounded-full bg-blue-100 dark:bg-blue-900/30 px-1.5 py-0.5 text-[10px] text-blue-600 dark:text-blue-400">
-                  {t("playground:composer.recommended", "Recommended")}
-                </span>
-              )}
-              {capabilityBadges.slice(0, 2).map(cap => (
-                <span key={cap} className="rounded bg-surface2 px-1 py-0.5 text-[9px] text-text-muted">
-                  {cap}
-                </span>
-              ))}
-              <button
-                type="button"
-                className="rounded p-0.5 text-text-subtle transition hover:bg-surface2"
-                onMouseDown={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                }}
-                onClick={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  toggleFavoriteModel(String(model.model))
-                }}
-                aria-label={favoriteTitle}
-                title={favoriteTitle}
-              >
-                <Star
-                  className={`h-3.5 w-3.5 ${
-                    isFavorite ? "fill-warn text-warn" : "text-text-subtle"
-                  }`}
-                />
-              </button>
-            </div>
-          </Tooltip>
-        ),
-        onClick: () => setSelectedModel(model.model)
-      }
-    }
-
-    if (modelSortMode === "az") {
-      return models.slice().sort(byLabel).map(buildItem)
-    }
-
-    if (modelSortMode === "favorites") {
-      const favorites = models.filter((model) =>
-        favoriteModelSet.has(String(model.model))
-      )
-      const others = models.filter(
-        (model) => !favoriteModelSet.has(String(model.model))
-      )
-      const items: any[] = []
-      if (favorites.length > 0) {
-        items.push({
-          type: "group" as const,
-          key: "favorites",
-          label: t("playground:composer.favorites", "Favorites"),
-          children: favorites.slice().sort(byLabel).map(buildItem)
-        })
-      }
-      items.push(...others.slice().sort(byLabel).map(buildItem))
-      return items
-    }
-
-    const groups = new Map<string, any[]>()
-    for (const model of models) {
-      const providerRaw = toProviderKey(model.provider)
-      const groupKey = toGroupKey(providerRaw)
-      if (!groups.has(groupKey)) groups.set(groupKey, [])
-      groups.get(groupKey)!.push(buildItem(model))
-    }
-
-    const entries = Array.from(groups.entries())
-    if (modelSortMode === "localFirst") {
-      entries.sort(([aKey], [bKey]) => {
-        const aLocal = LOCAL_PROVIDERS.has(aKey) || aKey === "default"
-        const bLocal = LOCAL_PROVIDERS.has(bKey) || bKey === "default"
-        if (aLocal !== bLocal) return aLocal ? -1 : 1
-        return aKey.localeCompare(bKey)
-      })
-    }
-
-    return entries.map(([key, children]) => ({
-      type: "group" as const,
-      key: `group-${key}`,
-      label: (
-        <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-text-subtle">
-          <ProviderIcons provider={key} className="h-3 w-3" />
-          <span>{getProviderDisplayName(key)}</span>
-        </div>
-      ),
-      children
-    }))
-  }, [
-    composerModels,
-    favoriteModels,
-    favoriteModelSet,
-    filteredModels,
-    modelSearchQuery,
-    modelSortMode,
-    navigate,
-    setSelectedModel,
-    t,
-    toggleFavoriteModel
-  ])
 
   const sendLabel = React.useMemo(() => {
     if (compareModeActive && compareSelectedModels.length > 1) {
@@ -1014,43 +580,29 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     setFieldValueRef.current = form.setFieldValue
   }, [form.setFieldValue])
 
-  const pendingCaretRef = React.useRef<number | null>(null)
-  const lastDisplaySelectionRef = React.useRef<{
-    start: number
-    end: number
-  } | null>(null)
-  const pendingCollapsedStateRef = React.useRef<{
-    message: string
-    range: CollapsedRange
-    caret: number
-  } | null>(null)
-  const pointerDownRef = React.useRef(false)
-  const selectionFromPointerRef = React.useRef(false)
-  const [isMessageCollapsed, setIsMessageCollapsed] = React.useState(false)
-  const [collapsedRange, setCollapsedRange] =
-    React.useState<CollapsedRange | null>(null)
-  const [hasExpandedLargeText, setHasExpandedLargeText] = React.useState(false)
-  const normalizeCollapsedRange = React.useCallback(
-    (range: CollapsedRange, messageLength: number): CollapsedRange => {
-      const start = Math.max(0, Math.min(range.start, messageLength))
-      const end = Math.max(start, Math.min(range.end, messageLength))
-      return { start, end }
-    },
-    []
-  )
-
-  const parseCollapsedRange = React.useCallback(
-    (value: unknown, messageLength: number): CollapsedRange | null => {
-      if (!value || typeof value !== "object") return null
-      const start = Number((value as { start?: number }).start)
-      const end = Number((value as { end?: number }).end)
-      if (!Number.isFinite(start) || !Number.isFinite(end)) return null
-      const range = normalizeCollapsedRange({ start, end }, messageLength)
-      if (range.end <= range.start) return null
-      return range
-    },
-    [normalizeCollapsedRange]
-  )
+  const msgCollapse = useMessageCollapse({ textareaRef })
+  const {
+    isMessageCollapsed,
+    setIsMessageCollapsed,
+    collapsedRange,
+    setCollapsedRange,
+    hasExpandedLargeText,
+    setHasExpandedLargeText,
+    pendingCaretRef,
+    lastDisplaySelectionRef,
+    pendingCollapsedStateRef,
+    pointerDownRef,
+    selectionFromPointerRef,
+    normalizeCollapsedRange,
+    parseCollapsedRange,
+    buildCollapsedMessageLabel,
+    getCollapsedDisplayMeta,
+    getDisplayCaretFromMessage,
+    getMessageCaretFromDisplay,
+    collapseLargeMessage,
+    expandLargeMessage,
+    restoreMessageValue: restoreCollapseState
+  } = msgCollapse
 
   const restoreMessageValue = React.useCallback(
     (
@@ -1058,150 +610,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       metadata?: { wasExpanded?: boolean; collapsedRange?: CollapsedRange | null }
     ) => {
       setFieldValueRef.current("message", value)
-      if (value.length <= PASTED_TEXT_CHAR_LIMIT) {
-        setIsMessageCollapsed(false)
-        setHasExpandedLargeText(false)
-        setCollapsedRange(null)
-        return
-      }
-      const wasExpanded = Boolean(metadata?.wasExpanded)
-      if (wasExpanded) {
-        setIsMessageCollapsed(false)
-        setHasExpandedLargeText(true)
-        setCollapsedRange(null)
-        return
-      }
-      const range =
-        parseCollapsedRange(metadata?.collapsedRange, value.length) ?? {
-          start: 0,
-          end: value.length
-        }
-      setIsMessageCollapsed(true)
-      setHasExpandedLargeText(false)
-      setCollapsedRange(range)
+      restoreCollapseState(value, metadata)
     },
-    [parseCollapsedRange]
-  )
-
-  const buildCollapsedMessageLabel = React.useCallback(
-    (text: string) => {
-      // Avoid allocating an array for very large messages.
-      const lineCount =
-        text ? (text.match(/\r\n|\r|\n/g)?.length ?? 0) + 1 : 0
-      return t(
-        "playground:composer.collapsedMessageLabel",
-        "[{lines, plural, one {# line} other {# lines}}/{chars, plural, one {# char} other {# chars}} in message]",
-        { lines: lineCount, chars: text.length }
-      )
-    },
-    [t]
-  )
-
-  const getCollapsedDisplayMeta = React.useCallback(
-    (text: string, range: CollapsedRange) => {
-      const normalizedRange = normalizeCollapsedRange(range, text.length)
-      const collapsedText = text.slice(
-        normalizedRange.start,
-        normalizedRange.end
-      )
-      const label = buildCollapsedMessageLabel(collapsedText)
-      const prefix = text.slice(0, normalizedRange.start)
-      const suffix = text.slice(normalizedRange.end)
-      const labelStart = prefix.length
-      const labelEnd = labelStart + label.length
-      const blockLength = normalizedRange.end - normalizedRange.start
-      return {
-        display: `${prefix}${label}${suffix}`,
-        label,
-        labelStart,
-        labelEnd,
-        labelLength: label.length,
-        blockLength,
-        rangeStart: normalizedRange.start,
-        rangeEnd: normalizedRange.end,
-        messageLength: text.length
-      }
-    },
-    [buildCollapsedMessageLabel, normalizeCollapsedRange]
-  )
-
-  const getDisplayCaretFromMessage = React.useCallback(
-    (
-      messageCaret: number,
-      meta: ReturnType<typeof getCollapsedDisplayMeta>
-    ) => {
-      if (messageCaret <= meta.rangeStart) return messageCaret
-      if (messageCaret >= meta.rangeEnd) {
-        return (
-          messageCaret -
-          meta.blockLength +
-          meta.labelLength
-        )
-      }
-      return meta.labelEnd
-    },
-    []
-  )
-
-  const getMessageCaretFromDisplay = React.useCallback(
-    (
-      displayCaret: number,
-      meta: ReturnType<typeof getCollapsedDisplayMeta>,
-      options?: { prefer?: "before" | "after" }
-    ) => {
-      if (displayCaret <= meta.labelStart) return displayCaret
-      if (displayCaret >= meta.labelEnd) {
-        return (
-          displayCaret -
-          meta.labelLength +
-          meta.blockLength
-        )
-      }
-      return options?.prefer === "before"
-        ? meta.rangeStart
-        : meta.rangeEnd
-    },
-    []
-  )
-
-  const collapseLargeMessage = React.useCallback(
-    (text: string, options?: { force?: boolean; range?: CollapsedRange }) => {
-      if (text.length <= PASTED_TEXT_CHAR_LIMIT) {
-        setIsMessageCollapsed(false)
-        setHasExpandedLargeText(false)
-        setCollapsedRange(null)
-        return
-      }
-      if (!options?.force && hasExpandedLargeText) return
-      const range =
-        options?.range ?? { start: 0, end: text.length }
-      const normalizedRange = normalizeCollapsedRange(range, text.length)
-      setIsMessageCollapsed(true)
-      setHasExpandedLargeText(false)
-      setCollapsedRange(normalizedRange)
-    },
-    [hasExpandedLargeText, normalizeCollapsedRange]
-  )
-
-  const expandLargeMessage = React.useCallback(
-    (options?: { caret?: number; force?: boolean }) => {
-      if (!isMessageCollapsed && !options?.force) return
-      setIsMessageCollapsed(false)
-      setHasExpandedLargeText(true)
-      setCollapsedRange(null)
-      requestAnimationFrame(() => {
-        const el = textareaRef.current
-        if (!el) return
-        const caret =
-          typeof options?.caret === "number"
-            ? Math.min(options.caret, el.value.length)
-            : pendingCaretRef.current ?? el.value.length
-        pendingCaretRef.current = null
-        el.focus()
-        el.setSelectionRange(caret, caret)
-      })
-    },
-    [isMessageCollapsed, textareaRef]
+    [restoreCollapseState]
   )
 
   const setMessageValue = React.useCallback(
@@ -1263,179 +674,33 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     setValueWithMetadata: restoreMessageValue
   })
 
-  const numberFormatter = React.useMemo(() => new Intl.NumberFormat(), [])
-  const formatNumber = React.useCallback(
-    (value: number | null) => {
-      if (typeof value !== "number" || !Number.isFinite(value)) return "—"
-      return numberFormatter.format(Math.round(value))
-    },
-    [numberFormatter]
-  )
-
-  const estimateTokensForText = React.useCallback((text: string) => {
-    const trimmed = text.trim()
-    if (!trimmed) return 0
-    return tldwChat.estimateTokens([
-      { role: "user", content: trimmed }
-    ])
-  }, [])
-
-  const draftTokenCount = React.useMemo(
-    () => estimateTokensForText(form.values.message || ""),
-    [estimateTokensForText, form.values.message]
-  )
-
-  const conversationTokenCountRef = React.useRef(0)
-  const conversationTokenCount = React.useMemo(() => {
-    if (isSending) {
-      return conversationTokenCountRef.current
-    }
-    const convoMessages: ChatMessage[] = []
-    const trimmedSystem = systemPrompt?.trim()
-    if (trimmedSystem) {
-      convoMessages.push({ role: "system", content: trimmedSystem })
-    }
-    messages.forEach((message) => {
-      const content = typeof message.message === "string" ? message.message.trim() : ""
-      if (!content) return
-      if (message.isBot) {
-        convoMessages.push({ role: "assistant", content })
-      } else {
-        convoMessages.push({ role: "user", content })
-      }
-    })
-    if (convoMessages.length === 0) return 0
-    const count = tldwChat.estimateTokens(convoMessages)
-    conversationTokenCountRef.current = count
-    return count
-  }, [isSending, messages, systemPrompt])
-
-  const promptTokenLabel = React.useMemo(
-    () =>
-      `${t("playground:tokens.prompt", "prompt")} ${formatNumber(draftTokenCount)}`,
-    [draftTokenCount, formatNumber, t]
-  )
-  const convoTokenLabel = React.useMemo(
-    () =>
-      `${t("playground:tokens.total", "tokens")} ${formatNumber(conversationTokenCount)}`,
-    [conversationTokenCount, formatNumber, t]
-  )
-  const contextTokenLabel = React.useMemo(
-    () => `${formatNumber(resolvedMaxContext)} ctx`,
-    [formatNumber, resolvedMaxContext]
-  )
-  const tokenUsageLabel = React.useMemo(
-    () => `${promptTokenLabel} · ${convoTokenLabel} / ${contextTokenLabel}`,
-    [contextTokenLabel, convoTokenLabel, promptTokenLabel]
-  )
-  const tokenUsageCompactLabel = React.useMemo(() => {
-    const prompt = formatNumber(draftTokenCount)
-    const convo = formatNumber(conversationTokenCount)
-    const ctx = formatNumber(resolvedMaxContext)
-    return `${prompt} · ${convo}/${ctx} ctx`
-  }, [conversationTokenCount, draftTokenCount, formatNumber, resolvedMaxContext])
+  const {
+    draftTokenCount,
+    conversationTokenCount,
+    tokenUsageLabel,
+    tokenUsageCompactLabel,
+    tokenUsageTooltip
+  } = useComposerTokens({
+    message: form.values.message || "",
+    messages,
+    systemPrompt,
+    resolvedMaxContext,
+    apiModelLabel,
+    isSending
+  })
   const tokenUsageDisplay = isProMode
     ? tokenUsageLabel
     : tokenUsageCompactLabel
-  const contextLabel = React.useMemo(
-    () =>
-      t(
-        "common:modelSettings.form.numCtx.label",
-        "Context Window Size (num_ctx)"
-      ),
-    [t]
-  )
-  const tokenUsageTooltip = React.useMemo(
-    () =>
-      `${apiModelLabel} · ${promptTokenLabel} · ${convoTokenLabel} · ${contextLabel} ${formatNumber(resolvedMaxContext)}`,
-    [
-      apiModelLabel,
-      contextLabel,
-      convoTokenLabel,
-      formatNumber,
-      promptTokenLabel,
-      resolvedMaxContext
-    ]
-  )
 
-  const imageBackendOptions = React.useMemo<
-    { value: string; label: string; provider?: string }[]
-  >(() => {
-    const dynamicOptions = (imageModels || [])
-      .filter((model: any) => model && model.id)
-      .map((model: any) => ({
-        value: String(model.id),
-        label: String(model.name || model.id),
-        provider: model.provider ? String(model.provider) : undefined
-      }))
-
-    const fallbackOptions = [
-      {
-        value: "tldw_server-Flux-Klein",
-        label: t("playground:imageBackend.fluxKlein", "Flux-Klein"),
-        provider: undefined
-      },
-      {
-        value: "tldw_server-ZTurbo",
-        label: t("playground:imageBackend.zTurbo", "ZTurbo"),
-        provider: undefined
-      }
-    ]
-
-    const baseOptions = dynamicOptions.length > 0 ? dynamicOptions : fallbackOptions
-    return [
-      {
-        value: "",
-        label: t("playground:imageBackend.none", "None")
-      },
-      ...baseOptions
-    ]
-  }, [imageModels, t])
-  const imageBackendDefaultTrimmed = React.useMemo(
-    () => (imageBackendDefault || "").trim(),
-    [imageBackendDefault]
-  )
-  const imageBackendLabel = React.useMemo(() => {
-    if (!imageBackendDefaultTrimmed) {
-      return t("playground:imageBackend.none", "None")
-    }
-    const match = imageBackendOptions.find(
-      (option) => option.value === imageBackendDefaultTrimmed
-    )
-    if (match?.provider) {
-      return `${getProviderDisplayName(match.provider)} · ${match.label}`
-    }
-    return match?.label || imageBackendDefaultTrimmed
-  }, [imageBackendDefaultTrimmed, imageBackendOptions, t])
-  const imageBackendActiveKey =
-    imageBackendDefaultTrimmed.length > 0 ? imageBackendDefaultTrimmed : "none"
-  const imageBackendMenuItems = React.useMemo(
-    () =>
-      imageBackendOptions.map((option: any) => {
-        const providerLabel = option.provider
-          ? getProviderDisplayName(option.provider)
-          : null
-        const labelText = providerLabel
-          ? `${providerLabel} · ${option.label}`
-          : option.label
-        return {
-          key: option.value || "none",
-          label: (
-            <div className="flex items-center gap-2 text-sm">
-              <ImageIcon className="h-3 w-3 text-text-subtle" />
-              <span className="truncate">{labelText}</span>
-            </div>
-          ),
-          onClick: () => setImageBackendDefault(option.value)
-        }
-      }),
-    [imageBackendOptions, setImageBackendDefault]
-  )
-  const imageBackendBadgeLabel = imageBackendDefaultTrimmed
-    ? t("playground:imageBackend.badge", "Image: {{backend}}", {
-        backend: imageBackendLabel
-      })
-    : t("playground:imageBackend.noneBadge", "Image: none")
+  const {
+    imageBackendDefault: imageBackendDefaultTrimmed,
+    setImageBackendDefault,
+    imageBackendOptions,
+    imageBackendLabel,
+    imageBackendActiveKey,
+    imageBackendMenuItems,
+    imageBackendBadgeLabel
+  } = useImageBackend({ imageModels })
 
   const modelSelectButton = (
     <Dropdown
@@ -3092,239 +2357,31 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     fileInputRef.current?.click()
   }, [])
 
-  const slashCommands = React.useMemo<SlashCommandItem[]>(
-    () => [
-      {
-        id: "slash-search",
-        command: "search",
-        label: t(
-          "common:commandPalette.toggleKnowledgeSearch",
-          "Toggle Search & Context"
-        ),
-        description: t(
-          "common:commandPalette.toggleKnowledgeSearchDesc",
-          "Search your knowledge base and context"
-        ),
-        keywords: ["rag", "context", "knowledge", "search"],
-        action: () => setChatMode(chatMode === "rag" ? "normal" : "rag")
-      },
-      {
-        id: "slash-web",
-        command: "web",
-        label: t(
-          "common:commandPalette.toggleWebSearch",
-          "Toggle Web Search"
-        ),
-        description: t(
-          "common:commandPalette.toggleWebDesc",
-          "Search the internet"
-        ),
-        keywords: ["web", "internet", "browse"],
-        action: () => setWebSearch(!webSearch)
-      },
-      {
-        id: "slash-vision",
-        command: "vision",
-        label: t("playground:actions.upload", "Attach image"),
-        description: t(
-          "playground:composer.slashVisionDesc",
-          "Attach an image for vision"
-        ),
-        keywords: ["image", "ocr", "vision"],
-        action: handleImageUpload
-      },
-      {
-        id: "slash-generate-image",
-        command: "generate-image",
-        label: t(
-          "playground:composer.slashGenerateImage",
-          "Generate image"
-        ),
-        description: imageBackendDefaultTrimmed
-          ? t(
-              "playground:composer.slashGenerateImageDescDefault",
-              "Generate an image (default: {{backend}}). Use /generate-image:<provider> to override.",
-              { backend: imageBackendLabel }
-            )
-          : t(
-              "playground:composer.slashGenerateImageDesc",
-              "Generate an image. Use /generate-image:<provider> <prompt>."
-            ),
-        keywords: ["image", "image gen", "flux", "zturbo", "art"],
-        insertText: imageBackendDefaultTrimmed
-          ? "/generate-image "
-          : "/generate-image:"
-      },
-      {
-        id: "slash-model",
-        command: "model",
-        label: t("common:commandPalette.switchModel", "Switch Model"),
-        description: t(
-          "common:currentChatModelSettings",
-          "Open current chat settings"
-        ),
-        keywords: ["settings", "parameters", "temperature"],
-        action: () => setOpenModelSettings(true)
-      }
-    ],
-    [
-      chatMode,
-      handleImageUpload,
-      imageBackendDefaultTrimmed,
-      imageBackendLabel,
-      setChatMode,
-      setWebSearch,
-      t,
-      webSearch,
-      setOpenModelSettings
-    ]
-  )
-
-  const slashCommandLookup = React.useMemo(
-    () => new Map(slashCommands.map((command) => [command.command, command])),
-    [slashCommands]
-  )
-
-  const slashMatch = React.useMemo(
-    () => form.values.message.match(/^\s*\/([\w-]*)$/),
-    [form.values.message]
-  )
-  const slashQuery = slashMatch?.[1] ?? ""
-  const showSlashMenu = Boolean(slashMatch)
-  const [slashActiveIndex, setSlashActiveIndex] = React.useState(0)
-
-  const filteredSlashCommands = React.useMemo(() => {
-    if (!slashQuery) return slashCommands
-    const q = slashQuery.toLowerCase()
-    return slashCommands.filter((command) => {
-      if (command.command.startsWith(q)) return true
-      if (command.label.toLowerCase().includes(q)) return true
-      return (command.keywords || []).some((keyword) =>
-        keyword.toLowerCase().includes(q)
-      )
-    })
-  }, [slashCommands, slashQuery])
-
-  React.useEffect(() => {
-    if (!showSlashMenu) {
-      setSlashActiveIndex(0)
-      return
-    }
-    setSlashActiveIndex((prev) => {
-      if (filteredSlashCommands.length === 0) return 0
-      return Math.min(prev, filteredSlashCommands.length - 1)
-    })
-  }, [showSlashMenu, filteredSlashCommands.length, slashQuery])
-
-  const parseSlashInput = React.useCallback((text: string) => {
-    const trimmed = text.trimStart()
-    const match = trimmed.match(/^\/(\w+)(?:\s+([\s\S]*))?$/)
-    if (!match) return null
-    return {
-      command: match[1].toLowerCase(),
-      remainder: match[2] || ""
-    }
-  }, [])
-
-  const parseImageSlashCommand = React.useCallback(
-    (text: string) => {
-      const trimmed = text.trim()
-      if (!trimmed.toLowerCase().startsWith("/generate-image")) return null
-      const remainder = trimmed.slice("/generate-image".length)
-      const colonMatch = remainder.match(
-        /^\s*:\s*([^\s]+)(?:\s+([\s\S]*))?$/i
-      )
-      if (colonMatch) {
-        const provider = colonMatch[1]?.trim() || ""
-        const prompt = (colonMatch[2] || "").trim()
-        const missingProvider = provider.length === 0
-        return {
-          provider,
-          prompt,
-          invalid: missingProvider,
-          missingProvider
-        }
-      }
-
-      const prompt = remainder.trim()
-      if (imageBackendDefaultTrimmed) {
-        return {
-          provider: imageBackendDefaultTrimmed,
-          prompt,
-          invalid: false,
-          missingProvider: false
-        }
-      }
-
-      return {
-        provider: "",
-        prompt,
-        invalid: true,
-        missingProvider: true
-      }
-    },
-    [imageBackendDefaultTrimmed]
-  )
-
-  const applySlashCommand = React.useCallback(
-    (text: string) => {
-      const parsed = parseSlashInput(text)
-      if (!parsed) {
-        return { handled: false, message: text }
-      }
-      const command = slashCommandLookup.get(parsed.command)
-      if (!command) {
-        return { handled: false, message: text }
-      }
-      command.action()
-      return { handled: true, message: parsed.remainder }
-    },
-    [parseSlashInput, slashCommandLookup]
-  )
-
-  const resolveSubmissionIntent = React.useCallback(
-    (rawMessage: string) => {
-      const imageCommand = parseImageSlashCommand(rawMessage)
-      if (imageCommand) {
-        return {
-          handled: true,
-          message: imageCommand.prompt,
-          imageBackendOverride: imageCommand.provider,
-          isImageCommand: true,
-          invalidImageCommand: imageCommand.invalid,
-          imageCommandMissingProvider: Boolean(imageCommand.missingProvider)
-        }
-      }
-      const slashResult = applySlashCommand(rawMessage)
-      return {
-        handled: slashResult.handled,
-        message: slashResult.handled ? slashResult.message : rawMessage,
-        imageBackendOverride: undefined,
-        isImageCommand: false,
-        invalidImageCommand: false,
-        imageCommandMissingProvider: false
-      }
-    },
-    [applySlashCommand, parseImageSlashCommand]
-  )
-  const activeImageCommand = React.useMemo(
-    () => Boolean(parseImageSlashCommand(form.values.message)),
-    [form.values.message, parseImageSlashCommand]
-  )
+  const {
+    showSlashMenu,
+    slashActiveIndex,
+    setSlashActiveIndex,
+    filteredSlashCommands,
+    resolveSubmissionIntent,
+    activeImageCommand,
+    handleSlashCommandSelect: slashHandleSelect
+  } = useSlashCommands({
+    chatMode,
+    setChatMode,
+    webSearch,
+    setWebSearch,
+    handleImageUpload,
+    imageBackendDefaultTrimmed,
+    imageBackendLabel,
+    setOpenModelSettings,
+    currentMessage: form.values.message
+  })
 
   const handleSlashCommandSelect = React.useCallback(
     (command: SlashCommandItem) => {
-      const parsed = parseSlashInput(form.values.message)
-      if (command.insertText) {
-        form.setFieldValue("message", command.insertText)
-        requestAnimationFrame(() => textareaRef.current?.focus())
-        return
-      }
-      command.action?.()
-      form.setFieldValue("message", parsed?.remainder || "")
-      requestAnimationFrame(() => textareaRef.current?.focus())
+      slashHandleSelect(command, form.setFieldValue.bind(form), textareaRef)
     },
-    [form, parseSlashInput, textareaRef]
+    [slashHandleSelect, form, textareaRef]
   )
 
   const serverRecorderRef = React.useRef<MediaRecorder | null>(null)
@@ -3711,32 +2768,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   // State for collapsible advanced section in tools popover
   const [advancedToolsExpanded, setAdvancedToolsExpanded] = React.useState(isProMode)
-  const [mcpSettingsOpen, setMcpSettingsOpen] = React.useState(false)
-  const actionBarCollapseTimerRef = React.useRef<number | null>(null)
-  const actionBarPinnedRef = React.useRef(false)
-  const composerHoveringRef = React.useRef(false)
-
-  const clearActionBarCollapseTimer = React.useCallback(() => {
-    if (actionBarCollapseTimerRef.current !== null) {
-      window.clearTimeout(actionBarCollapseTimerRef.current)
-      actionBarCollapseTimerRef.current = null
-    }
-  }, [])
-
-  const showActionBar = React.useCallback(() => {
-    clearActionBarCollapseTimer()
-    setActionBarVisible(true)
-  }, [clearActionBarCollapseTimer])
-
-  const scheduleActionBarCollapse = React.useCallback(() => {
-    clearActionBarCollapseTimer()
-    if (actionBarPinnedRef.current) return
-    actionBarCollapseTimerRef.current = window.setTimeout(() => {
-      if (!actionBarPinnedRef.current && !composerHoveringRef.current) {
-        setActionBarVisible(false)
-      }
-    }, 800)
-  }, [clearActionBarCollapseTimer])
+  const { mcpSettingsOpen, setMcpSettingsOpen } = mcpCtrl
 
   const moreToolsContent = React.useMemo(
     () => (
@@ -4175,216 +3207,44 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }
 
-  const persistenceModeLabel = React.useMemo(
-    () =>
-      getPersistenceModeLabel(
-        t,
-        temporaryChat,
-        isConnectionReady,
-        serverChatId
-      ),
-    [isConnectionReady, serverChatId, temporaryChat, t]
-  )
+  const {
+    persistenceTooltip,
+    focusConnectionCard,
+    getPersistenceModeLabel
+  } = usePersistenceMode({
+    temporaryChat,
+    serverChatId,
+    isConnectionReady
+  })
 
-  const persistencePillLabel = React.useMemo(() => {
-    if (temporaryChat) {
-      return t(
-        "playground:composer.persistence.ephemeralPill",
-        "Not saved"
-      )
-    }
-    if (serverChatId || isConnectionReady) {
-      return t(
-        "playground:composer.persistence.serverPill",
-        "Server"
-      )
-    }
-    return t(
-      "playground:composer.persistence.localPill",
-      "Local"
-    )
-  }, [isConnectionReady, serverChatId, temporaryChat, t])
+  const externalPinSources =
+    contextToolsOpen ||
+    promptInsertOpen ||
+    Boolean(promptInsertChoice) ||
+    mcpSettingsOpen ||
+    openModelSettings ||
+    openActorSettings ||
+    documentGeneratorOpen ||
+    voiceModeSelectorOpen ||
+    modelDropdownOpen ||
+    mcpCtrl.mcpPopoverOpen ||
+    toolsPopoverOpen ||
+    attachmentMenuOpen ||
+    sendMenuOpen
 
-  const persistenceTooltip = React.useMemo(
-    () => (
-      <div className="flex flex-col gap-0.5 text-xs">
-        <span className="font-medium">{persistencePillLabel}</span>
-        <span className="text-text-subtle">{persistenceModeLabel}</span>
-      </div>
-    ),
-    [persistenceModeLabel, persistencePillLabel]
-  )
-
-  const focusConnectionCard = React.useCallback(() => {
-    try {
-      const card = document.getElementById("server-connection-card")
-      if (card) {
-        card.scrollIntoView({ block: "nearest", behavior: "smooth" })
-        ;(card as HTMLElement).focus()
-        return
-      }
-    } catch {
-      // ignore DOM errors and fall through to hash navigation
-    }
-    try {
-      const base =
-        window.location.href.replace(/#.*$/, "") || "/options.html"
-      const target = `${base}#/settings/tldw`
-      window.location.href = target
-    } catch {
-      // ignore navigation failures
-    }
-  }, [])
-
-  const actionBarPinned = React.useMemo(
-    () =>
-      composerFocusWithin ||
-      contextToolsOpen ||
-      promptInsertOpen ||
-      Boolean(promptInsertChoice) ||
-      mcpSettingsOpen ||
-      openModelSettings ||
-      openActorSettings ||
-      documentGeneratorOpen ||
-      voiceModeSelectorOpen ||
-      modelDropdownOpen ||
-      mcpPopoverOpen ||
-      toolsPopoverOpen ||
-      attachmentMenuOpen ||
-      sendMenuOpen,
-    [
-      attachmentMenuOpen,
-      composerFocusWithin,
-      contextToolsOpen,
-      documentGeneratorOpen,
-      mcpPopoverOpen,
-      mcpSettingsOpen,
-      modelDropdownOpen,
-      openActorSettings,
-      openModelSettings,
-      promptInsertOpen,
-      promptInsertChoice,
-      sendMenuOpen,
-      toolsPopoverOpen,
-      voiceModeSelectorOpen
-    ]
-  )
-
-  React.useEffect(() => {
-    actionBarPinnedRef.current = actionBarPinned
-  }, [actionBarPinned])
-
-  React.useEffect(() => {
-    composerHoveringRef.current = composerHovering
-  }, [composerHovering])
-
-  React.useEffect(() => {
-    if (actionBarPinned) {
-      showActionBar()
-      return
-    }
-    if (!composerHovering) {
-      scheduleActionBarCollapse()
-    }
-  }, [actionBarPinned, composerHovering, scheduleActionBarCollapse, showActionBar])
-
-  React.useEffect(() => clearActionBarCollapseTimer, [clearActionBarCollapseTimer])
-
-  const handleComposerMouseEnter = React.useCallback(() => {
-    setComposerHovering(true)
-    showActionBar()
-  }, [showActionBar])
-
-  const handleComposerMouseLeave = React.useCallback(() => {
-    setComposerHovering(false)
-    scheduleActionBarCollapse()
-  }, [scheduleActionBarCollapse])
-
-  const handleComposerFocusCapture = React.useCallback(() => {
-    setComposerFocusWithin(true)
-    showActionBar()
-  }, [showActionBar])
-
-  const handleComposerBlurCapture = React.useCallback(
-    (event: React.FocusEvent<HTMLDivElement>) => {
-      const next = event.relatedTarget as Node | null
-      if (next && event.currentTarget.contains(next)) return
-      setComposerFocusWithin(false)
-      scheduleActionBarCollapse()
-    },
-    [scheduleActionBarCollapse]
-  )
-
-  const mcpDisabledReason = React.useMemo(() => {
-    if (!hasMcp) {
-      return t("playground:composer.mcpToolsUnavailable", "MCP tools unavailable")
-    }
-    if (mcpHealthState === "unhealthy") {
-      return t("playground:composer.mcpToolsUnhealthy", "MCP tools are offline")
-    }
-    if (mcpToolsLoading) {
-      return t("playground:composer.mcpToolsLoading", "Loading tools...")
-    }
-    if (mcpTools.length === 0) {
-      return t("playground:composer.mcpToolsEmpty", "No MCP tools available")
-    }
-    return ""
-  }, [hasMcp, mcpHealthState, mcpToolsLoading, mcpTools.length, t])
-
-  React.useEffect(() => {
-    if (!hasMcp || mcpHealthState === "unhealthy") {
-      setMcpPopoverOpen(false)
-    }
-  }, [hasMcp, mcpHealthState])
-
-  const mcpChoiceLabel = React.useMemo(() => {
-    switch (toolChoice) {
-      case "required":
-        return t("playground:composer.toolChoiceRequired", "Required")
-      case "none":
-        return t("playground:composer.toolChoiceNone", "None")
-      case "auto":
-      default:
-        return t("playground:composer.toolChoiceAuto", "Auto")
-    }
-  }, [toolChoice, t])
-
-  const mcpAriaLabel = React.useMemo(() => {
-    if (!hasMcp) {
-      return t("playground:composer.mcpAriaUnavailable", "MCP tools unavailable")
-    }
-    const countLabel = mcpToolsLoading
-      ? t("playground:composer.mcpToolsLoading", "Loading tools...")
-      : t("playground:tools.mcpSummary", "{{count}} tools", { count: mcpTools.length })
-    return t(
-      "playground:composer.mcpAriaLabel",
-      "MCP tools: {{choice}}, {{summary}}",
-      { choice: mcpChoiceLabel, summary: countLabel }
-    )
-  }, [hasMcp, mcpChoiceLabel, mcpTools.length, mcpToolsLoading, t])
-
-  const mcpSummaryLabel = React.useMemo(() => {
-    if (!hasMcp) return t("playground:composer.mcpToolsUnavailable", "MCP unavailable")
-    if (mcpToolsLoading) return t("playground:composer.mcpToolsLoading", "Loading tools...")
-    return t("playground:tools.mcpSummary", "{{count}} tools", { count: mcpTools.length })
-  }, [hasMcp, mcpToolsLoading, mcpTools.length, t])
-
-  const mcpStatusLabel = React.useMemo(() => {
-    if (!hasMcp) {
-      return t("playground:composer.mcpToolsUnavailable", "MCP tools unavailable")
-    }
-    if (mcpHealthState === "unhealthy") {
-      return t("playground:composer.mcpToolsUnhealthy", "MCP tools are offline")
-    }
-    return mcpSummaryLabel
-  }, [hasMcp, mcpHealthState, mcpSummaryLabel, t])
+  const {
+    actionBarVisible,
+    composerFocusWithin,
+    actionBarVisibilityClass,
+    handlers: actionBarHandlers
+  } = useActionBarVisibility({ externalPinSources })
 
   const mcpControlContent = (
     <div className="flex w-64 flex-col gap-2 p-2">
       <div className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
         {t("playground:composer.mcpToolsLabel", "MCP tools")}
       </div>
-      <div className="text-xs text-text-muted">{mcpSummaryLabel}</div>
+      <div className="text-xs text-text-muted">{mcpCtrl.mcpSummaryLabel}</div>
       <div className="flex flex-col gap-1">
         <div className="text-xs font-semibold text-text-muted">
           {t("playground:composer.toolChoiceLabel", "Tool choice")}
@@ -4415,7 +3275,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         <button
           type="button"
           onClick={() => {
-            setMcpPopoverOpen(false)
+            mcpCtrl.setMcpPopoverOpen(false)
             setMcpSettingsOpen(true)
           }}
           className="mt-1 inline-flex w-fit items-center gap-1 text-xs font-medium text-primary hover:text-primaryStrong"
@@ -4431,14 +3291,14 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       variant="outline"
       size="md"
       shape="pill"
-      ariaLabel={mcpAriaLabel}
-      title={mcpAriaLabel}
+      ariaLabel={mcpCtrl.mcpAriaLabel}
+      title={mcpCtrl.mcpAriaLabel}
       disabled={!hasMcp || mcpHealthState === "unhealthy"}
       className="gap-1.5 min-h-[44px]"
     >
       <span className="inline-flex items-center gap-1.5">
         <span className="text-[11px] font-semibold">MCP</span>
-        <span className="text-[11px] text-text-muted">{mcpChoiceLabel}</span>
+        <span className="text-[11px] text-text-muted">{mcpCtrl.mcpChoiceLabel}</span>
         {!mcpToolsLoading && hasMcp && mcpTools.length > 0 && (
           <span className="rounded-full bg-surface2 px-1.5 py-0.5 text-[10px] text-text-muted">
             {mcpTools.length}
@@ -4451,7 +3311,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   const mcpControl =
     !hasMcp || mcpHealthState === "unhealthy" ? (
-      <Tooltip title={mcpDisabledReason}>
+      <Tooltip title={mcpCtrl.mcpDisabledReason}>
         <span>{mcpControlButton}</span>
       </Tooltip>
     ) : (
@@ -4459,8 +3319,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         trigger="click"
         placement="topRight"
         content={mcpControlContent}
-        open={mcpPopoverOpen}
-        onOpenChange={setMcpPopoverOpen}
+        open={mcpCtrl.mcpPopoverOpen}
+        onOpenChange={mcpCtrl.setMcpPopoverOpen}
       >
         {mcpControlButton}
       </Popover>
@@ -4729,9 +3589,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     </Tooltip>
   )
 
-  const actionBarVisibilityClass = actionBarVisible
-    ? "max-h-[480px] opacity-100 visible"
-    : "max-h-0 opacity-0 invisible pointer-events-none"
 
   return (
     <div className="flex w-full flex-col items-center px-4 pb-6">
@@ -4742,10 +3599,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         <div className="relative flex w-full flex-row justify-center">
           <div
             data-istemporary-chat={temporaryChat}
-            onMouseEnter={handleComposerMouseEnter}
-            onMouseLeave={handleComposerMouseLeave}
-            onFocusCapture={handleComposerFocusCapture}
-            onBlurCapture={handleComposerBlurCapture}
+            onMouseEnter={actionBarHandlers.onMouseEnter}
+            onMouseLeave={actionBarHandlers.onMouseLeave}
+            onFocusCapture={actionBarHandlers.onFocusCapture}
+            onBlurCapture={actionBarHandlers.onBlurCapture}
             className={`relative w-full rounded-3xl border border-transparent bg-surface/95 p-3 text-text shadow-card backdrop-blur-lg transition-all duration-200 data-[istemporary-chat='true']:border-t-4 data-[istemporary-chat='true']:border-t-purple-500 data-[istemporary-chat='true']:border-dashed data-[istemporary-chat='true']:opacity-90 ${
               !isConnectionReady ? "opacity-80" : ""
             }`}>
@@ -5303,7 +4160,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         title={t("playground:composer.mcpSettingsTitle", "MCP tool settings")}
       >
         <div className="flex flex-col gap-4">
-          <div className="text-xs text-text-muted">{mcpStatusLabel}</div>
+          <div className="text-xs text-text-muted">{mcpCtrl.mcpStatusLabel}</div>
           {!hasMcp ? (
             <div className="text-sm text-text-muted">
               {t("playground:composer.mcpToolsUnavailable", "MCP tools unavailable")}
@@ -5321,13 +4178,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                   loading={mcpCatalogsLoading}
                   value={toolCatalogId ?? undefined}
                   placeholder={t("playground:composer.mcpCatalogSelectPlaceholder", "Select a catalog")}
-                  onChange={(value) => handleCatalogSelect(value as number | undefined)}
+                  onChange={(value) => mcpCtrl.handleCatalogSelect(value as number | undefined)}
                   optionFilterProp="label"
                   className="w-full"
                 >
-                  {catalogGroups.team.length > 0 && (
+                  {mcpCtrl.catalogGroups.team.length > 0 && (
                     <Select.OptGroup label={t("playground:composer.mcpCatalogTeam", "Team catalogs")}>
-                      {catalogGroups.team.map((catalog) => (
+                      {mcpCtrl.catalogGroups.team.map((catalog) => (
                         <Select.Option
                           key={`team-${catalog.id}`}
                           value={catalog.id}
@@ -5341,9 +4198,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                       ))}
                     </Select.OptGroup>
                   )}
-                  {catalogGroups.org.length > 0 && (
+                  {mcpCtrl.catalogGroups.org.length > 0 && (
                     <Select.OptGroup label={t("playground:composer.mcpCatalogOrg", "Org catalogs")}>
-                      {catalogGroups.org.map((catalog) => (
+                      {mcpCtrl.catalogGroups.org.map((catalog) => (
                         <Select.Option
                           key={`org-${catalog.id}`}
                           value={catalog.id}
@@ -5357,9 +4214,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                       ))}
                     </Select.OptGroup>
                   )}
-                  {catalogGroups.global.length > 0 && (
+                  {mcpCtrl.catalogGroups.global.length > 0 && (
                     <Select.OptGroup label={t("playground:composer.mcpCatalogGlobal", "Global catalogs")}>
-                      {catalogGroups.global.map((catalog) => (
+                      {mcpCtrl.catalogGroups.global.map((catalog) => (
                         <Select.Option
                           key={`global-${catalog.id}`}
                           value={catalog.id}
@@ -5377,10 +4234,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                 <Input
                   size="small"
                   placeholder={t("playground:composer.mcpCatalogPlaceholder", "catalog name")}
-                  value={catalogDraft}
-                  onChange={(e) => setCatalogDraft(e.target.value)}
-                  onBlur={commitCatalog}
-                  onPressEnter={commitCatalog}
+                  value={mcpCtrl.catalogDraft}
+                  onChange={(e) => mcpCtrl.setCatalogDraft(e.target.value)}
+                  onBlur={mcpCtrl.commitCatalog}
+                  onPressEnter={mcpCtrl.commitCatalog}
                 />
               </div>
               <div className="flex flex-col gap-1">

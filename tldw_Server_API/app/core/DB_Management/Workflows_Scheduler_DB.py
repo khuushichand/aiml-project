@@ -202,10 +202,7 @@ class WorkflowsSchedulerDB:
             pass
         with self.backend.transaction() as conn:
             backend_type = getattr(getattr(self.backend, "config", None), "backend_type", None)
-            if backend_type == BackendType.POSTGRESQL:
-                schema = SCHED_POSTGRES_SCHEMA
-            else:
-                schema = SCHED_SQLITE_SCHEMA
+            schema = SCHED_POSTGRES_SCHEMA if backend_type == BackendType.POSTGRESQL else SCHED_SQLITE_SCHEMA
             self.backend.create_tables(schema, connection=conn)
 
             existing_columns = {

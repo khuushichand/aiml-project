@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import sqlite3
 
@@ -8,6 +9,8 @@ from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     BackendType,
+)
+from tldw_Server_API.app.core.DB_Management.backends.base import (
     DatabaseError as BackendDatabaseError,
 )
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
@@ -105,9 +108,7 @@ async def run_workflows_db_maintenance(stop_event: asyncio.Event) -> None:
         except _WORKFLOWS_DB_MAINTENANCE_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Workflows DB maintenance loop error: {e}")
 
-        try:
+        with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(stop_event.wait(), timeout=interval)
-        except asyncio.TimeoutError:
-            pass
 
     logger.info("Workflows DB maintenance worker stopped")

@@ -29,10 +29,7 @@ try:
         STREAM_AUTO_MAX_ROWS_THRESHOLD = _DEFAULT_STREAM_AUTO_THRESHOLD
     else:
         raw_str = str(raw_stream_auto).strip()
-        if raw_str == "":
-            STREAM_AUTO_MAX_ROWS_THRESHOLD = _DEFAULT_STREAM_AUTO_THRESHOLD
-        else:
-            STREAM_AUTO_MAX_ROWS_THRESHOLD = int(raw_str)
+        STREAM_AUTO_MAX_ROWS_THRESHOLD = _DEFAULT_STREAM_AUTO_THRESHOLD if raw_str == "" else int(raw_str)
 except Exception:
     logger.warning(
         "Invalid AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS value {}; using default {}",

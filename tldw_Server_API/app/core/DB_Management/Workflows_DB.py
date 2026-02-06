@@ -7,6 +7,7 @@ to support v0.1 engine scaffolding.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sqlite3
@@ -32,7 +33,6 @@ from .backends.query_utils import (
     prepare_backend_many_statement,
     prepare_backend_statement,
 )
-
 
 _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -261,7 +261,7 @@ class WorkflowsBackendCursorAdapter:
 
     def _build_rows(self, result: QueryResult) -> list[WorkflowRowAdapter]:
         rows: list[WorkflowRowAdapter] = []
-        columns: tuple[str, ...] = tuple()
+        columns: tuple[str, ...] = ()
         if result.description:
             columns = tuple(desc[0] for desc in result.description if desc)
         for mapping in result.rows:
@@ -487,10 +487,7 @@ class WorkflowsDatabase:
         if not db_path and url:
             if url.startswith("sqlite://"):
                 path = url.split("sqlite://", 1)[1]
-                if path.startswith("/") and not path.startswith("//"):
-                    resolved = path
-                else:
-                    resolved = path.lstrip("/")
+                resolved = path if path.startswith("/") and not path.startswith("//") else path.lstrip("/")
                 db_path = resolved or str(DEFAULT_DB_PATH)
             else:
                 logger.warning(
@@ -617,10 +614,8 @@ class WorkflowsDatabase:
         # Close pooled connections first
         if hasattr(self, "_sqlite_pool") and self._sqlite_pool:
             for c in self._sqlite_pool:
-                try:
+                with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
                     c.close()
-                except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
-                    pass
             self._sqlite_pool = []
         if hasattr(self, "_conn") and self._conn is not None:
             try:
@@ -806,42 +801,34 @@ class WorkflowsDatabase:
         ident = backend.escape_identifier
 
         # Convert payload_json to JSONB if needed
-        try:
+        with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
             backend.execute(
                 f"ALTER TABLE {ident('workflow_events')} "
                 f"ALTER COLUMN {ident('payload_json')} TYPE JSONB USING {ident('payload_json')}::jsonb",
                 connection=conn,
             )
-        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
-            pass
 
         # Add GIN index on JSONB payloads
-        try:
+        with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
             backend.execute(
                 f"CREATE INDEX IF NOT EXISTS {ident('idx_events_payload_json_gin')} "
                 f"ON {ident('workflow_events')} USING GIN ({ident('payload_json')})",
                 connection=conn,
             )
-        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
-            pass
 
         # Recreate FK constraints to cascade on run delete
         for table in ("workflow_events", "workflow_step_runs", "workflow_artifacts"):
-            try:
+            with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
                 backend.execute(
                     f"ALTER TABLE {ident(table)} DROP CONSTRAINT IF EXISTS {ident(f'{table}_run_id_fkey')}",
                     connection=conn,
                 )
-            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
-                pass
-            try:
+            with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
                 backend.execute(
                     f"ALTER TABLE {ident(table)} ADD CONSTRAINT {ident(f'{table}_run_id_fkey')} "
                     f"FOREIGN KEY ({ident('run_id')}) REFERENCES {ident('workflow_runs')}({ident('run_id')}) ON DELETE CASCADE",
                     connection=conn,
                 )
-            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
-                pass
 
         # Partial indexes for hot statuses
         try:
@@ -877,20 +864,16 @@ class WorkflowsDatabase:
         backend = self.backend
         ident = backend.escape_identifier
         # Add additional partial indexes for common terminal statuses
-        try:
+        with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
             backend.execute(
                 f"CREATE INDEX IF NOT EXISTS {ident('idx_runs_status_succeeded')} ON {ident('workflow_runs')}({ident('status')}) WHERE {ident('status')} = 'succeeded'",
                 connection=conn,
             )
-        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
-            pass
-        try:
+        with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
             backend.execute(
                 f"CREATE INDEX IF NOT EXISTS {ident('idx_runs_status_failed')} ON {ident('workflow_runs')}({ident('status')}) WHERE {ident('status')} = 'failed'",
                 connection=conn,
             )
-        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
-            pass
 
     def _backend_migrate_to_v5(self, conn) -> None:
         if not self.backend:
@@ -909,7 +892,7 @@ class WorkflowsDatabase:
         )
 
         # Best-effort backfill tenant_id from workflow_runs
-        try:
+        with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
             backend.execute(
                 f"UPDATE {ident('workflow_step_runs')} AS s "
                 f"SET {ident('tenant_id')} = r.{ident('tenant_id')} "
@@ -918,23 +901,19 @@ class WorkflowsDatabase:
                 f"AND (s.{ident('tenant_id')} IS NULL OR s.{ident('tenant_id')} = '')",
                 connection=conn,
             )
-        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
-            pass
 
     def _backend_migrate_to_v6(self, conn) -> None:
         if not self.backend:
             return
         backend = self.backend
         ident = backend.escape_identifier
-        try:
+        with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
             backend.execute(
                 f"CREATE INDEX IF NOT EXISTS {ident('idx_runs_idempotency_lookup')} "
                 f"ON {ident('workflow_runs')} ({ident('tenant_id')}, {ident('user_id')}, "
                 f"{ident('idempotency_key')}, {ident('created_at')})",
                 connection=conn,
             )
-        except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
-            pass
 
     def _initialize_schema_backend(self) -> None:
         if not self.backend:
@@ -1225,10 +1204,8 @@ class WorkflowsDatabase:
             try:
                 self._sqlite_pool.append(conn)
             except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
-                try:
+                with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
                     conn.close()
-                except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
-                    pass
     def create_definition(
         self,
         tenant_id: str,
@@ -1806,10 +1783,8 @@ class WorkflowsDatabase:
         out: list[dict[str, Any]] = []
         for r in rows:
             data = self._row_to_dict(r)
-            try:
+            with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
                 data["payload_json"] = json.loads(data.get("payload_json") or "{}")
-            except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
-                pass
             out.append(data)
         return out
 
@@ -2016,7 +1991,7 @@ class WorkflowsDatabase:
         for row in rows:
             raw = None
             try:
-                if isinstance(row, WorkflowRowAdapter) or isinstance(row, dict):
+                if isinstance(row, (WorkflowRowAdapter, dict)):
                     raw = row.get("outputs_json")
                 else:
                     raw = row[0] if row else None
@@ -2311,10 +2286,7 @@ class WorkflowsDatabase:
                 try:
                     from tldw_Server_API.app.core.Security.crypto import decrypt_json_blob
                     dec = decrypt_json_blob(md.get("_encrypted") or {})
-                    if isinstance(dec, dict):
-                        md = dec
-                    else:
-                        md = {"_encrypted": True}
+                    md = dec if isinstance(dec, dict) else {"_encrypted": True}
                 except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                     md = {"_encrypted": True}
             data["metadata_json"] = md

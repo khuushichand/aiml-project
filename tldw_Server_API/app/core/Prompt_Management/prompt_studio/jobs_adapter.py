@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from datetime import datetime
@@ -271,9 +272,7 @@ class PromptStudioJobsAdapter:
         if job_type and str(job.get("job_type")) != str(job_type):
             return False
         owner = job.get("owner_user_id")
-        if owner is not None and user_id is not None and str(owner) != str(user_id):
-            return False
-        return True
+        return not (owner is not None and user_id is not None and str(owner) != str(user_id))
 
     def _format_job(self, job: dict[str, Any]) -> dict[str, Any]:
         payload = _normalize_payload(job.get("payload"))
@@ -296,10 +295,8 @@ class PromptStudioJobsAdapter:
             "completed_at": _format_datetime(job.get("completed_at")),
         }
         if progress is not None:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 formatted["progress"] = float(progress) / 100.0
-            except (TypeError, ValueError):
-                pass
         return formatted
 
 __all__ = ["PromptStudioJobsAdapter"]

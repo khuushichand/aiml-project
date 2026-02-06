@@ -31,8 +31,8 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DatabaseError,
     InvalidTokenError,
     RegistrationError,
-    TransactionError,
     TokenExpiredError,
+    TransactionError,
     WeakPasswordError,
 )
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
@@ -165,6 +165,7 @@ async def _authenticate_api_key_from_request(request: Request, api_key: str) -> 
             try:
                 if settings and isinstance(settings.DATABASE_URL, str) and settings.DATABASE_URL.startswith("sqlite:///"):
                     from pathlib import Path as _Path
+
                     from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure_authnz_tables
                     db_path = settings.DATABASE_URL.replace("sqlite:///", "")
                     _ensure_authnz_tables(_Path(db_path))
@@ -370,7 +371,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                     cur = await self._conn.execute(q, params)
                     rows = await cur.fetchall()
                     try:
-                        return [{key: r[key] for key in r.keys()} for r in rows]
+                        return [{key: r[key] for key in r} for r in rows]
                     except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                         return rows
 
@@ -384,7 +385,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                     cur = await self._conn.execute(q, params)
                     row = await cur.fetchone()
                     try:
-                        return {key: row[key] for key in row.keys()} if row else None
+                        return {key: row[key] for key in row} if row else None
                     except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                         return row
 

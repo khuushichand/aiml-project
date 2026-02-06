@@ -224,10 +224,7 @@ class PasswordService:
 
     def _has_repeated_chars(self, password: str, max_repeat: int = 3) -> bool:
         """Check if password has repeated characters (e.g., 'aaa', '111')"""
-        for i in range(len(password) - max_repeat + 1):
-            if len(set(password[i:i + max_repeat])) == 1:
-                return True
-        return False
+        return any(len(set(password[i:i + max_repeat])) == 1 for i in range(len(password) - max_repeat + 1))
 
     def generate_secure_password(self, length: int = 16) -> str:
         """

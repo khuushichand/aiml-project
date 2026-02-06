@@ -2,6 +2,7 @@
 # Description: Handles user authentication and identification based on application mode.
 #
 # Imports
+import contextlib
 import os
 from typing import Any, Optional, Union
 from uuid import UUID
@@ -694,10 +695,8 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         raise InactiveUserError("Inactive user")
 
     # Attach user id for downstream context (usage logging, RBAC rate limits)
-    try:
+    with contextlib.suppress(_USER_DB_NONCRITICAL_EXCEPTIONS):
         request.state.user_id = user.id
-    except _USER_DB_NONCRITICAL_EXCEPTIONS:
-        pass
 
     team_ids: list[int] = []
     org_ids: list[int] = []
@@ -934,15 +933,13 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                     request.state.org_ids = []
                 except _USER_DB_NONCRITICAL_EXCEPTIONS:
                     pass
-                try:
+                with contextlib.suppress(_USER_DB_NONCRITICAL_EXCEPTIONS):
                     set_scope(
                         user_id=user.id_int,
                         org_ids=[],
                         team_ids=[],
                         is_admin=True,
                     )
-                except _USER_DB_NONCRITICAL_EXCEPTIONS:
-                    pass
                 try:
                     principal = AuthPrincipal(
                         kind="user",
@@ -977,10 +974,8 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                         request_id=request_id,
                     )
                     request.state._auth_user = user
-                    try:
+                    with contextlib.suppress(_USER_DB_NONCRITICAL_EXCEPTIONS):
                         request.state.user_id = user.id_int
-                    except _USER_DB_NONCRITICAL_EXCEPTIONS:
-                        pass
                 except _USER_DB_NONCRITICAL_EXCEPTIONS:
                     logger.debug("Unable to populate AuthContext for single-user API key")
                 return user
@@ -1342,13 +1337,12 @@ async def get_request_user(
         if _prod and (
             _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
             or _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
-        ):
-            if not getattr(get_request_user, "_warned_testflags_prod", False):
-                logger.warning(
-                    "TEST flags detected while tldw_production=true; "
-                    "test-only auth bypasses are disabled."
-                )
-                get_request_user._warned_testflags_prod = True
+        ) and not getattr(get_request_user, "_warned_testflags_prod", False):
+            logger.warning(
+                "TEST flags detected while tldw_production=true; "
+                "test-only auth bypasses are disabled."
+            )
+            get_request_user._warned_testflags_prod = True
     except _USER_DB_NONCRITICAL_EXCEPTIONS as warn_exc:
         logger.debug(
             f"get_request_user: production test-flag warning emission failed; continuing without warning: {warn_exc}"

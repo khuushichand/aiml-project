@@ -44,11 +44,10 @@ class AuthnzMfaRepo:
             # asyncpg status string: e.g. "UPDATE 0", "UPDATE 1"
             if isinstance(result, str):
                 parts = result.split()
-                if parts and parts[-1].isdigit():
-                    if int(parts[-1]) == 0:
-                        msg = f"User {user_id} not found during {operation}"
-                        logger.warning(msg)
-                        raise UserNotFoundError(msg)
+                if parts and parts[-1].isdigit() and int(parts[-1]) == 0:
+                    msg = f"User {user_id} not found during {operation}"
+                    logger.warning(msg)
+                    raise UserNotFoundError(msg)
                 return
 
             # aiosqlite cursor-style result

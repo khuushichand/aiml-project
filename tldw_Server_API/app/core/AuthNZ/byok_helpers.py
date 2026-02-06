@@ -93,9 +93,7 @@ def is_trusted_base_url_principal(principal: AuthPrincipal | None) -> bool:
         return True
     if principal.kind == "service":
         return True
-    if is_single_user_principal(principal):
-        return True
-    return False
+    return bool(is_single_user_principal(principal))
 
 
 def is_trusted_base_url_request(

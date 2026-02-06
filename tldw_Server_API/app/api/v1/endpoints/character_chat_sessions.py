@@ -5,6 +5,7 @@ Provides CRUD operations for chat sessions and character-specific completions.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -41,12 +42,12 @@ from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
     CharacterChatCompletionV2Response,
     CharacterChatStreamPersistRequest,
     CharacterChatStreamPersistResponse,
-    ChatSettingsResponse,
-    ChatSettingsUpdate,
     ChatSessionCreate,
     ChatSessionListResponse,
     ChatSessionResponse,
     ChatSessionUpdate,
+    ChatSettingsResponse,
+    ChatSettingsUpdate,
     DiagnosticTurnEntry,
     GreetingItem,
     GreetingListResponse,
@@ -72,16 +73,6 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     post_message_to_conversation,
     replace_placeholders,
 )
-from tldw_Server_API.app.core.Character_Chat.modules.character_prompt_presets import (
-    build_character_system_prompt,
-    resolve_character_prompt_preset,
-)
-from tldw_Server_API.app.core.Character_Chat.modules.character_generation_presets import (
-    resolve_character_generation_settings,
-)
-from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
-    sanitize_sender_name,
-)
 
 # Rate limiting
 from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import (
@@ -96,6 +87,16 @@ from tldw_Server_API.app.core.Character_Chat.constants import (
     MAX_TOOL_CALLS_SIZE,
     THROTTLE_CACHE_MAX_KEYS,
     THROTTLE_STALE_SECONDS,
+)
+from tldw_Server_API.app.core.Character_Chat.modules.character_generation_presets import (
+    resolve_character_generation_settings,
+)
+from tldw_Server_API.app.core.Character_Chat.modules.character_prompt_presets import (
+    build_character_system_prompt,
+    resolve_character_prompt_preset,
+)
+from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
+    sanitize_sender_name,
 )
 
 # Chat helpers and utilities
@@ -838,8 +839,8 @@ def _resolve_effective_prompt_preset(
     """
 
     from tldw_Server_API.app.core.Character_Chat.modules.character_prompt_presets import (
-        DEFAULT_PROMPT_PRESET,
         _VALID_PROMPT_PRESETS,
+        DEFAULT_PROMPT_PRESET,
     )
 
     def _coerce_preset_id(value: Any) -> Optional[str]:
@@ -1162,10 +1163,7 @@ def _message_sender_matches_character(
         sender_sanitized = sanitize_sender_name(sender).strip().lower()
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
         sender_sanitized = ""
-    if sender_sanitized and sender_sanitized in active_aliases:
-        return True
-
-    return False
+    return bool(sender_sanitized and sender_sanitized in active_aliases)
 
 
 def _has_prior_assistant_reply(
@@ -1611,9 +1609,7 @@ def _summary_matches_existing(
         return False
     if int(existing_summary.get("windowMessages") or -1) != window:
         return False
-    if int(existing_summary.get("compressedCount") or -1) != compressed_count:
-        return False
-    return True
+    return int(existing_summary.get("compressedCount") or -1) == compressed_count
 
 
 def _persist_auto_summary_to_settings(
@@ -1971,10 +1967,8 @@ async def create_chat_session(
                         is_user_message=False,
                     )
                     # Update in-memory message count (best-effort)
-                    try:
+                    with contextlib.suppress(_CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS):
                         created_conv['message_count'] = (created_conv.get('message_count') or 0) + 1
-                    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
-                        pass
                     seed_status = "ok"
                 else:
                     seed_status = "no_greeting"
@@ -3151,10 +3145,8 @@ async def character_chat_completion(
         if hasattr(current_user, "id_int"):
             user_id_int = current_user.id_int
         elif hasattr(current_user, "id"):
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 user_id_int = int(current_user.id)
-            except (TypeError, ValueError):
-                pass
 
         byok_resolution = await resolve_byok_credentials(
             provider,
@@ -3362,12 +3354,10 @@ async def character_chat_completion(
                     stream = SSEStream(
                         labels={"component": "chat", "endpoint": "character_chat_stream"}
                     )
-                    try:
+                    with contextlib.suppress(_CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS):
                         logger.debug(
                             f"Unified SSE enabled: interval={stream.heartbeat_interval_s} mode={stream.heartbeat_mode}"
                         )
-                    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
-                        pass
 
                     chunk_count = 0
                     total_bytes = 0
@@ -3430,10 +3420,8 @@ async def character_chat_completion(
                         else:
                             # Ensure producer completes if stream ended without explicit DONE
                             if not producer.done():
-                                try:
+                                with contextlib.suppress(_CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS):
                                     await producer
-                                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
-                                    pass
                             # If DONE wasn’t enqueued for any reason, append one now
                             try:
                                 if not getattr(stream, "_done_enqueued", False):
@@ -3443,10 +3431,8 @@ async def character_chat_completion(
                         finally:
                             # Always tear down the background producer to avoid leaks
                             if not producer.done():
-                                try:
+                                with contextlib.suppress(_CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS):
                                     producer.cancel()
-                                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
-                                    pass
                                 try:
                                     await producer
                                 except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:

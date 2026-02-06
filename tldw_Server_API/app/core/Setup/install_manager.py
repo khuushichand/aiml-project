@@ -78,36 +78,26 @@ def _install_dependencies(plan: InstallPlan, status: InstallationStatus, errors:
     for entry in plan.stt:
         key = f"stt:{entry.engine}"
         if key not in processed_backends:
-            try:
+            with contextlib.suppress(PipInstallBlockedError):
                 _install_backend_dependencies('stt', entry.engine, status, errors)
-            except PipInstallBlockedError:
-                pass
             processed_backends.add(key)
 
     for entry in plan.tts:
         key = f"tts:{entry.engine}"
         if key not in processed_backends:
-            try:
+            with contextlib.suppress(PipInstallBlockedError):
                 _install_backend_dependencies('tts', entry.engine, status, errors)
-            except PipInstallBlockedError:
-                pass
             processed_backends.add(key)
 
     if plan.embeddings.huggingface:
-        try:
+        with contextlib.suppress(PipInstallBlockedError):
             _install_embedding_dependencies('huggingface', status, errors)
-        except PipInstallBlockedError:
-            pass
     if plan.embeddings.custom:
-        try:
+        with contextlib.suppress(PipInstallBlockedError):
             _install_embedding_dependencies('custom', status, errors)
-        except PipInstallBlockedError:
-            pass
     if plan.embeddings.onnx:
-        try:
+        with contextlib.suppress(PipInstallBlockedError):
             _install_embedding_dependencies('onnx', status, errors)
-        except PipInstallBlockedError:
-            pass
 
 
 def _install_backend_dependencies(category: str, engine: str, status: InstallationStatus, errors: list[str]) -> None:
@@ -398,9 +388,7 @@ def _is_requests_network_error(exc: Exception) -> bool:
     if "HTTPError" in name:
         return True
     msg = str(exc).lower()
-    if "timeout" in msg or "connection" in msg or "dns" in msg or "network" in msg:
-        return True
-    return False
+    return bool("timeout" in msg or "connection" in msg or "dns" in msg or "network" in msg)
 
 
 def get_install_status_snapshot() -> dict[str, Any] | None:

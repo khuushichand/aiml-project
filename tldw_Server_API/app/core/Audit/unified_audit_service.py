@@ -36,7 +36,7 @@ import re
 import threading
 import time
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import date, datetime, timedelta, timezone
 from datetime import time as time_t
@@ -145,21 +145,15 @@ async def _fallback_queue_lock(path: Path) -> AsyncGenerator[None, None]:
         try:
             yield
         finally:
-            try:
+            with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                 await asyncio.to_thread(fcntl.flock, handle.fileno(), fcntl.LOCK_UN)
-            except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                pass
-            try:
+            with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                 await asyncio.to_thread(handle.close)
-            except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                pass
     elif _HAS_MSVCRT:
         def _open_and_lock() -> Any:
             fh = lock_path.open("a+b")
-            try:
+            with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                 fh.seek(0)
-            except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                pass
             msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
             return fh
 
@@ -167,28 +161,20 @@ async def _fallback_queue_lock(path: Path) -> AsyncGenerator[None, None]:
         try:
             yield
         finally:
-            try:
+            with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                 await asyncio.to_thread(handle.seek, 0)
-            except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                pass
-            try:
+            with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                 await asyncio.to_thread(msvcrt.locking, handle.fileno(), msvcrt.LK_UNLCK, 1)
-            except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                pass
-            try:
+            with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                 await asyncio.to_thread(handle.close)
-            except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                pass
     else:
         lock = _get_fallback_thread_lock(lock_path)
         await asyncio.to_thread(lock.acquire)
         try:
             yield
         finally:
-            try:
+            with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                 lock.release()
-            except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                pass
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -590,10 +576,7 @@ class PIIDetector:
         if overrides:
             for name, raw in overrides.items():
                 try:
-                    if isinstance(raw, list):
-                        compiled = [re.compile(r) for r in raw]
-                    else:
-                        compiled = [re.compile(str(raw))]
+                    compiled = [re.compile(r) for r in raw] if isinstance(raw, list) else [re.compile(str(raw))]
                     if compiled:
                         pat_map[name] = compiled
                 except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
@@ -1106,10 +1089,8 @@ class UnifiedAuditService:
                 await db.execute("PRAGMA temp_store=MEMORY;")
                 await db.execute("PRAGMA foreign_keys=ON;")
                 # Enable incremental vacuum to reclaim space over time
-                try:
+                with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                     await db.execute("PRAGMA auto_vacuum=INCREMENTAL;")
-                except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                    pass
             except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to apply SQLite PRAGMAs on audit DB: {e}")
             db.row_factory = aiosqlite.Row
@@ -1326,10 +1307,8 @@ class UnifiedAuditService:
                 """
             )
             # Migration: add duration_count column if missing (for existing databases)
-            try:
+            with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                 await db.execute("ALTER TABLE audit_daily_stats ADD COLUMN duration_count INTEGER DEFAULT 0")
-            except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                pass
             return
 
         create_sql = """
@@ -1397,17 +1376,13 @@ class UnifiedAuditService:
                     (self.unidentified_tenant_id,),
                 )
 
-            try:
+            with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                 await db.execute("DROP TABLE audit_daily_stats_legacy")
-            except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                pass
             return
 
         if "duration_count" not in existing:
-            try:
+            with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                 await db.execute("ALTER TABLE audit_daily_stats ADD COLUMN duration_count INTEGER DEFAULT 0")
-            except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                pass
 
     async def _ensure_schema_version(self, db: aiosqlite.Connection) -> None:
         """Ensure shared audit DB schema version is recorded."""
@@ -1434,10 +1409,8 @@ class UnifiedAuditService:
                 "DROP TRIGGER IF EXISTS audit_rate_limit_changes",
             ]
             for sql in legacy_objects:
-                try:
+                with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                     await db.execute(sql)
-                except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                    pass
 
         await db.execute("ALTER TABLE audit_events RENAME TO audit_events_legacy")
         if self._shared_mode:
@@ -1944,10 +1917,8 @@ class UnifiedAuditService:
                 except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
                     # Close connection on failure to avoid resource leak
                     pass
-                    try:
+                    with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                         await conn.close()
-                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                        pass
                     logger.warning(f"Failed to initialize pooled audit DB connection: {e}")
                     raise
         return self._db_pool  # type: ignore[return-value]
@@ -1958,20 +1929,14 @@ class UnifiedAuditService:
         conn = await aiosqlite.connect(self.db_path)
         try:
             conn.row_factory = aiosqlite.Row
-            try:
+            with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                 await conn.execute("PRAGMA query_only=ON;")
-            except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                pass
-            try:
+            with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                 await conn.execute("PRAGMA busy_timeout=5000;")
-            except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                pass
             yield conn
         finally:
-            try:
+            with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                 await conn.close()
-            except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                pass
 
     async def start_background_tasks(self):
         """Start background flush and cleanup tasks"""
@@ -2008,17 +1973,13 @@ class UnifiedAuditService:
         async def _cancel_and_await(task: Optional[asyncio.Task]) -> None:
             if task is None:
                 return
-            try:
+            with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                 task.cancel()
-            except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                pass
 
             task_loop = _task_loop(task)
             if task_loop is None or task_loop is current_loop:
-                try:
+                with suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
 
         # Cancel background tasks (await only when bound to the current loop).
         await _cancel_and_await(self._flush_task)
@@ -2045,10 +2006,8 @@ class UnifiedAuditService:
                 if fut_loop is None or fut_loop is current_loop:
                     same_loop_futures.append(fut)
                 else:
-                    try:
+                    with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                         fut.cancel()
-                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                        pass
             if same_loop_futures:
                 await asyncio.gather(*same_loop_futures, return_exceptions=True)
 
@@ -2083,10 +2042,8 @@ class UnifiedAuditService:
         return self._owner_loop
 
     def _touch(self) -> None:
-        try:
+        with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
             self._last_used_ts = time.monotonic()
-        except _AUDIT_NONCRITICAL_EXCEPTIONS:
-            pass
 
     async def _flush_loop(self):
         """Background task to periodically flush events"""
@@ -2375,7 +2332,6 @@ class UnifiedAuditService:
         try:
             max_retries = 3
             backoff_base = 0.05  # 50ms base
-            last_error: Optional[Exception] = None
             for attempt in range(max_retries):
                 try:
                     if self._test_mode:
@@ -2419,17 +2375,14 @@ class UnifiedAuditService:
                     # Success
                     self.stats["events_flushed"] += len(new_events)
                     logger.debug(f"Flushed {len(new_events)} audit events to database")
-                    last_error = None
                     return True
                 except aiosqlite.OperationalError as oe:  # type: ignore[attr-defined]
-                    last_error = oe
                     msg = str(oe).lower()
                     if ("database is locked" in msg or "database locked" in msg) and attempt < max_retries - 1:
                         await asyncio.sleep(backoff_base * (attempt + 1))
                         continue
                     raise
-                except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
-                    last_error = e
+                except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     raise
         except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to flush audit events: {e}")
@@ -2479,14 +2432,9 @@ class UnifiedAuditService:
 
         for event in events:
             ts = event.timestamp
-            try:
+            with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                 ts = _normalize_timestamp(ts)
-            except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                pass
-            if isinstance(ts, datetime):
-                date = ts.date()
-            else:
-                date = event.timestamp.date()
+            date = ts.date() if isinstance(ts, datetime) else event.timestamp.date()
             if self._shared_mode:
                 tenant_id = self._resolve_event_tenant_id(event)
                 key = (tenant_id, date, event.category.value)
@@ -2624,10 +2572,8 @@ class UnifiedAuditService:
                 await db.commit()
 
                 # Reclaim space from deleted pages using incremental vacuum
-                try:
+                with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                     await db.execute("PRAGMA incremental_vacuum")
-                except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                    pass
 
                 if old_events_count or old_stats_count:
                     logger.info(
@@ -2952,10 +2898,8 @@ class UnifiedAuditService:
                     pass
             else:
                 if wrote_temp and temp_path.exists():
-                    try:
+                    with suppress(_AUDIT_NONCRITICAL_EXCEPTIONS):
                         temp_path.replace(fb_path)
-                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                        pass
                 else:
                     try:
                         if temp_path.exists():

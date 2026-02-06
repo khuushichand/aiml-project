@@ -405,7 +405,7 @@ async def create_privilege_snapshot(
         }
         try:
             job_manager = JobManager()
-            job_row = job_manager.create_job(
+            job_manager.create_job(
                 domain="privilege_maps",
                 queue="default",
                 job_type="snapshot",

@@ -9,6 +9,8 @@ This module builds and applies SQL similar to Docs/Deployment/Database/postgres-
 """
 from __future__ import annotations
 
+import contextlib
+
 from loguru import logger
 
 try:
@@ -235,10 +237,8 @@ def ensure_prompt_studio_rls(backend: DatabaseBackend) -> bool:
                 applied = True
             except Exception as e:
                 logger.debug(f"RLS apply skipped/failed for statement: {e}")
-        try:
+        with contextlib.suppress(Exception):
             conn.commit()
-        except Exception:
-            pass
     return applied
 
 
@@ -258,8 +258,6 @@ def ensure_chacha_rls(backend: DatabaseBackend) -> bool:
                 applied = True
             except Exception as e:
                 logger.debug(f"RLS apply skipped/failed for statement: {e}")
-        try:
+        with contextlib.suppress(Exception):
             conn.commit()
-        except Exception:
-            pass
     return applied

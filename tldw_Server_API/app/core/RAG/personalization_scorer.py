@@ -47,7 +47,7 @@ def rerank(
     ranked: list[dict[str, Any]] = []
     expl: list[dict[str, Any]] = []
 
-    for idx, it in enumerate(items):
+    for _idx, it in enumerate(items):
         base = float(it.get("bm25", 0.0))
         vec = float(it.get("vector", 0.0))
         per = float(it.get("personal", 0.0))

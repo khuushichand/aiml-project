@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from typing import Any
 
@@ -141,10 +142,8 @@ async def acp_session_stream(
     # Authenticate
     user_id = await _authenticate_ws(websocket, token=token, api_key=api_key)
     if user_id is None:
-        try:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
             await websocket.close(code=4401)
-        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-            pass
         return
 
     # Set up WebSocket stream wrapper for metrics
@@ -224,10 +223,8 @@ async def acp_session_ssh(
     """WebSocket SSH proxy for an ACP sandbox session."""
     user_id = await _authenticate_ws(websocket, token=token, api_key=api_key)
     if user_id is None:
-        try:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
             await websocket.close(code=4401)
-        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-            pass
         return
 
     try:
@@ -244,10 +241,8 @@ async def acp_session_ssh(
             return
         ssh_host, ssh_port, ssh_user, ssh_key = ssh_info
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-        try:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
             await websocket.close(code=4404)
-        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-            pass
         return
 
     await websocket.accept()
@@ -293,10 +288,8 @@ async def acp_session_ssh(
                             cols = int(payload.get("cols") or 0)
                             rows = int(payload.get("rows") or 0)
                             if cols > 0 and rows > 0:
-                                try:
+                                with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
                                     process.set_term_size(cols, rows)
-                                except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-                                    pass
                             continue
                         process.stdin.write(text)
                         await process.stdin.drain()
@@ -310,10 +303,8 @@ async def acp_session_ssh(
                 _write_input(),
             )
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-        try:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
             await websocket.close(code=1011)
-        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-            pass
 
 async def _handle_client_message(
     client: Any,

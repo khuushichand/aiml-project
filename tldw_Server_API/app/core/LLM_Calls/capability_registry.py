@@ -229,9 +229,8 @@ def _validate_response_format(provider_key: str, response_format: Any) -> None:
     if not isinstance(resp_type, str) or not resp_type.strip():
         _raise_nested_error(provider_key, "response_format", "type must be a non-empty string")
     schema = response_format.get("json_schema")
-    if resp_type == "json_schema":
-        if not isinstance(schema, Mapping):
-            _raise_nested_error(provider_key, "response_format", "json_schema must be an object")
+    if resp_type == "json_schema" and not isinstance(schema, Mapping):
+        _raise_nested_error(provider_key, "response_format", "json_schema must be an object")
     if schema is not None and not isinstance(schema, Mapping):
         _raise_nested_error(provider_key, "response_format", "json_schema must be an object")
     if isinstance(schema, Mapping):

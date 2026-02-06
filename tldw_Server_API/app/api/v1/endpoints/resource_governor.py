@@ -185,7 +185,7 @@ async def get_resource_governor_policy(
             "policies_count": len(getattr(snap, "policies", {}) or {}),
         }
         if include == "ids":
-            body["policy_ids"] = sorted(list((snap.policies or {}).keys()))
+            body["policy_ids"] = sorted((snap.policies or {}).keys())
         elif include == "full":
             # Caution: large response depending on policy size
             body["policies"] = snap.policies or {}

@@ -15,6 +15,7 @@ Reference upstream: https://github.com/neuphonic/neutts-air
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import tempfile
 from collections.abc import AsyncGenerator
@@ -268,10 +269,8 @@ class NeuTTSAdapter(TTSAdapter):
             )
         finally:
             if temp_path and os.path.exists(temp_path):
-                try:
+                with contextlib.suppress(Exception):
                     os.remove(temp_path)
-                except Exception:
-                    pass
 
     async def generate_stream(self, request: TTSRequest) -> AsyncGenerator[bytes, None]:
         if not await self.ensure_initialized():
@@ -364,10 +363,8 @@ class NeuTTSAdapter(TTSAdapter):
             )
         finally:
             if temp_path and os.path.exists(temp_path):
-                try:
+                with contextlib.suppress(Exception):
                     os.remove(temp_path)
-                except Exception:
-                    pass
 
     def _maybe_override_engine(self, extras: dict[str, Any]):
         """Allow per-request override of model repos/devices via extra_params."""

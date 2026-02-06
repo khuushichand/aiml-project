@@ -187,7 +187,7 @@ def _build_items_context_from_media_ids(media_db, item_ids: list[int], limit: in
             include_trash=False,
         )
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
-        rows, total = [], 0
+        rows, _total = [], 0
 
     items: list[dict[str, object]] = []
     for r in rows:

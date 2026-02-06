@@ -9,6 +9,7 @@ Provides health status monitoring for:
 """
 
 import asyncio
+import contextlib
 import time
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -79,10 +80,8 @@ class RAGHealthChecker:
         self._running = False
         if self._check_task:
             self._check_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._check_task
-            except asyncio.CancelledError:
-                pass
         logger.info("RAG health checker stopped")
 
     async def _periodic_check(self):

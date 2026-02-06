@@ -28,6 +28,8 @@ TEST_SETUP_API_KEY = "THIS-IS-NOT-A-SECURE-KEY-123-CHANGE-ME"
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
+import contextlib
+
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager, get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.migrations import check_migration_status, ensure_authnz_tables
@@ -232,10 +234,7 @@ def _detect_env_issues(auth_mode: str, env_values: dict[str, str]) -> tuple[set[
 
 def _write_env_values(env_path: Path, values: dict[str, str]) -> None:
     env_path.parent.mkdir(parents=True, exist_ok=True)
-    if env_path.exists():
-        lines = env_path.read_text(encoding="utf-8").splitlines()
-    else:
-        lines = []
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
 
     updated_keys: set[str] = set()
     for idx, line in enumerate(lines):
@@ -560,10 +559,8 @@ async def ensure_authnz_schema_ready_once() -> None:
         try:
             pool = await get_db_pool()
         except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
-            try:
+            with contextlib.suppress(_AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS):
                 logger.debug(f"AuthNZ schema ensure: failed to acquire DB pool; skipping: {e}")
-            except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
-                pass
             return
 
         try:
@@ -585,10 +582,8 @@ async def ensure_authnz_schema_ready_once() -> None:
         except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
             # Do not raise during startup; log for diagnostics
             logger.debug(f"AuthNZ Startup: schema ensure encountered error: {e}")
-            try:
+            with contextlib.suppress(_AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS):
                 _SCHEMA_ENSURED_KEYS.add(str(getattr(pool, '_sqlite_fs_path', '') or getattr(pool, 'db_path', '') or ''))
-            except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
-                pass
 
 
 async def ensure_single_user_rbac_seed_if_needed() -> None:
@@ -1427,9 +1422,8 @@ async def main(*, non_interactive: bool = False, test_setup: bool = False):
                         default_yes=True,
                         non_interactive=non_interactive,
                     )
-                    if should_create:
-                        if not await create_admin_user():
-                            print("\n⚠️  Admin user creation failed")
+                    if should_create and not await create_admin_user():
+                        print("\n⚠️  Admin user creation failed")
             else:
                 print(f"\n✅ Found {len(existing_users)} existing user(s)")
         except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:

@@ -311,7 +311,7 @@ class WebhookSecurityValidator:
             try:
                 import socket
                 ip_addresses = socket.getaddrinfo(hostname, None)
-                resolved_ips = list(set(addr[4][0] for addr in ip_addresses))
+                resolved_ips = list({addr[4][0] for addr in ip_addresses})
                 metadata["resolved_ips"] = resolved_ips
 
                 for ip_str in resolved_ips:
@@ -435,7 +435,7 @@ class WebhookSecurityValidator:
 
             # Check for suspicious parameter names
             suspicious_param_names = ['eval', 'exec', 'system', 'cmd', 'shell']
-            for param_name in params.keys():
+            for param_name in params:
                 if param_name.lower() in suspicious_param_names:
                     warnings.append(WebhookValidationError(
                         code="SUSPICIOUS_PARAMETER",

@@ -41,9 +41,8 @@ def _strip_inline_comment(value: str) -> str:
             in_single = not in_single
         elif ch == '"' and not in_single:
             in_double = not in_double
-        elif ch == "#" and not in_single and not in_double:
-            if idx == 0 or value[idx - 1].isspace():
-                return value[:idx].rstrip()
+        elif ch == "#" and not in_single and not in_double and (idx == 0 or value[idx - 1].isspace()):
+            return value[:idx].rstrip()
     return value
 
 
@@ -196,10 +195,7 @@ def ensure_env(
             rendered.append(_format_env_line(key, str(value)))
             added_keys.append(key)
 
-    if rendered:
-        new_content = "\n".join(rendered).rstrip("\n") + "\n"
-    else:
-        new_content = ""
+    new_content = "\n".join(rendered).rstrip("\n") + "\n" if rendered else ""
 
     changed = new_content != content
     backup_path: Path | None = None

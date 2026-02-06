@@ -353,7 +353,7 @@ class ContentFilter:
 
         # Check content categories
         category_matches = 0
-        for category, keywords in self.content_categories.items():
+        for _category, keywords in self.content_categories.items():
             if any(keyword in text_lower for keyword in keywords):
                 category_matches += 1
 
@@ -866,7 +866,7 @@ class SecurityFilters:
                 if pii_matches:
                     doc["content"] = self.pii_detector.mask_pii(content, pii_matches)
                     doc["pii_masked"] = True
-                    doc["pii_types"] = list(set(m.pii_type.value for m in pii_matches))
+                    doc["pii_types"] = list({m.pii_type.value for m in pii_matches})
 
         # Log access
         if self.auditor:

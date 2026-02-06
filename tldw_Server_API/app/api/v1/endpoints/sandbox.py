@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import contextlib
 import hashlib
 import hmac
+import json
 import mimetypes
 import os
 import time
@@ -921,9 +922,8 @@ async def start_run(
                     # Suggest docker even if availability is unknown (tests expect this)
                     if _dock_avail() or True:
                         suggestions.append("docker")
-                elif str(rt) == "docker":
-                    if _fc_avail():
-                        suggestions.append("firecracker")
+                elif str(rt) == "docker" and _fc_avail():
+                    suggestions.append("firecracker")
                 # Ensure uniqueness
                 suggestions = sorted(set(suggestions))
             except _SANDBOX_NONCRITICAL_EXCEPTIONS:
@@ -1214,10 +1214,8 @@ async def list_artifacts(
                     candidates.append(rp2)
             except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
-            try:
+            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                 candidates.append(request.url.path)
-            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                pass
             try:
                 # HTTP/2 pseudo-header path may be present
                 pseudo = None
@@ -1289,10 +1287,8 @@ async def download_artifact(
                     candidates.append(rp2)
             except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
-            try:
+            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                 candidates.append(request.url.path)
-            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                pass
             try:
                 pseudo = None
                 for (hk, hv) in request.scope.get("headers", []) or []:
@@ -1446,10 +1442,8 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             test_mode = bool(getattr(app_settings, "TEST_MODE", False))
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             test_mode = False
-        try:
+        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
             test_mode = test_mode or str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
-        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-            pass
         try:
             allow_untracked = str(os.getenv("SANDBOX_WS_ALLOW_UNTRACKED_RUNS", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
@@ -1553,10 +1547,8 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             # Optionally publish synthetic frames via hub for test determinism
             if st is not None and q_empty:
                 # Publish synthetic frames via hub so they participate in ordering and seq stamping
-                try:
+                with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                     hub.publish_event(run_id, "start", {"source": "ws_synthetic"})
-                except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                    pass
                 async def _enqueue_end_later():
                     try:
                         await asyncio.sleep(0.05)
@@ -1588,10 +1580,8 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 # with potentially inconsistent sequencing.
                 try:
                     hub.publish_heartbeat(run_id)
-                    try:
+                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         increment_counter("sandbox_ws_heartbeats_sent_total", labels={"component": "sandbox"})
-                    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                        pass
                 except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                     continue
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
@@ -1612,10 +1602,8 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             while True:
                 try:
                     msg = await websocket.receive_json()
-                    try:
+                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         stream.mark_activity()
-                    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                        pass
                 except WebSocketDisconnect:
                     return
                 except _SANDBOX_NONCRITICAL_EXCEPTIONS:
@@ -1645,17 +1633,13 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 if allowed <= 0:
                     # Rate limited or cap reached: notify client via truncated frame
                     if reason:
-                        try:
+                        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                             hub.publish_truncated(run_id, str(reason))
-                        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                            pass
                     continue
                 if allowed < len(raw):
                     # Truncated by cap; notify once
-                    try:
+                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         hub.publish_truncated(run_id, str(reason or "stdin_cap"))
-                    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                        pass
                 # Enqueue allowed bytes for runner-side stdin pump
                 try:
                     if allowed > 0:
@@ -1680,14 +1664,10 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 if last is None:
                     continue
                 if (_time.time() - float(last)) > float(tout):
-                    try:
+                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         hub.publish_truncated(run_id, "stdin_idle")
-                    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                        pass
-                    try:
+                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         await stream.ws.close()
-                    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                        pass
                     return
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             return
@@ -1712,10 +1692,8 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             # We intentionally keep the socket open in both synthetic and normal modes.
     except WebSocketDisconnect:
         logger.info(f"WS disconnected for run {run_id}")
-        try:
+        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
             increment_counter("sandbox_ws_disconnects_total", labels={"component": "sandbox"})
-        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-            pass
     except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"WS stream error: {e}")
     finally:
@@ -1740,10 +1718,8 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 synth_task.cancel()
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
-        try:
+        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
             await stream.ws.close()
-        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-            pass
 
 
 
@@ -1867,10 +1843,8 @@ async def sandbox_runs_fallback_guard(
                     candidates.append(rp2)
             except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
-            try:
+            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                 candidates.append(request.url.path)
-            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-                pass
             try:
                 # HTTP/2 pseudo-header path may be present
                 pseudo = None

@@ -98,7 +98,7 @@ class IPAccessController:
             ip_obj = ipaddress.ip_address(ip_str)
         except ValueError:
             logger.warning(f"Received request with unparsable IP '{ip_str}'")
-            return False if self.allowed_networks else True
+            return not self.allowed_networks
 
         # Explicit block overrides everything
         for network in self.blocked_networks:

@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, TypeVar
 
 from loguru import logger
 
@@ -60,7 +60,7 @@ class BatchResult:
         available, the Exception if the item failed, or *default* if
         the item was skipped (e.g. due to cancellation).
         """
-        err_map = {idx: exc for idx, exc in self.errors}
+        err_map = dict(self.errors)
         out: list[Any] = []
         if self.results_by_index:
             for idx in range(self.total):
@@ -86,7 +86,7 @@ async def run_batch(
     func: Callable[[Any], Awaitable[T]],
     max_concurrency: int = 5,
     fail_fast: bool = False,
-    on_progress: Optional[Callable[[int, int], Any]] = None,
+    on_progress: Callable[[int, int], Any] | None = None,
 ) -> BatchResult:
     """Execute an async function over a batch of items with concurrency control.
 
@@ -192,7 +192,7 @@ async def run_batch_indexed(
     func: Callable[[int, Any], Awaitable[T]],
     max_concurrency: int = 5,
     fail_fast: bool = False,
-    on_progress: Optional[Callable[[int, int], Any]] = None,
+    on_progress: Callable[[int, int], Any] | None = None,
 ) -> BatchResult:
     """Like ``run_batch`` but the function receives (index, item).
 

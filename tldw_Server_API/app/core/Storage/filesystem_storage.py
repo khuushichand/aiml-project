@@ -11,7 +11,7 @@ import hashlib
 from collections.abc import AsyncIterator
 from io import BytesIO
 from pathlib import Path
-from typing import BinaryIO, Union
+from typing import BinaryIO
 
 import aiofiles
 import aiofiles.os
@@ -31,7 +31,7 @@ class FileSystemStorage(StorageBackend):
     user_id and media_id for efficient lookup and isolation.
     """
 
-    def __init__(self, base_path: Union[str, Path]):
+    def __init__(self, base_path: str | Path):
         """
         Initialize the filesystem storage backend.
 
@@ -106,7 +106,7 @@ class FileSystemStorage(StorageBackend):
         user_id: str,
         media_id: int,
         filename: str,
-        data: Union[BinaryIO, bytes],
+        data: BinaryIO | bytes,
         mime_type: str | None = None,
     ) -> str:
         """

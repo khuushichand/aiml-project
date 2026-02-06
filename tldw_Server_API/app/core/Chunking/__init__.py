@@ -4,6 +4,8 @@ Chunking module for text processing and segmentation.
 Provides various strategies for splitting text into manageable chunks.
 """
 
+import contextlib
+
 from .base import (
     BaseChunkingStrategy,
     ChunkerConfig,
@@ -60,14 +62,10 @@ try:
         if isinstance(_c, dict):
             DEFAULT_CHUNK_OPTIONS['proposition_engine'] = _c.get('proposition_engine', DEFAULT_CHUNK_OPTIONS['proposition_engine'])
             DEFAULT_CHUNK_OPTIONS['proposition_prompt_profile'] = _c.get('proposition_prompt_profile', DEFAULT_CHUNK_OPTIONS['proposition_prompt_profile'])
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 DEFAULT_CHUNK_OPTIONS['proposition_aggressiveness'] = int(_c.get('proposition_aggressiveness', DEFAULT_CHUNK_OPTIONS['proposition_aggressiveness']))
-            except (TypeError, ValueError):
-                pass
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 DEFAULT_CHUNK_OPTIONS['proposition_min_proposition_length'] = int(_c.get('proposition_min_proposition_length', DEFAULT_CHUNK_OPTIONS['proposition_min_proposition_length']))
-            except (TypeError, ValueError):
-                pass
 except (AttributeError, ImportError, TypeError, ValueError):
     # Config not available; keep in-module defaults
     pass
@@ -182,10 +180,7 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
     except (AttributeError, TypeError, ValueError):
         method_norm = method
     method_norm = str(method_norm or "").strip().lower()
-    if method_norm in {"code", "code_ast"}:
-        inferred_chunk_type = "code"
-    else:
-        inferred_chunk_type = "text"
+    inferred_chunk_type = "code" if method_norm in {"code", "code_ast"} else "text"
 
     # Format for embedding
     result = []

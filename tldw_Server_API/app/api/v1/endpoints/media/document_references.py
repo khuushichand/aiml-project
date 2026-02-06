@@ -21,8 +21,8 @@ from tldw_Server_API.app.api.v1.schemas.document_references import (
 )
 from tldw_Server_API.app.api.v1.utils.cache import (
     cache_response,
-    get_cached_response,
     get_cache_client,
+    get_cached_response,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
@@ -242,9 +242,7 @@ def _split_references(refs_text: str) -> list[str]:
         ):
             return True
         # "Surname et al." pattern
-        if re.search(r"^[A-Z][A-Za-z'’.\-]+(?:\s+et\s+al\.)\b", line):
-            return True
-        return False
+        return bool(re.search(r"^[A-Z][A-Za-z'’.\-]+(?:\s+et\s+al\.)\b", line))
 
     def _looks_like_reference(text: str) -> bool:
         if not text or len(text) < 30:
@@ -255,9 +253,7 @@ def _split_references(refs_text: str) -> list[str]:
             return True
         if re.search(ARXIV_OLD_PATTERN, text, re.IGNORECASE):
             return True
-        if re.search(YEAR_PATTERN, text):
-            return True
-        return False
+        return bool(re.search(YEAR_PATTERN, text))
 
     # If still no good split, try single newlines with heuristics
     if len(references) < 5:

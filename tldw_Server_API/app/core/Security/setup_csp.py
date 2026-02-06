@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import os
 import re
 from typing import Callable
@@ -81,10 +82,8 @@ class SetupCSPMiddleware(BaseHTTPMiddleware):
 
         # Generate a nonce to future-proof policy customization; store on state
         nonce = _gen_nonce()
-        try:
+        with contextlib.suppress(Exception):
             request.state.csp_nonce = nonce
-        except Exception:
-            pass
 
         response = await call_next(request)
         try:

@@ -33,7 +33,7 @@ def create_backend(config: Optional[SchedulerConfig] = None) -> QueueBackend:
         config = get_config()
 
     # Detect backend type from URL
-    url = config.database_url.lower()
+    config.database_url.lower()
 
     if config.is_memory:
         # In-memory backend for testing

@@ -6,6 +6,7 @@ cached results for semantically similar queries, not just exact matches.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -813,10 +814,8 @@ def get_shared_cache(
     persist_path = persist_path or _default_persist_path(namespace_key)
     persist_path = _sanitize_persist_path(persist_path, namespace_key)
     if persist_path:
-        try:
+        with contextlib.suppress(OSError):
             Path(persist_path).parent.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
     ttl_key = int(ttl) if ttl is not None else None
     max_size_key = int(max_size) if max_size is not None else None
     cache_key = (cache_cls, namespace_key, float(similarity_threshold), ttl_key, max_size_key, persist_path)
@@ -846,9 +845,7 @@ def clear_shared_caches(namespace: Optional[str] = None) -> int:
         for cache_key, cache in list(_SHARED_CACHES.items()):
             _, key_namespace, *_ = cache_key
             if namespace_key is None or key_namespace == namespace_key:
-                try:
+                with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                     cache.clear()
-                except (AttributeError, RuntimeError, TypeError, ValueError):
-                    pass
                 cleared += 1
     return cleared

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import random
 from collections.abc import Awaitable
@@ -177,10 +178,8 @@ class WorkerSDK:
                             )
                         except _WORKER_SDK_NONCRITICAL_EXCEPTIONS as exc:
                             logger.debug("Release job failed for {}: {}", job_id, exc)
-                        try:
+                        with contextlib.suppress(_WORKER_SDK_NONCRITICAL_EXCEPTIONS):
                             await self._sleep(0)
-                        except _WORKER_SDK_NONCRITICAL_EXCEPTIONS:
-                            pass
                         continue
                 # Cancellation check (optional)
                 if cancel_check is not None:
@@ -188,10 +187,8 @@ class WorkerSDK:
                         if await cancel_check(job):
                             # Respect cancellation request; finalize and yield once to avoid tight spin
                             self.jm.cancel_job(job_id, reason="requested")
-                            try:
+                            with contextlib.suppress(_WORKER_SDK_NONCRITICAL_EXCEPTIONS):
                                 await self._sleep(0)
-                            except _WORKER_SDK_NONCRITICAL_EXCEPTIONS:
-                                pass
                             continue
                     except _WORKER_SDK_NONCRITICAL_EXCEPTIONS:
                         pass

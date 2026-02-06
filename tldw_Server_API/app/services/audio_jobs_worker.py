@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from functools import partial
 from pathlib import Path
@@ -170,10 +171,8 @@ async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None
                             )
                             cur_count = 0
                         finally:
-                            try:
+                            with contextlib.suppress(OSError, RuntimeError):
                                 conn2.close()
-                            except (OSError, RuntimeError):
-                                pass
                         if cur_count < max_jobs:
                             owner_candidate = cand
                             break
@@ -366,7 +365,5 @@ async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run_audio_jobs_worker())
-    except KeyboardInterrupt:
-        pass

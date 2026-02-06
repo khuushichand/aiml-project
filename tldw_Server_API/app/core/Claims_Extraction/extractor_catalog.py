@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 from dataclasses import dataclass
@@ -125,10 +126,8 @@ def get_spacy_pipeline(model_name: str, language: str) -> Any | None:
             return None
 
     if not nlp.has_pipe("sentencizer"):
-        try:
+        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
             nlp.add_pipe("sentencizer")
-        except (KeyError, RuntimeError, TypeError, ValueError):
-            pass
     return nlp
 
 

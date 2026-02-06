@@ -118,7 +118,7 @@ async def run_audio_diarize_adapter(config: dict[str, Any], context: dict[str, A
 
             return {
                 "segments": segments,
-                "speakers": sorted(list(speakers)),
+                "speakers": sorted(speakers),
                 "total_duration": total_duration,
             }
 
@@ -154,7 +154,7 @@ async def run_audio_diarize_adapter(config: dict[str, Any], context: dict[str, A
 
                     return {
                         "segments": segments,
-                        "speakers": sorted(list(speakers)),
+                        "speakers": sorted(speakers),
                         "total_duration": result.get("duration", 0),
                     }
 

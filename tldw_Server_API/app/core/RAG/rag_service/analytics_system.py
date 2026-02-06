@@ -440,10 +440,7 @@ class UserFeedbackStore:
         feedback_id = f"fb_{int(time.time() * 1000)}_{hashlib.md5(query.encode()).hexdigest()[:8]}"
 
         helpful_value: Optional[bool]
-        if helpful is None:
-            helpful_value = None
-        else:
-            helpful_value = bool(helpful)
+        helpful_value = None if helpful is None else bool(helpful)
 
         insert_sql = """
             INSERT INTO conversation_feedback

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from collections.abc import AsyncIterator, Iterable
-from typing import Any, Callable, Union
+from typing import Any, Callable
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatBadRequestError,
@@ -72,7 +73,7 @@ _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS = (
 )
 
 
-def _extract_text_from_message_content(content: Union[str, list[dict[str, Any]]], provider_name: str, msg_index: int) -> str:
+def _extract_text_from_message_content(content: str | list[dict[str, Any]], provider_name: str, msg_index: int) -> str:
     """Extracts and concatenates text parts from a message's content, logging warnings for images."""
     text_parts = []
     has_image = False
@@ -110,14 +111,14 @@ def _chat_with_openai_compatible_local_server(
         top_k: int | None = None,
         min_p: float | None = None,
         n: int | None = None,
-        stop: Union[str, list[str]] | None = None,
+        stop: str | list[str] | None = None,
         presence_penalty: float | None = None,
         frequency_penalty: float | None = None,
         logit_bias: dict[str, float] | None = None,
         seed: int | None = None,
         response_format: dict[str, str] | None = None, # e.g. {"type": "json_object"}
         tools: list[dict[str, Any]] | None = None,
-        tool_choice: Union[str, dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         logprobs: bool | None = None,
         top_logprobs: int | None = None,
         user_identifier: str | None = None, # maps to 'user' in OpenAI spec
@@ -319,10 +320,8 @@ def _chat_with_openai_compatible_local_server(
                         for tail in finalize_stream(response_obj, done_already=done_sent):
                             yield tail
                 finally:
-                    try:
+                    with contextlib.suppress(_LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS):
                         session.close()
-                    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
-                        pass
             return stream_generator()
         else:
             if is_test:
@@ -333,10 +332,8 @@ def _chat_with_openai_compatible_local_server(
                     logging.debug(f"{provider_name}: Non-streaming request successful.")
                     return data
                 finally:
-                    try:
+                    with contextlib.suppress(_LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS):
                         response.close()
-                    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
-                        pass
             else:
                 # Centralized client fetch with retries for prod
                 attempts = max(1, int(api_retries)) + 1
@@ -350,10 +347,8 @@ def _chat_with_openai_compatible_local_server(
                     logging.debug(f"{provider_name}: Non-streaming request successful.")
                     return data
                 finally:
-                    try:
+                    with contextlib.suppress(_LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS):
                         response.close()
-                    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
-                        pass
     except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS as e_http:
         if is_http_status_error(e_http):
             logging.error(
@@ -379,10 +374,8 @@ def _chat_with_openai_compatible_local_server(
         raise ChatBadRequestError(provider=provider_name, message=f"{provider_name} data or configuration error: {e_data}")
     finally:
         if not streaming:
-            try:
+            with contextlib.suppress(_LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS):
                 session.close()
-            except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
-                pass
 
 
 def _local_llm_request(
@@ -398,7 +391,7 @@ def _local_llm_request(
         min_p: float | None = None,
         max_tokens: int | None = None,
         seed: int | None = None,
-        stop: Union[str, list[str]] | None = None,
+        stop: str | list[str] | None = None,
         # Note: custom_prompt_arg is legacy-only; OpenAI-compatible servers expect prompts in messages.
         # It's better handled by the `chat` function by prepending to the user message if needed.
         # For now, we assume it's already part of input_data or handled by system_message.
@@ -413,7 +406,7 @@ def _local_llm_request(
         logprobs: bool | None = None,
         top_logprobs: int | None = None,
         tools: list[dict[str, Any]] | None = None,
-        tool_choice: Union[str, dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         app_config: dict[str, Any] | None = None,
         http_client_factory: Callable[[int], Any] | None = None,
         http_fetcher: Callable[..., Any] | None = None,
@@ -561,7 +554,7 @@ def _llama_request(
         min_p: float | None = None, # from map
         n_predict: int | None = None, # from map, mapped from max_tokens
         seed: int | None = None, # from map
-        stop: Union[str, list[str]] | None = None, # from map
+        stop: str | list[str] | None = None, # from map
         response_format: dict[str, str] | None = None, # from map
         logit_bias: dict[str, float] | None = None, # from map
         n: int | None = None, # from map, number of completions to request
@@ -704,7 +697,7 @@ def _kobold_request(
         top_k: int | None = None, # Mapped
         top_p: float | None = None, # Mapped
         max_length: int | None = None, # Mapped from 'max_tokens'
-        stop_sequence: Union[str, list[str]] | None = None, # Mapped from 'stop'
+        stop_sequence: str | list[str] | None = None, # Mapped from 'stop'
         num_responses: int | None = None, # Mapped from 'n'
         seed: int | None = None, # Mapped from 'seed'
         app_config: dict[str, Any] | None = None,
@@ -766,7 +759,7 @@ def _kobold_request(
         logging.warning("Kobold: Failed to coerce seed='%s' to int; sending as-is", current_seed)
 
     max_context_length = int(cfg.get('max_context_length', 2048)) # Kobold uses max_context_length for context window
-    timeout = int(cfg.get('api_timeout', 180))
+    int(cfg.get('api_timeout', 180))
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
@@ -887,7 +880,7 @@ def _ooba_request(
     min_p: float | None = None, # from map
     max_tokens: int | None = None, # from map
     seed: int | None = None, # from map
-    stop: Union[str, list[str]] | None = None, # from map
+    stop: str | list[str] | None = None, # from map
     response_format: dict[str, str] | None = None, # from map
     n: int | None = None, # from map
     user_identifier: str | None = None, # from map
@@ -1026,7 +1019,7 @@ def _tabbyapi_request(
     min_p: float | None = None, # from map
     max_tokens: int | None = None, # from map
     seed: int | None = None, # from map
-    stop: Union[str, list[str]] | None = None, # from map
+    stop: str | list[str] | None = None, # from map
     app_config: dict[str, Any] | None = None,
     # Additional OpenAI-compatible params (pass-through if supported by server)
     response_format: dict[str, str] | None = None,
@@ -1038,7 +1031,7 @@ def _tabbyapi_request(
     logprobs: bool | None = None,
     top_logprobs: int | None = None,
     tools: list[dict[str, Any]] | None = None,
-    tool_choice: Union[str, dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
     api_url: str | None = None,
     http_client_factory: Callable[[int], Any] | None = None,
     http_fetcher: Callable[..., Any] | None = None,
@@ -1190,7 +1183,7 @@ def _vllm_request(
     min_p: float | None = None,         # from map (mapped from generic 'minp')
     max_tokens: int | None = None,      # from map
     seed: int | None = None,          # from map
-    stop: Union[str, list[str]] | None = None, # from map
+    stop: str | list[str] | None = None, # from map
     response_format: dict[str, str] | None = None, # from map
     n: int | None = None,             # from map
     logit_bias: dict[str, float] | None = None, # from map
@@ -1199,7 +1192,7 @@ def _vllm_request(
     logprobs: bool | None = None,     # from map
     user_identifier: str | None = None, # from map
     tools: list[dict[str, Any]] | None = None,
-    tool_choice: Union[str, dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
     top_logprobs: int | None = None,
     vllm_api_url: str | None = None, # Specific config, not from generic map typically
     app_config: dict[str, Any] | None = None,
@@ -1355,7 +1348,7 @@ def _aphrodite_request(
     min_p: float | None = None,         # from map (mapped from generic 'minp')
     max_tokens: int | None = None,      # from map
     seed: int | None = None,          # from map
-    stop: Union[str, list[str]] | None = None, # from map
+    stop: str | list[str] | None = None, # from map
     response_format: dict[str, str] | None = None, # from map
     n: int | None = None,             # from map
     logit_bias: dict[str, float] | None = None, # from map
@@ -1364,7 +1357,7 @@ def _aphrodite_request(
     logprobs: bool | None = None,     # from map
     user_identifier: str | None = None, # from map
     tools: list[dict[str, Any]] | None = None,
-    tool_choice: Union[str, dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
     top_logprobs: int | None = None,
     api_url: str | None = None,
     app_config: dict[str, Any] | None = None,
@@ -1514,8 +1507,8 @@ def _ollama_request(
     # Back-compat alias from some direct callers
     max_tokens: int | None = None,
     seed: int | None = None,             # from map
-    stop: Union[str, list[str]] | None = None, # from map
-    format_str: Union[str, dict[str, Any]] | None = None,       # from map (mapped from generic 'response_format', e.g. "json" or {'type': 'json_object'})
+    stop: str | list[str] | None = None, # from map
+    format_str: str | dict[str, Any] | None = None,       # from map (mapped from generic 'response_format', e.g. "json" or {'type': 'json_object'})
     # Back-compat alias if any caller passed 'format'
     format: str | None = None,
                                             # _chat_with_openai_compatible_local_server expects dict {"type": "json_object"}
@@ -1527,7 +1520,7 @@ def _ollama_request(
     logprobs: bool | None = None,
     top_logprobs: int | None = None,
     tools: list[dict[str, Any]] | None = None,
-    tool_choice: Union[str, dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
     app_config: dict[str, Any] | None = None,
     http_client_factory: Callable[[int], Any] | None = None,
     http_fetcher: Callable[..., Any] | None = None,
@@ -1583,7 +1576,7 @@ def _ollama_request(
     # Ollama's format string ("json") maps to OpenAI's response_format {"type": "json_object"}.
     ollama_response_format_dict: dict[str, str] | None = None
     # Prefer explicit format_str argument, then alias 'format', then config key
-    actual_format_value: Union[str, dict[str, Any]] | None = (
+    actual_format_value: str | dict[str, Any] | None = (
         format_str if format_str is not None else (format if format is not None else cfg.get('format'))
     )
     if isinstance(actual_format_value, dict):

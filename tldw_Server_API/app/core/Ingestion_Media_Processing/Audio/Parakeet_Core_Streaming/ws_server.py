@@ -28,6 +28,7 @@ This module does not enforce auth/quotas; it is a drop-in core for external serv
 
 from __future__ import annotations
 
+import contextlib
 import json
 
 from fastapi import APIRouter, WebSocket
@@ -364,22 +365,16 @@ async def websocket_parakeet_core(
 
     except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Parakeet core WS error: {e}")
-        try:
+        with contextlib.suppress(_PARAKEET_WS_NONCRITICAL_EXCEPTIONS):
             await websocket.send_json({"type": "error", "message": str(e)})
-        except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS:
-            pass
     finally:
         try:
             if insights_engine:
-                try:
+                with contextlib.suppress(_PARAKEET_WS_NONCRITICAL_EXCEPTIONS):
                     await insights_engine.close()
-                except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS:
-                    pass
             if diarizer:
-                try:
+                with contextlib.suppress(_PARAKEET_WS_NONCRITICAL_EXCEPTIONS):
                     await diarizer.close()
-                except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS:
-                    pass
             await websocket.close()
         except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS:
             pass

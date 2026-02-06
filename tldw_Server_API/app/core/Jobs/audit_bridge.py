@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import threading
 from queue import Empty, Full, Queue
@@ -128,10 +129,8 @@ def shutdown_jobs_audit_bridge() -> None:
     global _WORKER_THREAD
     with _WORKER_LOCK:
         if _WORKER_THREAD and _WORKER_THREAD.is_alive():
-            try:
+            with contextlib.suppress(Full):
                 _EVENT_QUEUE.put_nowait(_SHUTDOWN_SENTINEL)
-            except Full:
-                pass
             _WORKER_THREAD.join(timeout=5)
         _WORKER_THREAD = None
     # Clear any remaining items in queue
@@ -197,10 +196,8 @@ def _audit_worker_loop() -> None:
     except _AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - init failure
         logger.warning(f"Jobs audit worker failed to initialize service: {exc}")
         return
-    try:
+    with contextlib.suppress(_AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS):
         _WORKER_READY.set()
-    except _AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS:
-        pass
     try:
         while True:
             try:
@@ -214,14 +211,10 @@ def _audit_worker_loop() -> None:
             except _AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - best effort
                 logger.warning(f"Jobs audit worker failed to log event {event}: {exc}")
     finally:
-        try:
+        with contextlib.suppress(_AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS):
             loop.run_until_complete(service.flush())
-        except _AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS:
-            pass
-        try:
+        with contextlib.suppress(_AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS):
             loop.run_until_complete(service.stop())
-        except _AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS:
-            pass
         loop.close()
 
 

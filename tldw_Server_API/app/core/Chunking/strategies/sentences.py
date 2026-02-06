@@ -4,6 +4,7 @@ Sentence-based chunking strategy.
 Splits text into chunks based on sentence count with optional overlap.
 """
 
+import contextlib
 import re
 from collections.abc import Generator
 from typing import Any, Optional
@@ -315,7 +316,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
         sentences = []
         current_sentence = ""
 
-        for i, part in enumerate(parts):
+        for _i, part in enumerate(parts):
             if part in delimiters:
                 if current_sentence:
                     current_sentence += part
@@ -421,8 +422,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             Individual text chunks
         """
         chunks = self.chunk(text, max_size, overlap, **options)
-        for chunk in chunks:
-            yield chunk
+        yield from chunks
 
     def _prepare_chunk_records(
         self,
@@ -458,10 +458,8 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                 continue
             start_char = window[0][1]
             end_char = window[-1][2]
-            try:
+            with contextlib.suppress(_SENTENCE_NONCRITICAL_EXCEPTIONS):
                 end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
-            except _SENTENCE_NONCRITICAL_EXCEPTIONS:
-                pass
             sentences_only = [item[0] for item in window]
             if self.language in no_space_languages:
                 chunk_text = ''.join(sentences_only).strip()

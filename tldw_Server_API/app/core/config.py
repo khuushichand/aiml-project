@@ -3,6 +3,7 @@
 #
 # Imports
 import configparser
+import contextlib
 import json
 import os
 import sys
@@ -744,10 +745,8 @@ def load_settings():
             if parsed.port and not os.getenv("REDIS_PORT"):
                 redis_port = parsed.port
             if parsed.path and parsed.path != "/" and not os.getenv("REDIS_DB"):
-                try:
+                with contextlib.suppress(_CONFIG_NONCRITICAL_EXCEPTIONS):
                     redis_db = int(parsed.path.lstrip("/"))
-                except _CONFIG_NONCRITICAL_EXCEPTIONS:
-                    pass
         except _CONFIG_NONCRITICAL_EXCEPTIONS:
             pass
     else:
@@ -870,10 +869,8 @@ def load_settings():
     # Load comprehensive configurations (API keys, embedding settings, etc.)
     # If SINGLE_USER_API_KEY wasn't present before, try reading again now that configs/.env may be loaded
     if not single_user_api_key:
-        try:
+        with contextlib.suppress(_CONFIG_NONCRITICAL_EXCEPTIONS):
             single_user_api_key = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
-        except _CONFIG_NONCRITICAL_EXCEPTIONS:
-            pass
 
 
     content_backend_mode = os.getenv("TLDW_CONTENT_DB_BACKEND", "sqlite").strip().lower()
@@ -986,8 +983,8 @@ def load_settings():
     SANDBOX_MAX_MEM_MB = _sbx_int("SANDBOX_MAX_MEM_MB", "max_mem_mb", 8192)
     SANDBOX_WORKSPACE_CAP_MB = _sbx_int("SANDBOX_WORKSPACE_CAP_MB", "workspace_cap_mb", 256)
     # Queue/backpressure defaults for sandbox orchestrator
-    SANDBOX_QUEUE_MAX_LENGTH = _sbx_int("SANDBOX_QUEUE_MAX_LENGTH", "queue_max_length", 100)
-    SANDBOX_QUEUE_TTL_SEC = _sbx_int("SANDBOX_QUEUE_TTL_SEC", "queue_ttl_sec", 120)
+    _sbx_int("SANDBOX_QUEUE_MAX_LENGTH", "queue_max_length", 100)
+    _sbx_int("SANDBOX_QUEUE_TTL_SEC", "queue_ttl_sec", 120)
     # WebSocket server poll timeout (seconds) for sandbox log streams
     # Tests may override to a smaller value (e.g., 1) via env to speed disconnects
     SANDBOX_WS_POLL_TIMEOUT_SEC = _sbx_int("SANDBOX_WS_POLL_TIMEOUT_SEC", "ws_poll_timeout_sec", 30)
@@ -1000,7 +997,7 @@ def load_settings():
         or _sbx_get("ws_signed_urls", "false")
         or "false"
     )
-    SANDBOX_WS_SIGNING_SECRET = os.getenv("SANDBOX_WS_SIGNING_SECRET") or _sbx_get("ws_signing_secret", None)
+    os.getenv("SANDBOX_WS_SIGNING_SECRET") or _sbx_get("ws_signing_secret", None)
     # Test-only helper: when true, the WS endpoint will publish synthetic
     # start/end frames to ensure subscribers see frames immediately. Disabled
     # by default; tests should set SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS=true.
@@ -1747,32 +1744,31 @@ def load_settings():
         }
 
     # --- Warnings ---
-    if config_dict["SINGLE_USER_MODE"]:
-        if not config_dict["SINGLE_USER_API_KEY"]:
-            # In test contexts, downgrade this startup-time message to WARNING
-            # to avoid failing tests that treat ERROR logs as failures. The
-            # actual server startup paths still validate and will hard-fail
-            # when SINGLE_USER_API_KEY is required.
-            try:
-                import os as _os
-                import sys as _sys
-                _in_test = (
-                    bool(_os.getenv("PYTEST_CURRENT_TEST"))
-                    or str(_os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
-                    or ("pytest" in _sys.modules)
-                )
-            except _CONFIG_NONCRITICAL_EXCEPTIONS:
-                _in_test = False
-
-            _msg = (
-                "SINGLE_USER_API_KEY is not configured. The server will refuse to start in single-user mode.\n"
-                "Run `python -m tldw_Server_API.app.core.AuthNZ.initialize` and generate secure keys, "
-                "then set SINGLE_USER_API_KEY in your environment or .env file."
+    if config_dict["SINGLE_USER_MODE"] and not config_dict["SINGLE_USER_API_KEY"]:
+        # In test contexts, downgrade this startup-time message to WARNING
+        # to avoid failing tests that treat ERROR logs as failures. The
+        # actual server startup paths still validate and will hard-fail
+        # when SINGLE_USER_API_KEY is required.
+        try:
+            import os as _os
+            import sys as _sys
+            _in_test = (
+                bool(_os.getenv("PYTEST_CURRENT_TEST"))
+                or str(_os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+                or ("pytest" in _sys.modules)
             )
-            if _in_test:
-                _log_warning(_msg)
-            else:
-                _log_error(_msg)
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
+            _in_test = False
+
+        _msg = (
+            "SINGLE_USER_API_KEY is not configured. The server will refuse to start in single-user mode.\n"
+            "Run `python -m tldw_Server_API.app.core.AuthNZ.initialize` and generate secure keys, "
+            "then set SINGLE_USER_API_KEY in your environment or .env file."
+        )
+        if _in_test:
+            _log_warning(_msg)
+        else:
+            _log_error(_msg)
     if not config_dict["SINGLE_USER_MODE"] and config_dict["JWT_SECRET_KEY"] == "a_very_insecure_default_secret_key_for_dev_only":
         _log_critical("SECURITY WARNING: Using default JWT_SECRET_KEY in multi-user mode. Set a strong JWT_SECRET_KEY environment variable!")
     if not config_dict["SINGLE_USER_MODE"] and not config_dict["USERS_DB_CONFIGURED"]:
@@ -2284,12 +2280,11 @@ def get_llamacpp_handler_config() -> Optional["LlamaCppConfig"]:
         kwargs["default_host"] = str(default_host)
     if default_port is not None:
         kwargs["default_port"] = _as_int(default_port, 8080)
-    if default_threads is not None:
-        if str(default_threads).strip():
-            try:
-                kwargs["default_threads"] = int(str(default_threads))
-            except _CONFIG_NONCRITICAL_EXCEPTIONS:
-                _log_warning(f"LLAMACPP_THREADS invalid; ignoring value: {default_threads}")
+    if default_threads is not None and str(default_threads).strip():
+        try:
+            kwargs["default_threads"] = int(str(default_threads))
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
+            _log_warning(f"LLAMACPP_THREADS invalid; ignoring value: {default_threads}")
     if default_n_gpu_layers is not None:
         kwargs["default_n_gpu_layers"] = _as_int(default_n_gpu_layers, 0)
     if default_ctx_size is not None:
@@ -2660,9 +2655,8 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
         return False
 
     # Stable-only gate: exclude experimental by default when enabled
-    if policy['stable_only']:
-        if key in policy['experimental']:
-            return False
+    if policy['stable_only'] and key in policy['experimental']:
+        return False
 
     # Fallback default behavior: stable routes are enabled unless explicitly disabled
     return bool(default_stable)
@@ -2989,9 +2983,9 @@ def load_and_log_configs():
         save_video_transcripts = config_parser_object.get('Paths', 'save_video_transcripts', fallback='True')
 
         # Retrieve logging settings from the configuration file
-        log_level = config_parser_object.get('Logging', 'log_level', fallback='INFO')
-        log_file = config_parser_object.get('Logging', 'log_file', fallback='./Logs/tldw_logs.json')
-        log_metrics_file = config_parser_object.get('Logging', 'log_metrics_file', fallback='./Logs/tldw_metrics_logs.json')
+        config_parser_object.get('Logging', 'log_level', fallback='INFO')
+        config_parser_object.get('Logging', 'log_file', fallback='./Logs/tldw_logs.json')
+        config_parser_object.get('Logging', 'log_metrics_file', fallback='./Logs/tldw_metrics_logs.json')
 
         # Retrieve processing choice from the configuration file
         processing_choice = config_parser_object.get('Processing', 'processing_choice', fallback='cpu')
@@ -3094,7 +3088,6 @@ def load_and_log_configs():
         proposition_aggressiveness = config_parser_object.get('Chunking', 'proposition_aggressiveness', fallback='1')
         proposition_min_proposition_length = config_parser_object.get('Chunking', 'proposition_min_proposition_length', fallback='15')
         #
-        chunking_types = 'article', 'audio', 'book', 'document', 'mediawiki_article', 'mediawiki_dump', 'obsidian_note', 'podcast', 'text', 'video'
 
         # Retrieve Embedding model settings from the configuration file
         # Default to Qwen3-Embedding-4B-GGUF if not specified
@@ -3157,7 +3150,7 @@ def load_and_log_configs():
             context_token_budget_val = 6000
 
         # Prompts - FIXME
-        prompt_path = config_parser_object.get('Prompts', 'prompt_path', fallback='Databases/prompts.db')
+        config_parser_object.get('Prompts', 'prompt_path', fallback='Databases/prompts.db')
 
         # Chat Dictionaries
         enable_chat_dictionaries = config_parser_object.get('Chat-Dictionaries', 'enable_chat_dictionaries', fallback='False')
@@ -3394,7 +3387,7 @@ def load_and_log_configs():
         default_openai_tts_voice = config_parser_object.get('TTS-Settings', 'default_openai_tts_voice', fallback='shimmer')
         default_openai_tts_speed = config_parser_object.get('TTS-Settings', 'default_openai_tts_speed', fallback='1')
         default_openai_tts_output_format = config_parser_object.get('TTS-Settings', 'default_openai_tts_output_format', fallback='mp3')
-        default_openai_tts_streaming = config_parser_object.get('TTS-Settings', 'default_openai_tts_streaming', fallback='False')
+        config_parser_object.get('TTS-Settings', 'default_openai_tts_streaming', fallback='False')
         # Google TTS
         # FIXME - FIX THESE DEFAULTS
         default_google_tts_model = config_parser_object.get('TTS-Settings', 'default_google_tts_model', fallback='en')
@@ -3418,7 +3411,7 @@ def load_and_log_configs():
         default_alltalk_tts_output_format = config_parser_object.get('TTS-Settings', 'default_alltalk_tts_output_format', fallback='mp3')
 
         # Kokoro TTS
-        kokoro_model_path = config_parser_object.get('TTS-Settings', 'kokoro_model_path', fallback='Databases/kokoro_models')
+        config_parser_object.get('TTS-Settings', 'kokoro_model_path', fallback='Databases/kokoro_models')
         default_kokoro_tts_model = config_parser_object.get('TTS-Settings', 'default_kokoro_tts_model', fallback='pht')
         default_kokoro_tts_voice = config_parser_object.get('TTS-Settings', 'default_kokoro_tts_voice', fallback='sky')
         default_kokoro_tts_speed = config_parser_object.get('TTS-Settings', 'default_kokoro_tts_speed', fallback=1.0)
@@ -4186,8 +4179,8 @@ def load_and_log_configs():
             'web_crawl_enable_domain_map': web_crawl_enable_domain_map,
             'web_crawl_domain_map': web_crawl_domain_map,
             },
-            'Redis': config_parser_object['Redis'] if 'Redis' in config_parser_object else {},
-            'Web-Scraping': config_parser_object['Web-Scraping'] if 'Web-Scraping' in config_parser_object else {}
+            'Redis': config_parser_object.get('Redis', {}),
+            'Web-Scraping': config_parser_object.get('Web-Scraping', {})
         }
         # Assemble minimal RAG config section (vector store + pgvector params)
         try:

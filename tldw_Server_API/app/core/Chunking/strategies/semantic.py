@@ -112,12 +112,12 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
         # Import here to avoid import errors if not available
 
         # Get options
-        unit = options.get('unit', 'words')
+        options.get('unit', 'words')
         tokenizer_name = options.get('tokenizer_name_or_path') or options.get('tokenizer_name')
         if isinstance(tokenizer_name, str) and tokenizer_name.strip():
             self._tokenizer_name = tokenizer_name.strip()
-        similarity_threshold = options.get('similarity_threshold', self.similarity_threshold)
-        min_chunk_size = options.get('min_chunk_size', max_size // 2)
+        options.get('similarity_threshold', self.similarity_threshold)
+        options.get('min_chunk_size', max_size // 2)
 
         chunk_spans = self._chunk_text_with_spans(text, max_size, overlap, **options)
         return [chunk for chunk, _start, _end in chunk_spans]
@@ -459,8 +459,7 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
         """
         # Semantic chunking needs full text analysis, so compute all chunks first
         chunks = self.chunk(text, max_size, overlap, **options)
-        for chunk in chunks:
-            yield chunk
+        yield from chunks
 
     def chunk_with_metadata(self,
                            text: str,

@@ -86,10 +86,7 @@ class ChatbookValidator:
 
         # Additional check: ZIP files from some tools use 0xA1ED pattern
         # This is a fallback for Unix-created archives
-        if zip_info.external_attr >> 16 == 0xA1ED:
-            return True
-
-        return False
+        return zip_info.external_attr >> 16 == 41453
 
     @classmethod
     def validate_filename(cls, filename: str) -> tuple[bool, Optional[str], str]:
@@ -139,10 +136,7 @@ class ChatbookValidator:
         # Ensure it ends with a valid extension after sanitization
         if not any(sanitized.lower().endswith(ext) for ext in cls.VALID_EXTENSIONS):
             # Force it to end with .zip
-            if '.' in sanitized:
-                sanitized = sanitized.rsplit('.', 1)[0] + '.zip'
-            else:
-                sanitized = sanitized + '.zip'
+            sanitized = sanitized.rsplit('.', 1)[0] + '.zip' if '.' in sanitized else sanitized + '.zip'
 
         return True, None, sanitized
 
@@ -243,7 +237,7 @@ class ChatbookValidator:
 
                     # Check individual file size
                     if info.file_size > cls.MAX_FILE_IN_ARCHIVE:
-                        size_mb = info.file_size / (1024 * 1024)
+                        info.file_size / (1024 * 1024)
                         max_mb = cls.MAX_FILE_IN_ARCHIVE / (1024 * 1024)
                         return False, f"Archive contains files larger than {max_mb:.0f}MB limit"
 
@@ -490,10 +484,7 @@ class ChatbookValidator:
 
         # Check for dangerous directory names
         parts = Path(normalized).parts
-        if any(part in cls.DANGEROUS_PATHS for part in parts):
-            return True
-
-        return False
+        return bool(any(part in cls.DANGEROUS_PATHS for part in parts))
 
     @classmethod
     def _is_dangerous_file(cls, filename: str) -> bool:

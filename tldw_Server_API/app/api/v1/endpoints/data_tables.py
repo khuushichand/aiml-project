@@ -90,10 +90,7 @@ def get_job_manager() -> JobManager:
     """Return a cached JobManager instance keyed by JOBS_DB_URL or JOBS_DB_PATH."""
     db_url = (os.getenv("JOBS_DB_URL") or "").strip()
     db_path = (os.getenv("JOBS_DB_PATH") or "").strip()
-    if db_url:
-        cache_key = f"url:{db_url}"
-    else:
-        cache_key = f"path:{db_path or 'default'}"
+    cache_key = f"url:{db_url}" if db_url else f"path:{db_path or 'default'}"
     with _job_manager_lock:
         cached = _job_manager_cache.get(cache_key)
         if cached is not None:
@@ -136,7 +133,7 @@ def _model_dump(obj: Any) -> dict[str, Any]:
     return dict(obj)
 
 
-def _resolve_owner_id(principal: AuthPrincipal, current_user: User) -> Union[int, str] | None:
+def _resolve_owner_id(principal: AuthPrincipal, current_user: User) -> int | str | None:
     """Resolve the owner id for data table queries based on auth context."""
     if principal.is_admin:
         return None
@@ -269,7 +266,7 @@ def _collect_export_rows(
     *,
     column_ids: list[str],
     column_names: list[str],
-    owner_user_id: Union[int, str] | None = None,
+    owner_user_id: int | str | None = None,
 ) -> list[list[Any]]:
     """Collect all table rows in batches for export."""
     rows: list[list[Any]] = []
@@ -346,7 +343,7 @@ def _build_table_detail_response(
     rows_offset: int = 0,
     include_rows: bool = True,
     include_sources: bool = True,
-    owner_user_id: Union[int, str] | None = None,
+    owner_user_id: int | str | None = None,
 ) -> DataTableDetailResponse:
     """Assemble a detail response including columns, rows, and sources."""
     table_id = int(table_row.get("id"))
@@ -406,7 +403,7 @@ async def generate_data_table(
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: MediaDatabase = Depends(get_media_db_for_user),
     jm: JobManager = Depends(get_job_manager),
-) -> Union[DataTableGenerateResponse, DataTableDetailResponse]:
+) -> DataTableGenerateResponse | DataTableDetailResponse:
     """Queue a data table generation job and optionally wait for completion."""
     rid = ensure_request_id(request)
     tp = ensure_traceparent(request)
@@ -979,7 +976,7 @@ async def regenerate_data_table(
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: MediaDatabase = Depends(get_media_db_for_user),
     jm: JobManager = Depends(get_job_manager),
-) -> Union[DataTableGenerateResponse, DataTableDetailResponse]:
+) -> DataTableGenerateResponse | DataTableDetailResponse:
     """Queue a data table regeneration job."""
     rid = ensure_request_id(request)
     tp = ensure_traceparent(request)

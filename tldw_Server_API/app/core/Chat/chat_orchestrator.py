@@ -476,8 +476,8 @@ def chat_api_call(
         status_code = getattr(e_chat_direct, 'status_code', 500)
         logging.error(
             f"Handler for {endpoint_lower} directly raised: {type(e_chat_direct).__name__} - {escaped_message}",
-            exc_info=True if status_code >= 500 else False)
-        raise e_chat_direct  # Re-raise the specific error
+            exc_info=status_code >= 500)
+        raise  # Re-raise the specific error
     except (ValueError, TypeError, KeyError) as e:
         logging.error(f"Value/Type/Key error during chat API call setup for {endpoint_lower}: {e}", exc_info=True)
         error_type = "Configuration/Parameter Error"
@@ -840,7 +840,6 @@ def _chat_sync_impl(
 
         # Parse slash-commands before dictionary processing
         injected_command_system_text: Optional[str] = None
-        original_message = message
         # Initialize command variables for safe access later (instead of using unsafe locals() checks)
         cmd_name: Optional[str] = None
         cmd_args: Optional[str] = None
@@ -1018,7 +1017,7 @@ def _chat_sync_impl(
         for i, msg_p in enumerate(llm_messages_payload):
             content_log = []
             if isinstance(msg_p.get("content"), list):
-                for part_idx, part_c in enumerate(msg_p["content"]):
+                for _part_idx, part_c in enumerate(msg_p["content"]):
                     if part_c.get("type") == "text": content_log.append(f"text: '{part_c['text'][:30]}...'")
                     elif part_c.get("type") == "image_url": content_log.append(f"image: '{part_c['image_url']['url'][:40]}...'")
             logging.debug(f"  Msg {i}: Role: {msg_p['role']}, Content: [{', '.join(content_log)}]")
@@ -1346,7 +1345,6 @@ async def achat(
             selected_parts = [selected_parts] if selected_parts else []
 
         injected_command_system_text: Optional[str] = None
-        original_message = message
         # Initialize command variables for safe access later (instead of using unsafe locals() checks)
         cmd_name: Optional[str] = None
         cmd_args: Optional[str] = None

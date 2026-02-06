@@ -8,6 +8,7 @@ cheap LLM fallback (configurable) with caching to reduce token usage.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import re
 import time
@@ -100,10 +101,8 @@ class PromptQualityScorer:
             )
             text = (res or {}).get("content", "").strip()
             if self._on_tokens:
-                try:
+                with contextlib.suppress(Exception):
                     self._on_tokens(int((res or {}).get("tokens", 0) or 0))
-                except Exception:
-                    pass
             m = re.search(r"\d+(?:\.\d+)?", text)
             llm_score = float(m.group(0)) if m else base
             final = float(max(0.0, min(10.0, 0.6 * base + 0.4 * llm_score)))

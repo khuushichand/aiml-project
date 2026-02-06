@@ -57,7 +57,8 @@ try:
         get_backend as _get_vlm_backend,
     )
 except ImportError:
-    _get_vlm_backend = lambda name=None: None  # type: ignore
+    def _get_vlm_backend(name=None):
+        return None  # type: ignore
 #
 # Constants
 # Get configuration values or use defaults
@@ -375,7 +376,6 @@ def process_pdf(
             raise TypeError(f"Unsupported file_input type: {type(file_input)}")
 
         # --- Step 1: Extract Text (Now always uses path_for_processing) ---
-        text_content = None
         if not path_for_processing: # Should not happen, but defensive check
              raise RuntimeError("Internal logic error: path_for_processing not set")
 
@@ -541,12 +541,12 @@ def process_pdf(
             pdf_keywords_str = raw_metadata.get('keywords', '')
             pdf_subject = raw_metadata.get('subject')
             # Use sets for efficient merging and deduplication
-            combined_keywords = set(k.strip() for k in (keywords or []) if k.strip()) # Start with input keywords
+            combined_keywords = {k.strip() for k in (keywords or []) if k.strip()} # Start with input keywords
             if pdf_keywords_str and isinstance(pdf_keywords_str, str):
                 combined_keywords.update(k.strip() for k in pdf_keywords_str.split(',') if k.strip())
             if pdf_subject and isinstance(pdf_subject, str) and pdf_subject.strip():
                  combined_keywords.add(pdf_subject.strip())
-            result["keywords"] = sorted(list(combined_keywords)) # Store unique, sorted keywords
+            result["keywords"] = sorted(combined_keywords) # Store unique, sorted keywords
 
             # Determine final title/author using overrides, then metadata, then filename
             final_title = title_override or raw_metadata.get('title') or Path(filename).stem
@@ -745,7 +745,6 @@ def process_pdf(
 
 
         # --- Step 4: Summarization / Analysis ---
-        final_analysis = None # Or final_summary
         # Use path_for_processing for logging context if needed
         logging.debug(f"PROCESS_PDF: Checking condition -> perform_analysis={perform_analysis}, api_name='{api_name}', api_key='{api_key}', chunks_exist={bool(processed_chunks)}") # Keep this log
         # Allow analysis to proceed without explicit api_key (resolved from server config)
@@ -871,7 +870,6 @@ def process_pdf(
         # Check if critical step (text extraction) failed. Check warnings for specific errors.
         extraction_failed = not content and any("Text extraction failed" in w for w in result["warnings"])
         # Treat metadata failures as warnings unless text extraction also failed
-        metadata_failed_critically = False
 
         if extraction_failed:
             result["status"] = "Error"
@@ -941,7 +939,6 @@ def process_pdf(
     # --- Finally Block: Cleanup ---
     finally:
         current_status_before_cleanup = result["status"]
-        temp_file_removed = False
 
         if path_for_processing and temp_dir_for_pdf and os.path.exists(path_for_processing):
             try:
@@ -954,7 +951,6 @@ def process_pdf(
                 logging.debug(f"Attempting to remove temporary file: {path_for_processing}")
                 os.remove(path_for_processing)
                 logging.debug(f"Successfully removed temporary file: {path_for_processing}")
-                temp_file_removed = True
                 time.sleep(0.1) # Small delay AFTER file removal before dir removal
 
             except OSError as file_rm_err:

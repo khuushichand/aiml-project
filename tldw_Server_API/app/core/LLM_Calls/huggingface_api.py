@@ -4,6 +4,7 @@ HuggingFace API client for browsing and downloading GGUF models.
 """
 
 import asyncio
+import contextlib
 import os
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -302,17 +303,13 @@ class HuggingFaceAPI:
                                 f.write(chunk)
                                 downloaded += len(chunk)
                                 if progress_callback and total_size:
-                                    try:
+                                    with contextlib.suppress(_HF_API_NONCRITICAL_EXCEPTIONS):
                                         progress_callback(min(downloaded, total_size), total_size)
-                                    except _HF_API_NONCRITICAL_EXCEPTIONS:
-                                        pass
                         temp_file.replace(destination)
                         # Final progress callback to ensure completion state
                         if progress_callback and total_size and downloaded < total_size:
-                            try:
+                            with contextlib.suppress(_HF_API_NONCRITICAL_EXCEPTIONS):
                                 progress_callback(total_size, total_size)
-                            except _HF_API_NONCRITICAL_EXCEPTIONS:
-                                pass
                         logger.info(f"Successfully downloaded {filename} to {destination}")
                         return True
                 except _HF_API_NONCRITICAL_EXCEPTIONS as e:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import threading
 import time
@@ -312,12 +313,9 @@ def _cohere_request(
                             {"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "cohere_stream_error"}}
                         )
                 finally:
-                    for tail in finalize_stream(response_handle, done_already=stream_properly_closed):
-                        yield tail
-                    try:
+                    yield from finalize_stream(response_handle, done_already=stream_properly_closed)
+                    with contextlib.suppress(Exception):
                         session_handle.close()
-                    except Exception:
-                        pass
 
             session = None
             return stream_generator_cohere_text_chunks(response_handle.iter_lines())

@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import contextlib
 import threading
 import time
 from collections import deque
@@ -197,10 +198,8 @@ class ProviderManager:
         """Stop background health monitoring."""
         if self._health_check_task:
             self._health_check_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._health_check_task
-            except asyncio.CancelledError:
-                pass
 
     async def _health_check_loop(self):
         """Background task to periodically check provider health."""

@@ -5,6 +5,7 @@ import os
 import threading
 from collections.abc import AsyncIterator, Iterable
 from typing import Any
+
 try:
     import httpx
 except ImportError:  # pragma: no cover - optional for static analysis
@@ -138,9 +139,7 @@ class OpenAIAdapter(ChatProvider):
     def _use_native_http(self) -> bool:
         # Always use native HTTP for OpenAI adapter unless explicitly disabled
         v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_OPENAI") or "").lower()
-        if v in {"0", "false", "no", "off"}:
-            return False
-        return True
+        return v not in {"0", "false", "no", "off"}
 
     def _build_openai_payload(self, request: dict[str, Any]) -> dict[str, Any]:
         messages = request.get("messages") or []
@@ -319,8 +318,7 @@ class OpenAIAdapter(ChatProvider):
                             if normalized is not None:
                                 yield normalized
                         # Ensure a single terminal DONE marker
-                        for tail in finalize_stream(response=resp, done_already=seen_done):
-                            yield tail
+                        yield from finalize_stream(response=resp, done_already=seen_done)
                 return
             except _OPENAI_ADAPTER_NONCRITICAL_EXCEPTIONS as e:
                 raise self.normalize_error(e)
@@ -396,7 +394,7 @@ class OpenAIAdapter(ChatProvider):
                 eobj = body["error"]
                 msg = (eobj.get("message") or "").strip()
                 typ = (eobj.get("type") or "").strip()
-                code = eobj.get("code")
+                eobj.get("code")
                 detail = (f"{typ} {msg}" if typ else msg) or str(exc)
             else:
                 detail = get_http_error_text(exc)

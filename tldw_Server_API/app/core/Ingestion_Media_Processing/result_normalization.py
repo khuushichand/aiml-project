@@ -52,7 +52,7 @@ def sort_results_success_first(results: Iterable[dict[str, Any]]) -> list[dict[s
         status_value = str(r.get("status", "")).lower()
         return 0 if status_value in {"success", "warning"} else 1
 
-    return sorted(list(results), key=_key)
+    return sorted(results, key=_key)
 
 
 def normalize_process_batch(batch: dict[str, Any]) -> dict[str, Any]:

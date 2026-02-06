@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
 
@@ -119,9 +120,7 @@ async def persona_stream(
             n = (name or "").lower()
             if "delete" in n and not allow_delete:
                 return False
-            if "export" in n and not allow_export:
-                return False
-            return True
+            return not ("export" in n and not allow_export)
 
         async def _call_tool(name: str, arguments: dict) -> dict:
             if not _tool_allowed(name):
@@ -178,7 +177,5 @@ async def persona_stream(
         logger.info("Persona stream disconnected")
     except Exception as e:
         logger.warning(f"Persona stream error: {e}")
-        try:
+        with contextlib.suppress(Exception):
             await stream.error("internal_error", "Internal error")
-        except Exception:
-            pass

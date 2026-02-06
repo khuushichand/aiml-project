@@ -73,7 +73,7 @@ class RetrievalAgentRequest(BaseModel):
     search_config: Optional[dict[str, Any]] = Field(default=None, description="Search configuration")
 
     @field_validator('messages', mode='before')
-    def ensure_messages_list(cls, v, values):
+    def ensure_messages_list(self, v, values):
         """Ensure we have either message or messages"""
         if v is None and 'message' in values and values['message'] is not None:
             return [values['message']]

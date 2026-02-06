@@ -1,4 +1,2 @@
-*
-!.gitkeep
-!.gitignore
-!README.md
+# Exclude macOS archive metadata
+__MACOSX/

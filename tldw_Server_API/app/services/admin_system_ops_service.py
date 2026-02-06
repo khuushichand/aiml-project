@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -76,19 +76,13 @@ def _store_file_lock(timeout: float = _LOCK_TIMEOUT_SECONDS):
     finally:
         if lock_fd is not None:
             if _HAS_FCNTL:
-                try:
+                with suppress(_SYSTEM_OPS_NONCRITICAL_EXCEPTIONS):
                     fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                except _SYSTEM_OPS_NONCRITICAL_EXCEPTIONS:
-                    pass
-            try:
+            with suppress(_SYSTEM_OPS_NONCRITICAL_EXCEPTIONS):
                 os.close(lock_fd)
-            except _SYSTEM_OPS_NONCRITICAL_EXCEPTIONS:
-                pass
         if not _HAS_FCNTL:
-            try:
+            with suppress(_SYSTEM_OPS_NONCRITICAL_EXCEPTIONS):
                 lock_path.unlink(missing_ok=True)
-            except _SYSTEM_OPS_NONCRITICAL_EXCEPTIONS:
-                pass
 
 
 @contextmanager

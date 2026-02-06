@@ -344,18 +344,20 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
                       </div>
                     ))}
 
-                  <div className="rounded-md border border-border/60 bg-surface2/70 p-2 text-text">
-                    <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-                      {t("playground:composer.promptPreview.examples", {
-                        defaultValue: "Conflict resolution examples"
-                      })}
+                  {preview.examples.length > 0 && (
+                    <div className="rounded-md border border-border/60 bg-surface2/70 p-2 text-text">
+                      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+                        {t("playground:composer.promptPreview.examples", {
+                          defaultValue: "Conflict resolution examples"
+                        })}
+                      </div>
+                      <ul className="list-disc space-y-1 pl-4">
+                        {preview.examples.map((example, index) => (
+                          <li key={`${example}-${index}`}>{example}</li>
+                        ))}
+                      </ul>
                     </div>
-                    <ul className="list-disc space-y-1 pl-4">
-                      {preview.examples.map((example, index) => (
-                        <li key={`${example}-${index}`}>{example}</li>
-                      ))}
-                    </ul>
-                  </div>
+                  )}
                 </div>
               )}
             </>

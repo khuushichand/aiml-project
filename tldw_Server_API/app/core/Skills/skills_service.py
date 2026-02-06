@@ -15,6 +15,7 @@ Provides:
 - Context payload generation for LLM injection
 """
 
+import contextlib
 import shutil
 import zipfile
 from datetime import datetime, timezone
@@ -361,10 +362,8 @@ class SkillsService:
         metadata = self._metadata_from_row(row)
         skill_dir = self._get_skill_dir(name)
         if not skill_dir.exists():
-            try:
+            with contextlib.suppress(Exception):
                 db.mark_skill_registry_deleted(name, expected_version=metadata.version)
-            except Exception:
-                pass
             raise SkillNotFoundError(name, detail="Skill directory not found")
 
         try:
@@ -523,10 +522,8 @@ class SkillsService:
 
         skill_dir = self._get_skill_dir(name)
         if not skill_dir.exists():
-            try:
+            with contextlib.suppress(Exception):
                 db.mark_skill_registry_deleted(name, expected_version=current_version)
-            except Exception:
-                pass
             raise SkillNotFoundError(name, detail="Skill directory not found")
 
         update_data: dict[str, Any] = {}

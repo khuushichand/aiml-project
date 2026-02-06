@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import os
 import sqlite3
@@ -81,7 +82,7 @@ async def generate_document(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     service_cls: type[DocumentGeneratorService] = Depends(get_document_generator_service),
     current_user: dict[str, Any] = Depends(get_current_active_user),
-) -> Union[GenerateDocumentResponse, AsyncGenerationResponse]:
+) -> GenerateDocumentResponse | AsyncGenerationResponse:
     """Generate a document from a conversation."""
     try:
         service = service_cls(db)
@@ -175,7 +176,7 @@ async def generate_document(
                 message="Document generation job created",
             )
 
-        def _generate_doc(stream: bool) -> Union[str, Any]:
+        def _generate_doc(stream: bool) -> str | Any:
             return service.generate_document(
                 conversation_id=request.conversation_id,
                 document_type=doc_type,
@@ -276,21 +277,15 @@ async def generate_document(
                             yield ln
                     except asyncio.CancelledError:
                         if not prod.done():
-                            try:
+                            with contextlib.suppress(_CHAT_DOCS_NONCRITICAL_EXCEPTIONS):
                                 prod.cancel()
-                            except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS:
-                                pass
-                            try:
+                            with contextlib.suppress(_CHAT_DOCS_NONCRITICAL_EXCEPTIONS):
                                 await prod
-                            except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS:
-                                pass
                         raise
                     else:
                         if not prod.done():
-                            try:
+                            with contextlib.suppress(_CHAT_DOCS_NONCRITICAL_EXCEPTIONS):
                                 await prod
-                            except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS:
-                                pass
                         try:
                             document_body = "".join(collected_chunks).strip()
                             if document_body:

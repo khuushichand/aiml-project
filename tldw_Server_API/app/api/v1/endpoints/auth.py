@@ -4,6 +4,7 @@
 # Imports
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import re
@@ -683,10 +684,8 @@ async def login(
 
             log_counter("auth_login_user_not_found")
             # finalize diag headers in test mode for visibility
-            try:
+            with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 _finalize_login_diag(request, response)
-            except _AUTH_NONCRITICAL_EXCEPTIONS:
-                pass
             extra_headers = {"WWW-Authenticate": "Bearer"}
             if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
                 extra_headers["X-TLDW-Login-Reason"] = "user-not-found"
@@ -747,10 +746,8 @@ async def login(
                     needs_rehash = needs_rehash2
                     password_service = fresh_ps
                     # annotate header to indicate re-verify succeeded
-                    try:
+                    with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                         response.headers["X-TLDW-Login-Reverify"] = "ok"
-                    except _AUTH_NONCRITICAL_EXCEPTIONS:
-                        pass
             except _AUTH_NONCRITICAL_EXCEPTIONS:
                 # fall back to original result
                 pass
@@ -799,10 +796,8 @@ async def login(
             logger.info(f"Remaining login attempts: {remaining}")
 
             log_counter("auth_login_invalid_password")
-            try:
+            with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 _finalize_login_diag(request, response)
-            except _AUTH_NONCRITICAL_EXCEPTIONS:
-                pass
             extra_headers = {"WWW-Authenticate": "Bearer"}
             if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
                 extra_headers["X-TLDW-Login-Reason"] = "invalid-password"
@@ -874,7 +869,7 @@ async def login(
             refresh_token = single_user_key
 
             # Create session with tokens
-            session_info = await session_manager.create_session(
+            await session_manager.create_session(
                 user_id=user['id'],
                 access_token=access_token,
                 refresh_token=refresh_token,
@@ -926,10 +921,8 @@ async def login(
                     ) from exc
                 response.status_code = status.HTTP_202_ACCEPTED
                 log_counter("auth_login_mfa_required")
-                try:
+                with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                     _finalize_login_diag(request, response)
-                except _AUTH_NONCRITICAL_EXCEPTIONS:
-                    pass
                 return MFAChallengeResponse(
                     session_token=session_token,
                     mfa_required=True,
@@ -965,7 +958,6 @@ async def login(
                 refresh_token=refresh_token
             )
 
-            session_info = temp_session_info
 
         # Update last login time
         await update_user_last_login(db, int(user['id']), datetime.utcnow())
@@ -1002,10 +994,8 @@ async def login(
             token_type="bearer",
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
         )
-        try:
+        with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
             _finalize_login_diag(request, response)
-        except _AUTH_NONCRITICAL_EXCEPTIONS:
-            pass
         return result
 
     except HTTPException:
@@ -1479,10 +1469,8 @@ async def refresh_token(
                         ip_address=(http_request.client.host if http_request and getattr(http_request, 'client', None) else None),
                     )
             except _AUTH_NONCRITICAL_EXCEPTIONS as _bl_e:
-                try:
+                with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                     logger.debug(f"Refresh: blacklist prior token best-effort failed: {_bl_e}")
-                except _AUTH_NONCRITICAL_EXCEPTIONS:
-                    pass
 
         if settings.PII_REDACT_LOGS:
             logger.info("Token refreshed [redacted]")
@@ -1493,10 +1481,8 @@ async def refresh_token(
         log_histogram("auth_refresh_duration", time.perf_counter() - start_time)
         # TEST_MODE: include simple duration metric header (non-breaking)
         if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
-            try:
+            with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Refresh-Duration-ms"] = str(int((time.perf_counter() - start_time) * 1000))
-            except _AUTH_NONCRITICAL_EXCEPTIONS:
-                pass
         return TokenResponse(
             access_token=new_access_token,
             refresh_token=new_refresh_token,
@@ -2657,10 +2643,8 @@ async def mfa_login(
             except _AUTH_NONCRITICAL_EXCEPTIONS as rl_exc:
                 logger.debug(f"rate_limiter.reset_failed_attempts failed: {rl_exc}")
 
-        try:
+        with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
             await session_manager.delete_ephemeral_value(cache_key)
-        except _AUTH_NONCRITICAL_EXCEPTIONS:
-            pass
 
         log_counter("auth_login_success")
         log_counter("auth_mfa_login_success")
@@ -2821,10 +2805,8 @@ async def register(
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
         # Attach diagnostics (if enabled)
         if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
-            try:
+            with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Register-Error"] = "duplicate-user"
-            except _AUTH_NONCRITICAL_EXCEPTIONS:
-                pass
         _finalize_register_diag(http_request, response)
         detail = "Username or email already exists."
         if payload.registration_code:
@@ -2842,10 +2824,8 @@ async def register(
         log_counter("auth_register_weak_password")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
         if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
-            try:
+            with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Register-Error"] = "weak-password"
-            except _AUTH_NONCRITICAL_EXCEPTIONS:
-                pass
         _finalize_register_diag(http_request, response)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2856,10 +2836,8 @@ async def register(
         log_counter("auth_register_invalid_code")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
         if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
-            try:
+            with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Register-Error"] = "invalid-registration-code"
-            except _AUTH_NONCRITICAL_EXCEPTIONS:
-                pass
         _finalize_register_diag(http_request, response)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2870,10 +2848,8 @@ async def register(
         log_counter("auth_register_error")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
         if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
-            try:
+            with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Register-Error"] = "registration-error"
-            except _AUTH_NONCRITICAL_EXCEPTIONS:
-                pass
         _finalize_register_diag(http_request, response)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2889,10 +2865,8 @@ async def register(
         log_counter("auth_register_unexpected_error")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
         if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
-            try:
+            with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Register-Error"] = "internal-error"
-            except _AUTH_NONCRITICAL_EXCEPTIONS:
-                pass
         duration = time.perf_counter() - start_time
         _finalize_register_diag(http_request, response)
         if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):

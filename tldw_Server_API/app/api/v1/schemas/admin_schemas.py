@@ -6,7 +6,7 @@ from datetime import date, datetime
 
 # Imports
 from decimal import Decimal, InvalidOperation
-from typing import Any, Literal, Union
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, NonNegativeInt, field_validator
@@ -651,7 +651,7 @@ class BatchOperationResponse(BaseModel):
 class UsageDailyRow(BaseModel):
     """Single usage_daily record."""
     user_id: int
-    day: Union[date, str]
+    day: date | str
     requests: int
     errors: int
     bytes_total: int

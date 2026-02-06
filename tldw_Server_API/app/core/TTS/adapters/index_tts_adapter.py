@@ -465,10 +465,7 @@ class IndexTTS2Adapter(TTSAdapter):
             return b""
 
         try:
-            if hasattr(chunk, "detach"):
-                np_chunk = chunk.detach().cpu().numpy()
-            else:
-                np_chunk = np.asarray(chunk)
+            np_chunk = chunk.detach().cpu().numpy() if hasattr(chunk, "detach") else np.asarray(chunk)
         except Exception as exc:
             logger.warning("IndexTTS2 streaming chunk conversion error: %s", exc)
             return b""
@@ -689,10 +686,7 @@ class IndexTTS2Adapter(TTSAdapter):
         """Persist numpy int16 audio array to WAV."""
         mono = np.asarray(audio, dtype=np.int16)
         if mono.ndim == 2:
-            if mono.shape[1] > 1:
-                mono = mono.mean(axis=1)
-            else:
-                mono = mono[:, 0]
+            mono = mono.mean(axis=1) if mono.shape[1] > 1 else mono[:, 0]
 
         mono = np.asarray(mono, dtype=np.int16)
 

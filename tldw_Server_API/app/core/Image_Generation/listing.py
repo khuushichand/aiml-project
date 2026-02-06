@@ -35,9 +35,7 @@ def _is_sd_cpp_configured(cfg, enabled: bool) -> bool:
         return False
     if not _path_exists(cfg.sd_cpp_binary_path):
         return False
-    if _path_exists(cfg.sd_cpp_diffusion_model_path) or _path_exists(cfg.sd_cpp_model_path):
-        return True
-    return False
+    return bool(_path_exists(cfg.sd_cpp_diffusion_model_path) or _path_exists(cfg.sd_cpp_model_path))
 
 
 def _is_swarmui_configured(cfg, enabled: bool) -> bool:

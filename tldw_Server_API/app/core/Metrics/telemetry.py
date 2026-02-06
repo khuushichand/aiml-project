@@ -13,8 +13,8 @@ from __future__ import annotations
 import inspect
 import os
 import socket
-from contextlib import contextmanager
-from typing import Any, Optional
+from contextlib import contextmanager, suppress
+from typing import Any
 
 from loguru import logger
 
@@ -259,7 +259,7 @@ class TelemetryConfig:
 class TelemetryManager:
     """Manages OpenTelemetry initialization and provides access to telemetry components."""
 
-    def __init__(self, config: Optional[TelemetryConfig] = None):
+    def __init__(self, config: TelemetryConfig | None = None):
         """
         Initialize the telemetry manager.
 
@@ -267,10 +267,10 @@ class TelemetryManager:
             config: TelemetryConfig instance or None to use defaults
         """
         self.config = config or TelemetryConfig()
-        self.tracer_provider: Optional[TracerProvider] = None
-        self.meter_provider: Optional[MeterProvider] = None
-        self.tracer: Optional[Tracer] = None
-        self.meter: Optional[Meter] = None
+        self.tracer_provider: TracerProvider | None = None
+        self.meter_provider: MeterProvider | None = None
+        self.tracer: Tracer | None = None
+        self.meter: Meter | None = None
         self.initialized = False
         # Hold pending views if provider not yet available
         self._pending_views = []  # list[tuple[str, list[float]]]
@@ -380,15 +380,13 @@ class TelemetryManager:
             try:
                 if hasattr(self.meter_provider, "register_view") and View and ExplicitBucketHistogramAggregation and InstrumentSelector:
                     for name, boundaries in list(self._pending_views):
-                        try:
+                        with suppress(_TELEMETRY_NONCRITICAL_EXCEPTIONS):
                             self.meter_provider.register_view(
                                 View(
                                     instrument_selector=InstrumentSelector(name=name),
                                     aggregation=ExplicitBucketHistogramAggregation(boundaries=boundaries),
                                 )
                             )
-                        except _TELEMETRY_NONCRITICAL_EXCEPTIONS:
-                            pass
                     self._pending_views.clear()
             except _TELEMETRY_NONCRITICAL_EXCEPTIONS:
                 pass
@@ -545,7 +543,7 @@ class TelemetryManager:
             except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Could not instrument psycopg2: {e}")
 
-    def get_tracer(self, name: Optional[str] = None) -> Tracer:
+    def get_tracer(self, name: str | None = None) -> Tracer:
         """
         Get a tracer instance.
 
@@ -562,7 +560,7 @@ class TelemetryManager:
             return trace.get_tracer(name, self.config.service_version)
         return self.tracer
 
-    def get_meter(self, name: Optional[str] = None) -> Meter:
+    def get_meter(self, name: str | None = None) -> Meter:
         """
         Get a meter instance.
 
@@ -603,7 +601,7 @@ class TelemetryManager:
             logger.debug(f"Failed to register histogram view for {instrument_name}: {e}")
 
     @contextmanager
-    def trace_context(self, operation_name: str, attributes: Optional[dict[str, Any]] = None):
+    def trace_context(self, operation_name: str, attributes: dict[str, Any] | None = None):
         """
         Context manager for creating a traced operation.
 
@@ -646,7 +644,7 @@ class TelemetryManager:
 
 
 # Global telemetry manager instance
-_telemetry_manager: Optional[TelemetryManager] = None
+_telemetry_manager: TelemetryManager | None = None
 
 
 def get_telemetry_manager() -> TelemetryManager:
@@ -662,7 +660,7 @@ def get_telemetry_manager() -> TelemetryManager:
     return _telemetry_manager
 
 
-def instrument_fastapi_app(app: Any, telemetry_manager: Optional[TelemetryManager] = None) -> bool:
+def instrument_fastapi_app(app: Any, telemetry_manager: TelemetryManager | None = None) -> bool:
     """Instrument a FastAPI app with OpenTelemetry if available."""
     if not OTEL_AVAILABLE or not FastAPIInstrumentor or app is None:
         return False
@@ -683,10 +681,8 @@ def instrument_fastapi_app(app: Any, telemetry_manager: Optional[TelemetryManage
                 if cls.__name__ == "OpenTelemetryMiddleware" or cls.__module__.startswith(
                     "opentelemetry.instrumentation"
                 ):
-                    try:
+                    with suppress(_TELEMETRY_NONCRITICAL_EXCEPTIONS):
                         app._tldw_otel_fastapi_instrumented = True
-                    except _TELEMETRY_NONCRITICAL_EXCEPTIONS:
-                        pass
                     return True
         except _TELEMETRY_NONCRITICAL_EXCEPTIONS:
             pass
@@ -696,17 +692,15 @@ def instrument_fastapi_app(app: Any, telemetry_manager: Optional[TelemetryManage
             tracer_provider=tm.tracer_provider,
             meter_provider=tm.meter_provider,
         )
-        try:
+        with suppress(_TELEMETRY_NONCRITICAL_EXCEPTIONS):
             app._tldw_otel_fastapi_instrumented = True
-        except _TELEMETRY_NONCRITICAL_EXCEPTIONS:
-            pass
         return True
     except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Could not instrument FastAPI app: {e}")
         return False
 
 
-def initialize_telemetry(config: Optional[TelemetryConfig] = None) -> TelemetryManager:
+def initialize_telemetry(config: TelemetryConfig | None = None) -> TelemetryManager:
     """
     Initialize telemetry with optional configuration.
 

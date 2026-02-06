@@ -33,7 +33,7 @@ import re
 import sqlite3
 import threading
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime, timezone
 from math import ceil
 from pathlib import Path
@@ -262,7 +262,7 @@ class PromptsDatabase:
 
         # Validate client_id
         if not client_id:
-            raise ValueError("Client ID cannot be empty or None.")
+            raise ValueError("Client ID cannot be empty or None.")  # noqa: TRY003
         self.client_id = client_id
 
         # Ensure parent directory exists if it's a file-based DB
@@ -271,7 +271,7 @@ class PromptsDatabase:
                 self.db_path.parent.mkdir(parents=True, exist_ok=True)
             except OSError as e:
                 # Catch potential errors creating the directory (e.g., permissions)
-                raise DatabaseError(f"Failed to create database directory {self.db_path.parent}: {e}") from e
+                raise DatabaseError(f"Failed to create database directory {self.db_path.parent}: {e}") from e  # noqa: TRY003
 
         logging.info(f"Initializing PromptsDatabase object for path: {self.db_path_str} [Client ID: {self.client_id}]")
 
@@ -284,10 +284,8 @@ class PromptsDatabase:
             def __init__(self, outer):
                 self._outer = outer
             def close(self):
-                try:
+                with suppress(_PROMPTS_NONCRITICAL_EXCEPTIONS):
                     self._outer.close_connection()
-                except _PROMPTS_NONCRITICAL_EXCEPTIONS:
-                    pass
         # Expose as attribute, not property, to satisfy hasattr checks in fixtures
         self.conn = _ConnCloseProxy(self)
 
@@ -305,14 +303,14 @@ class PromptsDatabase:
             # Attempt to clean up the connection before raising
             self.close_connection() # Important to call this if available
             # Re-raise as a DatabaseError to signal catastrophic failure
-            raise DatabaseError(f"Prompts Database initialization failed: {e}") from e
+            raise DatabaseError(f"Prompts Database initialization failed: {e}") from e  # noqa: TRY003
         except Exception as e:
             # Catch any other unexpected errors during initialization
             logging.critical(f"FATAL: Unexpected error during Prompts DB Initialization for {self.db_path_str}: {e}", exc_info=True)
             # Attempt cleanup
             self.close_connection() # Important to call this
             # Re-raise as a DatabaseError
-            raise DatabaseError(f"Unexpected prompts database initialization error: {e}") from e
+            raise DatabaseError(f"Unexpected prompts database initialization error: {e}") from e  # noqa: TRY003
         finally:
             # Log completion status based on the flag
             if initialization_successful:
@@ -363,7 +361,7 @@ class PromptsDatabase:
             except sqlite3.Error as e:
                 logging.error(f"Failed to connect to database at {self.db_path_str}: {e}", exc_info=True)
                 self._local.conn = None
-                raise DatabaseError(f"Failed to connect to database '{self.db_path_str}': {e}") from e
+                raise DatabaseError(f"Failed to connect to database '{self.db_path_str}': {e}") from e  # noqa: TRY003
         return self._local.conn
 
     def get_connection(self) -> sqlite3.Connection:
@@ -379,7 +377,7 @@ class PromptsDatabase:
             except sqlite3.Error as e:
                 logging.warning(f"Error closing connection: {e}")
             finally:
-                if hasattr(self._local, 'conn'): self._local.conn = None
+                if hasattr(self._local, 'conn'): self._local.conn = None  # noqa: E701
 
     # Simple alias for test fixtures and callers expecting a generic close()
     def close(self):
@@ -412,7 +410,7 @@ class PromptsDatabase:
             # Ensure the backup file path is not the same as the source for file-based DBs
             if not self.is_memory_db and self.db_path.resolve() == Path(backup_file_path).resolve():
                 logger.error("Backup path cannot be the same as the source database path.")
-                raise ValueError("Backup path cannot be the same as the source database path.")
+                raise ValueError("Backup path cannot be the same as the source database path.")  # noqa: TRY003, TRY301
 
             src_conn = self.get_connection()
 
@@ -427,7 +425,7 @@ class PromptsDatabase:
             src_conn.backup(backup_conn, pages=0, progress=None)
 
             logger.info(f"Database backup successful from '{self.db_path_str}' to '{str(backup_db_path_obj)}'")
-            return True
+            return True  # noqa: TRY300
         except ValueError as ve:
             logger.error(f"ValueError during database backup: {ve}", exc_info=True)
             return False
@@ -456,23 +454,23 @@ class PromptsDatabase:
             if commit:
                 conn.commit()
                 logging.debug("Committed.")
-            return cursor
+            return cursor  # noqa: TRY300
         except sqlite3.IntegrityError as e:
             msg = str(e).lower()
             if "sync error" in msg:  # From our custom triggers
                 logging.error(f"Sync Validation Failed: {e}")
-                raise e
+                raise
             else:
                 logging.error(f"Integrity error: {query[:200]}... Error: {e}", exc_info=True)
-                raise DatabaseError(f"Integrity constraint violation: {e}") from e
+                raise DatabaseError(f"Integrity constraint violation: {e}") from e  # noqa: TRY003
         except sqlite3.Error as e:
             logging.error(f"Query failed: {query[:200]}... Error: {e}", exc_info=True)
-            raise DatabaseError(f"Query execution failed: {e}") from e
+            raise DatabaseError(f"Query execution failed: {e}") from e  # noqa: TRY003
 
     def execute_many(self, query: str, params_list: list[tuple], *, commit: bool = False) -> Optional[sqlite3.Cursor]:
         conn = self.get_connection()
         if not isinstance(params_list, list):
-            raise TypeError("params_list must be a list.")
+            raise TypeError("params_list must be a list.")  # noqa: TRY003
         if not params_list:
             return None
         try:
@@ -482,16 +480,16 @@ class PromptsDatabase:
             if commit:
                 conn.commit()
                 logging.debug("Committed Many.")
-            return cursor
+            return cursor  # noqa: TRY300
         except sqlite3.IntegrityError as e:
             logging.error(f"Integrity error during Execute Many: {query[:150]}... Error: {e}", exc_info=True)
-            raise DatabaseError(f"Integrity constraint violation during batch: {e}") from e
+            raise DatabaseError(f"Integrity constraint violation during batch: {e}") from e  # noqa: TRY003
         except sqlite3.Error as e:
             logging.error(f"Execute Many failed: {query[:150]}... Error: {e}", exc_info=True)
-            raise DatabaseError(f"Execute Many failed: {e}") from e
+            raise DatabaseError(f"Execute Many failed: {e}") from e  # noqa: TRY003
         except TypeError as te:
             logging.error(f"TypeError during Execute Many: {te}. Check params_list format.", exc_info=True)
-            raise TypeError(f"Parameter list format error: {te}") from te
+            raise TypeError(f"Parameter list format error: {te}") from te  # noqa: TRY003
 
     # --- Transaction Context ---
     @contextmanager
@@ -514,7 +512,7 @@ class PromptsDatabase:
                     logging.debug("Rollback successful.")
                 except sqlite3.Error as rb_err:
                     logging.error(f"Rollback FAILED: {rb_err}", exc_info=True)
-            raise e
+            raise
 
     # --- Schema Initialization and Migration ---
     def _get_db_version(self, conn: sqlite3.Connection) -> int:
@@ -526,7 +524,7 @@ class PromptsDatabase:
             if "no such table: schema_version" in str(e).lower():
                 return 0
             else:
-                raise DatabaseError(f"Could not determine schema version: {e}") from e
+                raise DatabaseError(f"Could not determine schema version: {e}") from e  # noqa: TRY003
 
     _SCHEMA_UPDATE_VERSION_SQL_V1 = "UPDATE schema_version SET version = 1 WHERE version = 0;"
 
@@ -550,12 +548,12 @@ class PromptsDatabase:
                                  'last_modified', 'version', 'client_id', 'deleted'}
                 if not expected_cols.issubset(columns):
                     missing_cols = expected_cols - columns
-                    raise SchemaError(f"Validation Error: Prompts table missing columns: {missing_cols}")
+                    raise SchemaError(f"Validation Error: Prompts table missing columns: {missing_cols}")  # noqa: TRY003
                 logging.debug("[Schema V1] Prompts table structure validated.")
                 cursor_check = conn.execute("SELECT version FROM schema_version LIMIT 1")
                 version_in_tx = cursor_check.fetchone()
                 if not version_in_tx or version_in_tx['version'] != 1:
-                    raise SchemaError("Schema version update did not take effect within transaction.")
+                    raise SchemaError("Schema version update did not take effect within transaction.")  # noqa: TRY003
             logging.info(f"[Schema V1] Core Schema V1 applied and committed for DB: {self.db_path_str}.")
             try:
                 logging.debug("[Schema V1] Applying FTS Tables...")
@@ -567,7 +565,7 @@ class PromptsDatabase:
                 # This might not be fatal if FTS is optional or can be rebuilt.
         except sqlite3.Error as e:
             logging.error(f"[Schema V1] Application failed: {e}", exc_info=True)
-            raise DatabaseError(f"DB schema V1 setup failed: {e}") from e
+            raise DatabaseError(f"DB schema V1 setup failed: {e}") from e  # noqa: TRY003
 
     def _initialize_schema(self):
         conn = self.get_connection()
@@ -587,23 +585,23 @@ class PromptsDatabase:
                 return
 
             if current_db_version > target_version:
-                raise SchemaError(
+                raise SchemaError(  # noqa: TRY003, TRY301
                     f"DB schema version ({current_db_version}) is newer than supported ({target_version}).")
 
             if current_db_version == 0:
                 self._apply_schema_v1(conn)
                 final_db_version = self._get_db_version(conn)
                 if final_db_version != target_version:
-                    raise SchemaError(
+                    raise SchemaError(  # noqa: TRY003, TRY301
                         f"Schema migration applied, but final DB version is {final_db_version}, expected {target_version}.")
                 logging.info(f"Database schema initialized/migrated to version {target_version}.")
             else:
                 # Placeholder for future migrations from v1 to v2, etc.
-                raise SchemaError(
+                raise SchemaError(  # noqa: TRY003, TRY301
                     f"Migration needed from {current_db_version} to {target_version}, but no path defined.")
         except (DatabaseError, SchemaError, sqlite3.Error) as e:
             logging.error(f"Schema initialization/migration failed: {e}", exc_info=True)
-            raise DatabaseError(f"Schema initialization failed: {e}") from e
+            raise DatabaseError(f"Schema initialization failed: {e}") from e  # noqa: TRY003
 
     # --- Internal Helpers ---
     def _get_current_utc_timestamp_str(self) -> str:
@@ -642,7 +640,7 @@ class PromptsDatabase:
         tuple[int, int]]:
         try:
             if not (_SAFE_IDENTIFIER_RE.fullmatch(table or "") and _SAFE_IDENTIFIER_RE.fullmatch(id_col or "")):
-                raise DatabaseError(
+                raise DatabaseError(  # noqa: TRY003
                     f"Unsafe identifier in version lookup: table={table!r}, column={id_col!r}"
                 )
             cursor = conn.execute(f"SELECT version FROM {table} WHERE {id_col} = ? AND deleted = 0", (id_val,))
@@ -656,7 +654,7 @@ class PromptsDatabase:
                     return None
         except sqlite3.Error as e:
             logging.error(f"DB error fetching version for {table} {id_col}={id_val}: {e}")
-            raise DatabaseError(f"Failed to fetch current version: {e}") from e
+            raise DatabaseError(f"Failed to fetch current version: {e}") from e  # noqa: TRY003
         return None
 
     def _log_sync_event(self, conn: sqlite3.Connection, entity: str, entity_uuid: str, operation: str, version: int,
@@ -675,7 +673,7 @@ class PromptsDatabase:
             logging.debug(f"Logged sync: {entity} {entity_uuid} {operation} v{version} at {current_time}")
         except sqlite3.Error as e:
             logging.error(f"Failed insert sync_log for {entity} {entity_uuid}: {e}", exc_info=True)
-            raise DatabaseError(f"Failed to log sync event: {e}") from e
+            raise DatabaseError(f"Failed to log sync event: {e}") from e  # noqa: TRY003
 
     # --- FTS Helper Methods ---
     def _update_fts_prompt(self, conn: sqlite3.Connection, prompt_id: int, name: str, author: Optional[str],
@@ -687,7 +685,7 @@ class PromptsDatabase:
             logging.debug(f"Updated FTS for Prompt ID {prompt_id}")
         except sqlite3.Error as e:
             logging.error(f"Failed FTS update Prompt ID {prompt_id}: {e}", exc_info=True)
-            raise DatabaseError(f"Failed FTS update Prompt ID {prompt_id}: {e}") from e
+            raise DatabaseError(f"Failed FTS update Prompt ID {prompt_id}: {e}") from e  # noqa: TRY003
 
     def _delete_fts_prompt(self, conn: sqlite3.Connection, prompt_id: int):
         try:
@@ -695,7 +693,7 @@ class PromptsDatabase:
             logging.debug(f"Deleted FTS for Prompt ID {prompt_id}")
         except sqlite3.Error as e:
             logging.error(f"Failed FTS delete Prompt ID {prompt_id}: {e}", exc_info=True)
-            raise DatabaseError(f"Failed FTS delete Prompt ID {prompt_id}: {e}") from e
+            raise DatabaseError(f"Failed FTS delete Prompt ID {prompt_id}: {e}") from e  # noqa: TRY003
 
     def _update_fts_prompt_keyword(self, conn: sqlite3.Connection, keyword_id: int, keyword: str):
         try:
@@ -704,7 +702,7 @@ class PromptsDatabase:
             logging.debug(f"Updated FTS for PromptKeyword ID {keyword_id}")
         except sqlite3.Error as e:
             logging.error(f"Failed FTS update PromptKeyword ID {keyword_id}: {e}", exc_info=True)
-            raise DatabaseError(f"Failed FTS update PromptKeyword ID {keyword_id}: {e}") from e
+            raise DatabaseError(f"Failed FTS update PromptKeyword ID {keyword_id}: {e}") from e  # noqa: TRY003
 
     # --- Version History ---
     def _fetch_prompt_versions_from_sync_log(self, prompt_uuid: str) -> list[dict[str, Any]]:
@@ -807,13 +805,13 @@ class PromptsDatabase:
     def restore_prompt_version(self, prompt_id: int, version: int) -> tuple[Optional[str], str]:
         """Restore a prompt to a previous version using sync_log snapshots."""
         if not isinstance(version, int) or version < 1:
-            raise InputError("Version must be a positive integer.")
+            raise InputError("Version must be a positive integer.")  # noqa: TRY003
         prompt = self.fetch_prompt_details(prompt_id, include_deleted=True)
         if not prompt:
-            raise InputError(f"Prompt with ID {prompt_id} not found.")
+            raise InputError(f"Prompt with ID {prompt_id} not found.")  # noqa: TRY003
         payload = self._fetch_prompt_version_payload(prompt.get("uuid"), version)
         if not payload:
-            raise InputError(f"Version {version} not found for prompt {prompt_id}.")
+            raise InputError(f"Version {version} not found for prompt {prompt_id}.")  # noqa: TRY003
 
         update_data: dict[str, Any] = {}
         for field in ("name", "author", "details", "system_prompt", "user_prompt"):
@@ -833,12 +831,12 @@ class PromptsDatabase:
             logging.debug(f"Deleted FTS for PromptKeyword ID {keyword_id}")
         except sqlite3.Error as e:
             logging.error(f"Failed FTS delete PromptKeyword ID {keyword_id}: {e}", exc_info=True)
-            raise DatabaseError(f"Failed FTS delete PromptKeyword ID {keyword_id}: {e}") from e
+            raise DatabaseError(f"Failed FTS delete PromptKeyword ID {keyword_id}: {e}") from e  # noqa: TRY003
 
     # --- Public Mutating Methods ---
     def add_keyword(self, keyword_text: str) -> tuple[Optional[int], Optional[str]]:
         if not keyword_text or not keyword_text.strip():
-            raise InputError("Keyword cannot be empty.")
+            raise InputError("Keyword cannot be empty.")  # noqa: TRY003
         normalized_keyword = self._normalize_keyword(keyword_text)
         current_time = self._get_current_utc_timestamp_str()
         client_id = self.client_id
@@ -858,7 +856,7 @@ class PromptsDatabase:
                         cursor.execute(
                             "UPDATE PromptKeywordsTable SET deleted=0, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
                             (current_time, new_version, client_id, kw_id, current_version))
-                        if cursor.rowcount == 0: raise ConflictError(
+                        if cursor.rowcount == 0: raise ConflictError(  # noqa: E701, TRY003, TRY301
                             "Failed to undelete keyword due to version mismatch or it was not found.",
                             "PromptKeywordsTable", kw_id)
                         cursor.execute("SELECT * FROM PromptKeywordsTable WHERE id=?", (kw_id,))
@@ -877,7 +875,7 @@ class PromptsDatabase:
                         "INSERT INTO PromptKeywordsTable (keyword, uuid, last_modified, version, client_id, deleted) VALUES (?, ?, ?, ?, ?, 0)",
                         (normalized_keyword, new_uuid, current_time, new_version, client_id))
                     kw_id = cursor.lastrowid
-                    if not kw_id: raise DatabaseError("Failed to get ID for new prompt keyword.")
+                    if not kw_id: raise DatabaseError("Failed to get ID for new prompt keyword.")  # noqa: E701, TRY003, TRY301
                     cursor.execute("SELECT * FROM PromptKeywordsTable WHERE id=?", (kw_id,))
                     payload = dict(cursor.fetchone())
                     self._log_sync_event(conn, 'PromptKeywordsTable', new_uuid, 'create', new_version, payload)
@@ -886,9 +884,9 @@ class PromptsDatabase:
         except (InputError, ConflictError, DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error in add_keyword (prompt) for '{keyword_text}': {e}", exc_info=True)
             if isinstance(e, (InputError, ConflictError, DatabaseError)):
-                raise e
+                raise
             else:
-                raise DatabaseError(f"Failed to add/update prompt keyword: {e}") from e
+                raise DatabaseError(f"Failed to add/update prompt keyword: {e}") from e  # noqa: TRY003
 
     def get_active_keyword_by_text(self, keyword_text: str) -> Optional[dict]:
         """
@@ -920,7 +918,7 @@ class PromptsDatabase:
                    keywords: Optional[list[str]] = None, overwrite: bool = False) -> tuple[
         Optional[int], Optional[str], str]:
         if not isinstance(name, str) or name == "":
-            raise InputError("Prompt name cannot be empty.")
+            raise InputError("Prompt name cannot be empty.")  # noqa: TRY003
 
         current_time = self._get_current_utc_timestamp_str()
         client_id = self.client_id
@@ -941,7 +939,7 @@ class PromptsDatabase:
                     if is_deleted and not overwrite:  # Soft-deleted, treat as "exists" if not overwriting
                         return prompt_id, prompt_uuid, f"Prompt '{name}' exists but is soft-deleted. Use overwrite to restore/update."
                     if not overwrite and not is_deleted:
-                        raise ConflictError(f"Prompt '{name}' already exists.")  # RAISE ERROR
+                        raise ConflictError(f"Prompt '{name}' already exists.")  # RAISE ERROR  # noqa: TRY003, TRY301
                         #return prompt_id, prompt_uuid, f"Prompt '{name}' already exists. Skipped."
 
                     # Overwrite or undelete-and-update
@@ -977,10 +975,10 @@ class PromptsDatabase:
                             # We need to increment from its current soft-deleted version.
                             # For simplicity, we'll just tell user to handle undelete separately or ensure version matches.
                             # A more complex undelete+update would fetch its true current version first.
-                            raise ConflictError(
+                            raise ConflictError(  # noqa: TRY003, TRY301
                                 f"Prompt '{name}' (ID: {prompt_id}) was soft-deleted. Undelete first or ensure overwrite logic handles versioning correctly.",
                                 "Prompts", prompt_id)
-                        raise ConflictError(f"Failed to update prompt '{name}'.", "Prompts", prompt_id)
+                        raise ConflictError(f"Failed to update prompt '{name}'.", "Prompts", prompt_id)  # noqa: TRY003, TRY301
 
                     self._log_sync_event(conn, 'Prompts', prompt_uuid, 'update', new_version, update_data)
                     self._update_fts_prompt(conn, prompt_id, name, author, details, system_prompt, user_prompt)
@@ -1000,7 +998,7 @@ class PromptsDatabase:
                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
                                    (name, author, details, system_prompt, user_prompt, prompt_uuid, current_time, new_version, client_id))
                     prompt_id = cursor.lastrowid
-                    if not prompt_id: raise DatabaseError("Failed to get ID for new prompt.")
+                    if not prompt_id: raise DatabaseError("Failed to get ID for new prompt.")  # noqa: E701, TRY003, TRY301
                     self._log_sync_event(conn, 'Prompts', prompt_uuid, 'create', new_version, insert_data)
                     self._update_fts_prompt(conn, prompt_id, name, author, details, system_prompt, user_prompt)
 
@@ -1014,13 +1012,13 @@ class PromptsDatabase:
 
         except (InputError, ConflictError, DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error adding/updating prompt '{name}': {e}", exc_info=True)
-            if isinstance(e, (InputError, ConflictError, DatabaseError)): raise e
-            else: raise DatabaseError(f"Failed to process prompt '{name}': {e}") from e
+            if isinstance(e, (InputError, ConflictError, DatabaseError)): raise  # noqa: E701
+            else: raise DatabaseError(f"Failed to process prompt '{name}': {e}") from e  # noqa: E701, TRY003
 
     def update_keywords_for_prompt(self, prompt_id: int, keywords_list: list[str]):
-        normalized_new_keywords = sorted(list(set([
+        normalized_new_keywords = sorted({
             self._normalize_keyword(k) for k in keywords_list if k and k.strip()
-        ])))
+        })
         # Do NOT auto-add a default keyword when clearing; allow empty keyword sets
 
         try:
@@ -1033,7 +1031,7 @@ class PromptsDatabase:
             cursor.execute("SELECT uuid FROM Prompts WHERE id = ? AND deleted = 0", (prompt_id,))
             prompt_info = cursor.fetchone()
             if not prompt_info:
-                raise InputError(f"Cannot update keywords: Prompt ID {prompt_id} not found or deleted.")
+                raise InputError(f"Cannot update keywords: Prompt ID {prompt_id} not found or deleted.")  # noqa: TRY003, TRY301
             prompt_uuid = prompt_info['uuid']
 
             # Get current keywords for the prompt
@@ -1055,7 +1053,7 @@ class PromptsDatabase:
                         target_keyword_data[kw_id] = {'text': kw_text, 'uuid': kw_uuid}
                     else:
                         # This should not happen if add_keyword is robust
-                        raise DatabaseError(f"Failed to get/add keyword '{kw_text}' during prompt keyword update.")
+                        raise DatabaseError(f"Failed to get/add keyword '{kw_text}' during prompt keyword update.")  # noqa: TRY003, TRY301
 
             target_keyword_ids = set(target_keyword_data.keys())
 
@@ -1085,8 +1083,8 @@ class PromptsDatabase:
                 logging.debug(f"Keywords updated for prompt {prompt_id}. Added: {len(ids_to_add)}, Removed: {len(ids_to_remove)}.")
         except (InputError, DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error updating keywords for prompt {prompt_id}: {e}", exc_info=True)
-            if isinstance(e, (InputError, DatabaseError)): raise e
-            else: raise DatabaseError(f"Keyword update failed for prompt {prompt_id}: {e}") from e
+            if isinstance(e, (InputError, DatabaseError)): raise  # noqa: E701
+            else: raise DatabaseError(f"Keyword update failed for prompt {prompt_id}: {e}") from e  # noqa: E701, TRY003
 
     def update_prompt_by_id(self, prompt_id: int, update_data: dict[str, Any]) -> tuple[Optional[str], str]:
         """
@@ -1107,7 +1105,7 @@ class PromptsDatabase:
             DatabaseError: For other database issues.
         """
         if 'name' in update_data and (not update_data['name'] or not update_data['name'].strip()):
-            raise InputError("Prompt name cannot be empty if provided for update.")
+            raise InputError("Prompt name cannot be empty if provided for update.")  # noqa: TRY003
 
         current_time = self._get_current_utc_timestamp_str()
         client_id = self.client_id
@@ -1140,7 +1138,7 @@ class PromptsDatabase:
                                    (new_name, prompt_id))
                     conflicting_prompt = cursor.fetchone()
                     if conflicting_prompt:
-                        raise ConflictError(
+                        raise ConflictError(  # noqa: TRY003, TRY301
                             f"Another active prompt with name '{new_name}' already exists (ID: {conflicting_prompt['id']}).")
 
                 new_version = current_version + 1
@@ -1180,7 +1178,7 @@ class PromptsDatabase:
                 cursor.execute(update_sql, tuple(params))
 
                 if cursor.rowcount == 0:
-                    raise ConflictError(f"Failed to update prompt ID {prompt_id} (version mismatch or record gone).",
+                    raise ConflictError(f"Failed to update prompt ID {prompt_id} (version mismatch or record gone).",  # noqa: TRY003, TRY301
                                         "Prompts", prompt_id)
 
                 # Log sync event
@@ -1204,8 +1202,8 @@ class PromptsDatabase:
         except (InputError, ConflictError, DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error updating prompt ID {prompt_id}: {e}", exc_info=True)
             if isinstance(e, (InputError, ConflictError, DatabaseError)):
-                raise e
-            raise DatabaseError(f"Failed to update prompt ID {prompt_id}: {e}") from e
+                raise
+            raise DatabaseError(f"Failed to update prompt ID {prompt_id}: {e}") from e  # noqa: TRY003
 
     def soft_delete_prompt(self, prompt_id_or_name_or_uuid: Union[int, str]) -> bool:
         current_time = self._get_current_utc_timestamp_str()
@@ -1245,7 +1243,7 @@ class PromptsDatabase:
                 cursor.execute("UPDATE Prompts SET deleted=1, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
                                (current_time, new_version, client_id, prompt_id, current_version))
                 if cursor.rowcount == 0:
-                    raise ConflictError("Prompts", prompt_id)
+                    raise ConflictError("Prompts", prompt_id)  # noqa: TRY301
 
                 delete_payload = {'uuid': prompt_uuid, 'last_modified': current_time, 'version': new_version, 'client_id': client_id, 'deleted': 1}
                 self._log_sync_event(conn, 'Prompts', prompt_uuid, 'delete', new_version, delete_payload)
@@ -1307,12 +1305,12 @@ class PromptsDatabase:
                 return True
         except (ConflictError, DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error soft deleting prompt '{prompt_id_or_name_or_uuid}': {e}", exc_info=True)
-            if isinstance(e, (ConflictError, DatabaseError)): raise e
-            else: raise DatabaseError(f"Failed to soft delete prompt: {e}") from e
+            if isinstance(e, (ConflictError, DatabaseError)): raise  # noqa: E701
+            else: raise DatabaseError(f"Failed to soft delete prompt: {e}") from e  # noqa: E701, TRY003
 
     def soft_delete_keyword(self, keyword_text: str) -> bool:
         if not keyword_text or not keyword_text.strip():
-            raise InputError("Keyword to delete cannot be empty.")
+            raise InputError("Keyword to delete cannot be empty.")  # noqa: TRY003
         normalized_keyword = self._normalize_keyword(keyword_text)
         current_time = self._get_current_utc_timestamp_str()
         client_id = self.client_id
@@ -1332,7 +1330,7 @@ class PromptsDatabase:
                 cursor.execute("UPDATE PromptKeywordsTable SET deleted=1, last_modified=?, version=?, client_id=? WHERE id=? AND version=?",
                                (current_time, new_version, client_id, kw_id, current_version))
                 if cursor.rowcount == 0:
-                    raise ConflictError("PromptKeywordsTable", kw_id)
+                    raise ConflictError("PromptKeywordsTable", kw_id)  # noqa: TRY301
 
                 delete_payload = {'uuid': kw_uuid, 'last_modified': current_time, 'version': new_version, 'client_id': client_id, 'deleted': 1}
                 self._log_sync_event(conn, 'PromptKeywordsTable', kw_uuid, 'delete', new_version, delete_payload)
@@ -1363,8 +1361,8 @@ class PromptsDatabase:
                 return True
         except (InputError, ConflictError, DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error soft deleting prompt keyword '{keyword_text}': {e}", exc_info=True)
-            if isinstance(e, (InputError, ConflictError, DatabaseError)): raise e
-            else: raise DatabaseError(f"Failed to soft delete prompt keyword: {e}") from e
+            if isinstance(e, (InputError, ConflictError, DatabaseError)): raise  # noqa: E701
+            else: raise DatabaseError(f"Failed to soft delete prompt keyword: {e}") from e  # noqa: E701, TRY003
 
     # --- Read Methods ---
     def get_prompt_by_id(self, prompt_id: int, include_deleted: bool = False) -> Optional[dict]:
@@ -1378,7 +1376,7 @@ class PromptsDatabase:
             return dict(result) if result else None
         except (DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error fetching prompt by ID {prompt_id}: {e}")
-            raise DatabaseError(f"Failed fetch prompt by ID: {e}") from e
+            raise DatabaseError(f"Failed fetch prompt by ID: {e}") from e  # noqa: TRY003
 
     def get_prompt_by_uuid(self, prompt_uuid: str, include_deleted: bool = False) -> Optional[dict]:
         query = "SELECT * FROM Prompts WHERE uuid = ?"
@@ -1391,7 +1389,7 @@ class PromptsDatabase:
             return dict(result) if result else None
         except (DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error fetching prompt by UUID {prompt_uuid}: {e}")
-            raise DatabaseError(f"Failed fetch prompt by UUID: {e}") from e
+            raise DatabaseError(f"Failed fetch prompt by UUID: {e}") from e  # noqa: TRY003
 
     def get_prompt_by_name(self, name: str, include_deleted: bool = False) -> Optional[dict]:
         query = "SELECT * FROM Prompts WHERE name = ?"
@@ -1404,7 +1402,7 @@ class PromptsDatabase:
             return dict(result) if result else None
         except (DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error fetching prompt by name '{name}': {e}")
-            raise DatabaseError(f"Failed fetch prompt by name: {e}") from e
+            raise DatabaseError(f"Failed fetch prompt by name: {e}") from e  # noqa: TRY003
 
     def list_prompts(
         self,
@@ -1415,9 +1413,9 @@ class PromptsDatabase:
         sort_order: str = "desc"
     ) -> tuple[list[dict], int, int, int]:
         if page < 1:
-            raise ValueError("Page number must be >= 1")
+            raise ValueError("Page number must be >= 1")  # noqa: TRY003
         if per_page < 1:
-            raise ValueError("Per page must be >= 1")
+            raise ValueError("Per page must be >= 1")  # noqa: TRY003
         sort_key = (sort_by or "last_modified").strip().lower()
         sort_dir = (sort_order or "desc").strip().lower()
         allowed_sort = {
@@ -1427,9 +1425,9 @@ class PromptsDatabase:
             "id": "id",
         }
         if sort_key not in allowed_sort:
-            raise ValueError(f"Unsupported sort_by value: {sort_by}")
+            raise ValueError(f"Unsupported sort_by value: {sort_by}")  # noqa: TRY003
         if sort_dir not in {"asc", "desc"}:
-            raise ValueError(f"Unsupported sort_order value: {sort_order}")
+            raise ValueError(f"Unsupported sort_order value: {sort_order}")  # noqa: TRY003
         offset = (page - 1) * per_page
 
         where_clause = "WHERE deleted = 0" if not include_deleted else ""
@@ -1457,10 +1455,8 @@ class PromptsDatabase:
                     results_data = [dict(row) for row in cursor.fetchall()]
                     # Normalize author formatting only (do not mutate other fields)
                     for it in results_data:
-                        try:
+                        with suppress(_PROMPTS_NONCRITICAL_EXCEPTIONS):
                             it['author'] = (it.get('author') or '').strip()
-                        except _PROMPTS_NONCRITICAL_EXCEPTIONS:
-                            pass
 
                 # Enrich each prompt with keywords for downstream filtering/searching that rely on list output
                 # (kept outside of the above block to ensure empty lists are handled consistently)
@@ -1475,10 +1471,10 @@ class PromptsDatabase:
                 # Do not mutate keywords in list results; preserve exact values for export/roundtrip
 
             total_pages = ceil(total_items / per_page) if total_items > 0 else 0
-            return results_data, total_pages, page, total_items
+            return results_data, total_pages, page, total_items  # noqa: TRY300
         except (DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error listing prompts: {e}")
-            raise DatabaseError(f"Failed to list prompts: {e}") from e
+            raise DatabaseError(f"Failed to list prompts: {e}") from e  # noqa: TRY003
 
     def fetch_prompt_details(self, prompt_id_or_name_or_uuid: Union[int, str], include_deleted: bool = False) -> Optional[dict]:
         prompt_data = None
@@ -1506,14 +1502,14 @@ class PromptsDatabase:
 
     def fetch_all_keywords(self, include_deleted: bool = False) -> list[str]:
         query = "SELECT keyword FROM PromptKeywordsTable"
-        if not include_deleted: query += " WHERE deleted = 0"
+        if not include_deleted: query += " WHERE deleted = 0"  # noqa: E701
         query += " ORDER BY keyword COLLATE NOCASE"
         try:
             cursor = self.execute_query(query)
             return [row['keyword'] for row in cursor.fetchall()]
         except (DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error fetching all prompt keywords: {e}")
-            raise DatabaseError("Failed to fetch all prompt keywords") from e
+            raise DatabaseError("Failed to fetch all prompt keywords") from e  # noqa: TRY003
 
     def fetch_all_prompt_names(self, include_deleted: bool = True) -> list[str]:
         """
@@ -1537,7 +1533,7 @@ class PromptsDatabase:
             return [row['name'] for row in cursor.fetchall()]
         except (DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error fetching all prompt names: {e}")
-            raise DatabaseError("Failed to fetch all prompt names") from e
+            raise DatabaseError("Failed to fetch all prompt names") from e  # noqa: TRY003
 
     def fetch_keywords_for_prompt(self, prompt_id: int, include_deleted: bool = False) -> list[str]:
         # Note: include_deleted here refers to the keyword itself, not the link or prompt
@@ -1553,7 +1549,7 @@ class PromptsDatabase:
             return [row['keyword'] for row in cursor.fetchall()]
         except (DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error fetching keywords for prompt ID {prompt_id}: {e}")
-            raise DatabaseError(f"Failed to fetch keywords for prompt {prompt_id}") from e
+            raise DatabaseError(f"Failed to fetch keywords for prompt {prompt_id}") from e  # noqa: TRY003
 
     def search_prompts(self,
                        search_query: Optional[str],
@@ -1562,8 +1558,8 @@ class PromptsDatabase:
                        results_per_page: int = 20,
                        include_deleted: bool = False
                        ) -> tuple[list[dict[str, Any]], int]:
-        if page < 1: raise ValueError("Page must be >= 1")
-        if results_per_page < 1: raise ValueError("Results per page must be >= 1")
+        if page < 1: raise ValueError("Page must be >= 1")  # noqa: E701, TRY003
+        if results_per_page < 1: raise ValueError("Results per page must be >= 1")  # noqa: E701, TRY003
 
         # Keep a copy of caller intent before we normalize fields
         original_fields = search_fields
@@ -1602,10 +1598,7 @@ class PromptsDatabase:
             author_value = author_value.strip()
             # Exact author match (case-insensitive)
             cond = "p.author = ? COLLATE NOCASE"
-            if not include_deleted:
-                conditions = ["p.deleted = 0", cond]
-            else:
-                conditions = [cond]
+            conditions = ["p.deleted = 0", cond] if not include_deleted else [cond]
             where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
             results_sql = f"{base_select} {from_clause} {where_clause} {order_by_clause} LIMIT ? OFFSET ?"
             count_sql = f"{count_select} {from_clause} {where_clause}"
@@ -1619,7 +1612,7 @@ class PromptsDatabase:
                     results_list = [dict(row) for row in results_cursor.fetchall()]
                     for res in results_list:
                         res['keywords'] = self.fetch_keywords_for_prompt(res['id'], include_deleted=False)
-                return results_list, total_matches
+                return results_list, total_matches  # noqa: TRY300
             except (DatabaseError, sqlite3.Error) as e:
                 logging.error(f"DB error during author filter search: {e}", exc_info=True)
                 return [], 0
@@ -1670,7 +1663,7 @@ class PromptsDatabase:
                     results_list = [dict(row) for row in results_cursor.fetchall()]
                     for res in results_list:
                         res['keywords'] = self.fetch_keywords_for_prompt(res['id'], include_deleted=False)
-                return results_list, total_matches
+                return results_list, total_matches  # noqa: TRY300
             except (DatabaseError, sqlite3.Error) as e:
                 logging.error(f"DB error during keyword filter search: {e}", exc_info=True)
                 return [], 0
@@ -1756,7 +1749,7 @@ class PromptsDatabase:
             # - Prefer naive in test mode or when no fields were specified (original_fields None)
             # - FTS was used but returned zero matches (defensive fallback to avoid false negatives)
             do_naive = False
-            if search_query:
+            if search_query:  # noqa: SIM102
                 if fts_error or prefer_naive or (not used_fts and (not search_fields or len(search_fields) == 0)) or used_fts and total_matches == 0:
                     do_naive = True
             if do_naive:
@@ -1791,10 +1784,10 @@ class PromptsDatabase:
                     combined.sort(key=lambda x: (x.get('last_modified', ''), x.get('id', 0)), reverse=True)
                     total_matches = len(combined)
                     results_list = combined[offset:offset + results_per_page]
-                    return results_list, total_matches
+                    return results_list, total_matches  # noqa: TRY300
                 except _PROMPTS_NONCRITICAL_EXCEPTIONS as fe:
                     logging.warning(f"Naive fallback search failed: {fe}")
-            return results_list, total_matches
+            return results_list, total_matches  # noqa: TRY300
         except (DatabaseError, sqlite3.Error) as e:
             logging.error(f"DB error during prompt search: {e}", exc_info=True)
             # Last-resort fallback to empty set
@@ -1813,21 +1806,21 @@ class PromptsDatabase:
             for row in cursor.fetchall():
                 row_dict = dict(row)
                 if row_dict.get('payload'):
-                    try: row_dict['payload'] = json.loads(row_dict['payload'])
+                    try: row_dict['payload'] = json.loads(row_dict['payload'])  # noqa: E701
                     except json.JSONDecodeError:
                         logging.warning(f"Failed decode JSON payload for sync_log ID {row_dict.get('change_id')}")
                         row_dict['payload'] = None
                 results.append(row_dict)
-            return results
+            return results  # noqa: TRY300
         except (DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error fetching sync_log entries: {e}")
-            raise DatabaseError("Failed to fetch sync_log entries") from e
+            raise DatabaseError("Failed to fetch sync_log entries") from e  # noqa: TRY003
 
 
     def delete_sync_log_entries(self, change_ids: list[int]) -> int:
-        if not change_ids: return 0
+        if not change_ids: return 0  # noqa: E701
         if not all(isinstance(cid, int) for cid in change_ids):
-            raise ValueError("change_ids must be a list of integers.")
+            raise ValueError("change_ids must be a list of integers.")  # noqa: TRY003
         placeholders = ','.join('?' * len(change_ids))
         query = f"DELETE FROM sync_log WHERE change_id IN ({placeholders})"
         try:
@@ -1838,7 +1831,7 @@ class PromptsDatabase:
                 return deleted_count
         except (DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error deleting sync log entries: {e}")
-            raise DatabaseError("Failed to delete sync log entries") from e
+            raise DatabaseError("Failed to delete sync log entries") from e  # noqa: TRY003
 
 
 # =========================================================================
@@ -1855,7 +1848,7 @@ def add_or_update_prompt(db_instance: PromptsDatabase,
     If the prompt exists (even if soft-deleted), it will be updated/undeleted.
     """
     if not isinstance(db_instance, PromptsDatabase):
-        raise TypeError("db_instance must be a PromptsDatabase object.")
+        raise TypeError("db_instance must be a PromptsDatabase object.")  # noqa: TRY003
     # `add_prompt` with overwrite=True handles both add and update logic.
     return db_instance.add_prompt(
         name=name, author=author, details=details,
@@ -1869,7 +1862,7 @@ def load_prompt_details_for_ui(db_instance: PromptsDatabase, prompt_name: str) -
     Returns empty strings if not found.
     """
     if not isinstance(db_instance, PromptsDatabase):
-        raise TypeError("db_instance must be a PromptsDatabase object.")
+        raise TypeError("db_instance must be a PromptsDatabase object.")  # noqa: TRY003
     if not prompt_name:
         return "", "", "", "", "", ""
 
@@ -1893,7 +1886,7 @@ def export_prompt_keywords_to_csv(db_instance: PromptsDatabase) -> tuple[str, st
     from datetime import datetime
 
     if not isinstance(db_instance, PromptsDatabase):
-        raise TypeError("db_instance must be a PromptsDatabase object.")
+        raise TypeError("db_instance must be a PromptsDatabase object.")  # noqa: TRY003
 
     logging.debug(f"export_prompt_keywords_to_csv from DB: {db_instance.db_path_str}")
     try:
@@ -1932,7 +1925,7 @@ def export_prompt_keywords_to_csv(db_instance: PromptsDatabase) -> tuple[str, st
 
         status_msg = f"Successfully exported {len(results)} active prompt keywords to CSV."
         logging.info(status_msg)
-        return status_msg, file_path
+        return status_msg, file_path  # noqa: TRY300
 
     except (DatabaseError, sqlite3.Error) as e:
         error_msg = f"Database error exporting keywords: {e}"
@@ -1946,7 +1939,7 @@ def export_prompt_keywords_to_csv(db_instance: PromptsDatabase) -> tuple[str, st
 
 def view_prompt_keywords_markdown(db_instance: PromptsDatabase) -> str:
     if not isinstance(db_instance, PromptsDatabase):
-        raise TypeError("db_instance must be a PromptsDatabase object.")
+        raise TypeError("db_instance must be a PromptsDatabase object.")  # noqa: TRY003
     logging.debug(f"view_prompt_keywords_markdown from DB: {db_instance.db_path_str}")
     try:
         query = """
@@ -1964,7 +1957,7 @@ def view_prompt_keywords_markdown(db_instance: PromptsDatabase) -> str:
         if keywords_data:
             keyword_list_md = [f"- {row['keyword']} ({row['prompt_count']} active prompts)" for row in keywords_data]
             return "### Current Active Prompt Keywords:\n" + "\n".join(keyword_list_md)
-        return "No active keywords found."
+        return "No active keywords found."  # noqa: TRY300
     except (DatabaseError, sqlite3.Error) as e:
         error_msg = f"Error retrieving keywords for markdown view: {e}"
         logging.error(error_msg, exc_info=True)
@@ -1988,17 +1981,17 @@ def export_prompts_formatted(db_instance: PromptsDatabase,
     from datetime import datetime
 
     if not isinstance(db_instance, PromptsDatabase):
-        raise TypeError("db_instance must be a PromptsDatabase object.")
+        raise TypeError("db_instance must be a PromptsDatabase object.")  # noqa: TRY003
 
     logging.debug(f"export_prompts_formatted (format: {export_format}) from DB: {db_instance.db_path_str}")
 
     # --- Fetch Prompts Data ---
     # Build base query parts
     select_fields = ["p.id", "p.name", "p.uuid"] # Always include id, name, uuid
-    if include_author: select_fields.append("p.author")
-    if include_details: select_fields.append("p.details")
-    if include_system: select_fields.append("p.system_prompt")
-    if include_user: select_fields.append("p.user_prompt")
+    if include_author: select_fields.append("p.author")  # noqa: E701
+    if include_details: select_fields.append("p.details")  # noqa: E701
+    if include_system: select_fields.append("p.system_prompt")  # noqa: E701
+    if include_user: select_fields.append("p.user_prompt")  # noqa: E701
 
     query_sql = f"SELECT DISTINCT {', '.join(select_fields)} FROM Prompts p"
     query_params = []
@@ -2040,21 +2033,21 @@ def export_prompts_formatted(db_instance: PromptsDatabase,
         if export_format == 'csv':
             temp_csv_file = os.path.join(tempfile.gettempdir(), f'prompts_export_{timestamp}.csv')
             header_row = ['Name', 'UUID'] # Start with common fields
-            if include_author: header_row.append('Author')
-            if include_details: header_row.append('Details')
-            if include_system: header_row.append('System Prompt')
-            if include_user: header_row.append('User Prompt')
-            if include_associated_keywords: header_row.append('Keywords')
+            if include_author: header_row.append('Author')  # noqa: E701
+            if include_details: header_row.append('Details')  # noqa: E701
+            if include_system: header_row.append('System Prompt')  # noqa: E701
+            if include_user: header_row.append('User Prompt')  # noqa: E701
+            if include_associated_keywords: header_row.append('Keywords')  # noqa: E701
 
             with open(temp_csv_file, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow(header_row)
                 for p_data in prompts_data:
                     row_to_write = [p_data['name'], p_data['uuid']]
-                    if include_author: row_to_write.append(p_data.get('author', ''))
-                    if include_details: row_to_write.append(p_data.get('details', ''))
-                    if include_system: row_to_write.append(p_data.get('system_prompt', ''))
-                    if include_user: row_to_write.append(p_data.get('user_prompt', ''))
+                    if include_author: row_to_write.append(p_data.get('author', ''))  # noqa: E701
+                    if include_details: row_to_write.append(p_data.get('details', ''))  # noqa: E701
+                    if include_system: row_to_write.append(p_data.get('system_prompt', ''))  # noqa: E701
+                    if include_user: row_to_write.append(p_data.get('user_prompt', ''))  # noqa: E701
                     if include_associated_keywords:
                         row_to_write.append(', '.join(p_data.get('keywords_list', [])))
                     writer.writerow(row_to_write)
@@ -2127,10 +2120,10 @@ def export_prompts_formatted(db_instance: PromptsDatabase,
             output_file_path = zip_file_path
             status_msg = f"Successfully exported {len(prompts_data)} prompts to Markdown in a ZIP file."
         else:
-            raise ValueError(f"Unsupported export_format: {export_format}. Must be 'csv' or 'markdown'.")
+            raise ValueError(f"Unsupported export_format: {export_format}. Must be 'csv' or 'markdown'.")  # noqa: TRY003, TRY301
 
         logging.info(status_msg)
-        return status_msg, output_file_path
+        return status_msg, output_file_path  # noqa: TRY300
 
     except (DatabaseError, sqlite3.Error, ValueError) as e:
         error_msg = f"Error exporting prompts: {e}"

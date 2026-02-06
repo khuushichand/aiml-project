@@ -180,10 +180,7 @@ class RollingSummarizeStrategy(BaseChunkingStrategy):
                 seg_start = current[0][1]
                 seg_end = current[-1][2]
                 segments.append((seg_text, seg_start, seg_end, len(current)))
-                if overlap > 0:
-                    current = current[-overlap:]
-                else:
-                    current = []
+                current = current[-overlap:] if overlap > 0 else []
         if current:
             seg_text = " ".join(s for s, _s0, _e0 in current)
             seg_start = current[0][1]

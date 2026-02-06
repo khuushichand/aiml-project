@@ -4,6 +4,7 @@
 #
 # Third-party imports
 import asyncio
+import contextlib
 import os
 import platform
 import shutil
@@ -122,10 +123,8 @@ class LlamafileHandler(BaseLLMHandler):
                 except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
                     if hasattr(process, "kill"):
                         process.kill()
-            try:
+            with contextlib.suppress(_LLAMAFILE_NONCRITICAL_EXCEPTIONS):
                 await process.wait()
-            except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
-                pass
 
     async def _drain_stream(self, stream, label: str) -> None:
         if stream is None:
@@ -626,7 +625,7 @@ class LlamafileHandler(BaseLLMHandler):
                 except ProcessLookupError:
                     return f"No process found with PID {pid}."
                 except subprocess.CalledProcessError as e_taskkill:
-                    self.logger.error(f"taskkill failed for PID {pid}: {e_taskkill.stderr.decode()}")
+                    self.logger.exception(f"taskkill failed for PID {pid}: {e_taskkill.stderr.decode()}")
                     return f"Failed to stop unmanaged PID {pid} with taskkill."
                 except Exception as e:
                     self.logger.error(f"Error stopping unmanaged PID {pid}: {e}", exc_info=True)
@@ -749,7 +748,7 @@ class LlamafileHandler(BaseLLMHandler):
                 conn_made = True
                 self.logger.debug(f"Successfully connected to {client_host}:{port}. Assuming external server.")
             except ConnectionRefusedError:
-                self.logger.error(
+                self.logger.exception(
                     f"No managed llamafile server on port {port} (or it terminated), and connection refused to {client_host}:{port}.")
                 raise ServerError(f"Llamafile server not found or not responding on {client_host}:{port}.")
             except Exception as e:
@@ -853,20 +852,16 @@ class LlamafileHandler(BaseLLMHandler):
                     if proc.returncode is None:
                         if platform.system() == "Windows":
                             if hasattr(proc, "kill"):
-                                try:
+                                with contextlib.suppress(_LLAMAFILE_NONCRITICAL_EXCEPTIONS):
                                     proc.kill()
-                                except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
-                                    pass
                         else:
                             try:
                                 pgid = os.getpgid(pid)
                                 os.killpg(pgid, signal.SIGKILL)
                             except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
                                 if hasattr(proc, "kill"):
-                                    try:
+                                    with contextlib.suppress(_LLAMAFILE_NONCRITICAL_EXCEPTIONS):
                                         proc.kill()
-                                    except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
-                                        pass
             if port in self._active_servers:
                 self._stop_stream_drainers(port)
                 del self._active_servers[port]

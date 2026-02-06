@@ -17,7 +17,7 @@ import os as _env_os
 # 3rd-party Libraries
 import sys
 import threading
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -222,10 +222,8 @@ def _safe_debug(message: str) -> None:
     try:
         logger.debug(message)
     except _LOGGING_SETUP_EXCEPTIONS:
-        try:
+        with suppress(_IO_EXCEPTIONS):
             sys.__stderr__.write(message + "\n")
-        except _IO_EXCEPTIONS:
-            pass
 
 
 class _StderrInterceptor:
@@ -440,25 +438,18 @@ class _SafeStreamWrapper:
         try:
             # Normalize line endings and ensure a newline terminator
             if message and not message.endswith("\n"):
-                if message.endswith("\r"):
-                    message = message[:-1] + "\n"
-                else:
-                    message = message + "\n"
+                message = message[:-1] + "\n" if message.endswith("\r") else message + "\n"
             self._stream.write(message)
             # Flush to avoid line coalescing in buffered environments
-            try:
+            with suppress(_IO_EXCEPTIONS):
                 self._stream.flush()
-            except _IO_EXCEPTIONS:
-                pass
         except _IO_EXCEPTIONS:
             # Swallow closed-file or teardown-time errors
             pass
 
     def flush(self):
-        try:
+        with suppress(_IO_EXCEPTIONS):
             self._stream.flush()
-        except _IO_EXCEPTIONS:
-            pass
 
     def isatty(self):
         try:
@@ -1217,15 +1208,11 @@ try:
             filter=_ensure_log_extra_fields,
             enqueue=True,
         )
-        try:
+        with suppress(_LOGGING_SETUP_EXCEPTIONS):
             logger.info("JSON logging enabled (serialize=True, async enqueue)")
-        except _LOGGING_SETUP_EXCEPTIONS:
-            pass
 except _LOGGING_SETUP_EXCEPTIONS as _e:
-    try:
+    with suppress(_LOGGING_SETUP_EXCEPTIONS):
         logger.debug(f"Failed to enable JSON logs sink: {_e}")
-    except _LOGGING_SETUP_EXCEPTIONS:
-        pass
 
 # Best-effort: capture recent logs in an in-memory ring buffer for admin queries.
 try:
@@ -1233,10 +1220,8 @@ try:
 
     ensure_system_log_buffer()
 except _IMPORT_EXCEPTIONS as _e:
-    try:
+    with suppress(_LOGGING_SETUP_EXCEPTIONS):
         logger.debug(f"Failed to enable system log buffer: {_e}")
-    except _LOGGING_SETUP_EXCEPTIONS:
-        pass
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1283,10 +1268,7 @@ async def lifespan(app: FastAPI):
             return str(v).strip().lower() in {"1", "true", "yes", "y", "on"}
 
         _disable = _env_to_bool(_env_os.getenv("DISABLE_HEAVY_STARTUP"))
-        if _disable:
-            _defer_heavy = False
-        else:
-            _defer_heavy = _env_to_bool(_env_os.getenv("DEFER_HEAVY_STARTUP"))
+        _defer_heavy = False if _disable else _env_to_bool(_env_os.getenv("DEFER_HEAVY_STARTUP"))
         # Default to synchronous (False) if neither flag is set
         _defer_heavy = bool(_defer_heavy)
     except _STARTUP_GUARD_EXCEPTIONS:
@@ -1294,10 +1276,8 @@ async def lifespan(app: FastAPI):
         _defer_heavy = False
 
     # Container for background startup tasks (used during shutdown)
-    try:
+    with suppress(_STARTUP_GUARD_EXCEPTIONS):
         app.state.bg_tasks = {}
-    except _STARTUP_GUARD_EXCEPTIONS:
-        pass
     chat_config: dict[str, object] = {}
     # Startup: Validate MCP configuration in production (fail fast)
     try:
@@ -1309,7 +1289,7 @@ async def lifespan(app: FastAPI):
                     raise RuntimeError("MCP configuration validation failed; refusing to start in production")
     except _STARTUP_GUARD_EXCEPTIONS as _mcp_val_err:
         # Abort startup on validation errors
-        logger.error(f"Startup aborted due to insecure MCP configuration: {_mcp_val_err}")
+        logger.exception(f"Startup aborted due to insecure MCP configuration: {_mcp_val_err}")
         raise
 
     # Startup: Validate Postgres content backend when enabled
@@ -1321,7 +1301,7 @@ async def lifespan(app: FastAPI):
         _validate_content_backend()
         logger.info("App Startup: PostgreSQL content backend validated")
     except RuntimeError as _content_err:
-        logger.error(f"Startup aborted: {_content_err}")
+        logger.exception(f"Startup aborted: {_content_err}")
         raise
     except ImportError as _content_import_err:
         logger.debug(f"Content backend validation skipped (import error): {_content_import_err}")
@@ -1342,7 +1322,7 @@ async def lifespan(app: FastAPI):
         except _STARTUP_GUARD_EXCEPTIONS as _otel_app_err:
             logger.debug(f"App Startup: FastAPI instrumentation skipped: {_otel_app_err}")
     except _STARTUP_GUARD_EXCEPTIONS as e:
-        logger.error(f"App Startup: Failed to initialize telemetry: {e}")
+        logger.exception(f"App Startup: Failed to initialize telemetry: {e}")
 
     # Startup: Warn if first-time setup is enabled (local-only, no proxies)
     try:
@@ -1501,10 +1481,8 @@ async def lifespan(app: FastAPI):
                             )
 
                             _start = logger.bind(component="rg_boot_health")
-                            try:
+                            with suppress(_STARTUP_GUARD_EXCEPTIONS):
                                 _start.info("RG boot health: verifying Redis connectivity (fail_closed mode)")
-                            except _STARTUP_GUARD_EXCEPTIONS:
-                                pass
                             _rc = await _create_async_redis_client(fallback_to_fake=False, context="rg_boot_health")
                             try:
                                 # Extra sanity ping; factory already pings
@@ -1514,12 +1492,10 @@ async def lifespan(app: FastAPI):
                                     if hasattr(pr, "__await__"):
                                         await pr
                             finally:
-                                try:
+                                with suppress(_STARTUP_GUARD_EXCEPTIONS):
                                     await _ensure_async_client_closed(_rc)
-                                except _STARTUP_GUARD_EXCEPTIONS:
-                                    pass
                     except _STARTUP_GUARD_EXCEPTIONS as _rg_boot_err:
-                        logger.error(
+                        logger.exception(
                             f"ResourceGovernor boot health failed (Redis unreachable, fail_closed): {_rg_boot_err}"
                         )
                         raise RuntimeError(
@@ -1652,12 +1628,12 @@ async def lifespan(app: FastAPI):
             if dispatcher.enabled:
                 logger.info("App Startup: Security alert configuration validated")
         except ValueError as config_error:
-            logger.error(f"App Startup: Security alert configuration invalid: {config_error}")
+            logger.exception(f"App Startup: Security alert configuration invalid: {config_error}")
             raise
     except _STARTUP_GUARD_EXCEPTIONS as exc:
-        logger.error(f"App Startup: Security alert validation failed: {exc}")
+        logger.exception(f"App Startup: Security alert validation failed: {exc}")
     except _STARTUP_GUARD_EXCEPTIONS as e:
-        logger.error(f"App Startup: Failed to initialize auth services: {e}")
+        logger.exception(f"App Startup: Failed to initialize auth services: {e}")
         # Continue startup even if auth services fail (for backward compatibility)
 
     # Startup: Warm ChaChaNotes to remove request-path blocking for the default user
@@ -1687,7 +1663,7 @@ async def lifespan(app: FastAPI):
 
         validate_privilege_metadata_on_startup(app)
     except _STARTUP_GUARD_EXCEPTIONS as exc:
-        logger.error(f"App Startup: Privilege metadata validation failed: {exc}")
+        logger.exception(f"App Startup: Privilege metadata validation failed: {exc}")
         raise
 
     # Heavy initializations: helpers and shared runner to avoid duplication
@@ -1911,10 +1887,8 @@ async def lifespan(app: FastAPI):
                             mms.append((name, expected, actual, user_id))
                     except _STARTUP_GUARD_EXCEPTIONS:
                         pass
-                try:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     mgr.close()
-                except _STARTUP_GUARD_EXCEPTIONS:
-                    pass
                 return mms
 
             auth_mode = str(_emb_settings.get("AUTH_MODE", os.getenv("AUTH_MODE", "single_user")))
@@ -1925,10 +1899,8 @@ async def lifespan(app: FastAPI):
                     for entry in _Path(base).iterdir():
                         if entry.is_dir():
                             user_id = entry.name
-                            try:
+                            with suppress(_STARTUP_GUARD_EXCEPTIONS):
                                 mismatches.extend(_check_user(user_id))
-                            except _STARTUP_GUARD_EXCEPTIONS:
-                                pass
                 else:
                     if not deferred:
                         logger.warning(
@@ -2573,7 +2545,7 @@ async def lifespan(app: FastAPI):
                         sql = "SELECT m.id FROM Media m WHERE m.deleted=0 AND m.is_trash=0 LIMIT 25"
                     else:
                         # rudimentary stale policy: claims older than N days since media last_modified
-                        days = int(_app_settings.get("CLAIMS_STALE_DAYS", 7))
+                        int(_app_settings.get("CLAIMS_STALE_DAYS", 7))
                         sql = (
                             "SELECT m.id FROM Media m "
                             "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
@@ -2587,10 +2559,8 @@ async def lifespan(app: FastAPI):
                     mids = [int(r[0]) for r in rows]
                     for mid in mids:
                         svc.submit(media_id=mid, db_path=db_path)
-                    try:
+                    with suppress(_STARTUP_GUARD_EXCEPTIONS):
                         db.close_connection()
-                    except _STARTUP_GUARD_EXCEPTIONS:
-                        pass
                 except _STARTUP_GUARD_EXCEPTIONS as e:
                     logger.warning(f"Claims rebuild loop error: {e}")
                 await _asyncio.sleep(_claims_interval)
@@ -2913,7 +2883,7 @@ async def lifespan(app: FastAPI):
         logger.info("🛠 Setup UI: http://127.0.0.1:8000/setup (if required)")
         logger.info("=" * 60)
     except _IMPORT_EXCEPTIONS as e:
-        logger.error(f"Failed to display startup info: {e}")
+        logger.exception(f"Failed to display startup info: {e}")
 
     # Preflight environment report (non-blocking)
     try:
@@ -3028,10 +2998,8 @@ async def lifespan(app: FastAPI):
         if isinstance(bg, dict):
             task = bg.get("deferred_startup")
             if task:
-                try:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     task.cancel()
-                except _STARTUP_GUARD_EXCEPTIONS:
-                    pass
     except _STARTUP_GUARD_EXCEPTIONS:
         pass
     try:
@@ -3169,20 +3137,16 @@ async def lifespan(app: FastAPI):
 
                 await _stop_usage(usage_task)
         except _STARTUP_GUARD_EXCEPTIONS:
-            try:
+            with suppress(_STARTUP_GUARD_EXCEPTIONS):
                 usage_task.cancel()
-            except _STARTUP_GUARD_EXCEPTIONS:
-                pass
         try:
             if "llm_usage_task" in locals() and llm_usage_task:
                 from tldw_Server_API.app.services.llm_usage_aggregator import stop_llm_usage_aggregator as _stop_llm
 
                 await _stop_llm(llm_usage_task)
         except _STARTUP_GUARD_EXCEPTIONS:
-            try:
+            with suppress(_STARTUP_GUARD_EXCEPTIONS):
                 llm_usage_task.cancel()
-            except _STARTUP_GUARD_EXCEPTIONS:
-                pass
         # Stop Workflows recurring scheduler
         try:
             if "workflows_sched_task" in locals() and workflows_sched_task:
@@ -3219,10 +3183,8 @@ async def lifespan(app: FastAPI):
                 else:
                     jobs_metrics_task.cancel()
             except _STARTUP_GUARD_EXCEPTIONS:
-                try:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     jobs_metrics_task.cancel()
-                except _STARTUP_GUARD_EXCEPTIONS:
-                    pass
 
         # Event loop lag watchdog shutdown
         if "loop_lag_task" in locals() and loop_lag_task:
@@ -3259,10 +3221,8 @@ async def lifespan(app: FastAPI):
                 else:
                     jobs_crypto_rotate_task.cancel()
             except _STARTUP_GUARD_EXCEPTIONS:
-                try:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     jobs_crypto_rotate_task.cancel()
-                except _STARTUP_GUARD_EXCEPTIONS:
-                    pass
 
         # Jobs integrity sweeper shutdown
         if "jobs_integrity_task" in locals() and jobs_integrity_task:
@@ -3274,10 +3234,8 @@ async def lifespan(app: FastAPI):
                 else:
                     jobs_integrity_task.cancel()
             except _STARTUP_GUARD_EXCEPTIONS:
-                try:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     jobs_integrity_task.cancel()
-                except _STARTUP_GUARD_EXCEPTIONS:
-                    pass
 
         # Jobs webhooks worker shutdown
         if "jobs_webhooks_task" in locals() and jobs_webhooks_task:
@@ -3289,10 +3247,8 @@ async def lifespan(app: FastAPI):
                 else:
                     jobs_webhooks_task.cancel()
             except _STARTUP_GUARD_EXCEPTIONS:
-                try:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     jobs_webhooks_task.cancel()
-                except _STARTUP_GUARD_EXCEPTIONS:
-                    pass
 
         # Workflows webhook DLQ worker shutdown
         if "workflows_dlq_task" in locals() and workflows_dlq_task:
@@ -3304,10 +3260,8 @@ async def lifespan(app: FastAPI):
                 else:
                     workflows_dlq_task.cancel()
             except _STARTUP_GUARD_EXCEPTIONS:
-                try:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     workflows_dlq_task.cancel()
-                except _STARTUP_GUARD_EXCEPTIONS:
-                    pass
 
         # Workflows artifact GC worker shutdown
         if "workflows_gc_task" in locals() and workflows_gc_task:
@@ -3319,10 +3273,8 @@ async def lifespan(app: FastAPI):
                 else:
                     workflows_gc_task.cancel()
             except _STARTUP_GUARD_EXCEPTIONS:
-                try:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     workflows_gc_task.cancel()
-                except _STARTUP_GUARD_EXCEPTIONS:
-                    pass
 
         # Workflows DB maintenance worker shutdown
         if "workflows_maint_task" in locals() and workflows_maint_task:
@@ -3334,10 +3286,8 @@ async def lifespan(app: FastAPI):
                 else:
                     workflows_maint_task.cancel()
             except _STARTUP_GUARD_EXCEPTIONS:
-                try:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     workflows_maint_task.cancel()
-                except _STARTUP_GUARD_EXCEPTIONS:
-                    pass
     except _STARTUP_GUARD_EXCEPTIONS:
         pass
 
@@ -3376,7 +3326,7 @@ async def lifespan(app: FastAPI):
             else:
                 logger.info("App Shutdown: Skipping DB pool close in test context")
     except _STARTUP_GUARD_EXCEPTIONS as e:
-        logger.error(f"App Shutdown: Error closing auth database pool: {e}")
+        logger.exception(f"App Shutdown: Error closing auth database pool: {e}")
 
     # Shutdown session manager
     try:
@@ -3384,7 +3334,7 @@ async def lifespan(app: FastAPI):
             await session_manager.shutdown()
             logger.info("App Shutdown: Session manager shutdown")
     except _STARTUP_GUARD_EXCEPTIONS as e:
-        logger.error(f"App Shutdown: Error shutting down session manager: {e}")
+        logger.exception(f"App Shutdown: Error shutting down session manager: {e}")
 
     # Shutdown MCP Unified server
     try:
@@ -3392,7 +3342,7 @@ async def lifespan(app: FastAPI):
             await mcp_server.shutdown()
             logger.info("App Shutdown: MCP Unified server shutdown")
     except _IMPORT_EXCEPTIONS as e:
-        logger.error(f"App Shutdown: Error shutting down MCP Unified server: {e}")
+        logger.exception(f"App Shutdown: Error shutting down MCP Unified server: {e}")
 
     # Shutdown MCP Unified rate limiter cleanup task (if any)
     try:
@@ -3412,7 +3362,7 @@ async def lifespan(app: FastAPI):
         await close_tts_service_v2()
         logger.info("App Shutdown: TTS service shutdown complete")
     except _IMPORT_EXCEPTIONS as e:
-        logger.error(f"App Shutdown: Error shutting down TTS service: {e}")
+        logger.exception(f"App Shutdown: Error shutting down TTS service: {e}")
 
     # Shutdown TTS Resource Manager (memory monitor, sessions, HTTP clients)
     try:
@@ -3423,7 +3373,7 @@ async def lifespan(app: FastAPI):
         await _close_tts_resource_manager()
         logger.info("App Shutdown: TTS resource manager shutdown complete")
     except _IMPORT_EXCEPTIONS as e:
-        logger.error(f"App Shutdown: Error shutting down TTS resource manager: {e}")
+        logger.exception(f"App Shutdown: Error shutting down TTS resource manager: {e}")
 
     # Shutdown shared HTTP client sessions (aiohttp)
     try:
@@ -3432,7 +3382,7 @@ async def lifespan(app: FastAPI):
         await shutdown_http_client()
         logger.info("App Shutdown: HTTP client sessions shutdown complete")
     except _IMPORT_EXCEPTIONS as e:
-        logger.error(f"App Shutdown: Error shutting down HTTP client sessions: {e}")
+        logger.exception(f"App Shutdown: Error shutting down HTTP client sessions: {e}")
 
     # Shutdown ChaChaNotes executor and cached instances
     try:
@@ -3443,7 +3393,7 @@ async def lifespan(app: FastAPI):
         await shutdown_chacha_resources()
         logger.info("App Shutdown: ChaChaNotes resources cleaned up")
     except _STARTUP_GUARD_EXCEPTIONS as e:
-        logger.error(f"App Shutdown: Error shutting down ChaChaNotes resources: {e}")
+        logger.exception(f"App Shutdown: Error shutting down ChaChaNotes resources: {e}")
 
     # Shutdown Chat Module Components
     logger.info("App Shutdown: Cleaning up Chat module components...")
@@ -3454,7 +3404,7 @@ async def lifespan(app: FastAPI):
             await provider_manager.stop_health_checks()
             logger.info("App Shutdown: Provider manager stopped")
     except _STARTUP_GUARD_EXCEPTIONS as e:
-        logger.error(f"App Shutdown: Error stopping provider manager: {e}")
+        logger.exception(f"App Shutdown: Error stopping provider manager: {e}")
 
     # Shutdown Request Queue
     try:
@@ -3462,7 +3412,7 @@ async def lifespan(app: FastAPI):
             await request_queue.stop()
             logger.info("App Shutdown: Request queue stopped")
     except _IMPORT_EXCEPTIONS as e:
-        logger.error(f"App Shutdown: Error stopping request queue: {e}")
+        logger.exception(f"App Shutdown: Error stopping request queue: {e}")
 
     # Shutdown Evaluations pool via lazy helper (no-op if never initialized)
     try:
@@ -3496,7 +3446,7 @@ async def lifespan(app: FastAPI):
         await shutdown_all_audit_services()
         logger.info("App Shutdown: Unified audit services stopped")
     except _IMPORT_EXCEPTIONS as e:
-        logger.error(f"App Shutdown: Error stopping unified audit services: {e}")
+        logger.exception(f"App Shutdown: Error stopping unified audit services: {e}")
 
     # Shutdown registered executors (thread/process pools)
     try:
@@ -3512,7 +3462,7 @@ async def lifespan(app: FastAPI):
         except _STARTUP_GUARD_EXCEPTIONS as e:
             logger.debug(f"App Shutdown: Default executor shutdown skipped/failed: {e}")
     except _IMPORT_EXCEPTIONS as e:
-        logger.error(f"App Shutdown: Error shutting down executors: {e}")
+        logger.exception(f"App Shutdown: Error shutting down executors: {e}")
 
     # Cleanup CPU pools
     try:
@@ -3521,7 +3471,7 @@ async def lifespan(app: FastAPI):
         cleanup_pools()
         logger.info("App Shutdown: CPU pools cleaned up")
     except _STARTUP_GUARD_EXCEPTIONS as e:
-        logger.error(f"App Shutdown: Error cleaning up CPU pools: {e}")
+        logger.exception(f"App Shutdown: Error cleaning up CPU pools: {e}")
 
     # Stop usage aggregator
     try:
@@ -3531,7 +3481,7 @@ async def lifespan(app: FastAPI):
             await stop_usage_aggregator(usage_task)
             logger.info("Usage aggregator stopped")
     except _STARTUP_GUARD_EXCEPTIONS as e:
-        logger.error(f"App Shutdown: Error stopping usage aggregator: {e}")
+        logger.exception(f"App Shutdown: Error stopping usage aggregator: {e}")
 
     # Shutdown telemetry
     try:
@@ -3559,7 +3509,7 @@ async def lifespan(app: FastAPI):
         shutdown_telemetry()
         logger.info("App Shutdown: Telemetry shutdown")
     except _IMPORT_EXCEPTIONS as e:
-        logger.error(f"App Shutdown: Error shutting down telemetry: {e}")
+        logger.exception(f"App Shutdown: Error shutting down telemetry: {e}")
 
     # Close cached MediaDatabase instances so Postgres pooled connections are released
     try:
@@ -4236,7 +4186,7 @@ async def _display_startup_info_and_warm():
     try:
         await asyncio.to_thread(get_cached_evaluation_manager)
     except _STARTUP_GUARD_EXCEPTIONS as exc:
-        logger.error(f"Failed to initialize evaluation manager during startup: {exc}")
+        logger.exception(f"Failed to initialize evaluation manager during startup: {exc}")
     try:
         if needs_setup():
             logger.info("First-time setup is enabled. Open http://localhost:8000/setup to configure the server.")
@@ -4291,8 +4241,8 @@ from tldw_Server_API.app.core.AuthNZ.csrf_protection import add_csrf_protection
 try:
     add_csrf_protection(app)
 except _STARTUP_GUARD_EXCEPTIONS as _csrf_e:
-    logger.error(f"Failed to configure CSRF middleware: {_csrf_e}")
-    logger.error(
+    logger.exception(f"Failed to configure CSRF middleware: {_csrf_e}")
+    logger.exception(
         "Auth configuration error. If running in single-user mode, ensure SINGLE_USER_API_KEY is set.\n"
         "If running in multi-user mode, ensure JWT_SECRET_KEY is set (>=32 chars).\n"
         "See README: Authentication Setup and .env templates."
@@ -5124,7 +5074,7 @@ else:
             authnz_debug_router,
             prefix=f"{API_V1_PREFIX}",
             tags=["authnz-debug"],
-            default_stable=True if _TEST_MODE else False,
+            default_stable=bool(_TEST_MODE),
         )
     except _IMPORT_EXCEPTIONS as _e:
         logger.debug(f"Skipping authnz_debug router: {_e}")

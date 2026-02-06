@@ -16,6 +16,7 @@ Returned item structure (normalized):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -296,10 +297,7 @@ def _extract_value(
         matches = _select_nodes(node, expr, context_sensitive=True)
         if not matches:
             continue
-        if join:
-            value = _reduce_matches(matches, join_with)
-        else:
-            value = _coerce_value(matches[0])
+        value = _reduce_matches(matches, join_with) if join else _coerce_value(matches[0])
         if value:
             return value
     return None
@@ -338,10 +336,7 @@ def _normalize_field_definitions(fields: Any) -> list[dict[str, Any]]:
     if isinstance(fields, dict):
         normalized: list[dict[str, Any]] = []
         for name, spec in fields.items():
-            if isinstance(spec, dict):
-                entry = dict(spec)
-            else:
-                entry = {"selector": spec}
+            entry = dict(spec) if isinstance(spec, dict) else {"selector": spec}
             entry.setdefault("name", str(name))
             normalized.append(entry)
         return normalized
@@ -574,10 +569,7 @@ def _extract_fields_from_node(
                 value = _extract_regex_from_text(base_text, field)
             else:
                 join_with = str(field.get("join_with") or " ")
-                if len(matches) > 1:
-                    value = _reduce_matches(matches, join_with)
-                else:
-                    value = _extract_text_from_node(matches[0])
+                value = _reduce_matches(matches, join_with) if len(matches) > 1 else _extract_text_from_node(matches[0])
 
         value = _apply_transforms(value, field.get("transforms"), base_url)
         if value is not None:
@@ -904,10 +896,8 @@ def extract_schema_fields(html_text: str, base_url: str, rules: dict[str, Any]) 
         result["error"] = f"HTML parse failed: {exc}"
         return result
 
-    try:
+    with contextlib.suppress(_WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS):
         document.make_links_absolute(base_url)
-    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
-        pass
 
     if _is_schema_dsl(rules):
         schema_name = rules.get("name")
@@ -1068,10 +1058,8 @@ def parse_scraped_items(html_text: str, base_url: str, rules: dict[str, Any]) ->
         logger.debug(f"parse_scraped_items HTML parse failed: {exc}")
         return result
 
-    try:
+    with contextlib.suppress(_WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS):
         document.make_links_absolute(base_url)
-    except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
-        pass
 
     def _gather_items(rule_set: dict[str, Any], *, seen: set[str], items: list[dict[str, Any]], limit: int | None) -> None:
         entry_selectors = (
@@ -1369,10 +1357,7 @@ async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = 
         sitemap_url_for_auto: str | None = None
         if effective_method == "auto":
             sitemap_url_for_auto = await _detect_sitemap(base_url)
-            if sitemap_url_for_auto:
-                effective_method = "sitemap"
-            else:
-                effective_method = "frontpage"
+            effective_method = "sitemap" if sitemap_url_for_auto else "frontpage"
 
         # Sitemap method
         if effective_method == "sitemap" or base_url.endswith(".xml") or "sitemap" in base_url:
@@ -1791,7 +1776,7 @@ async def fetch_rss_feed_history(
             key = (it.get("guid") or it.get("url") or it.get("link") or "").strip()
             if key:
                 agg_seen.add(key)
-        db_seen: set[str] = set(k.strip() for k in (seen_keys or []) if isinstance(k, str))
+        db_seen: set[str] = {k.strip() for k in (seen_keys or []) if isinstance(k, str)}
         fetched_here = 0
         while remaining > 0 and current_url:
             try:
@@ -1887,7 +1872,7 @@ async def fetch_rss_feed_history(
         wp_urls = _wp_paged_urls(url, pages_left + 1)
         # Track DB-seen and aggregate keys
         prior_keys = {(it.get("guid") or it.get("url") or it.get("link") or "").strip() for it in agg_items}
-        db_seen_wp: set[str] = set(k.strip() for k in (seen_keys or []) if isinstance(k, str))
+        db_seen_wp: set[str] = {k.strip() for k in (seen_keys or []) if isinstance(k, str)}
         for u in wp_urls:
             if pages_left <= 0:
                 break

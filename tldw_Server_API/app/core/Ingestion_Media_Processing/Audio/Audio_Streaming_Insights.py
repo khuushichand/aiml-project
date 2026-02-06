@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import configparser
+import contextlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -326,10 +327,8 @@ class LiveMeetingInsights:
             }
             section = section_map.get(provider)
             if section and config.has_section(section):
-                try:
+                with contextlib.suppress(configparser.Error, AttributeError, TypeError, ValueError):
                     model = config.get(section, "model", fallback=model)
-                except (configparser.Error, AttributeError, TypeError, ValueError):
-                    pass
 
         if not model:
             default_models = {
@@ -471,10 +470,7 @@ class LiveMeetingInsights:
         raw_response = await self._loop.run_in_executor(None, _invoke)
         content = extract_response_content(raw_response)
         if content is None:
-            if isinstance(raw_response, dict):
-                content = json.dumps(raw_response)
-            else:
-                content = str(raw_response)
+            content = json.dumps(raw_response) if isinstance(raw_response, dict) else str(raw_response)
         return {"raw": raw_response, "content": content}
 
     def _build_prompt(self, transcript_text: str, *, stage: str) -> str:

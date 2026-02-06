@@ -2,6 +2,7 @@
 # Description: Pydantic settings for user registration system with persistent JWT secret management
 #
 # Imports
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -1039,10 +1040,8 @@ def _load_overrides_from_config() -> dict:
             # Map config key to Settings field if env var not set
             env_name = field
             if os.getenv(env_name) is None and cfg.has_option("AuthNZ", key):
-                try:
+                with contextlib.suppress(_SETTINGS_CAST_EXCEPTIONS):
                     overrides[field] = caster(cfg.get("AuthNZ", key))
-                except _SETTINGS_CAST_EXCEPTIONS:
-                    pass
 
         maybe_set("AUTH_MODE", "auth_mode", lambda v: v.strip())
         maybe_set("DATABASE_URL", "database_url", lambda v: v.strip())

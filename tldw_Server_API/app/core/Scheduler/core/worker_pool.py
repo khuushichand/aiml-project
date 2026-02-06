@@ -4,6 +4,7 @@ Handles dynamic scaling, health checks, and graceful shutdown.
 """
 
 import asyncio
+import contextlib
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -91,18 +92,14 @@ class Worker:
             except asyncio.TimeoutError:
                 logger.warning(f"Worker {self.worker_id} stop timeout, cancelling")
                 self._task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await self._task
-                except asyncio.CancelledError:
-                    pass
 
         # Cancel lease renewal if active
         if self._lease_task:
             self._lease_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._lease_task
-            except asyncio.CancelledError:
-                pass
 
         self.state = WorkerState.STOPPED
         logger.info(f"Worker {self.worker_id} stopped")
@@ -197,7 +194,7 @@ class Worker:
             self._lease_task = lease_task
 
             # Get handler
-            handler = self.registry.get_handler(task.handler)
+            self.registry.get_handler(task.handler)
 
             # Set timeout
             timeout = task.timeout or self.config.default_task_timeout
@@ -229,10 +226,8 @@ class Worker:
             # CRITICAL FIX: Always stop lease renewal, even if lease_task creation failed
             if lease_task:
                 lease_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await lease_task
-                except asyncio.CancelledError:
-                    pass
             self._lease_task = None
 
     def get_status(self) -> dict[str, Any]:
@@ -307,10 +302,8 @@ class WorkerPool:
         for task in [self._monitor_task, self._scaling_task]:
             if task:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
 
         # Stop all workers
         stop_tasks = []

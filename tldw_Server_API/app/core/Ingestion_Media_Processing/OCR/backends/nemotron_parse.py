@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import importlib
 import importlib.util
 import io
@@ -90,9 +91,8 @@ class NemotronParseBackend(OCRBackend):
     @classmethod
     def available(cls) -> bool:
         mode = _resolve_mode()
-        if mode in ("auto", "vllm"):
-            if os.getenv("NEMOTRON_VLLM_URL"):
-                return True
+        if mode in ("auto", "vllm") and os.getenv("NEMOTRON_VLLM_URL"):
+            return True
         if mode in ("auto", "transformers"):
             try:
                 has_tf = importlib.util.find_spec("transformers") is not None
@@ -221,10 +221,9 @@ def _prepare_image_bytes(image_bytes: bytes) -> bytes:
             if mode in ("fit_max", "fit_range"):
                 max_scale = min(_MAX_W / max(w, 1), _MAX_H / max(h, 1), 1.0)
                 scale = max_scale
-                if mode == "fit_range":
-                    if w < _MIN_W or h < _MIN_H:
-                        min_scale = max(_MIN_W / max(w, 1), _MIN_H / max(h, 1))
-                        scale = max(scale, min_scale)
+                if mode == "fit_range" and (w < _MIN_W or h < _MIN_H):
+                    min_scale = max(_MIN_W / max(w, 1), _MIN_H / max(h, 1))
+                    scale = max(scale, min_scale)
 
             if abs(scale - 1.0) < 1e-3:
                 return image_bytes
@@ -257,10 +256,8 @@ def _postprocess_output(raw: str, text_format: str = "plain") -> dict[str, Any]:
                 raw, text_format=text_format, table_format=table_format
             )
         except TypeError:
-            try:
+            with contextlib.suppress(_NEMOTRON_NONCRITICAL_EXCEPTIONS):
                 structured["text"] = funcs["postprocess"](raw, text_format, table_format)
-            except _NEMOTRON_NONCRITICAL_EXCEPTIONS:
-                pass
         except _NEMOTRON_NONCRITICAL_EXCEPTIONS:
             pass
 
@@ -386,10 +383,8 @@ def _ocr_via_vllm(image_bytes: bytes, prompt: str, skip_special_tokens: bool) ->
         j = fetch_json(method="POST", url=url, json=data, timeout=timeout)
     finally:
         if tmp_path:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp_path)
-            except OSError:
-                pass
     choice = (j.get("choices") or [{}])[0]
     content = (
         choice.get("message", {}).get("content")

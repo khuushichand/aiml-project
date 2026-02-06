@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import contextlib
 import json
 from collections import deque
 from datetime import datetime, timedelta, timezone
@@ -61,10 +62,8 @@ class TokenBlacklist:
         """Remove a JTI from the local cache if present."""
         if jti in self._local_cache:
             self._local_cache.pop(jti, None)
-            try:
+            with contextlib.suppress(ValueError):
                 self._local_order.remove(jti)
-            except ValueError:
-                pass
 
     @staticmethod
     def _normalize_expiry(expires_at: Optional[Any]) -> Optional[datetime]:
@@ -107,10 +106,8 @@ class TokenBlacklist:
         # Refresh ordering
         if jti in self._local_cache:
             self._local_cache[jti] = expiry
-            try:
+            with contextlib.suppress(ValueError):
                 self._local_order.remove(jti)
-            except ValueError:
-                pass
             self._local_order.append(jti)
         else:
             self._local_cache[jti] = expiry
@@ -482,28 +479,26 @@ class TokenBlacklist:
                 access_exp = _to_datetime(session.get("expires_at"))
                 refresh_exp = _to_datetime(session.get("refresh_expires_at"))
 
-                if access_jti and access_exp:
-                    if await self.revoke_token(
-                        jti=access_jti,
-                        expires_at=access_exp,
-                        user_id=user_id,
-                        token_type="access",
-                        reason=reason,
-                        revoked_by=revoked_by,
-                        ip_address=ip_address,
-                    ):
-                        tokens_revoked += 1
-                if refresh_jti and refresh_exp:
-                    if await self.revoke_token(
-                        jti=refresh_jti,
-                        expires_at=refresh_exp,
-                        user_id=user_id,
-                        token_type="refresh",
-                        reason=reason,
-                        revoked_by=revoked_by,
-                        ip_address=ip_address,
-                    ):
-                        tokens_revoked += 1
+                if access_jti and access_exp and await self.revoke_token(
+                    jti=access_jti,
+                    expires_at=access_exp,
+                    user_id=user_id,
+                    token_type="access",
+                    reason=reason,
+                    revoked_by=revoked_by,
+                    ip_address=ip_address,
+                ):
+                    tokens_revoked += 1
+                if refresh_jti and refresh_exp and await self.revoke_token(
+                    jti=refresh_jti,
+                    expires_at=refresh_exp,
+                    user_id=user_id,
+                    token_type="refresh",
+                    reason=reason,
+                    revoked_by=revoked_by,
+                    ip_address=ip_address,
+                ):
+                    tokens_revoked += 1
 
             if self.settings.PII_REDACT_LOGS:
                 logger.info(

@@ -675,7 +675,7 @@ async def set_team_quota(
 
     service = await _get_service()
 
-    result = await service.set_team_quota(
+    await service.set_team_quota(
         team_id,
         request.quota_mb,
         soft_limit_pct=request.soft_limit_pct,
@@ -703,7 +703,7 @@ async def set_org_quota(
 
     service = await _get_service()
 
-    result = await service.set_org_quota(
+    await service.set_org_quota(
         org_id,
         request.quota_mb,
         soft_limit_pct=request.soft_limit_pct,

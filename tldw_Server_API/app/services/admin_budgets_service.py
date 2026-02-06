@@ -271,10 +271,7 @@ def _apply_budget_response_defaults(budgets: dict[str, Any]) -> dict[str, Any]:
 
     thresholds = normalized.get("alert_thresholds")
     if thresholds is not None:
-        if not isinstance(thresholds, dict):
-            thresholds = {}
-        else:
-            thresholds = dict(thresholds)
+        thresholds = {} if not isinstance(thresholds, dict) else dict(thresholds)
         if thresholds.get("per_metric") is None:
             thresholds["per_metric"] = {}
         normalized["alert_thresholds"] = thresholds
@@ -338,10 +335,7 @@ async def list_budgets(
     """List organization budgets and plan context."""
     try:
         del principal  # admin role already enforced by router dependency
-        if org_id is not None:
-            org_ids = [org_id]
-        else:
-            org_ids = None
+        org_ids = [org_id] if org_id is not None else None
         items, total = await list_org_budgets(
             db,
             org_ids=org_ids,
@@ -671,7 +665,7 @@ def _build_nested_changes(
         elif isinstance(per_metric_update, dict):
             old_map = existing_payload.get("per_metric") if isinstance(existing_payload.get("per_metric"), dict) else {}
             new_map = merged_payload.get("per_metric") if isinstance(merged_payload.get("per_metric"), dict) else {}
-            for metric_key in per_metric_update.keys():
+            for metric_key in per_metric_update:
                 old_value = old_map.get(metric_key)
                 new_value = new_map.get(metric_key)
                 if old_value == new_value:
@@ -705,7 +699,7 @@ async def _fetchrow(db, query: str, params: list[Any]) -> dict[str, Any] | None:
     if not row:
         return None
     if hasattr(row, "keys"):
-        return {key: row[key] for key in row.keys()}
+        return {key: row[key] for key in row}
     return dict(row) if not isinstance(row, dict) else row
 
 

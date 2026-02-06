@@ -95,10 +95,7 @@ def _allow_zero_embeddings_for_media(media_item: dict[str, Any]) -> bool:
     if raw is None:
         raw = os.getenv("ALLOW_ZERO_EMBEDDINGS_MEDIA_TYPES") or os.getenv("EMBEDDINGS_SKIP_MEDIA_TYPES")
 
-    if raw is None:
-        allowed = {"audio", "video"}
-    else:
-        allowed = set(_parse_media_type_list(raw))
+    allowed = {"audio", "video"} if raw is None else set(_parse_media_type_list(raw))
 
     return media_type in allowed
 
@@ -439,7 +436,7 @@ async def generate_embeddings_for_media(
             except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 extra_metadata = {}
             metadatas = []
-            for i, chunk in enumerate(chunks):
+            for _i, chunk in enumerate(chunks):
                 metadata = {
                     "media_id": str(media_id),
                     "chunk_index": chunk["index"],
@@ -482,7 +479,7 @@ async def generate_embeddings_for_media(
                 "chunks_processed": len(chunks)
             }
 
-        except Exception as e:
+        except Exception:
             # Try fallback model if primary fails
             if embedding_model != FALLBACK_EMBEDDING_MODEL:
                 logger.warning(f"Failed with {embedding_model}, trying fallback {FALLBACK_EMBEDDING_MODEL}")
@@ -513,7 +510,7 @@ async def generate_embeddings_for_media(
                         extra_metadata = media_item_meta.get("metadata") or {}
                 except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     extra_metadata = {}
-                for i, chunk in enumerate(chunks):
+                for _i, chunk in enumerate(chunks):
                     metadata = {
                         "media_id": str(media_id),
                         "chunk_index": chunk["index"],
@@ -551,7 +548,7 @@ async def generate_embeddings_for_media(
                     "chunks_processed": len(chunks)
                 }
             else:
-                raise e
+                raise
 
     except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error generating embeddings: {e}")
@@ -655,7 +652,6 @@ async def generate_embeddings(
             current_user,
             error_status=http_status.HTTP_400_BAD_REQUEST,
         )
-        collection_name = f"user_{user_id}_media_embeddings"
 
         if _embeddings_jobs_backend() != "jobs":
             raise HTTPException(

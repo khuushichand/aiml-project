@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -109,10 +110,8 @@ def _should_cancel(jm: JobManager, job_id: int) -> bool:
 def _cleanup_temp_dir(temp_dir: str | None) -> None:
     if not temp_dir:
         return
-    try:
+    with contextlib.suppress(Exception):
         shutil.rmtree(temp_dir, ignore_errors=True)
-    except Exception:
-        pass
 
 
 def _build_form_data(payload: dict[str, Any]) -> AddMediaForm:
@@ -204,7 +203,8 @@ async def _handle_job(job: dict[str, Any], jm: JobManager, progress: _ProgressSt
         client_id = getattr(db, "client_id", None) or f"media_ingest_worker:{user_id}"
         loop = asyncio.get_running_loop()
 
-        cancel_check = lambda: _should_cancel(jm, job_id)
+        def cancel_check():
+            return _should_cancel(jm, job_id)
 
         chunk_options = prepare_chunking_options_dict(form_data)
         if chunk_options is not None:
@@ -297,10 +297,8 @@ async def _handle_job(job: dict[str, Any], jm: JobManager, progress: _ProgressSt
 
     finally:
         if db is not None:
-            try:
+            with contextlib.suppress(Exception):
                 db.close_connection()
-            except Exception:
-                pass
         if cleanup_temp_dir:
             _cleanup_temp_dir(temp_dir)
 
@@ -342,14 +340,10 @@ async def run_media_ingest_jobs_worker(stop_event: asyncio.Event | None = None) 
     try:
         await sdk.run(handler=_handler, cancel_check=_cancel_check, progress_cb=_progress_cb)
     finally:
-        try:
+        with contextlib.suppress(Exception):
             watcher.cancel()
-        except Exception:
-            pass
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run_media_ingest_jobs_worker())
-    except KeyboardInterrupt:
-        pass

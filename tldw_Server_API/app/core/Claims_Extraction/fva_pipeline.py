@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -37,8 +37,8 @@ from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
 )
 from tldw_Server_API.app.core.Claims_Extraction.claims_engine import (
     Claim,
-    ClaimVerification,
     ClaimsEngine,
+    ClaimVerification,
 )
 from tldw_Server_API.app.core.Claims_Extraction.falsification import (
     FalsificationDecision,
@@ -112,7 +112,7 @@ class FVAConfig:
     falsification_timeout_seconds: float = 30.0
     min_confidence_for_skip: float = 0.9  # Skip falsification if very confident
     force_falsification_claim_types: list[str] = field(default_factory=list)
-    anti_context_config: Optional[AntiContextConfig] = None
+    anti_context_config: AntiContextConfig | None = None
     # Budget integration
     max_budget_ratio_for_fva: float = 0.3  # Max 30% of budget for FVA
     # Thresholds
@@ -126,9 +126,9 @@ class FVAResult:
 
     original_verification: ClaimVerification
     falsification_triggered: bool
-    falsification_decision: Optional[FalsificationDecision]
+    falsification_decision: FalsificationDecision | None
     anti_context_found: int
-    adjudication: Optional[AdjudicationResult]
+    adjudication: AdjudicationResult | None
     final_verification: ClaimVerification
     processing_time_ms: float
 
@@ -156,8 +156,8 @@ class FVAPipeline:
     def __init__(
         self,
         claims_engine: ClaimsEngine,
-        retriever: "MultiDatabaseRetriever",
-        config: Optional[FVAConfig] = None,
+        retriever: MultiDatabaseRetriever,
+        config: FVAConfig | None = None,
     ):
         """
         Initialize the FVA pipeline.
@@ -190,9 +190,9 @@ class FVAPipeline:
         claim: Claim,
         query: str,
         documents: list[Document],
-        user_id: Optional[str] = None,
-        budget: Optional[ClaimsJobBudget] = None,
-        job_context: Optional[ClaimsJobContext] = None,
+        user_id: str | None = None,
+        budget: ClaimsJobBudget | None = None,
+        job_context: ClaimsJobContext | None = None,
     ) -> FVAResult:
         """
         Process a single claim through the FVA pipeline.
@@ -224,9 +224,9 @@ class FVAPipeline:
         )
 
         # Step 2: Falsification trigger decision
-        falsification_decision: Optional[FalsificationDecision] = None
+        falsification_decision: FalsificationDecision | None = None
         anti_context_count = 0
-        adjudication: Optional[AdjudicationResult] = None
+        adjudication: AdjudicationResult | None = None
         final_verification = original_verification
 
         if self.config.enabled:
@@ -375,9 +375,9 @@ class FVAPipeline:
         claims: list[Claim],
         query: str,
         documents: list[Document],
-        user_id: Optional[str] = None,
-        budget: Optional[ClaimsJobBudget] = None,
-        job_context: Optional[ClaimsJobContext] = None,
+        user_id: str | None = None,
+        budget: ClaimsJobBudget | None = None,
+        job_context: ClaimsJobContext | None = None,
     ) -> FVABatchResult:
         """
         Process multiple claims with concurrency control.
@@ -492,13 +492,13 @@ class FVAPipeline:
 
 def create_fva_pipeline(
     claims_engine: ClaimsEngine,
-    retriever: "MultiDatabaseRetriever",
+    retriever: MultiDatabaseRetriever,
     enabled: bool = True,
     max_concurrent: int = 5,
     timeout_seconds: float = 30.0,
     confidence_threshold: float = 0.7,
     contested_threshold: float = 0.4,
-    force_claim_types: Optional[list[str]] = None,
+    force_claim_types: list[str] | None = None,
 ) -> FVAPipeline:
     """
     Factory function to create an FVA pipeline.
@@ -534,8 +534,8 @@ def create_fva_pipeline(
 
 def create_fva_pipeline_from_settings(
     claims_engine: ClaimsEngine,
-    retriever: "MultiDatabaseRetriever",
-    config_overrides: Optional[dict[str, Any]] = None,
+    retriever: MultiDatabaseRetriever,
+    config_overrides: dict[str, Any] | None = None,
 ) -> FVAPipeline:
     """
     Factory function to create an FVA pipeline from application settings.

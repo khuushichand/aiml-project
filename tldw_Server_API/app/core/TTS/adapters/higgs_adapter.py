@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import contextlib
 import os
 from collections.abc import AsyncGenerator
 from typing import Any, Optional
@@ -370,10 +371,8 @@ class HiggsAdapter(TTSAdapter):
                 "stop_strings": ["<|end_of_text|>", "<|eot_id|>"],
             }
             if extras.get("min_new_tokens") is not None:
-                try:
+                with contextlib.suppress(Exception):
                     gen_kwargs["min_new_tokens"] = int(extras.get("min_new_tokens"))
-                except Exception:
-                    pass
             output: HiggsAudioResponse = self.serve_engine.generate(**gen_kwargs)
 
             # Convert numpy audio to tensor and back to numpy for processing
@@ -439,13 +438,11 @@ class HiggsAdapter(TTSAdapter):
         # We construct HuggingFace-like ChatML using the official boson_multimodal dataclasses
         # while keeping a dict payload to satisfy existing unit tests.
         try:
-            from boson_multimodal.data_types import AudioContent, ChatMLSample, Message, TextContent
+            from boson_multimodal.data_types import AudioContent, Message
             use_dataclasses = True
         except Exception:
             # Fallback to plain dicts if library is not available (e.g., unit tests without deps)
-            ChatMLSample = None  # type: ignore
             Message = None       # type: ignore
-            TextContent = None   # type: ignore
             AudioContent = None  # type: ignore
             use_dataclasses = False
 

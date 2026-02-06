@@ -18,6 +18,7 @@ Security
 - Rate limits applied to optimization creation and comparisons
 """
 
+import contextlib
 import json
 from datetime import datetime
 from typing import Any, Optional
@@ -114,7 +115,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
     beam_search, greedy, anneal, genetic). For grid_search/bayesian, require non-empty models_to_test.
     """
     ot = _normalize_optimizer_type(optimizer_type)
-    required = _VALIDATION_REQUIRED.get(ot, tuple())
+    required = _VALIDATION_REQUIRED.get(ot, ())
     for field in required:
         value = cfg.get(field)
         if not value or (isinstance(value, list) and len(value) == 0):
@@ -666,12 +667,10 @@ async def create_optimization(
                 # for idempotency keys. For now, lookup by key remains global.
                 existing_id = db.lookup_idempotency("optimization", idempotency_key, user_id_str)
                 if existing_id:
-                    try:
+                    with contextlib.suppress(_OPTIMIZATION_NONCRITICAL_EXCEPTIONS):
                         prompt_studio_metrics.metrics_manager.increment(
                             "prompt_studio.idempotency.hit_total", labels={"entity_type": "optimization"}
                         )
-                    except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                        pass
                     existing_opt = db.get_optimization(existing_id)
                     if existing_opt:
                         return StandardResponse(success=True, data={"optimization": existing_opt, "job_id": None})
@@ -702,12 +701,10 @@ async def create_optimization(
         if idempotency_key and optimization_record.get("id"):
             try:
                 db.record_idempotency("optimization", idempotency_key, int(optimization_record["id"]), user_id_str)
-                try:
+                with contextlib.suppress(_OPTIMIZATION_NONCRITICAL_EXCEPTIONS):
                     prompt_studio_metrics.metrics_manager.increment(
                         "prompt_studio.idempotency.miss_total", labels={"entity_type": "optimization"}
                     )
-                except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                    pass
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
                 pass
 

@@ -7,6 +7,7 @@
 #
 ########################################################################################################################
 
+import contextlib
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -211,7 +212,7 @@ class UserDatabase:
                     raise DuplicateUserError("Username or email already exists")
 
                 # Insert user
-                result = self.backend.execute(
+                self.backend.execute(
                     """
                     INSERT INTO users (uuid, username, email, password_hash, metadata)
                     VALUES (?, ?, ?, ?, ?)
@@ -516,7 +517,7 @@ class UserDatabase:
             (user_id,)
         )
 
-        permissions = set(row['name'] for row in role_perms.rows)
+        permissions = {row['name'] for row in role_perms.rows}
 
         # Get direct permissions (add granted, remove revoked)
         direct_perms = self.backend.execute(
@@ -1159,27 +1160,21 @@ class UserDatabase:
             rid = user_id
             pid = _pid(pname)
             if rid and pid:
-                try:
+                with contextlib.suppress(_USERDB_NONCRITICAL_EXCEPTIONS):
                     self.backend.execute(rp_sql, (rid, pid))
-                except _USERDB_NONCRITICAL_EXCEPTIONS:
-                    pass
         # viewer role
         rid = viewer_id
         pid = _pid("media.read")
         if rid and pid:
-            try:
+            with contextlib.suppress(_USERDB_NONCRITICAL_EXCEPTIONS):
                 self.backend.execute(rp_sql, (rid, pid))
-            except _USERDB_NONCRITICAL_EXCEPTIONS:
-                pass
         # admin all
         if admin_id:
             for pname in ("media.read", "media.create", "media.delete", "system.configure", "users.manage_roles"):
                 pid = _pid(pname)
                 if pid:
-                    try:
+                    with contextlib.suppress(_USERDB_NONCRITICAL_EXCEPTIONS):
                         self.backend.execute(rp_sql, (admin_id, pid))
-                    except _USERDB_NONCRITICAL_EXCEPTIONS:
-                        pass
 
 
 #

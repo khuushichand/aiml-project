@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Union
 
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     BackendType,
@@ -33,7 +32,7 @@ class UserDatabase(_UserDatabaseV2):
 
     def __init__(
         self,
-        db_path: Union[str, Path] | None = None,
+        db_path: str | Path | None = None,
         client_id: str = "auth_service",
         *,
         backend: DatabaseBackend | None = None,

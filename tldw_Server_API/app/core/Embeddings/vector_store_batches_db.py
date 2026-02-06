@@ -1,3 +1,4 @@
+import contextlib
 import json
 import sqlite3
 import time
@@ -19,14 +20,10 @@ def get_db_path(user_id: Optional[str]) -> Path:
 
 def _prime(conn: sqlite3.Connection) -> sqlite3.Connection:
     """Apply recommended SQLite PRAGMAs for concurrency and resilience."""
-    try:
+    with contextlib.suppress(Exception):
         conn.execute("PRAGMA journal_mode=WAL;")
-    except Exception:
-        pass
-    try:
+    with contextlib.suppress(Exception):
         conn.execute("PRAGMA busy_timeout=3000;")
-    except Exception:
-        pass
     return conn
 
 

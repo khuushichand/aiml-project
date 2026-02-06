@@ -89,10 +89,7 @@ async def create_project_simple(
         db=db,
     )  # type: ignore[arg-type]
     # Unwrap StandardResponse regardless of Pydantic/dict
-    if hasattr(resp, "model_dump"):
-        obj = resp.model_dump()
-    else:
-        obj = resp if isinstance(resp, dict) else {}
+    obj = resp.model_dump() if hasattr(resp, "model_dump") else resp if isinstance(resp, dict) else {}
     data = obj.get("data", obj)
     if hasattr(data, "model_dump"):
         return data.model_dump()

@@ -53,11 +53,11 @@ class ExplicitFeedbackRequest(BaseModel):
 
     if model_validator is not None:
         @model_validator(mode="before")
-        def _require_query_for_rag_only(cls, values):  # type: ignore
+        def _require_query_for_rag_only(self, values):  # type: ignore
             return _validate_feedback_requirements(values)
     elif root_validator is not None:
         @root_validator(pre=True)  # type: ignore
-        def _require_query_for_rag_only(cls, values):  # type: ignore
+        def _require_query_for_rag_only(self, values):  # type: ignore
             return _validate_feedback_requirements(values)
 
     model_config = ConfigDict(json_schema_extra={

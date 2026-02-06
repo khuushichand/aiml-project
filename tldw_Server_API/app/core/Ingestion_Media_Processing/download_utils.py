@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import math
 from pathlib import Path
 from typing import Any
@@ -263,10 +264,7 @@ async def download_url_async(
     - Enforce per-media size caps (or explicit max_bytes) before and during
       streaming to prevent oversized downloads.
     """
-    if allowed_extensions is None:
-        allowed_extensions = set()
-    else:
-        allowed_extensions = {ext.lower() for ext in allowed_extensions}
+    allowed_extensions = set() if allowed_extensions is None else {ext.lower() for ext in allowed_extensions}
 
     # Enforce outbound policy early to avoid bypassing central egress controls.
     _validate_egress_or_raise(url)
@@ -323,10 +321,7 @@ async def download_url_async(
                 if "filename=" in cd:
                     try:
                         part = cd.split("filename=", 1)[1]
-                        if part.startswith("\""):
-                            part = part.split("\"", 2)[1]
-                        else:
-                            part = part.split(";", 1)[0]
+                        part = part.split('"', 2)[1] if part.startswith('"') else part.split(";", 1)[0]
                         part = part.strip()
                         if part:
                             filename = part
@@ -405,10 +400,8 @@ async def download_url_async(
                 try:
                     await _write_response_to_path(url, resp, target_path, resolved_max_bytes)
                 except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
-                    try:
+                    with contextlib.suppress(_DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS):
                         target_path.unlink(missing_ok=True)
-                    except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
-                        pass
                     raise
                 logger.info("Downloaded {} to {}", url, target_path)
                 return target_path
@@ -446,10 +439,7 @@ async def download_url_async(
             try:
                 # naive parse: filename="name.ext"
                 part = cd.split("filename=", 1)[1]
-                if part.startswith("\""):
-                    part = part.split("\"", 2)[1]
-                else:
-                    part = part.split(";", 1)[0]
+                part = part.split('"', 2)[1] if part.startswith('"') else part.split(";", 1)[0]
                 part = part.strip()
                 if part:
                     filename = part
@@ -537,10 +527,8 @@ async def download_url_async(
         try:
             await _write_response_to_path(url, resp, target_path, resolved_max_bytes)
         except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
-            try:
+            with contextlib.suppress(_DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS):
                 target_path.unlink(missing_ok=True)
-            except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
-                pass
             raise
 
         logger.info("Downloaded {} to {}", url, target_path)
@@ -605,7 +593,5 @@ async def download_url_async(
         except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
             pass
         if owns_client and client_for_afetch is not None:
-            try:
+            with contextlib.suppress(_DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS):
                 await client_for_afetch.aclose()
-            except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
-                pass

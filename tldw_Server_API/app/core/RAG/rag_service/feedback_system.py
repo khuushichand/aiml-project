@@ -469,14 +469,13 @@ class FeedbackAnalyzer:
             query_doc_score = 0.5  # Default
 
             for entry in query_feedback:
-                if entry["document_id"] == doc_id:
-                    if entry["feedback_type"] == "relevance":
-                        try:
-                            score = float(json.loads(entry["value"]) if isinstance(entry["value"], str) else entry["value"])
-                            query_doc_score = (score - 1) / 4  # Normalize to 0-1
-                            break
-                        except (TypeError, ValueError, json.JSONDecodeError) as e:
-                            logger.debug(f"Failed to parse relevance score for query document: error={e}")
+                if entry["document_id"] == doc_id and entry["feedback_type"] == "relevance":
+                    try:
+                        score = float(json.loads(entry["value"]) if isinstance(entry["value"], str) else entry["value"])
+                        query_doc_score = (score - 1) / 4  # Normalize to 0-1
+                        break
+                    except (TypeError, ValueError, json.JSONDecodeError) as e:
+                        logger.debug(f"Failed to parse relevance score for query document: error={e}")
 
             # Combine document and query-specific scores
             combined_score = 0.7 * doc_score + 0.3 * query_doc_score

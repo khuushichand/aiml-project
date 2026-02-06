@@ -29,7 +29,7 @@ import tempfile
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 from threading import BoundedSemaphore, Lock
@@ -558,22 +558,18 @@ def _cluster_cache_get(key: str) -> Optional[list[float]]:
     with _CLUSTER_CACHE_LOCK:
         value = _CLUSTER_EMBED_CACHE.get(key)
         if value is None:
-            try:
+            with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
                 increment_counter(
                     "extraction_cluster_cache_total",
                     labels={"cache": "embedding", "result": "miss"},
                 )
-            except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
-                pass
             return None
         _CLUSTER_EMBED_CACHE.move_to_end(key)
-    try:
+    with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
         increment_counter(
             "extraction_cluster_cache_total",
             labels={"cache": "embedding", "result": "hit"},
         )
-    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
-        pass
     return value
 
 
@@ -612,10 +608,8 @@ def _normalize_strategy_order(
 
 
 def _trace_entry(strategy: str, status: str, reason: str, detail: Optional[str] = None) -> dict[str, Any]:
-    try:
+    with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
         log_counter("extraction_strategy_total", labels={"strategy": strategy, "status": status})
-    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
-        pass
     entry = {"strategy": strategy, "status": status, "reason": reason}
     if detail:
         entry["detail"] = detail
@@ -628,26 +622,22 @@ def _record_strategy_metrics(
     duration_s: float,
     result: Optional[dict[str, Any]] = None,
 ) -> None:
-    try:
+    with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
         observe_histogram(
             "extraction_strategy_duration_seconds",
             duration_s,
             labels={"strategy": strategy, "status": status},
         )
-    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
-        pass
     if status != "success" or not result:
         return
     content = result.get("content")
     if isinstance(content, str) and content:
-        try:
+        with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
             observe_histogram(
                 "extraction_content_length_bytes",
                 len(content.encode("utf-8", errors="ignore")),
                 labels={"strategy": strategy},
             )
-        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
-            pass
 
 
 def _attach_trace(
@@ -804,10 +794,7 @@ def _mask_pii_value(label: str, value: str) -> str:
         if "@" not in value:
             return "***"
         local, domain = value.split("@", 1)
-        if len(local) <= 2:
-            masked_local = "*" * len(local)
-        else:
-            masked_local = f"{local[0]}***{local[-1]}"
+        masked_local = "*" * len(local) if len(local) <= 2 else f"{local[0]}***{local[-1]}"
         return f"{masked_local}@{domain}"
     if label == "phone":
         digits = re.sub(r"\D", "", value)
@@ -896,9 +883,8 @@ def extract_regex_entities(
                     ipaddress.ip_address(value)
                 except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
                     continue
-            if label == "credit_card":
-                if not _luhn_check(value):
-                    continue
+            if label == "credit_card" and not _luhn_check(value):
+                continue
             if (label, start, end) in seen_spans:
                 continue
             seen_spans.add((label, start, end))
@@ -1024,10 +1010,7 @@ def _jsonld_score_candidate(node: dict[str, Any]) -> tuple[int, int]:
 def _jsonld_has_content(result: dict[str, Any]) -> bool:
     content = result.get("content")
     summary = result.get("summary")
-    for value in (content, summary):
-        if isinstance(value, str) and value.strip():
-            return True
-    return False
+    return any(isinstance(value, str) and value.strip() for value in (content, summary))
 
 
 def _collect_jsonld_nodes(data: Any) -> list[dict[str, Any]]:
@@ -1496,10 +1479,8 @@ def extract_cluster_entities(
     if not isinstance(tag_keywords, dict):
         tag_keywords = _DEFAULT_CLUSTER_TAG_KEYWORDS
 
-    try:
+    with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
         increment_counter("extraction_cluster_total", labels={"status": "started"})
-    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
-        pass
 
     blocks = _extract_cluster_blocks(
         html_text,
@@ -1509,10 +1490,8 @@ def extract_cluster_entities(
     )
     if not blocks:
         result["cluster_error"] = "cluster_no_blocks"
-        try:
+        with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
             increment_counter("extraction_cluster_total", labels={"status": "no_blocks"})
-        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
-            pass
         return result
 
     doc_vec = _cluster_embedding(" ".join(blocks), embed_dims)
@@ -1545,10 +1524,8 @@ def extract_cluster_entities(
 
     if not clusters:
         result["cluster_error"] = "cluster_no_clusters"
-        try:
+        with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
             increment_counter("extraction_cluster_total", labels={"status": "no_clusters"})
-        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
-            pass
         return result
 
     def _cluster_score(cluster: dict[str, Any]) -> tuple[int, int]:
@@ -1561,10 +1538,8 @@ def extract_cluster_entities(
 
     if not content:
         result["cluster_error"] = "cluster_empty_content"
-        try:
+        with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
             increment_counter("extraction_cluster_total", labels={"status": "empty"})
-        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
-            pass
         return result
 
     title = _extract_cluster_title(html_text)
@@ -1590,10 +1565,8 @@ def extract_cluster_entities(
         result["cluster_tags"] = tags
         result["cluster_tag_scores"] = tag_scores
     result["extraction_successful"] = True
-    try:
+    with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
         increment_counter("extraction_cluster_total", labels={"status": "success"})
-    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
-        pass
     return result
 
 
@@ -1660,13 +1633,11 @@ def _run_with_retries(
             if jitter_ms:
                 delay_s += random.uniform(0.0, jitter_ms / 1000.0)
             attempts += 1
-            try:
+            with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
                 increment_counter(
                     "extraction_retry_total",
                     labels={"strategy": strategy, "attempt": str(attempts)},
                 )
-            except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
-                pass
             if delay_s > 0.0:
                 time.sleep(delay_s)
 
@@ -1847,10 +1818,7 @@ def _decode_all_json(payload: str) -> list[Any]:
         bracket = payload.find("[", idx)
         if brace == -1 and bracket == -1:
             break
-        if brace == -1 or (bracket != -1 and bracket < brace):
-            start = bracket
-        else:
-            start = brace
+        start = bracket if brace == -1 or bracket != -1 and bracket < brace else brace
         try:
             obj, end = decoder.raw_decode(payload, start)
         except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
@@ -2184,10 +2152,7 @@ def _schema_rules_to_field_specs(schema_rules: Optional[dict[str, Any]]) -> list
             if isinstance(raw, dict):
                 normalized: list[dict[str, Any]] = []
                 for name, spec in raw.items():
-                    if isinstance(spec, dict):
-                        entry = dict(spec)
-                    else:
-                        entry = {"selector": spec}
+                    entry = dict(spec) if isinstance(spec, dict) else {"selector": spec}
                     entry.setdefault("name", str(name))
                     normalized.append(entry)
                 return normalized
@@ -2314,7 +2279,7 @@ def _merge_llm_results(objs: list[dict[str, Any]], mode: str) -> tuple[dict[str,
 
 
 def _llm_has_content(data: dict[str, Any]) -> bool:
-    for key, value in data.items():
+    for _key, value in data.items():
         if value is None:
             continue
         if isinstance(value, str) and value.strip():
@@ -2877,23 +2842,22 @@ async def scrape_article(url: str, custom_cookies: Optional[list[dict[str, Any]]
 
     # robots.txt enforcement (fail open if error)
     effective_ua = ua_headers.get("User-Agent", web_scraping_user_agent)
-    if getattr(plan, "respect_robots", True):
-        if not await is_allowed_by_robots_async(url, effective_ua):
-            logging.warning("Robots policy disallows fetching this URL; skipping fetch")
-            try:
-                parsed = urlparse(url)
-                increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
-            except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
-                increment_counter("scrape_blocked_by_robots_total", labels={})
-            return _attach_preflight({
-                "url": url,
-                "title": "N/A",
-                "author": "N/A",
-                "date": "N/A",
-                "content": "",
-                "extraction_successful": False,
-                "error": "Blocked by robots policy",
-            })
+    if getattr(plan, "respect_robots", True) and not await is_allowed_by_robots_async(url, effective_ua):
+        logging.warning("Robots policy disallows fetching this URL; skipping fetch")
+        try:
+            parsed = urlparse(url)
+            increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
+            increment_counter("scrape_blocked_by_robots_total", labels={})
+        return _attach_preflight({
+            "url": url,
+            "title": "N/A",
+            "author": "N/A",
+            "date": "N/A",
+            "content": "",
+            "extraction_successful": False,
+            "error": "Blocked by robots policy",
+        })
 
     if backend_choice != "playwright" and preflight_method != "playwright":
         # First try lightweight HTTP path (curl/httpx) before Playwright
@@ -3095,9 +3059,8 @@ async def scrape_article(url: str, custom_cookies: Optional[list[dict[str, Any]]
         regex_settings=regex_settings,
         cluster_settings=cluster_settings,
     )
-    if article_data.get("extraction_successful") and not use_handler:
-        if article_data.get("content"):
-            article_data["content"] = convert_html_to_markdown(article_data["content"])
+    if article_data.get("extraction_successful") and not use_handler and article_data.get("content"):
+        article_data["content"] = convert_html_to_markdown(article_data["content"])
     if article_data.get("extraction_successful"):
         content = article_data.get("content", "") or ""
         logging.info(f"Article content length: {len(content)}")
@@ -3197,10 +3160,8 @@ async def scrape_and_summarize_multiple(
         custom_title = custom_titles[i] if i < len(custom_titles) else None
         try:
             if rate_limiter is not None:
-                try:
+                with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
                     await rate_limiter.acquire()
-                except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
-                    pass
             # Scrape the article
             article = await scrape_article(url, custom_cookies=custom_cookies)
             if article and article['extraction_successful']:
@@ -3560,9 +3521,8 @@ def collect_internal_links(base_url: str) -> set:
             for link in soup.find_all('a', href=True):
                 full_url = urljoin(base_url, link['href'])
                 # Only process links within the same domain
-                if urlparse(full_url).netloc == urlparse(base_url).netloc:
-                    if full_url not in visited:
-                        to_visit.add(full_url)
+                if urlparse(full_url).netloc == urlparse(base_url).netloc and full_url not in visited:
+                    to_visit.add(full_url)
 
             visited.add(current_url)
         except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
@@ -3622,9 +3582,8 @@ async def async_collect_internal_links(base_url: str,
             soup = BeautifulSoup(text, 'html.parser')
             for link in soup.find_all('a', href=True):
                 full_url = urljoin(base_url, link['href'])
-                if urlparse(full_url).netloc == urlparse(base_url).netloc:
-                    if full_url not in visited:
-                        to_visit.add(full_url)
+                if urlparse(full_url).netloc == urlparse(base_url).netloc and full_url not in visited:
+                    to_visit.add(full_url)
         except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             continue
 
@@ -3899,10 +3858,7 @@ def parse_csv_urls(file_path: str) -> dict[str, Union[str, list[str]]]:
             url = df.iloc[idx]['url'].strip()
 
             # Use title/name if available, otherwise use URL as key
-            if key_column:
-                key = df.iloc[idx][key_column].strip()
-            else:
-                key = f"Article {idx + 1}"
+            key = df.iloc[idx][key_column].strip() if key_column else f"Article {idx + 1}"
 
             # Handle duplicate keys
             if key in urls_dict:

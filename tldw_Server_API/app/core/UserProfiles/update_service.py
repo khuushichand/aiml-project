@@ -366,13 +366,12 @@ class UserProfileUpdateService:
                 team = await get_team(team_id)
                 if not team:
                     raise ValueError("team_not_found")
-                if not is_platform_admin:
-                    if not self._actor_can_access_team(
-                        membership_context,
-                        team_id=team_id,
-                        team_org_id=int(team.get("org_id")) if team.get("org_id") is not None else None,
-                    ):
-                        raise ValueError("forbidden_scope")
+                if not is_platform_admin and not self._actor_can_access_team(
+                    membership_context,
+                    team_id=team_id,
+                    team_org_id=int(team.get("org_id")) if team.get("org_id") is not None else None,
+                ):
+                    raise ValueError("forbidden_scope")
                 if action == "add":
                     if team.get("org_id") is not None:
                         org_id = int(team.get("org_id"))
@@ -588,10 +587,7 @@ async def _fetch_username(db_conn: Any, user_id: int) -> str | None:
         row = await cursor.fetchone()
         if row is None:
             return None
-        if isinstance(row, dict) or hasattr(row, "keys"):
-            raw = row.get("username")
-        else:
-            raw = row[0]
+        raw = row.get("username") if isinstance(row, dict) or hasattr(row, "keys") else row[0]
         return str(raw) if raw is not None else None
     except Exception as exc:
         logger.error("Failed to fetch username for user {}: {}", user_id, exc)

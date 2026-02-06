@@ -16,7 +16,7 @@ from configparser import ConfigParser
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
 
 from loguru import logger
 
@@ -434,8 +434,8 @@ class AnalyticsDatabase:
     def _prepare_backend_statement(
         self,
         query: str,
-        params: Union[tuple, list, dict] | None = None,
-    ) -> tuple[str, Union[tuple, dict] | None]:
+        params: tuple | list | dict | None = None,
+    ) -> tuple[str, tuple | dict | None]:
         return prepare_backend_statement(
             self.backend_type,
             query,
@@ -447,7 +447,7 @@ class AnalyticsDatabase:
         self,
         conn,
         query: str,
-        params: Union[tuple, list, dict] | None = None,
+        params: tuple | list | dict | None = None,
     ):
         prepared_query, prepared_params = self._prepare_backend_statement(query, params)
 
@@ -471,7 +471,7 @@ class AnalyticsDatabase:
         self,
         conn,
         query: str,
-        params: Union[tuple, list, dict] | None = None,
+        params: tuple | list | dict | None = None,
     ) -> dict[str, Any] | None:
         cursor = self._execute(conn, query, params)
         row = cursor.fetchone()
@@ -483,7 +483,7 @@ class AnalyticsDatabase:
         self,
         conn,
         query: str,
-        params: Union[tuple, list, dict] | None = None,
+        params: tuple | list | dict | None = None,
     ) -> list[dict[str, Any]]:
         cursor = self._execute(conn, query, params)
         rows = cursor.fetchall() or []

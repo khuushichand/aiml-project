@@ -18,6 +18,8 @@ try:
     from pydantic import model_validator  # type: ignore
 except ImportError:  # pragma: no cover - fallback for older environments
     model_validator = None  # type: ignore
+import contextlib
+
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
@@ -153,7 +155,7 @@ class SubmitAudioJobRequest(BaseModel):
 
     if model_validator is not None:
         @model_validator(mode="before")
-        def _validate_inputs(cls, values: Any) -> Any:  # type: ignore[override]
+        def _validate_inputs(self, values: Any) -> Any:  # type: ignore[override]
             if not isinstance(values, dict):
                 return values
             url = (values.get("url") or "").strip()
@@ -172,7 +174,7 @@ class SubmitAudioJobRequest(BaseModel):
         from pydantic import root_validator as _rv  # type: ignore
 
         @_rv(pre=True)
-        def _validate_inputs(cls, values: dict[str, Any]) -> dict[str, Any]:  # type: ignore[no-redef]
+        def _validate_inputs(self, values: dict[str, Any]) -> dict[str, Any]:  # type: ignore[no-redef]
             url = (values.get("url") or "").strip()
             lp = (values.get("local_path") or "").strip()
             if not url and not lp:
@@ -299,7 +301,7 @@ async def get_audio_job(
         is_admin = principal.is_admin
         if not (is_admin or owner == str(current_user.id)):
             raise HTTPException(status_code=403, detail="Not authorized for this job")
-        return AudioJob(**{k: d.get(k) for k in _AUDIO_JOB_FIELD_MAP.keys()})
+        return AudioJob(**{k: d.get(k) for k in _AUDIO_JOB_FIELD_MAP})
     except HTTPException:
         raise
     except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS:
@@ -368,10 +370,8 @@ async def stream_audio_job_progress(
             except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS:
                 rows = []
             finally:
-                try:
+                with contextlib.suppress(_AUDIO_JOBS_NONCRITICAL_EXCEPTIONS):
                     conn.close()
-                except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS:
-                    pass
 
             if rows:
                 for r in rows:
@@ -404,14 +404,10 @@ async def stream_audio_job_progress(
                 yield ln
         finally:
             if not prod_task.done():
-                try:
+                with contextlib.suppress(_AUDIO_JOBS_NONCRITICAL_EXCEPTIONS):
                     prod_task.cancel()
-                except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS:
-                    pass
-                try:
+                with contextlib.suppress(_AUDIO_JOBS_NONCRITICAL_EXCEPTIONS):
                     await prod_task
-                except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS:
-                    pass
 
     sse_headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     return StreamingResponse(_gen(), media_type="text/event-stream", headers=sse_headers)
@@ -449,7 +445,7 @@ async def list_audio_jobs_admin(
             sort_order="desc",
         )
         # Project to model
-        out = [AudioJob(**{k: j.get(k) for k in _AUDIO_JOB_FIELD_MAP.keys()}) for j in jobs]
+        out = [AudioJob(**{k: j.get(k) for k in _AUDIO_JOB_FIELD_MAP}) for j in jobs]
         return ListAudioJobsResponse(jobs=out)
     except HTTPException:
         raise

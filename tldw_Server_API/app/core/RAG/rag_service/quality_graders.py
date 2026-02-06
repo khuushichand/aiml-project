@@ -323,9 +323,9 @@ class FastGroundednessGrader:
         Uses keyword overlap between answer and sources as a proxy.
         """
         # Extract significant words from answer
-        answer_words = set(
+        answer_words = {
             w.lower() for w in re.findall(r'\b\w{4,}\b', answer)
-        )
+        }
 
         # Extract words from all documents
         source_words: set[str] = set()
@@ -532,8 +532,8 @@ class UtilityGrader:
             score += 1  # Reasonable length
 
         # Check query term overlap
-        query_words = set(w.lower() for w in re.findall(r'\b\w{3,}\b', query))
-        answer_words = set(w.lower() for w in re.findall(r'\b\w{3,}\b', answer))
+        query_words = {w.lower() for w in re.findall(r'\b\w{3,}\b', query)}
+        answer_words = {w.lower() for w in re.findall(r'\b\w{3,}\b', answer)}
 
         if query_words:
             overlap = len(query_words & answer_words) / len(query_words)

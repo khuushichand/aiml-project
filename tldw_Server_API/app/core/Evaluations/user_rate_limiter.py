@@ -6,6 +6,7 @@ with support for burst traffic and cost-based limits.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import sqlite3
@@ -197,10 +198,8 @@ class UserRateLimiter:
     def _init_database(self):
         """Initialize rate limiting tables."""
         # Register explicit adapters to avoid deprecated defaults on Python 3.12+
-        try:
+        with contextlib.suppress(_USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS):
             sqlite3.register_adapter(datetime, lambda d: d.isoformat(sep=" "))
-        except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
-            pass
         with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES) as conn:
             # User rate limits table (created in migration)
             conn.execute("""

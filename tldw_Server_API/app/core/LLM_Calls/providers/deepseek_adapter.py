@@ -336,8 +336,7 @@ class DeepSeekAdapter(ChatProvider):
                         normalized = normalize_provider_line(line)
                         if normalized is not None:
                             yield normalized
-                    for tail in finalize_stream(response=resp, done_already=seen_done):
-                        yield tail
+                    yield from finalize_stream(response=resp, done_already=seen_done)
             return
         except _DEEPSEEK_CLIENT_EXCEPTIONS as e:
             # Try to log upstream response text if available

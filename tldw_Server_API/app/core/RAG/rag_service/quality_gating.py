@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -216,7 +216,7 @@ class GatingEvaluator:
         print(result.exit_code)  # 2 (warning - faithfulness below threshold)
     """
 
-    def __init__(self, config: Optional[GatingConfig] = None) -> None:
+    def __init__(self, config: GatingConfig | None = None) -> None:
         """Initialize GatingEvaluator.
 
         Args:
@@ -242,10 +242,7 @@ class GatingEvaluator:
         for name, threshold in self.config.stable.items():
             if name in metrics:
                 value = metrics[name]
-                if name in lower_is_better:
-                    passed = value <= threshold
-                else:
-                    passed = value >= threshold
+                passed = value <= threshold if name in lower_is_better else value >= threshold
                 result = GatingResult.PASS if passed else GatingResult.FAIL
 
                 if not passed:
@@ -265,10 +262,7 @@ class GatingEvaluator:
         for name, threshold in self.config.unstable.items():
             if name in metrics:
                 value = metrics[name]
-                if name in lower_is_better:
-                    passed = value <= threshold
-                else:
-                    passed = value >= threshold
+                passed = value <= threshold if name in lower_is_better else value >= threshold
                 result = GatingResult.PASS if passed else GatingResult.WARN
 
                 if not passed:

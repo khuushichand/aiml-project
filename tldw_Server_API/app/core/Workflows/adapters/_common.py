@@ -253,10 +253,7 @@ def workflow_file_allowlist(context: dict[str, Any]) -> list[Path]:
     """Return the resolved allowlist for the current tenant, if configured."""
     tenant_id = str(context.get("tenant_id") or "default") if isinstance(context, dict) else "default"
     tenant_key = f"WORKFLOWS_FILE_ALLOWLIST_{tenant_id.upper().replace('-', '_')}"
-    if tenant_key in os.environ:
-        raw = os.environ.get(tenant_key)
-    else:
-        raw = os.getenv("WORKFLOWS_FILE_ALLOWLIST")
+    raw = os.environ.get(tenant_key) if tenant_key in os.environ else os.getenv("WORKFLOWS_FILE_ALLOWLIST")
     return resolve_workflows_file_allowlist_paths(parse_workflows_file_allowlist(raw))
 
 

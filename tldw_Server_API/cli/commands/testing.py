@@ -2,6 +2,7 @@
 Testing and development commands for tldw Evaluations CLI.
 """
 
+import contextlib
 import sys
 
 import click
@@ -49,7 +50,7 @@ def test_connection(ctx):
 @click.pass_context
 def test_providers(ctx, provider, test_all):
     """Test LLM provider connections."""
-    cli_context = ctx.obj['cli_context']
+    ctx.obj['cli_context']
 
     providers_to_test = []
     if provider:
@@ -117,12 +118,10 @@ def test_audit(ctx):
         svc = UnifiedAuditService()
         import asyncio as _asyncio
         if getattr(svc, "initialize", None):
-            try:
+            with contextlib.suppress(RuntimeError):
                 _asyncio.run(svc.initialize())
-            except RuntimeError:
-                pass
         # Log a test event to unified audit
-        try:
+        with contextlib.suppress(RuntimeError):
             _asyncio.run(
                 svc.log_event(
                     event_type=AuditEventType.SYSTEM_START,
@@ -131,8 +130,6 @@ def test_audit(ctx):
                     metadata={"test": True},
                 )
             )
-        except RuntimeError:
-            pass
 
         print_success("Audit logging test successful")
 

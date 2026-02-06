@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 from datetime import datetime
 from typing import Any
@@ -163,12 +164,10 @@ async def list_versions(
         for rv in raw_rows:
             created_at_dt: datetime | None = rv.get("created_at")
             if isinstance(created_at_dt, str):
-                try:
+                with contextlib.suppress(_MEDIA_VERSIONS_COERCE_EXCEPTIONS):
                     created_at_dt = datetime.fromisoformat(
                         created_at_dt.replace("Z", "+00:00")
                     )
-                except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
-                    pass
             safe_md = rv.get("safe_metadata")
             if isinstance(safe_md, str):
                 import json as _json
@@ -262,12 +261,10 @@ async def get_version(
 
         created_at_dt = version_dict.get("created_at")
         if isinstance(created_at_dt, str):
-            try:
+            with contextlib.suppress(_MEDIA_VERSIONS_COERCE_EXCEPTIONS):
                 created_at_dt = datetime.fromisoformat(
                     created_at_dt.replace("Z", "+00:00")
                 )
-            except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
-                pass
         safe_md = version_dict.get("safe_metadata")
         if isinstance(safe_md, str):
             import json as _json

@@ -16,7 +16,7 @@ from .base import BackendType
 ParamsType = Optional[Union[tuple[Any, ...], list[Any], dict[str, Any], Any]]
 
 
-def normalise_params(params: ParamsType) -> Union[tuple[Any, ...], dict[str, Any]] | None:
+def normalise_params(params: ParamsType) -> tuple[Any, ...] | dict[str, Any] | None:
     """Normalize parameter containers for backend execution.
 
     Rules:
@@ -281,7 +281,6 @@ def _ensure_returning_id(query: str) -> str:
         stripped = stripped[:-1].rstrip()
 
     # Try to detect table name for special-case handling
-    target = stripped
     try:
         m = re.match(r'\s*INSERT\s+INTO\s+([\w\."]+)', stripped, flags=re.IGNORECASE)
         table_token = (m.group(1) if m else "")
@@ -608,7 +607,7 @@ def prepare_backend_statement(
     transformer: Any | None = None,
     apply_default_transform: bool = False,
     ensure_returning: bool = False,
-) -> tuple[str, Union[tuple[Any, ...], dict[str, Any]] | None]:
+) -> tuple[str, tuple[Any, ...] | dict[str, Any] | None]:
     """Prepare a query/params pair for execution on the configured backend."""
     if backend_type != BackendType.POSTGRESQL:
         return query, params
@@ -639,7 +638,7 @@ def prepare_backend_many_statement(
     transformer: Any | None = None,
     apply_default_transform: bool = False,
     ensure_returning: bool = False,
-) -> tuple[str, list[Union[tuple[Any, ...], dict[str, Any]] | None]]:
+) -> tuple[str, list[tuple[Any, ...] | dict[str, Any] | None]]:
     """Prepare a batch query/params list for execution on the configured backend."""
     if backend_type != BackendType.POSTGRESQL:
         return query, list(params_list)

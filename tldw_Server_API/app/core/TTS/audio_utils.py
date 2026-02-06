@@ -3,8 +3,8 @@
 #
 # Imports
 import asyncio
-import binascii
 import base64
+import binascii
 import importlib.util
 import re
 import tempfile
@@ -450,7 +450,7 @@ def process_voice_reference(
 
         # Convert if requested
         if convert and provider.lower() in processor.PROVIDER_REQUIREMENTS:
-            requirements = processor.PROVIDER_REQUIREMENTS[provider.lower()]
+            processor.PROVIDER_REQUIREMENTS[provider.lower()]
             audio_bytes = processor.convert_audio(
                 audio_bytes,
                 target_format='wav',
@@ -616,10 +616,7 @@ def crossfade_audio(
 def _to_float_mono(audio: np.ndarray) -> np.ndarray:
     arr = np.asarray(audio)
     if arr.ndim > 1:
-        if arr.shape[0] <= arr.shape[-1]:
-            arr = arr.mean(axis=0)
-        else:
-            arr = arr.mean(axis=1)
+        arr = arr.mean(axis=0) if arr.shape[0] <= arr.shape[-1] else arr.mean(axis=1)
     arr = arr.reshape(-1)
     if np.issubdtype(arr.dtype, np.integer):
         max_val = np.iinfo(arr.dtype).max

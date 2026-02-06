@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -129,7 +130,5 @@ async def run_privilege_snapshot_worker(stop_event: asyncio.Event | None = None)
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run_privilege_snapshot_worker())
-    except KeyboardInterrupt:
-        pass

@@ -8,6 +8,8 @@ engine and endpoints. Importing this module ensures metrics exist to avoid
 "not registered" warnings when recording.
 """
 
+import contextlib
+
 from tldw_Server_API.app.core.Metrics import (
     MetricDefinition,
     MetricType,
@@ -92,7 +94,5 @@ def register_workflows_metrics() -> None:
 
 
 # Register eagerly on import
-try:
+with contextlib.suppress(Exception):
     register_workflows_metrics()
-except Exception:
-    pass

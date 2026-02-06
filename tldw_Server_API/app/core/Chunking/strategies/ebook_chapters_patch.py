@@ -119,7 +119,7 @@ def validate_regex_pattern_enhanced(pattern: str, max_length: int = 500, timeout
         start_time = time.time()
         try:
             # Use compiled pattern for better performance
-            result = compiled_pattern.search(test_input)
+            compiled_pattern.search(test_input)
             elapsed = time.time() - start_time
 
             if elapsed > timeout:

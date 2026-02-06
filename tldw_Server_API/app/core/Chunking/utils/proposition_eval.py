@@ -58,7 +58,7 @@ def _greedy_match_semantic(extracted: list[str], reference: list[str], threshold
         if sim[i, j] >= threshold and j not in matched_ref:
             matched_ref.add(j)
             matches += 1
-    return matches, sorted(list(matched_ref))
+    return matches, sorted(matched_ref)
 
 
 def _greedy_match_jaccard(extracted: list[str], reference: list[str], threshold: float = 0.6) -> tuple[int, list[int]]:
@@ -79,7 +79,7 @@ def _greedy_match_jaccard(extracted: list[str], reference: list[str], threshold:
         if scores[j] >= threshold and j not in matched_ref:
             matched_ref.add(j)
             matches += 1
-    return matches, sorted(list(matched_ref))
+    return matches, sorted(matched_ref)
 
 
 def evaluate_propositions(
@@ -120,7 +120,7 @@ def evaluate_propositions(
     avg_len = (token_count / len(ex)) if ex else 0.0
 
     # Dedup rate (exact string duplicates)
-    dedup_rate = 1 - (len(set([e.lower() for e in ex])) / len(ex)) if ex else 0.0
+    dedup_rate = 1 - (len({e.lower() for e in ex}) / len(ex)) if ex else 0.0
 
     details = {
         "matched_reference_indices": len(matched_indices),

@@ -562,10 +562,7 @@ class NotesModule(BaseModule):
                 "loc": None,
             }
 
-            if mode == "full":
-                body = content
-            else:
-                body = _make_snippet(content, None, snippet_len)
+            body = content if mode == "full" else _make_snippet(content, None, snippet_len)
 
             return {
                 "meta": meta,

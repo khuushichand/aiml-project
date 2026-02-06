@@ -22,7 +22,7 @@ class ReadingSaveRequest(BaseModel):
     )
 
     @validator("tags", pre=True, each_item=True)
-    def _strip_tags(cls, value: str) -> str:
+    def _strip_tags(self, value: str) -> str:
         return value.strip()
 
 
@@ -118,19 +118,19 @@ class ReadingDigestSuggestionsConfig(BaseModel):
     include_archived: bool = False
 
     @validator("status", pre=True)
-    def _coerce_suggestions_status(cls, value: Any) -> Any:
+    def _coerce_suggestions_status(self, value: Any) -> Any:
         if isinstance(value, str):
             return [value]
         return value
 
     @validator("exclude_tags", pre=True)
-    def _coerce_exclude_tags(cls, value: Any) -> Any:
+    def _coerce_exclude_tags(self, value: Any) -> Any:
         if isinstance(value, str):
             return [value]
         return value
 
     @validator("exclude_tags", pre=True, each_item=True)
-    def _strip_exclude_tags(cls, value: str) -> str:
+    def _strip_exclude_tags(self, value: str) -> str:
         return value.strip()
 
 
@@ -150,19 +150,19 @@ class ReadingDigestScheduleFilters(BaseModel):
     suggestions: ReadingDigestSuggestionsConfig | None = None
 
     @validator("status", pre=True)
-    def _coerce_status_list(cls, value: Any) -> Any:
+    def _coerce_status_list(self, value: Any) -> Any:
         if isinstance(value, str):
             return [value]
         return value
 
     @validator("tags", pre=True)
-    def _coerce_tags_list(cls, value: Any) -> Any:
+    def _coerce_tags_list(self, value: Any) -> Any:
         if isinstance(value, str):
             return [value]
         return value
 
     @validator("tags", pre=True, each_item=True)
-    def _strip_digest_tags(cls, value: str) -> str:
+    def _strip_digest_tags(self, value: str) -> str:
         return value.strip()
 
 
@@ -355,5 +355,5 @@ class ReadingUpdateRequest(BaseModel):
     title: str | None = Field(default=None, example="Updated Article Title")
 
     @validator("tags", pre=True, each_item=True)
-    def _strip_tags(cls, value: str) -> str:
+    def _strip_tags(self, value: str) -> str:
         return value.strip()

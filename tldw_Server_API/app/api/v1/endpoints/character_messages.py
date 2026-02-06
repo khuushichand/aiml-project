@@ -32,12 +32,12 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     replace_placeholders,
     retrieve_message_details,
 )
-from tldw_Server_API.app.core.Character_Chat.modules.character_prompt_presets import (
-    build_character_system_prompt,
-)
 
 # Rate limiting
 from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import get_character_rate_limiter
+from tldw_Server_API.app.core.Character_Chat.modules.character_prompt_presets import (
+    build_character_system_prompt,
+)
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,

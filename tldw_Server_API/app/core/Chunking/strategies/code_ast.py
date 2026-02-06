@@ -34,7 +34,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
     def _line_starts(self, text: str) -> list[int]:
         starts: list[int] = []
         pos = 0
-        for idx, ln in enumerate(text.splitlines(keepends=True)):
+        for _idx, ln in enumerate(text.splitlines(keepends=True)):
             starts.append(pos)
             pos += len(ln)
         # Ensure at least one start
@@ -47,14 +47,8 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
             s_line = 0
         if e_line < 0:
             e_line = 0
-        if s_line >= len(line_starts):
-            s_char = total_chars
-        else:
-            s_char = line_starts[s_line]
-        if e_line >= len(line_starts):
-            e_char = total_chars
-        else:
-            e_char = line_starts[e_line]
+        s_char = total_chars if s_line >= len(line_starts) else line_starts[s_line]
+        e_char = total_chars if e_line >= len(line_starts) else line_starts[e_line]
         if e_char < s_char:
             e_char = s_char
         return s_char, e_char
@@ -152,10 +146,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                     while t:
                         part = t[:max_chars]
                         chunks.append(part)
-                        if len(t) <= max_chars:
-                            t = ''
-                        else:
-                            t = t[max_chars:]
+                        t = '' if len(t) <= max_chars else t[max_chars:]
                     buf = ''
                     current_len = 0
                 else:

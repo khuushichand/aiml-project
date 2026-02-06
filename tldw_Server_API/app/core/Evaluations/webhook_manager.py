@@ -291,13 +291,10 @@ class WebhookManager:
                 if existing:
                     webhook_id = existing['id']
                     existing_secret = existing['secret']
-                    existing_events = existing['events']
+                    existing['events']
 
                     # Preserve secret unless explicitly rotated
-                    if secret:
-                        secret_to_store = secret
-                    else:
-                        secret_to_store = existing_secret
+                    secret_to_store = secret or existing_secret
 
                     # Update existing webhook
                     self.db_adapter.update("""
@@ -919,7 +916,7 @@ class WebhookManager:
                 "error": "Webhook not found"
             }
 
-        webhook_id = row.get("id") if isinstance(row, dict) else row[0]
+        row.get("id") if isinstance(row, dict) else row[0]
         secret = row.get("secret") if isinstance(row, dict) else row[1]
 
         # Create test payload
@@ -1045,6 +1042,7 @@ class WebhookManager:
             }
 
 
+import contextlib
 from functools import lru_cache
 
 
@@ -1091,10 +1089,8 @@ def shutdown_webhook_manager_if_initialized() -> None:
                 try:
                     adapter = getattr(mgr, "db_adapter", None)
                     if adapter is not None:
-                        try:
+                        with contextlib.suppress(_WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS):
                             adapter.close()
-                        except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS:
-                            pass
                 except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS:
                     pass
             finally:

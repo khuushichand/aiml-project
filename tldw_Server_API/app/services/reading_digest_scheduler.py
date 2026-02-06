@@ -12,6 +12,7 @@ Env:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -90,10 +91,8 @@ class _ReadingDigestScheduler:
             try:
                 if self._rescan_task:
                     self._rescan_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await self._rescan_task
-                    except asyncio.CancelledError:
-                        pass
             except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 pass
             self._rescan_task = None
@@ -139,10 +138,8 @@ class _ReadingDigestScheduler:
         try:
             current_ids = {j.id for j in (self._aps.get_jobs() or [])}
             for jid in list(current_ids - desired):
-                try:
+                with contextlib.suppress(_READING_DIGEST_NONCRITICAL_EXCEPTIONS):
                     self._aps.remove_job(jid)
-                except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
-                    pass
         except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
             pass
 
@@ -158,20 +155,16 @@ class _ReadingDigestScheduler:
                         continue
         except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Reading digest scheduler: failed to enumerate user dirs: {exc}")
-        try:
+        with contextlib.suppress(_READING_DIGEST_NONCRITICAL_EXCEPTIONS):
             user_ids.add(int(core_settings.get("SINGLE_USER_FIXED_ID", 1)))
-        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
-            pass
         return user_ids
 
     def _add_job(self, schedule: ReadingDigestScheduleRow, user_id: int | None = None) -> None:
         if not self._aps:
             return
         try:
-            try:
+            with contextlib.suppress(_READING_DIGEST_NONCRITICAL_EXCEPTIONS):
                 self._aps.remove_job(schedule.id)
-            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
-                pass
             tz = schedule.timezone or os.getenv("READING_DIGEST_SCHEDULER_TZ", "UTC")
             try:
                 trigger = CronTrigger.from_crontab(schedule.cron, timezone=tz)
@@ -263,10 +256,8 @@ class _ReadingDigestScheduler:
         except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
             latest = None
         if not latest or not latest.enabled:
-            try:
+            with contextlib.suppress(_READING_DIGEST_NONCRITICAL_EXCEPTIONS):
                 db.set_reading_digest_history(schedule_id, last_status="skipped_disabled")
-            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
-                pass
             return
         schedule = latest
 
@@ -303,16 +294,12 @@ class _ReadingDigestScheduler:
                 idempotency_key=f"reading_digest:{schedule.id}:{run_slot}",
             )
             logger.info("Reading digest schedule queued: schedule_id=%s job_id=%s", schedule_id, job.get("id"))
-            try:
+            with contextlib.suppress(_READING_DIGEST_NONCRITICAL_EXCEPTIONS):
                 db.set_reading_digest_history(schedule_id, last_status="queued")
-            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
-                pass
         except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning("Reading digest schedule enqueue failed: %s", exc)
-            try:
+            with contextlib.suppress(_READING_DIGEST_NONCRITICAL_EXCEPTIONS):
                 db.set_reading_digest_history(schedule_id, last_status="error")
-            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
-                pass
 
     # CRUD wrappers
     def create(
@@ -430,13 +417,9 @@ async def stop_reading_digest_scheduler(task: asyncio.Task | None) -> None:
     try:
         if task:
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
     except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
         pass
-    try:
+    with contextlib.suppress(_READING_DIGEST_NONCRITICAL_EXCEPTIONS):
         await get_reading_digest_scheduler().stop()
-    except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
-        pass

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import time
@@ -228,7 +229,7 @@ def _validate_settings(settings: dict[str, Any] | None) -> dict[str, Any] | None
         return None
     if not isinstance(settings, dict):
         raise HTTPException(status_code=422, detail="invalid_settings")
-    unknown = [key for key in settings.keys() if key not in _SETTINGS_ALLOWLIST]
+    unknown = [key for key in settings if key not in _SETTINGS_ALLOWLIST]
     if unknown:
         raise HTTPException(status_code=422, detail=f"invalid_settings: unknown keys {unknown}")
     for key, value in settings.items():
@@ -1315,23 +1316,19 @@ async def export_presentation(
             ).encode("utf-8")
         except SlidesExportInputError as exc:
             if metrics is not None:
-                try:
+                with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                     metrics.increment(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "input_error"},
                     )
-                except _SLIDES_NONCRITICAL_EXCEPTIONS:
-                    pass
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except SlidesExportError as exc:
             if metrics is not None:
-                try:
+                with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                     metrics.increment(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "export_error"},
                     )
-                except _SLIDES_NONCRITICAL_EXCEPTIONS:
-                    pass
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         filename = f"presentation_{presentation_id}.md"
         media_type = "text/markdown"
@@ -1360,23 +1357,19 @@ async def export_presentation(
             )
         except SlidesExportInputError as exc:
             if metrics is not None:
-                try:
+                with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                     metrics.increment(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "input_error"},
                     )
-                except _SLIDES_NONCRITICAL_EXCEPTIONS:
-                    pass
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except SlidesExportError as exc:
             if metrics is not None:
-                try:
+                with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                     metrics.increment(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "export_error"},
                     )
-                except _SLIDES_NONCRITICAL_EXCEPTIONS:
-                    pass
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         filename = f"presentation_{presentation_id}.pdf"
         media_type = "application/pdf"
@@ -1391,56 +1384,46 @@ async def export_presentation(
             )
         except SlidesAssetsMissingError as exc:
             if metrics is not None:
-                try:
+                with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                     metrics.increment(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "assets_missing"},
                     )
-                except _SLIDES_NONCRITICAL_EXCEPTIONS:
-                    pass
             raise HTTPException(status_code=500, detail="slides_assets_missing") from exc
         except SlidesExportInputError as exc:
             if metrics is not None:
-                try:
+                with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                     metrics.increment(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "input_error"},
                     )
-                except _SLIDES_NONCRITICAL_EXCEPTIONS:
-                    pass
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except SlidesExportError as exc:
             if metrics is not None:
-                try:
+                with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                     metrics.increment(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "export_error"},
                     )
-                except _SLIDES_NONCRITICAL_EXCEPTIONS:
-                    pass
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         filename = f"presentation_{presentation_id}.zip"
         media_type = "application/zip"
     else:
         if metrics is not None:
-            try:
+            with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                 metrics.increment(
                     "slides_export_errors_total",
                     labels={"format": str(format), "error": "invalid_format"},
                 )
-            except _SLIDES_NONCRITICAL_EXCEPTIONS:
-                pass
         raise HTTPException(status_code=400, detail="invalid_export_format")
 
     if metrics is not None:
-        try:
+        with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
             metrics.observe(
                 "slides_export_latency_seconds",
                 time.perf_counter() - started_at,
                 labels={"format": format.value},
             )
-        except _SLIDES_NONCRITICAL_EXCEPTIONS:
-            pass
 
     headers = {"Content-Disposition": f"attachment; filename=\"{filename}\""}
     return Response(content=body, media_type=media_type, headers=headers)

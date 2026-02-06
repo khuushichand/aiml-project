@@ -153,6 +153,8 @@ def otel_span(name: str, *args, **kwargs):
     return _NoopSpan()
 
 # Core types
+import contextlib
+
 from .metrics_collector import MetricsCollector, QueryMetrics
 from .types import DataSource, Document
 
@@ -1296,10 +1298,8 @@ async def unified_rag_pipeline(
                 return
             # Fused score is the calibrated probability of the top document
             if "fused_score" not in cal and "top_doc_prob" in cal:
-                try:
+                with contextlib.suppress(TypeError, ValueError):
                     cal["fused_score"] = float(cal.get("top_doc_prob") or 0.0)
-                except (TypeError, ValueError):
-                    pass
             # Mark whether learned fusion was explicitly requested
             if enable_learned_fusion:
                 cal["enabled"] = True
@@ -1346,22 +1346,18 @@ async def unified_rag_pipeline(
                 cfg_lcb = _rag_low_conf()
                 if (low_confidence_behavior or "continue") == "continue" and cfg_lcb != "continue":
                     low_confidence_behavior = cfg_lcb
-            if _rag_req_hc and not bool(require_hard_citations):
-                if bool(_rag_req_hc(default=False)):
-                    require_hard_citations = True
+            if _rag_req_hc and not bool(require_hard_citations) and bool(_rag_req_hc(default=False)):
+                require_hard_citations = True
         except (TypeError, ValueError):
             pass
 
         # Apply config-driven default for strict extractive generation
         _rag_strict: Any = None
-        try:
+        with contextlib.suppress(ImportError):
             from tldw_Server_API.app.core.config import rag_strict_extractive as _rag_strict
-        except ImportError:
-            pass
         try:
-            if _rag_strict is not None and not bool(strict_extractive):
-                if bool(_rag_strict(default=False)):
-                    strict_extractive = True
+            if _rag_strict is not None and not bool(strict_extractive) and bool(_rag_strict(default=False)):
+                strict_extractive = True
         except (TypeError, ValueError):
             pass
 
@@ -1494,17 +1490,13 @@ async def unified_rag_pipeline(
                 strat = str(routing.get("retrieval_strategy", "")).lower()
                 if strat == "precise":
                     # Favor lexical; shift hybrid_alpha toward FTS
-                    try:
+                    with contextlib.suppress(TypeError, ValueError):
                         hybrid_alpha = min(max(0.0, float(hybrid_alpha)), 1.0)
-                    except (TypeError, ValueError):
-                        pass
                     hybrid_alpha = min(hybrid_alpha, 0.5)
                 elif strat == "broad":
                     # Favor semantic
-                    try:
+                    with contextlib.suppress(TypeError, ValueError):
                         hybrid_alpha = min(max(0.0, float(hybrid_alpha)), 1.0)
-                    except (TypeError, ValueError):
-                        pass
                     hybrid_alpha = max(hybrid_alpha, 0.7)
                 # Respect suggested top_k when present
                 try:
@@ -1807,10 +1799,8 @@ async def unified_rag_pipeline(
                         _otel_cm = _tr.start_as_current_span("rag.retrieval")
                         _otel_span = _otel_cm.__enter__()
                         for _k, _v in _attrs.items():
-                            try:
+                            with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                                 _otel_span.set_attribute(_k, _v)
-                            except (AttributeError, RuntimeError, TypeError, ValueError):
-                                pass
                     except (AttributeError, RuntimeError, TypeError, ValueError):
                         _otel_cm = None
                         _otel_span = None
@@ -2440,10 +2430,8 @@ async def unified_rag_pipeline(
             finally:
                 # Ensure OTEL span is closed
                 if _otel_cm is not None:
-                    try:
+                    with contextlib.suppress(ImportError, RuntimeError, TypeError, ValueError):
                         _otel_cm.__exit__(None, None, None)
-                    except (ImportError, RuntimeError, TypeError, ValueError):
-                        pass
 
         # ========== MULTI-VECTOR PASSAGES (optional, pre-rerank) ==========
         if enable_multi_vector_passages and result.documents:
@@ -2834,7 +2822,8 @@ async def unified_rag_pipeline(
                         get_backend as _get_vlm_backend,
                     )
                 except ImportError:
-                    _get_vlm_backend = lambda name=None: None
+                    def _get_vlm_backend(name=None):
+                        return None
 
                 # Pick backend
                 backend = _get_vlm_backend(vlm_backend if vlm_backend not in (None, "auto") else None)
@@ -3350,10 +3339,8 @@ async def unified_rag_pipeline(
                         _otel_cm_rk = _tr.start_as_current_span("rag.rerank")
                         _otel_span_rk = _otel_cm_rk.__enter__()
                         for _k, _v in _attrs.items():
-                            try:
+                            with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                                 _otel_span_rk.set_attribute(_k, _v)
-                            except (AttributeError, RuntimeError, TypeError, ValueError):
-                                pass
                     except (AttributeError, RuntimeError, TypeError, ValueError):
                         _otel_cm_rk = None
                         _otel_span_rk = None
@@ -3447,10 +3434,8 @@ async def unified_rag_pipeline(
                         # Also record as a generic phase without difficulty
                         observe_histogram("rag_phase_duration_seconds", result.timings["reranking"], labels={"phase": "reranking", "difficulty": "na"})
                         if _otel_span_rk is not None:
-                            try:
+                            with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                                 _otel_span_rk.set_attribute("rag.doc_count", int(len(result.documents or [])))
-                            except (AttributeError, RuntimeError, TypeError, ValueError):
-                                pass
                     except (ImportError, RuntimeError, TypeError, ValueError):
                         pass
                     if metrics:
@@ -3544,10 +3529,8 @@ async def unified_rag_pipeline(
                     pass
             finally:
                 if _otel_cm_rk is not None:
-                    try:
+                    with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                         _otel_cm_rk.__exit__(None, None, None)
-                    except (AttributeError, RuntimeError, TypeError, ValueError):
-                        pass
 
         # ========== SELF-CORRECTING RAG: WEB SEARCH FALLBACK (Stage 3) ==========
         # When local retrieval has low relevance, fall back to web search
@@ -3939,10 +3922,8 @@ async def unified_rag_pipeline(
             # are wired for observability.
             if isinstance(_cal, dict):
                 if "fused_score" not in _cal and "top_doc_prob" in _cal:
-                    try:
+                    with contextlib.suppress(TypeError, ValueError):
                         _cal["fused_score"] = float(_cal.get("top_doc_prob") or 0.0)
-                    except (TypeError, ValueError):
-                        pass
                 if enable_learned_fusion:
                     _cal["enabled"] = True
                 if calibrator_version:
@@ -3970,10 +3951,8 @@ async def unified_rag_pipeline(
                         _otel_cm_gen = _tr.start_as_current_span("rag.generation")
                         _otel_span_gen = _otel_cm_gen.__enter__()
                         for _k, _v in _attrs.items():
-                            try:
+                            with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                                 _otel_span_gen.set_attribute(_k, _v)
-                            except (AttributeError, RuntimeError, TypeError, ValueError):
-                                pass
                     except (AttributeError, RuntimeError, TypeError, ValueError):
                         _otel_cm_gen = None
                         _otel_span_gen = None
@@ -4155,10 +4134,8 @@ async def unified_rag_pipeline(
                     pass
             finally:
                 if _otel_cm_gen is not None:
-                    try:
+                    with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                         _otel_cm_gen.__exit__(None, None, None)
-                    except (AttributeError, RuntimeError, TypeError, ValueError):
-                        pass
         elif enable_generation and gated_generation:
             # Record a metadata entry and bump a metric for observability
             result.metadata.setdefault("generation_gate", {})
@@ -4482,10 +4459,8 @@ async def unified_rag_pipeline(
                                         (int(mid), int(claims_max)),
                                     ).fetchall()
                                     pre_claims.extend([r[0] for r in rows])
-                            try:
+                            with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError, sqlite3.Error):
                                 db.close_connection()
-                            except (AttributeError, RuntimeError, TypeError, ValueError, sqlite3.Error):
-                                pass
                         if pre_claims:
                             # Verify these claims directly, skipping extraction
                             from tldw_Server_API.app.core.Claims_Extraction.claims_engine import Claim as _Claim
@@ -4632,9 +4607,9 @@ async def unified_rag_pipeline(
                 if nf:
                     result.metadata.setdefault("numeric_fidelity", {})
                     result.metadata["numeric_fidelity"].update({
-                        "present": sorted(list(nf.present)),
-                        "missing": sorted(list(nf.missing)),
-                        "source_numbers": sorted(list(nf.union_source_numbers))[:100],
+                        "present": sorted(nf.present),
+                        "missing": sorted(nf.missing),
+                        "source_numbers": sorted(nf.union_source_numbers)[:100],
                     })
                     if nf.missing:
                         try:
@@ -4801,7 +4776,7 @@ async def unified_rag_pipeline(
                     if low_confidence and adaptive_rerun_on_low_confidence and not _adaptive_rerun:
                         rerun_start = time.time()
                         # Prefer to broaden recall on rerun
-                        rerun_expand = True if not expand_query else expand_query
+                        rerun_expand = expand_query if expand_query else True
                         # Build rerun with post-verification off and a guard to prevent nesting
                         new_result = await unified_rag_pipeline(
                             query=query,
@@ -4985,7 +4960,7 @@ async def unified_rag_pipeline(
                             # Replace documents, citations and answer with rerun outputs
                             result.documents = new_result.documents
                             result.citations = new_result.citations
-                            result.metadata.update({k: v for k, v in (new_result.metadata or {}).items()})
+                            result.metadata.update(dict((new_result.metadata or {}).items()))
                             result.generated_answer = new_result.generated_answer
                 except (
                     AttributeError,
@@ -5105,23 +5080,13 @@ async def unified_rag_pipeline(
                         except (AttributeError, RuntimeError, TypeError, ValueError):
                             pass
                     # Record anonymized search analytics
-                    try:
+                    with contextlib.suppress(AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError, asyncio.TimeoutError):
                         await collector.record_search(
                             query=query,
                             results_count=len(result.documents or []),
                             cache_hit=bool(result.cache_hit),
                             latency_ms=(time.time() - start_time) * 1000.0,
                         )
-                    except (
-                        AttributeError,
-                        ConnectionError,
-                        OSError,
-                        RuntimeError,
-                        TypeError,
-                        ValueError,
-                        asyncio.TimeoutError,
-                    ):
-                        pass
 
                     result.timings["feedback"] = time.time() - feedback_start
 

@@ -15,6 +15,7 @@ except ImportError:  # Fallback to v1 naming
     from pydantic import validator as field_validator  # type: ignore
 
 import asyncio
+import contextlib
 import json as _json
 
 from fastapi.responses import StreamingResponse
@@ -775,10 +776,8 @@ async def list_job_events(
                 continue
         return events
     finally:
-        try:
+        with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
             conn.close()
-        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-            pass
 
 
 @router.get("/jobs/events/stream")
@@ -847,10 +846,8 @@ async def stream_job_events(
     async def _producer() -> None:
         nonlocal nonlocal_after_id
         # Initial small event to prompt client streaming
-        try:
+        with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
             await stream.send_event("ping", {})
-        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-            pass
         while True:
             # Terminate promptly if the stream has been closed (e.g., max_duration or client done)
             try:
@@ -906,14 +903,12 @@ async def stream_job_events(
                             attrs_obj = {}
                         # Preserve SSE id line for clients using Last-Event-ID
                         await stream.send_event("job", {"event": et, "attrs": attrs_obj}, event_id=str(eid))
-                        try:
+                        with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                             _reg.set_gauge(
                                 "jobs_events_last_ts_seconds",
                                 float(_time.time()),
                                 {"component": "jobs", "endpoint": "jobs_events_sse"},
                             )
-                        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-                            pass
                         nonlocal_after_id = eid
                 # If no rows, rely on heartbeat to keep connection alive
                 await asyncio.sleep(poll_interval)
@@ -923,10 +918,8 @@ async def stream_job_events(
                 # Swallow transient errors and continue after a short delay; heartbeat covers liveness
                 await asyncio.sleep(poll_interval)
             finally:
-                try:
+                with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                     conn.close()
-                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-                    pass
 
     async def _gen():
         prod_task = asyncio.create_task(_producer())
@@ -936,29 +929,21 @@ async def stream_job_events(
         except asyncio.CancelledError:
             # Client cancelled: cancel producer promptly and re-raise
             if not prod_task.done():
-                try:
+                with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                     prod_task.cancel()
-                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-                    pass
-                try:
+                with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                     await prod_task
-                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-                    pass
             raise
         else:
             # Normal shutdown: ensure producer completes without forced cancel
             if not prod_task.done():
-                try:
+                with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                     await prod_task
-                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-                    pass
         finally:
             # Ensure producer task never leaks on unexpected exceptions
             if not prod_task.done():
-                try:
+                with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                     prod_task.cancel()
-                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-                    pass
                 try:
                     await prod_task
                 except asyncio.CancelledError:
@@ -1022,7 +1007,7 @@ async def ttl_sweep_endpoint(
         # Correlation IDs and diagnostics
         from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
         rid = ensure_request_id(request)
-        tp = ensure_traceparent(request)
+        ensure_traceparent(request)
         # Pre-parse raw to enforce RBAC and confirm header before validation
         try:
             raw = await request.json()
@@ -1060,13 +1045,11 @@ async def ttl_sweep_endpoint(
         except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             ref_now = None
         # Diagnostics before executing
-        try:
+        with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
             get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="jobs").info(
                 "TTL sweep request: action=%s domain=%s queue=%s job_type=%s age=%s runtime=%s backend=%s ref_now=%s",
                 req.action, req.domain, req.queue, req.job_type, req.age_seconds, req.runtime_seconds, (backend or "sqlite"), str(ref_now) if ref_now else ""
             )
-        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-            pass
         affected = jm.apply_ttl_policies(
             age_seconds=req.age_seconds,
             runtime_seconds=req.runtime_seconds,
@@ -1083,13 +1066,11 @@ async def ttl_sweep_endpoint(
         except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             pass
         # Diagnostics after executing
-        try:
+        with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
             get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="jobs").info(
                 "TTL sweep result: affected=%s action=%s domain=%s queue=%s job_type=%s",
                 int(affected), req.action, req.domain, req.queue, req.job_type
             )
-        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-            pass
         return TTLSweepResponse(affected=int(affected))
     except HTTPException:
         raise
@@ -1282,10 +1263,8 @@ async def get_archive_meta(
             result_compressed_present=bool(result_compressed_present),
         )
     finally:
-        try:
+        with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
             conn.close()
-        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-            pass
 
 
 class JobItem(BaseModel):
@@ -1511,10 +1490,7 @@ async def batch_cancel_endpoint(
                             tuple(params),
                         )
                         c = cur.fetchone()
-                        if isinstance(c, dict):
-                            count = int(c.get("count") or 0)
-                        else:
-                            count = int(c[0] if c else 0)
+                        count = int(c.get("count") or 0) if isinstance(c, dict) else int(c[0] if c else 0)
                         return BatchCancelResponse(affected=count)
                     # Counters pre-measure per group
                     counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
@@ -1587,10 +1563,8 @@ async def batch_cancel_endpoint(
                                 )
                     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
-                    try:
+                    with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                         conn.commit()
-                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-                        pass
                     try:
                         # If fully scoped, refresh gauges
                         if req.domain and req.queue and req.job_type:
@@ -1663,10 +1637,8 @@ async def batch_cancel_endpoint(
                 except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
                 # Ensure changes are persisted for subsequent reads
-                try:
+                with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                     conn.commit()
-                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-                    pass
                 try:
                     if req.domain and req.queue and req.job_type:
                         jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
@@ -1674,10 +1646,8 @@ async def batch_cancel_endpoint(
                     pass
                 return BatchCancelResponse(affected=int(affected))
         finally:
-            try:
+            with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-                pass
     except HTTPException:
         raise
     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
@@ -1761,10 +1731,8 @@ async def batch_reschedule_endpoint(
                                 )
                     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
-                    try:
+                    with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                         conn.commit()
-                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-                        pass
                     try:
                         if req.domain and req.queue and req.job_type:
                             jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
@@ -1808,10 +1776,8 @@ async def batch_reschedule_endpoint(
                             )
                 except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
-                try:
+                with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                     conn.commit()
-                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-                    pass
                 try:
                     if req.domain and req.queue and req.job_type:
                         jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
@@ -1819,10 +1785,8 @@ async def batch_reschedule_endpoint(
                     pass
                 return BatchRescheduleResponse(affected=int(affected))
         finally:
-            try:
+            with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-                pass
     except HTTPException:
         raise
     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
@@ -1936,10 +1900,7 @@ async def batch_requeue_quarantined_endpoint(
                         if req.dry_run:
                             cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where)}", tuple(params))
                             r = cur.fetchone()
-                            if isinstance(r, dict):
-                                count = int(r.get("c") or 0)
-                            else:
-                                count = int(r[0] if r else 0)
+                            count = int(r.get("c") or 0) if isinstance(r, dict) else int(r[0] if r else 0)
                             return BatchRequeueQuarantinedResponse(affected=count)
                         # Compute group counts to adjust counters post-update when enabled
                         counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
@@ -2026,10 +1987,8 @@ async def batch_requeue_quarantined_endpoint(
                         pass
                     return BatchRequeueQuarantinedResponse(affected=affected2)
         finally:
-            try:
+            with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-                pass
     except HTTPException:
         raise
     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:

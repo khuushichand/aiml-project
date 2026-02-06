@@ -22,6 +22,7 @@ except ImportError:  # Fallback for v1
         from pydantic import root_validator as model_validator  # type: ignore
     except ImportError:
         model_validator = None  # type: ignore
+import contextlib
 import inspect
 import re
 import time
@@ -234,31 +235,23 @@ class IdempotencyManager:
             return None
         ts, payload = item
         if time.time() - ts > ttl:
-            try:
+            with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
                 del self._local_cache[cache_key]
-            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
-                pass
             return None
-        try:
+        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
             self._local_cache.move_to_end(cache_key)
-        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
-            pass
         return payload
 
     def _local_put(self, cache_key: str, payload: dict[str, Any], ttl: int, max_size: int) -> None:
         now = time.time()
         self._local_cache[cache_key] = (now, payload)
-        try:
+        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
             self._local_cache.move_to_end(cache_key)
-        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
-            pass
         # Evict expired entries opportunistically
         expired = [k for k, (ts, _) in self._local_cache.items() if now - ts > ttl]
         for k in expired:
-            try:
+            with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
                 del self._local_cache[k]
-            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
-                pass
         # Enforce max size (LRU)
         while len(self._local_cache) > max_size:
             try:
@@ -296,10 +289,8 @@ class IdempotencyManager:
             "if redis.call('get', KEYS[1]) == ARGV[1] "
             "then return redis.call('del', KEYS[1]) end"
         )
-        try:
+        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
             await client.eval(lua_script, 1, key, token)
-        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
-            pass
 
     async def _run_local(
         self,
@@ -547,10 +538,7 @@ class MCPProtocol:
                 if len(parts) >= 2 and parts[0] == "mcp":
                     if parts[1] == "*" or parts[1] == resource_kind:
                         return True
-        for scope in scopes:
-            if self._scope_matches(scope, resource_kind, identifier_norm):
-                return True
-        return False
+        return any(self._scope_matches(scope, resource_kind, identifier_norm) for scope in scopes)
 
     async def _has_module_permission(self, context: RequestContext, module_id: Optional[str]) -> bool:
         module_id_norm = module_id or ""
@@ -804,10 +792,8 @@ class MCPProtocol:
                 f"elapsed={elapsed:.3f}s",
                 extra={"audit": True}
             )
-            try:
+            with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
                 self.metrics.record_request(method=request.method, duration=elapsed, status="success")
-            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
-                pass
 
             # Notification: do not return a response
             if request.id is None:
@@ -837,7 +823,7 @@ class MCPProtocol:
             return self._error_response(ErrorCode.AUTHORIZATION_ERROR, msg, request.id if isinstance(request, MCPRequest) else None)
         except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as e:
             # Log error
-            log.error(
+            log.exception(
                 f"MCP request failed: method={request.method}, error={self._mask_secrets(str(e))}",
                 extra={"audit": True}
             )
@@ -1215,7 +1201,7 @@ class MCPProtocol:
                     tool_copy["canExecute"] = can_execute
                     tools.append(tool_copy)
             except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as e:
-                context.logger.error(f"Error getting tools from module {module_id}: {e}")
+                context.logger.exception(f"Error getting tools from module {module_id}: {e}")
 
         return {"tools": tools}
 
@@ -1290,10 +1276,7 @@ class MCPProtocol:
         allowed_tools = self._extract_allowed_tools(context)
         if not allowed_tools:
             return True
-        for pattern in allowed_tools:
-            if self._matches_allowed_tool_pattern(tool_name, tool_args, pattern):
-                return True
-        return False
+        return any(self._matches_allowed_tool_pattern(tool_name, tool_args, pattern) for pattern in allowed_tools)
 
     async def _handle_tools_call(
         self,
@@ -1402,10 +1385,8 @@ class MCPProtocol:
                 try:
                     self._validate_input_schema(schema, tool_args)
                 except InvalidParamsException:
-                    try:
+                    with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
                         self.metrics.record_tool_invalid_params(getattr(module, "name", "unknown"), str(tool_name))
-                    except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
-                        pass
                     raise
 
             # Determine write-capable status
@@ -1426,10 +1407,8 @@ class MCPProtocol:
                     raise PermissionError("Write tools are disabled by server policy")
                 # Check module overrides validator
                 if module.__class__.validate_tool_arguments is BaseModule.validate_tool_arguments:
-                    try:
+                    with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
                         self.metrics.record_tool_validator_missing(getattr(module, "name", "unknown"), str(tool_name))
-                    except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
-                        pass
                     raise ValueError(
                         "Write-capable tool requires module.validate_tool_arguments override"
                     )
@@ -1437,10 +1416,8 @@ class MCPProtocol:
                 try:
                     module.validate_tool_arguments(tool_name, tool_args)
                 except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as ve:
-                    try:
+                    with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
                         self.metrics.record_tool_invalid_params(getattr(module, "name", "unknown"), str(tool_name))
-                    except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
-                        pass
                     raise ValueError(f"Invalid parameters for tool {tool_name}: {ve}")
 
                 idempotency_cache_key = None
@@ -1549,7 +1526,7 @@ class MCPProtocol:
 
             except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as e:
                 sanitized_error = self._mask_secrets(str(e))
-                context.logger.error(f"Tool execution failed: {tool_name} - {sanitized_error}")
+                context.logger.exception(f"Tool execution failed: {tool_name} - {sanitized_error}")
                 try:
                     duration = max(0.0, time.time() - t0)
                     self.metrics.record_module_operation(module=getattr(module, "name", "unknown"), operation="tools_call", duration=duration, success=False)
@@ -1697,7 +1674,7 @@ class MCPProtocol:
                     resources.append(resource_copy)
 
             except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as e:
-                context.logger.error(f"Error getting resources from module {module_id}: {e}")
+                context.logger.exception(f"Error getting resources from module {module_id}: {e}")
 
         return {"resources": resources}
 
@@ -1758,7 +1735,7 @@ class MCPProtocol:
                     prompts.append(prompt_copy)
 
             except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as e:
-                context.logger.error(f"Error getting prompts from module {module_id}: {e}")
+                context.logger.exception(f"Error getting prompts from module {module_id}: {e}")
 
         return {"prompts": prompts}
 

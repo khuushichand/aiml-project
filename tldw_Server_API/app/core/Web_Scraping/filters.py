@@ -50,10 +50,7 @@ class FilterChain:
         return self
 
     def apply(self, url: str) -> bool:
-        for f in self.filters:
-            if not f.apply(url):
-                return False
-        return True
+        return all(f.apply(url) for f in self.filters)
 
 
 @dataclass
@@ -87,10 +84,7 @@ class DomainFilter(URLFilter):
         # If no allowed set, pass
         if not self.allowed:
             return True
-        for d in self.allowed:
-            if (self._is_sub(host, d) if self.include_subdomains else host == d):
-                return True
-        return False
+        return any(self._is_sub(host, d) if self.include_subdomains else host == d for d in self.allowed)
 
 
 class ContentTypeFilter(URLFilter):
@@ -165,10 +159,7 @@ class URLPatternFilter(URLFilter):
                     return False
         # Include gating (optional)
         if self.include_patterns:
-            for p in self.include_patterns:
-                if p and p.lower() in s:
-                    return True
-            return False
+            return any(p and p.lower() in s for p in self.include_patterns)
         return True
 
 

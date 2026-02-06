@@ -7,6 +7,7 @@ and enumerates profile/config keys, editability, and UI metadata.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from collections.abc import Iterable
 from datetime import datetime
@@ -66,13 +67,13 @@ class UserProfileCatalogEntry(BaseModel):
     deprecated: bool = False
 
     @validator("key", "label", "type", "sensitivity")
-    def _not_empty(cls, value: str) -> str:
+    def _not_empty(self, value: str) -> str:
         if not str(value).strip():
             raise ValueError("Field cannot be empty.")
         return value
 
     @validator("editable_by", each_item=True)
-    def _validate_editable_by(cls, value: str) -> str:
+    def _validate_editable_by(self, value: str) -> str:
         if value not in _ALLOWED_EDITORS:
             raise ValueError(f"Invalid editable_by role: {value}")
         return value
@@ -86,7 +87,7 @@ class UserProfileCatalog(BaseModel):
     entries: list[UserProfileCatalogEntry]
 
     @validator("version")
-    def _validate_version(cls, value: str) -> str:
+    def _validate_version(self, value: str) -> str:
         if not value.strip():
             raise ValueError("Catalog version cannot be empty.")
         return value
@@ -146,7 +147,5 @@ def load_user_profile_catalog(path: Path | None = None) -> UserProfileCatalog:
 
 def clear_user_profile_catalog_cache() -> None:
     """Clear the load_user_profile_catalog() LRU cache (used in tests or hot-reload scenarios)."""
-    try:
+    with contextlib.suppress(Exception):
         _load_user_profile_catalog.cache_clear()
-    except Exception:
-        pass

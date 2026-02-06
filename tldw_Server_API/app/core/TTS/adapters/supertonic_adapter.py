@@ -373,10 +373,7 @@ class SupertonicOnnxAdapter(TTSAdapter):
             )
 
         try:
-            if isinstance(duration, (list, tuple, np.ndarray)):
-                dur_val = float(duration[0])
-            else:
-                dur_val = float(duration)
+            dur_val = float(duration[0]) if isinstance(duration, (list, tuple, np.ndarray)) else float(duration)
             end_idx = int(self.sample_rate * dur_val)
             if end_idx > 0:
                 arr = arr[:end_idx]

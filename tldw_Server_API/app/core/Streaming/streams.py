@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import os
 import time
 from collections.abc import AsyncIterator
@@ -236,14 +237,13 @@ class SSEStream:
         while not self._closed:
             now = time.monotonic()
             # Enforce max duration proactively even when data continues flowing
-            if self.max_duration_s and self.max_duration_s > 0:
-                if now >= start_ts + self.max_duration_s:
-                    await self.error(
-                        "max_duration_exceeded",
-                        "stream exceeded maximum duration",
-                        force=True,
-                    )
-                    break
+            if self.max_duration_s and self.max_duration_s > 0 and now >= start_ts + self.max_duration_s:
+                await self.error(
+                    "max_duration_exceeded",
+                    "stream exceeded maximum duration",
+                    force=True,
+                )
+                break
             # Compute deadlines
             next_heartbeat_delta = None
             if self.heartbeat_interval_s and self.heartbeat_interval_s > 0:
@@ -281,10 +281,8 @@ class SSEStream:
                     get_metrics_registry().observe("sse_enqueue_to_yield_ms", dt_ms, self._labels)
                 except _STREAMING_NONCRITICAL_EXCEPTIONS:
                     pass
-                try:
+                with contextlib.suppress(_STREAMING_NONCRITICAL_EXCEPTIONS):
                     logger.debug(f"SSEStream yielding line: {line.strip()[:120]}")
-                except _STREAMING_NONCRITICAL_EXCEPTIONS:
-                    pass
                 yield line
                 continue
             except asyncio.TimeoutError:
@@ -301,12 +299,10 @@ class SSEStream:
                 # Heartbeat (suppressed once DONE is enqueued)
                 if self.heartbeat_interval_s and self.heartbeat_interval_s > 0 and not self._done_enqueued:
                     if now >= last_hb_ts + self.heartbeat_interval_s:
-                        try:
+                        with contextlib.suppress(_STREAMING_NONCRITICAL_EXCEPTIONS):
                             logger.debug(
                                 f"SSEStream heartbeat emit mode={self.heartbeat_mode} interval_s={self.heartbeat_interval_s}"
                             )
-                        except _STREAMING_NONCRITICAL_EXCEPTIONS:
-                            pass
                         if self.heartbeat_mode == "data":
                             await self._enqueue(sse_data({"heartbeat": True}))
                         else:
@@ -338,10 +334,8 @@ class SSEStream:
             try:
                 self._queue.put_nowait((line, enq_ts))
             except asyncio.QueueFull:
-                try:
+                with contextlib.suppress(_STREAMING_NONCRITICAL_EXCEPTIONS):
                     _ = self._queue.get_nowait()
-                except _STREAMING_NONCRITICAL_EXCEPTIONS:
-                    pass
                 try:
                     self._queue.put_nowait((line, enq_ts))
                 except _STREAMING_NONCRITICAL_EXCEPTIONS:
@@ -431,19 +425,15 @@ class WebSocketStream:
     async def receive_text(self) -> str:
         """Receive a text frame and mark activity for idle tracking."""
         text = await maybe_await(self.ws.receive_text())
-        try:
+        with contextlib.suppress(_STREAMING_NONCRITICAL_EXCEPTIONS):
             self.mark_activity()
-        except _STREAMING_NONCRITICAL_EXCEPTIONS:
-            pass
         return text
 
     async def receive_json(self) -> Any:
         """Receive a JSON frame and mark activity for idle tracking."""
         data = await maybe_await(self.ws.receive_json())
-        try:
+        with contextlib.suppress(_STREAMING_NONCRITICAL_EXCEPTIONS):
             self.mark_activity()
-        except _STREAMING_NONCRITICAL_EXCEPTIONS:
-            pass
         return data
 
     async def send_event(self, event: str, data: Any | None = None) -> None:
@@ -459,10 +449,8 @@ class WebSocketStream:
     async def done(self, *, close_code: int = 1000) -> None:
         await self._send_json_with_metrics({"type": "done"}, kind="done")
         if self.close_on_done:
-            try:
+            with contextlib.suppress(_STREAMING_NONCRITICAL_EXCEPTIONS):
                 await maybe_await(self.ws.close(code=close_code))
-            except _STREAMING_NONCRITICAL_EXCEPTIONS:
-                pass
 
     async def error(self, code: str, message: str, *, data: Optional[dict[str, Any]] = None) -> None:
         payload: dict[str, Any] = {"type": "error", "code": code, "message": message}
@@ -478,10 +466,8 @@ class WebSocketStream:
                 pass
         await self._send_json_with_metrics(payload, kind="error")
         close_code = self._map_close_code(code)
-        try:
+        with contextlib.suppress(_STREAMING_NONCRITICAL_EXCEPTIONS):
             await maybe_await(self.ws.close(code=close_code))
-        except _STREAMING_NONCRITICAL_EXCEPTIONS:
-            pass
 
     async def _send_json_with_metrics(self, payload: dict[str, Any], *, kind: str) -> None:
         t0 = time.monotonic()
@@ -494,10 +480,8 @@ class WebSocketStream:
             raise
         finally:
             dt_ms = max(0.0, (time.monotonic() - t0) * 1000.0)
-            try:
+            with contextlib.suppress(_STREAMING_NONCRITICAL_EXCEPTIONS):
                 get_metrics_registry().observe("ws_send_latency_ms", dt_ms, {**self._labels, "kind": kind})
-            except _STREAMING_NONCRITICAL_EXCEPTIONS:
-                pass
             if sent:
                 self.mark_activity()
 
@@ -525,10 +509,8 @@ class WebSocketStream:
                 if self.idle_timeout_s and now - self._last_activity >= self.idle_timeout_s:
                     # Close with 1001 and increment counter
                     reg.increment("ws_idle_timeouts_total", 1, self._labels)
-                    try:
+                    with contextlib.suppress(_STREAMING_NONCRITICAL_EXCEPTIONS):
                         await maybe_await(self.ws.close(code=1001))
-                    except _STREAMING_NONCRITICAL_EXCEPTIONS:
-                        pass
                     self._running = False
                     break
         except asyncio.CancelledError:

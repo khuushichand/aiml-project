@@ -461,10 +461,7 @@ def generate_chat_history_content(
 
     if not conversation_name:
         media_name_extracted = extract_media_name(media_content)
-        if media_name_extracted:
-            conversation_name = f"{media_name_extracted}-chat-{timestamp}"
-        else:
-            conversation_name = f"chat-{timestamp}"
+        conversation_name = f"{media_name_extracted}-chat-{timestamp}" if media_name_extracted else f"chat-{timestamp}"
 
     chat_data: dict[str, Any] = {
         "conversation_id": conversation_id,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shlex
@@ -89,10 +90,8 @@ def load_acp_runner_config() -> ACPRunnerConfig:
     )
     timeout_sec = 10.0
     if timeout_raw:
-        try:
+        with contextlib.suppress(TypeError, ValueError):
             timeout_sec = float(timeout_raw) / 1000.0
-        except (TypeError, ValueError):
-            pass
 
     return ACPRunnerConfig(
         command=str(command or ""),

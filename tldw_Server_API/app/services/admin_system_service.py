@@ -107,7 +107,7 @@ async def get_system_stats(db) -> SystemStatsResponse:
             if isinstance(row, dict):
                 return row
             if hasattr(row, "keys"):
-                return {key: row[key] for key in row.keys()}
+                return {key: row[key] for key in row}
             return {key: row[idx] if idx < len(row) else None for idx, key in enumerate(keys)}
 
         is_pg = await is_postgres_backend()
@@ -344,10 +344,7 @@ async def get_audit_log(
 
         org_ids = await admin_scope_service.get_admin_org_ids(principal)
         if org_id is not None:
-            if org_ids is None:
-                org_ids = [org_id]
-            else:
-                org_ids = [org_id] if org_id in org_ids else []
+            org_ids = [org_id] if org_ids is None else [org_id] if org_id in org_ids else []
         if org_ids is not None and len(org_ids) == 0:
             return AuditLogResponse(entries=[], total=0, limit=limit, offset=offset)
 
@@ -562,10 +559,7 @@ async def list_system_logs(
 
     org_ids = await admin_scope_service.get_admin_org_ids(principal)
     if org_id is not None:
-        if org_ids is None:
-            org_ids = [org_id]
-        else:
-            org_ids = [org_id] if org_id in org_ids else []
+        org_ids = [org_id] if org_ids is None else [org_id] if org_id in org_ids else []
     if org_ids is not None and len(org_ids) == 0:
         return SystemLogsResponse(items=[], total=0, limit=limit, offset=offset)
 

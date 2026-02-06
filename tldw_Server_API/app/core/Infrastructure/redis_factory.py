@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import fnmatch
 import hashlib
 import inspect
@@ -180,10 +181,8 @@ async def create_async_redis_client(
             await result
     except _REDIS_NONCRITICAL_EXCEPTIONS as exc:
         if client is not None:
-            try:
+            with contextlib.suppress(_REDIS_NONCRITICAL_EXCEPTIONS):
                 await client.close()
-            except _REDIS_NONCRITICAL_EXCEPTIONS:
-                pass
         if not fallback_to_fake:
             _record_connection_metrics(
                 mode="async",
@@ -254,10 +253,8 @@ def create_sync_redis_client(
         client.ping()
     except _REDIS_NONCRITICAL_EXCEPTIONS as exc:
         if client is not None:
-            try:
+            with contextlib.suppress(_REDIS_NONCRITICAL_EXCEPTIONS):
                 client.close()
-            except _REDIS_NONCRITICAL_EXCEPTIONS:
-                pass
         if not fallback_to_fake:
             _record_connection_metrics(
                 mode="sync",
@@ -393,9 +390,7 @@ class _InMemoryRedisCore:
                 ts = entry_id.split("-", 1)[0]
                 if minimum not in ("-", None) and ts < str(minimum):
                     return False
-                if maximum not in ("+", None) and ts > str(maximum):
-                    return False
-                return True
+                return not (maximum not in ("+", None) and ts > str(maximum))
             stream = [item for item in stream if _within(item[0])]
         if count is not None and count >= 0:
             stream = stream[:count]
@@ -418,9 +413,7 @@ class _InMemoryRedisCore:
                 ts = entry_id.split("-", 1)[0]
                 if maximum not in ("+", None) and ts > str(maximum):
                     return False
-                if minimum not in ("-", None) and ts < str(minimum):
-                    return False
-                return True
+                return not (minimum not in ("-", None) and ts < str(minimum))
             stream = [item for item in stream if _within(item[0])]
         if count is not None and count >= 0:
             stream = stream[:count]

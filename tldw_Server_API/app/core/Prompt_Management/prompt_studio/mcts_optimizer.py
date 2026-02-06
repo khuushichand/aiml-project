@@ -45,6 +45,8 @@ try:
     )
 except _MCTS_IMPORT_EXCEPTIONS:  # pragma: no cover - optional in minimal builds
     ws_connection_manager = None
+import contextlib
+
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 
 
@@ -126,18 +128,14 @@ class MCTSOptimizer:
 
         # Configure scorer
         if scorer_model:
-            try:
+            with contextlib.suppress(_MCTS_NONCRITICAL_EXCEPTIONS):
                 self.scorer.set_model(str(scorer_model))
-            except _MCTS_NONCRITICAL_EXCEPTIONS:
-                pass
 
         # Token accounting
         self._tokens_spent = 0
         def _add_tokens(n: int):
-            try:
+            with contextlib.suppress(_MCTS_NONCRITICAL_EXCEPTIONS):
                 self._tokens_spent += int(n or 0)
-            except _MCTS_NONCRITICAL_EXCEPTIONS:
-                pass
         self.scorer.set_token_callback(_add_tokens)
 
         logger.info(
@@ -180,7 +178,7 @@ class MCTSOptimizer:
         broadcaster = None
         if ws_connection_manager is not None and optimization_id is not None:
             broadcaster = EventBroadcaster(ws_connection_manager, self.db)
-            try:
+            with contextlib.suppress(_MCTS_NONCRITICAL_EXCEPTIONS):
                 await broadcaster.broadcast_event(
                     event_type=EventType.OPTIMIZATION_STARTED,
                     data={
@@ -190,10 +188,7 @@ class MCTSOptimizer:
                     },
                     project_id=base_prompt.get("project_id"),
                 )
-            except _MCTS_NONCRITICAL_EXCEPTIONS:
-                pass
 
-        best_eval_system: Optional[str] = None
         for sim in range(1, n_sims + 1):
             if token_budget and self._tokens_spent >= token_budget:
                 logger.info("MCTS token budget exhausted: %s >= %s", self._tokens_spent, token_budget)
@@ -219,10 +214,8 @@ class MCTSOptimizer:
                         path.append(node)
                         nodes_created += 1
                         edges_created += 1
-                        try:
+                        with contextlib.suppress(_MCTS_NONCRITICAL_EXCEPTIONS):
                             parent_ids.add(id(node.parent))
-                        except _MCTS_NONCRITICAL_EXCEPTIONS:
-                            pass
                         continue
                 if node.children:
                     # Log selection decision (UCT) for observability
@@ -286,7 +279,6 @@ class MCTSOptimizer:
                 best_score = score
                 best_prompt_id = prompt_id
                 no_improve_streak = 0
-                best_eval_system = eval_system
             else:
                 no_improve_streak += 1
                 if no_improve_streak >= early_no_improve:
@@ -301,7 +293,7 @@ class MCTSOptimizer:
                 or (sim % ws_throttle_every == 0)
             )
             if broadcaster and do_broadcast:
-                try:
+                with contextlib.suppress(_MCTS_NONCRITICAL_EXCEPTIONS):
                     await broadcaster.broadcast_optimization_iteration(
                         optimization_id=optimization_id,
                         iteration=sim,
@@ -309,12 +301,10 @@ class MCTSOptimizer:
                         current_metric=float(score),
                         best_metric=float(best_score),
                     )
-                except _MCTS_NONCRITICAL_EXCEPTIONS:
-                    pass
 
             # Persist iteration record (throttled similarly to WS)
             if optimization_id is not None and do_broadcast:
-                try:
+                with contextlib.suppress(_MCTS_NONCRITICAL_EXCEPTIONS):
                     self.db.record_optimization_iteration(
                         optimization_id,
                         iteration_number=sim,
@@ -330,8 +320,6 @@ class MCTSOptimizer:
                         tokens_used=int(self._tokens_spent),
                         note="mcts-iteration",
                     )
-                except _MCTS_NONCRITICAL_EXCEPTIONS:
-                    pass
 
             # Cancellation check (if status changed to cancelled)
             if optimization_id is not None:
@@ -348,7 +336,7 @@ class MCTSOptimizer:
         avg_branching = float(edges_created) / float(parents_used)
 
         # Record metrics and error counters
-        try:
+        with contextlib.suppress(_MCTS_NONCRITICAL_EXCEPTIONS):
             prompt_studio_metrics.record_mcts_summary(
                 sims_total=len(iteration_history),
                 tree_nodes=nodes_created,
@@ -357,8 +345,6 @@ class MCTSOptimizer:
                 tokens_spent=self._tokens_spent,
                 duration_ms=duration_ms,
             )
-        except _MCTS_NONCRITICAL_EXCEPTIONS:
-            pass
         # Emit error counters
         try:
             for key, val in (self._counters or {}).items():
@@ -376,7 +362,7 @@ class MCTSOptimizer:
             pass
 
         if broadcaster:
-            try:
+            with contextlib.suppress(_MCTS_NONCRITICAL_EXCEPTIONS):
                 await broadcaster.broadcast_event(
                     event_type=EventType.OPTIMIZATION_COMPLETED,
                     data={
@@ -388,8 +374,6 @@ class MCTSOptimizer:
                     },
                     project_id=base_prompt.get("project_id"),
                 )
-            except _MCTS_NONCRITICAL_EXCEPTIONS:
-                pass
 
         # Build compact final trace: best path + top-K candidates
         top_candidates = sorted(iteration_history, key=lambda e: e.get("score", 0.0), reverse=True)[: max(1, trace_top_k)]
@@ -493,10 +477,8 @@ class MCTSOptimizer:
                             self._counters["scorer_failures"] = self._counters.get("scorer_failures", 0) + 1
                     except _MCTS_NONCRITICAL_EXCEPTIONS:
                         pass
-                try:
+                with contextlib.suppress(_MCTS_NONCRITICAL_EXCEPTIONS):
                     self._db_cache_set(key, q, ttl_sec=1800)
-                except _MCTS_NONCRITICAL_EXCEPTIONS:
-                    pass
             try:
                 bin_idx = PromptQualityScorer.score_to_bin(q, score_bin_size)
                 scored.append((cand_system, q, bin_idx))
@@ -599,16 +581,12 @@ class MCTSOptimizer:
                 parameters={"temperature": 0.5, "max_tokens": 600},
             )
             content = (result or {}).get("content", "").strip()
-            try:
+            with contextlib.suppress(_MCTS_NONCRITICAL_EXCEPTIONS):
                 self._tokens_spent += int((result or {}).get("tokens", 0) or 0)
-            except _MCTS_NONCRITICAL_EXCEPTIONS:
-                pass
             if content:
                 self._rephrase_cache[cache_key] = content
-                try:
+                with contextlib.suppress(_MCTS_NONCRITICAL_EXCEPTIONS):
                     self._db_cache_set(db_key, content, ttl_sec=3600)
-                except _MCTS_NONCRITICAL_EXCEPTIONS:
-                    pass
             return content or None
         except _MCTS_NONCRITICAL_EXCEPTIONS:
             return None
@@ -649,10 +627,8 @@ class MCTSOptimizer:
             else:
                 score = await self._evaluate_prompt(prompt_id, test_case_ids, model_config, target_metric)
                 self._eval_cache[eval_cache_key] = score
-                try:
+                with contextlib.suppress(_MCTS_NONCRITICAL_EXCEPTIONS):
                     self._db_cache_set(db_key, score, ttl_sec=3600)
-                except _MCTS_NONCRITICAL_EXCEPTIONS:
-                    pass
         scaled = score * 10.0
         if not feedback_enabled or scaled >= feedback_threshold or not self._refiner_cls:
             return score, prompt_id

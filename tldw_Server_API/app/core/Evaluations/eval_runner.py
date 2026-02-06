@@ -460,7 +460,7 @@ class EvaluationRunner:
         values_lists = [merged[k] for k in keys]
         combos = []
         for combo in product(*values_lists):
-            combos.append({k: v for k, v in zip(keys, combo)})
+            combos.append(dict(zip(keys, combo)))
         return combos
 
     def _build_config_grid(self, eval_spec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -523,7 +523,7 @@ class EvaluationRunner:
         Returns (results_dict, usage_dict)
         """
         rp = (eval_spec or {}).get("rag_pipeline", {}) or {}
-        metrics_sel = rp.get("metrics") or {}
+        rp.get("metrics") or {}
         config_grid = self._build_config_grid(eval_spec)
         eval_provider, eval_model, _ = self._resolve_eval_provider_model_api_key(eval_spec, eval_config)
 
@@ -568,7 +568,7 @@ class EvaluationRunner:
         base_namespace = rp.get("index_namespace")
 
         # Initialize progress for total work units
-        try:
+        with suppress(_EVAL_RUNNER_NONCRITICAL_EXCEPTIONS):
             self.db.update_run_progress(
                 run_id,
                 {
@@ -577,8 +577,6 @@ class EvaluationRunner:
                     "failed_samples": 0,
                 },
             )
-        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
-            pass
 
         # Iterate configs
         for idx, cfg in enumerate(config_grid):
@@ -587,7 +585,6 @@ class EvaluationRunner:
             # Aggregate accumulators
             agg_scores = []
             agg_latency = []
-            agg_cost = []
 
             # Unpack blocks
             ck = cfg.get("chunking", {}) or {}
@@ -830,10 +827,8 @@ class EvaluationRunner:
 
                 # Aggregate per-sample record
                 latency = 0.0
-                try:
+                with suppress(_EVAL_RUNNER_NONCRITICAL_EXCEPTIONS):
                     latency = float(timings.get("total", 0.0)) * 1000.0
-                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
-                    pass
                 rec = {
                     "sample_index": s_idx,
                     "scores": scores,
@@ -860,10 +855,7 @@ class EvaluationRunner:
                 )
 
             # Aggregate per-config
-            if agg_scores:
-                mean_overall = statistics.mean(agg_scores)
-            else:
-                mean_overall = 0.0
+            mean_overall = statistics.mean(agg_scores) if agg_scores else 0.0
             mean_latency = statistics.mean(agg_latency) if agg_latency else 0.0
             # Compute aggregated retrieval stats across samples if present
             def _mean_score(key: str, _per_sample=per_sample) -> float:
@@ -1902,10 +1894,7 @@ class EvaluationRunner:
 
             claim = inp.get("claim") or inp.get("hypothesis") or ""
             ev = inp.get("evidence") or inp.get("premise") or inp.get("context") or ""
-            if isinstance(ev, list):
-                evidence = "\n".join([str(x) for x in ev])
-            else:
-                evidence = str(ev)
+            evidence = "\n".join([str(x) for x in ev]) if isinstance(ev, list) else str(ev)
 
             # Default allowed labels if not provided
             default_allowed = ["SUPPORTED", "REFUTED", "NEI"]
@@ -2278,8 +2267,8 @@ class EvaluationRunner:
             if resp.status_code >= 400:
                 try:
                     resp.raise_for_status()
-                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
-                    raise e
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
+                    raise
             logger.info(f"Webhook sent to {webhook_url} for run {run_id}")
 
         except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:

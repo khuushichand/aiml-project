@@ -177,8 +177,8 @@ async def readiness_check() -> dict[str, Any]:
     """
     try:
         # Quick checks for critical components
-        cache = get_rag_cache()
-        metrics = get_metrics_collector()
+        get_rag_cache()
+        get_metrics_collector()
 
         return {
             "status": "ready",

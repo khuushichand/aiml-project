@@ -157,7 +157,7 @@ def _normalize_tags(value: Any) -> list[str]:
                 tags.append(str(entry))
         return sorted({t.strip().lower() for t in tags if t})
     if isinstance(value, dict):
-        return sorted({str(k).strip().lower() for k in value.keys() if k})
+        return sorted({str(k).strip().lower() for k in value if k})
     if isinstance(value, str):
         return _split_tags(value)
     return []

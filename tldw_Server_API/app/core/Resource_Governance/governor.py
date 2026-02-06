@@ -17,6 +17,7 @@ API layer. Minutes/day ledger durability is left to a separate DAL; this
 memory governor implements only in-memory counting for the 'minutes' category.
 """
 
+import contextlib
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -243,10 +244,8 @@ class MemoryResourceGovernor(ResourceGovernor):
     def _purge_expired_handles(self, now: float) -> None:
         expired = [hid for hid, h in self._handles.items() if h.expires_at <= now]
         for hid in expired:
-            try:
+            with contextlib.suppress(KeyError):
                 del self._handles[hid]
-            except KeyError:
-                pass
 
     def _purge_expired_ops(self, now: float) -> None:
         ttl = self._op_ttl
@@ -261,10 +260,8 @@ class MemoryResourceGovernor(ResourceGovernor):
             except (OverflowError, TypeError, ValueError):
                 continue
         for op_id in expired:
-            try:
+            with contextlib.suppress(KeyError):
                 del self._ops[op_id]
-            except KeyError:
-                pass
 
     # --- Core evaluation ---
     def _category_limits(self, policy: dict[str, Any], category: str) -> dict[str, Any]:
@@ -442,10 +439,8 @@ class MemoryResourceGovernor(ResourceGovernor):
                 if not daily_allowed:
                     allowed = False
                 retry_after = max(int(retry_after or 0), int(daily_ra or 0))
-                try:
+                with contextlib.suppress(AttributeError, TypeError, ValueError):
                     details.update(daily_details or {})
-                except (AttributeError, TypeError, ValueError):
-                    pass
                 # Provide limit/remaining for daily-only categories
                 try:
                     if not int(details.get("limit") or 0):
@@ -457,10 +452,8 @@ class MemoryResourceGovernor(ResourceGovernor):
                         details["remaining"] = int((daily_details or {}).get("daily_remaining") or 0)
                 except (AttributeError, TypeError, ValueError):
                     pass
-                try:
+                with contextlib.suppress(TypeError, ValueError):
                     details["retry_after"] = int(retry_after or 0)
-                except (TypeError, ValueError):
-                    pass
 
             per_category[category] = {"allowed": bool(allowed), **details}
             overall_allowed = overall_allowed and allowed
@@ -832,10 +825,8 @@ class MemoryResourceGovernor(ResourceGovernor):
             if category and cat != category:
                 continue
             if sc == entity_scope and ev == entity_value:
-                try:
+                with contextlib.suppress(KeyError):
                     del self._buckets[(pol, cat, sc, ev)]
-                except KeyError:
-                    pass
 
     async def capabilities(self) -> dict[str, Any]:
         return {

@@ -7,6 +7,8 @@ Importing this module ensures the A/B metrics exist so callers can record
 without "not registered" warnings.
 """
 
+import contextlib
+
 from tldw_Server_API.app.core.Metrics import (
     MetricDefinition,
     MetricType,
@@ -76,7 +78,5 @@ def record_abtest_run(*, duration_seconds: float, status: str) -> None:
     reg.observe("embeddings_abtest_run_duration_seconds", duration_seconds, labels=labels)
 
 
-try:
+with contextlib.suppress(Exception):
     register_embeddings_abtest_metrics()
-except Exception:
-    pass

@@ -3,6 +3,7 @@
 #
 #######################################################################################################################
 import asyncio
+import contextlib
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Optional
@@ -45,10 +46,8 @@ class VoiceSessionManager:
         """Stop the session manager."""
         if self._cleanup_task:
             self._cleanup_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
             self._cleanup_task = None
             logger.info("Voice session manager stopped")
 
@@ -96,12 +95,11 @@ class VoiceSessionManager:
             The new session context
         """
         # Check session limit per user
-        if user_id in self._user_sessions:
-            if len(self._user_sessions[user_id]) >= self.MAX_SESSIONS_PER_USER:
-                # Remove oldest session
-                oldest = await self._get_oldest_session(user_id)
-                if oldest:
-                    await self.end_session(oldest)
+        if user_id in self._user_sessions and len(self._user_sessions[user_id]) >= self.MAX_SESSIONS_PER_USER:
+            # Remove oldest session
+            oldest = await self._get_oldest_session(user_id)
+            if oldest:
+                await self.end_session(oldest)
 
         session_id = str(uuid.uuid4())
         session = VoiceSessionContext(

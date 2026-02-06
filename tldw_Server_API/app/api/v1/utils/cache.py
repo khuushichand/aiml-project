@@ -12,6 +12,7 @@ Design goals:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 from collections.abc import Iterable, Mapping, MutableMapping, Sequence
@@ -251,10 +252,7 @@ def get_cached_response(
         cached_value = cache.get(key)
         if not cached_value:
             return None
-        if isinstance(cached_value, bytes):
-            decoded = cached_value.decode("utf-8")
-        else:
-            decoded = str(cached_value)
+        decoded = cached_value.decode("utf-8") if isinstance(cached_value, bytes) else str(cached_value)
         parts = decoded.split("|", 1)
         if len(parts) != 2:
             logger.warning(f"Cached value for key '{key}' has unexpected format")
@@ -307,10 +305,8 @@ def invalidate_media_cache(
                         total_deleted += 1
                     except _CACHE_RUNTIME_EXCEPTIONS:
                         pass
-            try:
+            with contextlib.suppress(_CACHE_RUNTIME_EXCEPTIONS):
                 cache.delete(idx_key)
-            except _CACHE_RUNTIME_EXCEPTIONS:
-                pass
 
         # Fallback: scan for keys matching the media path.
         pattern = f"cache:/api/v1/media/{int(media_id)}:*"

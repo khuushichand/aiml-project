@@ -3,11 +3,12 @@
 import asyncio
 import base64
 import configparser
+import contextlib
 import json
 import os
 import time
 from types import SimpleNamespace
-from typing import Any, Optional, Set
+from typing import Any, Optional
 from uuid import uuid4
 
 import numpy as np
@@ -1219,10 +1220,7 @@ async def websocket_audio_chat_stream(
                 choices = payload.get("choices") or []
                 for choice in choices:
                     delta = choice.get("delta") or choice.get("message") or {}
-                    if isinstance(delta, dict):
-                        content = delta.get("content") or delta.get("text")
-                    else:
-                        content = None
+                    content = delta.get("content") or delta.get("text") if isinstance(delta, dict) else None
                     if content:
                         deltas.append(content)
                         if _outer_stream:
@@ -1842,7 +1840,7 @@ async def websocket_tts_realtime(
     done_sent = False
     error_sent = False
 
-    def _allowed_formats_for(provider_name: Optional[str]) -> Set[str]:
+    def _allowed_formats_for(provider_name: Optional[str]) -> set[str]:
         try:
             from tldw_Server_API.app.core.TTS.tts_validation import ProviderLimits
 
@@ -1876,10 +1874,8 @@ async def websocket_tts_realtime(
                     close_code = _outer_stream._map_close_code(code) if _outer_stream else 1011
                 except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                     close_code = 1011
-        try:
+        with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
             await websocket.close(code=close_code)
-        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
-            pass
 
     auth_ok, jwt_user_id = await _shim_audio_ws_authenticate(
         websocket,
@@ -2002,10 +1998,8 @@ async def websocket_tts_realtime(
                     close=True,
                     close_code=4400,
                 )
-                try:
+                with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
                     await session.finish()
-                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
-                    pass
                 return
 
         await _send_json(
@@ -2113,22 +2107,16 @@ async def websocket_tts_realtime(
         logger.info("TTS realtime WS disconnected")
     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"TTS realtime WS error: {exc}", exc_info=True)
-        try:
+        with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
             await _send_error("internal_error", "Internal error", close=True)
-        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
-            pass
     finally:
         if session is not None:
-            try:
+            with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
                 await session.finish()
-            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
-                pass
         if sender_task and not sender_task.done():
             sender_task.cancel()
-            try:
+            with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
                 await sender_task
-            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
-                pass
         if acquired_stream:
             try:
                 await _finish_stream(user_id_for_usage)

@@ -421,10 +421,7 @@ Example:
         try:
             # Try to find JSON in response
             json_match = re.search(r'\{[\s\S]*\}', response_text)
-            if json_match:
-                entities = json.loads(json_match.group())
-            else:
-                entities = {}
+            entities = json.loads(json_match.group()) if json_match else {}
         except json.JSONDecodeError:
             entities = {}
 

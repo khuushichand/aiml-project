@@ -12,7 +12,7 @@ import json
 import os
 import sqlite3
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -207,10 +207,8 @@ class EvaluationsDatabase:
         """Context manager for database connections (backend-aware)."""
         if self.backend_type == BackendType.SQLITE:
             # Register explicit adapters to avoid deprecated defaults on Python 3.12+
-            try:
+            with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
                 sqlite3.register_adapter(datetime, lambda d: d.isoformat(sep=" "))
-            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
-                pass
             conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
             conn.row_factory = sqlite3.Row
             try:
@@ -224,10 +222,8 @@ class EvaluationsDatabase:
         try:
             yield _EvaluationsBackendConnection(self, raw)
         finally:
-            try:
+            with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
                 self.backend.get_pool().return_connection(raw)
-            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
-                pass
 
     # --- Backend helpers ---
     def _prepare_backend_statement(self, query: str, params: Optional[Any] = None) -> tuple[str, Optional[Any]]:
@@ -456,16 +452,14 @@ class EvaluationsDatabase:
             """)
 
             # Best-effort ALTER TABLE for new diagnostic columns (ignore errors if already exist)
-            for col, sql in [
+            for _col, sql in [
                 ("ranked_distances", "ALTER TABLE embedding_abtest_results ADD COLUMN ranked_distances TEXT"),
                 ("ranked_metadatas", "ALTER TABLE embedding_abtest_results ADD COLUMN ranked_metadatas TEXT"),
                 ("ranked_documents", "ALTER TABLE embedding_abtest_results ADD COLUMN ranked_documents TEXT"),
                 ("rerank_scores", "ALTER TABLE embedding_abtest_results ADD COLUMN rerank_scores TEXT"),
             ]:
-                try:
+                with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
                     cursor.execute(sql)
-                except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
-                    pass
 
             # Ensure embedding_abtest_queries.created_at exists even on older databases (SQLite cannot add non-constant defaults)
             try:
@@ -1252,10 +1246,8 @@ class EvaluationsDatabase:
                             ("emb_abtest%", test_id, f"{test_id}:%"),
                         )
                         deleted += int(cursor.rowcount or 0)
-                        try:
+                        with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
                             conn.commit()
-                        except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
-                            pass
                 except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                     pass
             return deleted
@@ -1330,10 +1322,8 @@ class EvaluationsDatabase:
                     deleted += int(cursor.rowcount or 0)
                 except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
                     pass
-            try:
+            with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
                 conn.commit()
-            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
-                pass
         return int(deleted)
 
     # ============= Idempotency Helpers =============
@@ -1458,7 +1448,7 @@ class EvaluationsDatabase:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
+            set_clause = ", ".join([f"{k} = ?" for k in updates])
             values = list(updates.values()) + [eval_id]
 
             query = f"UPDATE evaluations SET {set_clause} WHERE id = ? AND deleted_at IS NULL"

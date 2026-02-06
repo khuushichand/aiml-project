@@ -195,7 +195,7 @@ export function MessageActionsBar({
         <OverflowMenuItem
           key="branch"
           icon={<GitBranchIcon className="w-3.5 h-3.5" />}
-          label={t("newBranch")}
+          label={t("newBranch", "New Branch")}
           onClick={onNewBranch}
         />
       )
@@ -205,7 +205,7 @@ export function MessageActionsBar({
         <OverflowMenuItem
           key="continue"
           icon={<PlayCircle className="w-3.5 h-3.5" />}
-          label={t("continue")}
+          label={t("continue", "Continue")}
           onClick={onContinue}
         />
       )
@@ -253,7 +253,7 @@ export function MessageActionsBar({
               <Square className="w-3.5 h-3.5 text-danger" />
             )
           }
-          label={isSpeaking ? t("ttsStop", "Stop TTS") : t("tts")}
+          label={isSpeaking ? t("ttsStop", "Stop TTS") : t("tts", "Read Aloud")}
           onClick={onToggleTts}
           disabled={ttsActionDisabled}
         />

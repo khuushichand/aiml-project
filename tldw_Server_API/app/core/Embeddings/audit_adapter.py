@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import contextlib
 import os
 import sys
 import threading
@@ -111,10 +112,8 @@ def _stop_sync_loop() -> None:
     thread = _SYNC_LOOP_THREAD
 
     if loop and loop.is_running():
-        try:
+        with contextlib.suppress(RuntimeError, TypeError, ValueError):
             loop.call_soon_threadsafe(loop.stop)
-        except (RuntimeError, TypeError, ValueError):
-            pass
 
     if thread and thread.is_alive() and threading.current_thread() is not thread:
         thread.join(timeout=2.0)
@@ -255,15 +254,11 @@ def _shutdown_on_exit() -> None:
         try:
             loop = asyncio.get_running_loop()
             # Schedule but do not await; at exit there may be no time to run
-            try:
+            with contextlib.suppress(RuntimeError, TypeError, ValueError):
                 loop.create_task(shutdown_audit_adapter_services())
-            except (RuntimeError, TypeError, ValueError):
-                pass
         except RuntimeError:
-            try:
+            with contextlib.suppress(RuntimeError, TypeError, ValueError):
                 asyncio.run(shutdown_audit_adapter_services())
-            except (RuntimeError, TypeError, ValueError):
-                pass
     except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         pass
 

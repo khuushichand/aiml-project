@@ -12,6 +12,7 @@ Enable via env:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from typing import Callable
 
@@ -89,10 +90,8 @@ async def run_claims_alerts_once(
             logger.warning(f"claims_alerts: failed to create media db: {exc}")
             return 0
         try:
-            try:
+            with contextlib.suppress(_CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS):
                 db.initialize_db()
-            except _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS:
-                pass
             user_ids = db.list_claims_monitoring_user_ids()
             for user_id in user_ids:
                 try:
@@ -111,10 +110,8 @@ async def run_claims_alerts_once(
                 except _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.warning(f"claims_alerts: evaluation failed for user {user_id}: {exc}")
         finally:
-            try:
+            with contextlib.suppress(_CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS):
                 db.close_connection()
-            except _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS:
-                pass
     else:
         user_ids = _enumerate_sqlite_user_ids()
         for user_id in user_ids:
@@ -127,10 +124,8 @@ async def run_claims_alerts_once(
                 logger.debug(f"claims_alerts: failed to open user db {user_id}: {exc}")
                 continue
             try:
-                try:
+                with contextlib.suppress(_CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS):
                     user_db.initialize_db()
-                except _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS:
-                    pass
                 await asyncio.to_thread(
                     eval_fn,
                     target_user_id=str(user_id),
@@ -146,10 +141,8 @@ async def run_claims_alerts_once(
             except _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"claims_alerts: evaluation failed for user {user_id}: {exc}")
             finally:
-                try:
+                with contextlib.suppress(_CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS):
                     user_db.close_connection()
-                except _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS:
-                    pass
     return processed
 
 

@@ -339,10 +339,7 @@ def validate_request_size(request_data: Any) -> bool:
             request_json = DATA_URI_REDACT_PATTERN.sub(r'\1<redacted>', request_data)
         else:
             # Convert to a serializable dict and sanitize recursively
-            if hasattr(request_data, 'model_dump'):
-                raw = request_data.model_dump()
-            else:
-                raw = request_data
+            raw = request_data.model_dump() if hasattr(request_data, 'model_dump') else request_data
             sanitized_obj = _sanitize_value_for_size(raw)
             request_json = json.dumps(sanitized_obj)
 

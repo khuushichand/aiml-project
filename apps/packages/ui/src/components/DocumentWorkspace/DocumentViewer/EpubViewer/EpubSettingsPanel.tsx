@@ -116,6 +116,8 @@ export const EpubSettingsPanel: React.FC<EpubSettingsPanelProps> = ({
         </div>
         <div className="flex items-center gap-2">
           <button
+            type="button"
+            aria-label="Decrease font size"
             onClick={() => setFontSize(fontSize - 10)}
             disabled={fontSize <= 50}
             className="flex h-7 w-7 items-center justify-center rounded hover:bg-hover disabled:opacity-50"

@@ -9,6 +9,7 @@ Stage 1 scope:
 """
 from __future__ import annotations
 
+import contextlib
 import io
 import mailbox
 import os
@@ -124,19 +125,17 @@ def _addresses_from_header(msg: Message, header_name: str) -> str:
         pairs = getaddresses(raw_values)
         # Keep only email part for storage/search; join with comma+space
         emails: list[str] = []
-        for name, email_addr in pairs:
+        for _name, email_addr in pairs:
             if email_addr and "@" in email_addr:
                 emails.append(email_addr)
         return ", ".join(emails)
     except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
         logging.debug(f"Failed to parse addresses from {header_name}: {e}")
-        try:
+        with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
             get_metrics_registry().increment(
                 "app_warning_events_total",
                 labels={"component": "email_ingest", "event": "addresses_parse_failed"},
             )
-        except _EMAIL_NONCRITICAL_EXCEPTIONS:
-            pass
         return ""
 
 
@@ -244,13 +243,11 @@ def parse_eml_bytes(
                             child_emls.append((child_bytes, child_name))
                     except _EMAIL_NONCRITICAL_EXCEPTIONS as ce:
                         logging.debug(f"Failed to capture nested EML bytes: {ce}")
-                        try:
+                        with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                             get_metrics_registry().increment(
                                 "app_warning_events_total",
                                 labels={"component": "email_ingest", "event": "nested_eml_capture_failed"},
                             )
-                        except _EMAIL_NONCRITICAL_EXCEPTIONS:
-                            pass
                 continue
 
             if ctype == "text/plain":
@@ -355,13 +352,11 @@ def process_email_task(
                 result["chunks"] = chunks
             except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
                 logging.error(f"Email chunking failed for {filename}: {e}")
-                try:
+                with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                     get_metrics_registry().increment(
                         "app_exception_events_total",
                         labels={"component": "email_ingest", "event": "chunking_failed"},
                     )
-                except _EMAIL_NONCRITICAL_EXCEPTIONS:
-                    pass
                 result["warnings"].append(f"Chunking failed: {e}")
                 result["chunks"] = [{"text": content_text, "metadata": {"chunk_num": 0, "error": str(e)}}]
         elif content_text:
@@ -384,13 +379,11 @@ def process_email_task(
                     result["analysis"] = analysis_text
             except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
                 logging.warning(f"Email analysis failed for {filename}: {e}")
-                try:
+                with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                     get_metrics_registry().increment(
                         "app_warning_events_total",
                         labels={"component": "email_ingest", "event": "analysis_failed"},
                     )
-                except _EMAIL_NONCRITICAL_EXCEPTIONS:
-                    pass
                 result["warnings"].append(f"Analysis failed: {e}")
 
         # Optionally parse nested email attachments recursively (children are returned in 'children' key)
@@ -418,13 +411,11 @@ def process_email_task(
                     children_results.append(child_res)
                 except _EMAIL_NONCRITICAL_EXCEPTIONS as ce:
                     logging.debug(f"Failed to process child EML '{child_name}': {ce}")
-                    try:
+                    with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                         get_metrics_registry().increment(
                             "app_warning_events_total",
                             labels={"component": "email_ingest", "event": "child_process_failed"},
                         )
-                    except _EMAIL_NONCRITICAL_EXCEPTIONS:
-                        pass
             if children_results:
                 result["children"] = children_results
 
@@ -552,7 +543,7 @@ def process_eml_archive_bytes(
             kws = set(one.get("keywords") or [])
             if group_tag:
                 kws.add(group_tag)
-            one["keywords"] = sorted(list(kws))
+            one["keywords"] = sorted(kws)
         except _EMAIL_NONCRITICAL_EXCEPTIONS:
             pass
         results.append(one)
@@ -673,7 +664,7 @@ def process_mbox_bytes(
                 kws = set(one.get("keywords") or [])
                 if group_tag:
                     kws.add(group_tag)
-                one["keywords"] = sorted(list(kws))
+                one["keywords"] = sorted(kws)
             except _EMAIL_NONCRITICAL_EXCEPTIONS:
                 pass
             staged.append(one)
@@ -691,13 +682,11 @@ def process_mbox_bytes(
         results.extend(staged)
     except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Invalid or unreadable MBOX '{mbox_name}': {e}")
-        try:
+        with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
             get_metrics_registry().increment(
                 "app_exception_events_total",
                 labels={"component": "email_ingest", "event": "mbox_read_failed"},
             )
-        except _EMAIL_NONCRITICAL_EXCEPTIONS:
-            pass
         return [{
             "status": "Error",
             "input_ref": mbox_name,
@@ -711,26 +700,22 @@ def process_mbox_bytes(
             if mbox is not None:
                 mbox.close()
         except _EMAIL_NONCRITICAL_EXCEPTIONS:
-            try:
+            with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "email_ingest", "event": "mbox_close_failed"},
                 )
-            except _EMAIL_NONCRITICAL_EXCEPTIONS:
-                pass
         # Cleanup temp file
         try:
             if tmp_path:
                 import os
                 os.unlink(tmp_path)
         except _EMAIL_NONCRITICAL_EXCEPTIONS:
-            try:
+            with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "email_ingest", "event": "mbox_tmp_cleanup_failed"},
                 )
-            except _EMAIL_NONCRITICAL_EXCEPTIONS:
-                pass
 
     return results
 
@@ -1102,7 +1087,7 @@ def process_pst_bytes(
                             kws = set(one.get("keywords") or [])
                             if group_tag:
                                 kws.add(group_tag)
-                            one["keywords"] = sorted(list(kws))
+                            one["keywords"] = sorted(kws)
                         except _EMAIL_NONCRITICAL_EXCEPTIONS:
                             pass
                         # Augment metadata with PST-derived recipients/date/attachments for robustness
@@ -1152,13 +1137,11 @@ def process_pst_bytes(
         }]
     except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Invalid or unreadable PST/OST '{pst_name}': {e}")
-        try:
+        with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
             get_metrics_registry().increment(
                 "app_exception_events_total",
                 labels={"component": "email_ingest", "event": "pst_read_failed"},
             )
-        except _EMAIL_NONCRITICAL_EXCEPTIONS:
-            pass
         return [{
             "status": "Error",
             "input_ref": pst_name,
@@ -1173,22 +1156,18 @@ def process_pst_bytes(
                 pst.close()
             except _EMAIL_NONCRITICAL_EXCEPTIONS as close_err:
                 logging.warning(f"Failed to close PST/OST reader for '{pst_name}': {close_err}")
-                try:
+                with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                     get_metrics_registry().increment(
                         "app_warning_events_total",
                         labels={"component": "email_ingest", "event": "pst_close_failed"},
                     )
-                except _EMAIL_NONCRITICAL_EXCEPTIONS:
-                    pass
         try:
             if tmp_path:
                 os.unlink(tmp_path)
         except _EMAIL_NONCRITICAL_EXCEPTIONS as cleanup_err:
             logging.warning(f"Failed to remove temporary PST/OST file '{tmp_path}': {cleanup_err}")
-            try:
+            with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "email_ingest", "event": "pst_tmp_cleanup_failed"},
                 )
-            except _EMAIL_NONCRITICAL_EXCEPTIONS:
-                pass

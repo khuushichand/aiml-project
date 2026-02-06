@@ -516,10 +516,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[Union[int, str]
         logger.debug(f"Using cached audit service instance for user_id: {user_id}")
         return service_instance
 
-    if storage_mode == "shared":
-        key_label = "shared"
-    else:
-        key_label = "default" if user_id is None else f"user_id {user_id}"
+    key_label = "shared" if storage_mode == "shared" else "default" if user_id is None else f"user_id {user_id}"
     logger.info(f"No cached audit service found for {key_label}. Initializing.")
 
     init_timeout_s = _settings_float("AUDIT_INIT_TIMEOUT_SECONDS", 30.0, min_value=0.1, max_value=300.0)
@@ -713,10 +710,7 @@ async def shutdown_user_audit_service(user_id: int):
             existing = state.cache.get(user_id)
             if existing:
                 pop_no_cb = getattr(state.cache, "pop_no_callback", None)
-                if callable(pop_no_cb):
-                    service = pop_no_cb(user_id, None)
-                else:
-                    service = state.cache.pop(user_id, None)
+                service = pop_no_cb(user_id, None) if callable(pop_no_cb) else state.cache.pop(user_id, None)
                 if service:
                     services.append(service)
 
@@ -779,10 +773,7 @@ async def shutdown_all_audit_services():
             total_instances += len(keys)
             for key in keys:
                 pop_no_cb = getattr(state.cache, "pop_no_callback", None)
-                if callable(pop_no_cb):
-                    service = pop_no_cb(key, None)
-                else:
-                    service = state.cache.pop(key, None)
+                service = pop_no_cb(key, None) if callable(pop_no_cb) else state.cache.pop(key, None)
                 if service:
                     services.append(service)
 

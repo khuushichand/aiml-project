@@ -180,10 +180,7 @@ class ScraperRouter:
                                 continue
                     cleaned[k] = pats
                 elif k in ("extra_headers", "cookies"):
-                    if isinstance(v, dict):
-                        m = {str(kk): str(vv) for kk, vv in v.items()}
-                    else:
-                        m = {}
+                    m = {str(kk): str(vv) for kk, vv in v.items()} if isinstance(v, dict) else {}
                     cleaned[k] = m
                 elif k == "respect_robots":
                     cleaned[k] = bool(v)

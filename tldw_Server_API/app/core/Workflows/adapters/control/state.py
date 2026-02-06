@@ -6,6 +6,7 @@ These adapters handle workflow state and caching operations.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from typing import Any
@@ -122,10 +123,8 @@ async def run_cache_result_adapter(config: dict[str, Any], context: dict[str, An
             return {"cached": False, "data": data, "error": "cache_collection_error"}
 
         if action == "invalidate":
-            try:
+            with contextlib.suppress(_STATE_ADAPTER_EXCEPTIONS):
                 collection.delete(ids=[cache_key])
-            except _STATE_ADAPTER_EXCEPTIONS:
-                pass
             return {"invalidated": True, "key": cache_key}
 
         if action in ("get", "get_or_set"):
@@ -137,10 +136,8 @@ async def run_cache_result_adapter(config: dict[str, Any], context: dict[str, An
                     if time.time() - cached_at <= ttl_seconds:
                         cached_data = meta.get("data")
                         if isinstance(cached_data, str):
-                            try:
+                            with contextlib.suppress(_STATE_JSON_EXCEPTIONS):
                                 cached_data = json.loads(cached_data)
-                            except _STATE_JSON_EXCEPTIONS:
-                                pass
                         return {"cached": True, "data": cached_data, "key": cache_key, "age_seconds": int(time.time() - cached_at)}
             except _STATE_ADAPTER_EXCEPTIONS:
                 pass
@@ -212,10 +209,7 @@ async def run_retry_adapter(config: dict[str, Any], context: dict[str, Any]) -> 
             # Check if result indicates an error
             if isinstance(result, dict) and result.get("error"):
                 error_str = str(result["error"])
-                if retry_on_errors:
-                    should_retry = any(pat in error_str for pat in retry_on_errors)
-                else:
-                    should_retry = True
+                should_retry = any(pat in error_str for pat in retry_on_errors) if retry_on_errors else True
 
                 if should_retry and attempt < max_retries:
                     last_error = error_str

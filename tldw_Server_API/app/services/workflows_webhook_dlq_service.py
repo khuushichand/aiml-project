@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import random
@@ -220,10 +221,8 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
             rows = []
 
         if not rows:
-            try:
+            with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(stop_event.wait(), timeout=interval)
-            except asyncio.TimeoutError:
-                pass
             continue
 
         for r in rows:

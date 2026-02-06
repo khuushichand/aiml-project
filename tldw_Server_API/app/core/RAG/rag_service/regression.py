@@ -19,7 +19,7 @@ import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -162,10 +162,10 @@ class RegressionDetector:
 
     def __init__(
         self,
-        baseline_dir: Optional[Path | str] = None,
+        baseline_dir: Path | str | None = None,
         default_threshold: float = 0.05,
-        lower_is_better: Optional[set[str]] = None,
-        gating_config: Optional[GatingConfig] = None,
+        lower_is_better: set[str] | None = None,
+        gating_config: GatingConfig | None = None,
         use_quality_gating: bool = True,
     ) -> None:
         """Initialize RegressionDetector.
@@ -193,9 +193,9 @@ class RegressionDetector:
     def save_baseline(
         self,
         metrics: dict[str, float],
-        pipeline_config: Optional[dict[str, Any]] = None,
-        metadata: Optional[dict[str, Any]] = None,
-        baseline_id: Optional[str] = None,
+        pipeline_config: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        baseline_id: str | None = None,
     ) -> MetricBaseline:
         """Save a metric baseline snapshot.
 
@@ -223,7 +223,7 @@ class RegressionDetector:
         logger.info(f"Saved metric baseline '{bid}' with {len(metrics)} metrics")
         return baseline
 
-    def load_baseline(self, baseline_id: str = "latest") -> Optional[MetricBaseline]:
+    def load_baseline(self, baseline_id: str = "latest") -> MetricBaseline | None:
         """Load a stored baseline.
 
         Args:
@@ -247,7 +247,7 @@ class RegressionDetector:
         self,
         current_metrics: dict[str, float],
         baseline_id: str = "latest",
-        thresholds: Optional[dict[str, float]] = None,
+        thresholds: dict[str, float] | None = None,
     ) -> RegressionReport:
         """Check current metrics against a stored baseline.
 
@@ -271,11 +271,8 @@ class RegressionDetector:
             )
 
         thresholds = thresholds or {}
-        gating_config: Optional[GatingConfig]
-        if self.use_quality_gating:
-            gating_config = self.gating_config or GatingConfig()
-        else:
-            gating_config = None
+        gating_config: GatingConfig | None
+        gating_config = self.gating_config or GatingConfig() if self.use_quality_gating else None
 
         lower_is_better = set(self.lower_is_better)
         if gating_config:

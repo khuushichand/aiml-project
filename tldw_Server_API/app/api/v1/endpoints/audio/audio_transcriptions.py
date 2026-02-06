@@ -1,6 +1,7 @@
 # audio_transcriptions.py
 # Description: Audio transcription, translation, and segmentation endpoints.
 import asyncio
+import contextlib
 import json
 import os
 import tempfile
@@ -366,10 +367,7 @@ async def create_transcription(
                     logger.debug(f"Failed to parse hotwords JSON; falling back to CSV parsing: {hotwords_exc}")
             if hotwords_norm is None:
                 hotwords_norm = [part.strip() for part in raw_hotwords.split(",") if part.strip()]
-            if hotwords_norm:
-                hotwords_norm = hotwords_norm[:128]
-            else:
-                hotwords_norm = None
+            hotwords_norm = hotwords_norm[:128] if hotwords_norm else None
 
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import (
             Audio_Files as audio_files,
@@ -406,7 +404,6 @@ async def create_transcription(
                 rid,
             )
             allow = True
-            remaining_after = None
         if not allow:
             try:
                 await _audio_shim_attr("finish_job")(current_user.id)
@@ -420,10 +417,8 @@ async def create_transcription(
             acquired_job_slot = False
             if job_heartbeat_task:
                 job_heartbeat_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await job_heartbeat_task
-                except asyncio.CancelledError:
-                    pass
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED, detail="Transcription quota exceeded (daily minutes)"
             )
@@ -521,10 +516,8 @@ async def create_transcription(
             try:
                 if job_heartbeat_task:
                     job_heartbeat_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await job_heartbeat_task
-                    except asyncio.CancelledError:
-                        pass
                 if acquired_job_slot:
                     await _audio_shim_attr("finish_job")(current_user.id)
             except EXPECTED_DB_EXC as e:

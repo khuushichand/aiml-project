@@ -227,10 +227,7 @@ class FasterWhisperAdapter(SttProviderAdapter):
         # Map task to STT language handling:
         #  - transcribe: honor explicit language when provided
         #  - translate: let backend auto-detect source language
-        if task == "translate":
-            selected_lang = None
-        else:
-            selected_lang = language or None
+        selected_lang = None if task == "translate" else language or None
 
         model_name = model or "distil-large-v3"
         _raise_if_cancelled(cancel_check)
@@ -753,10 +750,7 @@ class SttProviderRegistry:
         resolved via config and used. As a final safety net, the
         'faster-whisper' adapter is returned.
         """
-        if provider_name:
-            key = _normalize_provider_name(provider_name)
-        else:
-            key = self.get_default_provider_name()
+        key = _normalize_provider_name(provider_name) if provider_name else self.get_default_provider_name()
 
         adapter = self._adapters.get(key)
         if adapter is not None:

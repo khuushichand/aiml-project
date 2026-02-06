@@ -5,6 +5,7 @@ Production-ready media management module with full MCP compliance.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import ipaddress
 import json
@@ -119,10 +120,8 @@ class MediaModule(BaseModule):
                     for retriever in self._semantic_retrievers.values():
                         close_fn = getattr(retriever, "close", None)
                         if callable(close_fn):
-                            try:
+                            with contextlib.suppress(_MEDIA_MODULE_NONCRITICAL_EXCEPTIONS):
                                 close_fn()
-                            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
-                                pass
                     self._semantic_retrievers.clear()
             except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 pass
@@ -172,10 +171,8 @@ class MediaModule(BaseModule):
                     self.db.execute_query("CREATE TABLE IF NOT EXISTS _mcp_healthcheck (k TEXT PRIMARY KEY, v TEXT)")
                     self.db.execute_query("INSERT OR REPLACE INTO _mcp_healthcheck(k, v) VALUES (?, ?)", ("ping", datetime.utcnow().isoformat()))
                     # Best-effort cleanup to keep DB tidy (ignore errors for non-SQLite backends)
-                    try:
+                    with contextlib.suppress(_MEDIA_MODULE_NONCRITICAL_EXCEPTIONS):
                         self.db.execute_query("DELETE FROM _mcp_healthcheck WHERE k = ?", ("ping",))
-                    except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
-                        pass
                 checks["database_writable"] = True
             except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as _w_e:
                 logger.debug(f"Media DB writable check failed: {_w_e}")
@@ -450,10 +447,8 @@ class MediaModule(BaseModule):
             return False
 
     def _close_media_db_instance(self, db: MediaDatabase) -> None:
-        try:
+        with contextlib.suppress(_MEDIA_MODULE_NONCRITICAL_EXCEPTIONS):
             db.close_connection()
-        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
-            pass
         try:
             pool = db.backend.get_pool()
             pool.close_all()
@@ -903,10 +898,7 @@ class MediaModule(BaseModule):
                 body = self._make_snippet(content, None, snippet_length)
                 return {"meta": item, "content": body, "attachments": None}
 
-            if approx_offset is None:
-                anchor_index = 0
-            else:
-                anchor_index = max(0, min(len(chunks) - 1, approx_offset // size_chars))
+            anchor_index = 0 if approx_offset is None else max(0, min(len(chunks) - 1, approx_offset // size_chars))
 
             if mode == "chunk":
                 body = chunks[anchor_index]
@@ -1261,10 +1253,8 @@ class MediaModule(BaseModule):
         if retriever is None:
             return [], 0
         max_results = max(1, limit + offset)
-        try:
+        with contextlib.suppress(_MEDIA_MODULE_NONCRITICAL_EXCEPTIONS):
             retriever.config.max_results = max_results
-        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
-            pass
 
         media_type_arg: Optional[str] = None
         if isinstance(media_types, list) and len(media_types) == 1:

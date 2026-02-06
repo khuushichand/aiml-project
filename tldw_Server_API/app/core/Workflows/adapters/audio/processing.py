@@ -470,7 +470,7 @@ async def run_audio_mix_adapter(config: dict[str, Any], context: dict[str, Any])
         return {"__status__": "cancelled"}
 
     input_paths = config.get("input_paths") or []
-    volumes = config.get("volumes") or []
+    config.get("volumes") or []
 
     if len(input_paths) < 2:
         return {"error": "need_at_least_2_files", "mixed": False}

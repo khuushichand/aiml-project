@@ -7,6 +7,7 @@ and tools with optional filtering for progressive disclosure.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from loguru import logger
@@ -102,10 +103,8 @@ class MCPDiscoveryModule(BaseModule):
 
         catalog_id = args.get("catalog_id")
         if catalog_id is not None:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 params["catalog_id"] = int(catalog_id)
-            except (TypeError, ValueError):
-                pass
 
         catalog_strict = args.get("catalog_strict")
         if isinstance(catalog_strict, bool):
@@ -215,17 +214,13 @@ class MCPDiscoveryModule(BaseModule):
 
         org_raw = metadata.get("org_id")
         if org_raw is not None:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 org_ids.add(int(org_raw))
-            except (TypeError, ValueError):
-                pass
 
         team_raw = metadata.get("team_id")
         if team_raw is not None:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 team_ids.add(int(team_raw))
-            except (TypeError, ValueError):
-                pass
 
         if admin_all:
             return org_ids, team_ids

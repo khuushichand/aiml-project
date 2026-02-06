@@ -221,7 +221,7 @@ async def create_chatbook(
 
         # Create chatbook
         rid = ensure_request_id(request)
-        tp = ensure_traceparent(request)
+        ensure_traceparent(request)
         success, message, result = await service.create_chatbook(
             name=request_data.name,
             description=request_data.description,
@@ -428,7 +428,7 @@ async def import_chatbook(
         if import_request.content_selections:
             unsupported = {"media", "embedding", "prompt", "evaluation", "generated_document"}
             requested = []
-            for content_type in import_request.content_selections.keys():
+            for content_type in import_request.content_selections:
                 ct_val = content_type.value if hasattr(content_type, "value") else str(content_type)
                 if ct_val in unsupported:
                     requested.append(ct_val)
@@ -500,7 +500,7 @@ async def import_chatbook(
 
         # Import chatbook
         rid = ensure_request_id(request)
-        tp = ensure_traceparent(request)
+        ensure_traceparent(request)
         success, message, result = await service.import_chatbook(
             file_path=str(temp_file),
             content_selections=content_selections,

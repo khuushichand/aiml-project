@@ -80,6 +80,8 @@ def _import_onnxruntime():
         ) from e
 #
 # Local Imports
+import contextlib
+
 from tldw_Server_API.app.core.config import resolve_repo_relative_path, rg_policy_path
 from tldw_Server_API.app.core.Embeddings.audit_adapter import (
     log_memory_limit_exceeded,
@@ -154,9 +156,7 @@ def _is_probable_network_error(exc: Exception) -> bool:
     if "Timeout" in name or "Connection" in name or "Connect" in name:
         return True
     msg = str(exc).lower()
-    if "timed out" in msg or "timeout" in msg or "connection" in msg or "dns" in msg:
-        return True
-    return False
+    return bool("timed out" in msg or "timeout" in msg or "connection" in msg or "dns" in msg)
 
 
 def _is_request_exception(exc: Exception) -> bool:
@@ -168,9 +168,7 @@ def _is_request_exception(exc: Exception) -> bool:
         return True
     if "HTTPError" in name:
         return True
-    if _get_http_status_from_exception(exc) is not None:
-        return True
-    return False
+    return _get_http_status_from_exception(exc) is not None
 
 
 def _model_cache_subdir_name(model_id: str) -> str:
@@ -1032,14 +1030,12 @@ def evict_lru_models(keep_model_id: str | None = None) -> None:
             if lru_model_id:
                 logger.info(f"Evicting LRU model: {lru_model_id}")
                 # Unified audit (non-blocking)
-                try:
+                with contextlib.suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                     log_model_evicted(
                         model_id=lru_model_id,
                         memory_usage_gb=model_memory_usage.get(lru_model_id, 0),
                         reason="lru_eviction",
                     )
-                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                    pass
                 removed = _remove_model(lru_model_id)
                 if not removed:
                     logger.debug(f"Unable to evict model '{lru_model_id}' because it is in use.")
@@ -1086,10 +1082,8 @@ def _remove_model(model_id: str) -> bool:
         model_memory_usage.pop(model_id, None)
         model_in_use_counts.pop(model_id, None)
         if provider_label:
-            try:
+            with contextlib.suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 ACTIVE_EMBEDDERS.labels(provider=provider_label, model_id=model_id).set(0)
-            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                pass
         logger.info(f"Removed model {model_id} from memory")
     return True
 
@@ -1120,13 +1114,11 @@ def get_directory_size(path: str) -> float:
     """
     total_size = 0
     try:
-        for dirpath, dirnames, filenames in os.walk(path):
+        for dirpath, _dirnames, filenames in os.walk(path):
             for filename in filenames:
                 filepath = os.path.join(dirpath, filename)
-                try:
+                with contextlib.suppress(OSError):
                     total_size += os.path.getsize(filepath)
-                except OSError:
-                    pass
     except OSError:
         pass
 
@@ -1446,15 +1438,11 @@ class HuggingFaceEmbedder:
     def __del__(self):
         logger_debug = getattr(logger, "debug", None)
         if callable(logger_debug):
-            try:
+            with contextlib.suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 logger_debug(f"HuggingFaceEmbedder {self.model_identifier} is being deleted.")
-            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                pass
         if self.unload_timer:
-            try:
+            with contextlib.suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 self.unload_timer.cancel()
-            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                pass
             self.unload_timer = None
 
 
@@ -1550,10 +1538,8 @@ class ONNXEmbedder:
             logger.exception(f"Failed to export/download ONNX model for {self.model_identifier}: {e}")
             # Basic cleanup: if model.onnx was partially created, remove it.
             if os.path.exists(self.onnx_model_file_path):
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(self.onnx_model_file_path)
-                except OSError:
-                    pass
             raise RuntimeError(f"ONNX model conversion failed for {self.model_identifier}.")
 
     def _reset_timer(self) -> None:
@@ -1858,15 +1844,13 @@ def create_embeddings_batch(
 
                     if not check_memory_limit(estimated_size):
                         logger.warning(f"Memory limit would be exceeded by loading {model_id_to_use} (size: {estimated_size:.2f} GB)")
-                        try:
+                        with contextlib.suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                             log_memory_limit_exceeded(
                                 model_id=model_id_to_use,
                                 memory_usage_gb=estimated_size,
                                 current_usage_gb=sum(model_memory_usage.values()),
                                 limit_gb=MAX_MODEL_MEMORY_GB,
                             )
-                        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                            pass
                         evict_lru_models(keep_model_id=model_id_to_use)
                         if not check_memory_limit(estimated_size):
                             logger.error(
@@ -1941,15 +1925,13 @@ def create_embeddings_batch(
 
                     if not check_memory_limit(estimated_size):
                         logger.warning(f"Memory limit would be exceeded by loading {model_id_to_use} (size: {estimated_size:.2f} GB)")
-                        try:
+                        with contextlib.suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                             log_memory_limit_exceeded(
                                 model_id=model_id_to_use,
                                 memory_usage_gb=estimated_size,
                                 current_usage_gb=sum(model_memory_usage.values()),
                                 limit_gb=MAX_MODEL_MEMORY_GB,
                             )
-                        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                            pass
                         evict_lru_models(keep_model_id=model_id_to_use)
                         if not check_memory_limit(estimated_size):
                             logger.error(

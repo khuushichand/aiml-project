@@ -190,10 +190,7 @@ def check_any_permission(user: User, permissions: list[str]) -> bool:
     Returns:
         bool: True if user has at least one permission
     """
-    for permission in permissions:
-        if check_permission(user, permission):
-            return True
-    return False
+    return any(check_permission(user, permission) for permission in permissions)
 
 def check_all_permissions(user: User, permissions: list[str]) -> bool:
     """
@@ -206,10 +203,7 @@ def check_all_permissions(user: User, permissions: list[str]) -> bool:
     Returns:
         bool: True if user has all permissions
     """
-    for permission in permissions:
-        if not check_permission(user, permission):
-            return False
-    return True
+    return all(check_permission(user, permission) for permission in permissions)
 
 ########################################################################################################################
 # Decorator Functions (for non-FastAPI use)

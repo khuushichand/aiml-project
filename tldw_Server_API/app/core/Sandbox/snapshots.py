@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import tarfile
@@ -109,10 +110,8 @@ class SnapshotManager:
                     tar.add(item_path, arcname=item)
         except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             # Clean up on failure
-            try:
+            with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
                 snapshot_path.unlink(missing_ok=True)
-            except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS:
-                pass
             raise OSError(f"Failed to create snapshot archive: {e}")
 
         # Get snapshot size
@@ -180,10 +179,8 @@ class SnapshotManager:
                     if os.path.isdir(item_path):
                         shutil.rmtree(item_path, ignore_errors=True)
                     else:
-                        try:
+                        with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
                             os.remove(item_path)
-                        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS:
-                            pass
             else:
                 os.makedirs(workspace_path, exist_ok=True)
         except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
@@ -281,10 +278,8 @@ class SnapshotManager:
                         archive_path = self._snapshot_path(session_id, snapshot_id)
                         if archive_path.exists():
                             # Update size in case it changed
-                            try:
+                            with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
                                 metadata["size_bytes"] = archive_path.stat().st_size
-                            except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS:
-                                pass
                             snapshots.append(metadata)
             except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Failed to read snapshot metadata {meta_file}: {e}")
@@ -378,10 +373,8 @@ class SnapshotManager:
             with open(metadata_path) as f:
                 metadata = json.load(f)
                 # Update size
-                try:
+                with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
                     metadata["size_bytes"] = snapshot_path.stat().st_size
-                except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS:
-                    pass
                 return metadata
         except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Failed to read snapshot metadata: {e}")
@@ -403,10 +396,8 @@ class SnapshotManager:
 
         total = 0
         for archive in snapshot_dir.glob("*.tar.gz"):
-            try:
+            with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
                 total += archive.stat().st_size
-            except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS:
-                pass
 
         return total
 

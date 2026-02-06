@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import socket
 import subprocess
@@ -205,10 +206,8 @@ def refresh_egress_rules(
     Performs a best-effort deletion via delete_rules_by_label(), then applies
     new rules computed from the current DNS resolution of hostnames.
     """
-    try:
+    with contextlib.suppress(_SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS):
         delete_rules_by_label(label)
-    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
-        pass
     targets = expand_allowlist_to_targets(raw_allowlist, resolver=resolver, wildcard_subdomains=wildcard_subdomains)
     return apply_egress_rules_atomic(container_ip, targets, label)
 
@@ -293,10 +292,8 @@ def delete_rules_by_label(label: str) -> None:
                 except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
                     continue
         for num in sorted(numbered, reverse=True):
-            try:
+            with contextlib.suppress(_SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS):
                 subprocess.run(["iptables", "-D", "DOCKER-USER", str(num)], check=False)
-            except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
-                pass
         return
     except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
         pass
@@ -308,9 +305,7 @@ def delete_rules_by_label(label: str) -> None:
                 parts = line.strip().split()
                 if parts and parts[0] in {"-A", "-I"}:
                     parts[0] = "-D"
-                    try:
+                    with contextlib.suppress(_SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS):
                         subprocess.run(["iptables"] + parts, check=False)
-                    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
-                        pass
     except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
         pass

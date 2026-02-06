@@ -158,10 +158,7 @@ def apply_llm_provider_overrides_to_listing(payload: dict[str, Any]) -> dict[str
         if isinstance(config_models, list):
             models = [str(v).strip() for v in config_models if str(v).strip()]
         if override.allowed_models:
-            if models:
-                models = [m for m in models if m in override.allowed_models]
-            else:
-                models = list(override.allowed_models)
+            models = [m for m in models if m in override.allowed_models] if models else list(override.allowed_models)
         merged["models"] = models
 
         models_info = merged.get("models_info")

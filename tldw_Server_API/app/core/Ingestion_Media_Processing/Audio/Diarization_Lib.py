@@ -5,6 +5,7 @@ Implements speaker identification using vector embeddings approach.
 """
 #
 # Imports
+import contextlib
 import importlib.util
 import threading
 import time
@@ -56,10 +57,8 @@ def _module_spec_available(module_name: str) -> bool:
     try:
         return importlib.util.find_spec(module_name) is not None
     except _DIARIZATION_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive logging
-        try:
+        with contextlib.suppress(_DIARIZATION_NONCRITICAL_EXCEPTIONS):
             logger.debug(f"Module spec probe failed for {module_name}: {exc}")
-        except _DIARIZATION_NONCRITICAL_EXCEPTIONS:
-            pass
         return False
 
 

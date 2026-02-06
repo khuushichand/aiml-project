@@ -200,7 +200,7 @@ class AuthnzUserProviderSecretsRepo:
                     """,
                     (user_id,),
                 )
-            return [dict(row) if isinstance(row, dict) else {k: row[k] for k in row.keys()} for row in rows]
+            return [dict(row) if isinstance(row, dict) else {k: row[k] for k in row} for row in rows]
         except Exception as exc:
             logger.error(f"AuthnzUserProviderSecretsRepo.list_secrets_for_user failed: {exc}")
             raise

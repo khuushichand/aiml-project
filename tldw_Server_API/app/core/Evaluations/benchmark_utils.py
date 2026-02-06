@@ -7,6 +7,7 @@ system rather than replacing it.
 """
 
 import ast
+import contextlib
 import json
 import re
 from typing import Any, Union
@@ -34,10 +35,7 @@ def parse_multiple_choice_answer(response: str, choices: list[str] = None) -> st
     response = response.strip().upper()
 
     # Define default choices if not provided
-    if choices is None:
-        choices = ['A', 'B', 'C', 'D']
-    else:
-        choices = [str(c).upper() for c in choices]
+    choices = ['A', 'B', 'C', 'D'] if choices is None else [str(c).upper() for c in choices]
 
     # Direct single letter match
     if len(response) == 1 and response in choices:
@@ -469,9 +467,8 @@ class MultipleChoiceEvaluation(BaseEvaluation):
         ])
 
         # Convert answer index to letter if needed
-        if isinstance(correct_answer, int):
-            if 0 <= correct_answer < len(choices):
-                correct_answer = choice_labels[correct_answer]
+        if isinstance(correct_answer, int) and 0 <= correct_answer < len(choices):
+            correct_answer = choice_labels[correct_answer]
 
         evaluation_prompt = f"""Evaluate this multiple choice response.
 
@@ -1139,10 +1136,7 @@ def load_dataset_from_url(url: str, format: str = "auto") -> list[dict[str, Any]
 
     if format == "auto":
         # best-effort detect based on extension
-        if url.endswith('.jsonl'):
-            format = "jsonl"
-        else:
-            format = "json"
+        format = "jsonl" if url.endswith('.jsonl') else "json"
 
     if format == "jsonl":
         r = fetch(method="GET", url=url, timeout=15)
@@ -1150,10 +1144,8 @@ def load_dataset_from_url(url: str, format: str = "auto") -> list[dict[str, Any]
             lines = r.text.strip().split('\n')
             return [json.loads(line) for line in lines if line]
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 r.close()
-            except Exception:
-                pass
     else:
         data = fetch_json(method="GET", url=url, timeout=15)
         return data if isinstance(data, list) else [data]

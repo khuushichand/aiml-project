@@ -252,10 +252,7 @@ class WorldBookEntry:
             else:
                 # Build pattern for literal matching (always safe)
                 escaped = re.escape(keyword)
-                if self.whole_word_match:
-                    pattern_str = r'\b' + escaped + r'\b'
-                else:
-                    pattern_str = escaped
+                pattern_str = r'\b' + escaped + r'\b' if self.whole_word_match else escaped
 
                 flags = 0 if self.case_sensitive else re.IGNORECASE
                 patterns.append((re.compile(pattern_str, flags), keyword))
@@ -275,11 +272,7 @@ class WorldBookEntry:
         if not self.enabled or not self._patterns:
             return False
 
-        for pattern, _keyword in self._patterns:
-            if pattern.search(text):
-                return True
-
-        return False
+        return any(pattern.search(text) for pattern, _keyword in self._patterns)
 
     def get_first_match_info(self, text: str) -> Optional[dict[str, Any]]:
         """Return the first matching keyword and reason, if any."""
@@ -1556,7 +1549,7 @@ class WorldBookService:
             "processed_context": injected_content,
             "entries_matched": len(matched_entries),
             "tokens_used": tokens_used,
-            "books_used": len(set(e.world_book_id for e in matched_entries)) if matched_entries else 0,
+            "books_used": len({e.world_book_id for e in matched_entries}) if matched_entries else 0,
             "entry_ids": [e.entry_id for e in matched_entries],
             "token_budget": int(token_budget),
             "budget_exhausted": bool(

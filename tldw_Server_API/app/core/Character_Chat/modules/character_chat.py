@@ -82,10 +82,7 @@ def _extract_message_attachments(msg_data: dict[str, Any]) -> list[dict[str, Any
         if data is None:
             return
         payload = data.tobytes() if isinstance(data, memoryview) else data
-        if isinstance(payload, str):
-            payload_bytes = payload.encode("utf-8")
-        else:
-            payload_bytes = bytes(payload)
+        payload_bytes = payload.encode("utf-8") if isinstance(payload, str) else bytes(payload)
         attachments[position] = {
             "position": position,
             "data": base64.b64encode(payload_bytes).decode("ascii"),

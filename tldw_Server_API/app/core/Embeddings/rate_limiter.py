@@ -162,10 +162,7 @@ class UserRateLimiter:
                 self.total_blocked += 1
 
                 # Calculate when the oldest request will expire
-                if user_queue:
-                    retry_after = int(user_queue[0][0] + self.window_seconds - current_time) + 1
-                else:
-                    retry_after = 1
+                retry_after = int(user_queue[0][0] + self.window_seconds - current_time) + 1 if user_queue else 1
 
                 # Unified audit (mandatory)
                 log_security_violation(
@@ -231,10 +228,7 @@ class UserRateLimiter:
             current_count = sum(entry[1] for entry in user_queue)
 
             if current_count + cost > burst_limit:
-                if user_queue:
-                    retry_after = int(user_queue[0][0] + self.window_seconds - current_time) + 1
-                else:
-                    retry_after = 1
+                retry_after = int(user_queue[0][0] + self.window_seconds - current_time) + 1 if user_queue else 1
                 return False, retry_after
 
             return True, None
@@ -267,10 +261,7 @@ class UserRateLimiter:
             current_count = sum(entry[1] for entry in user_queue)
 
             if current_count + cost > burst_limit:
-                if user_queue:
-                    retry_after = int(user_queue[0][0] + self.window_seconds - current_time) + 1
-                else:
-                    retry_after = 1
+                retry_after = int(user_queue[0][0] + self.window_seconds - current_time) + 1 if user_queue else 1
                 return False, retry_after
 
             return True, None
@@ -304,10 +295,7 @@ class UserRateLimiter:
             current_count = sum(entry[1] for entry in user_queue)
 
             if current_count + cost > burst_limit:
-                if user_queue:
-                    retry_after = int(user_queue[0][0] + self.window_seconds - current_time) + 1
-                else:
-                    retry_after = 1
+                retry_after = int(user_queue[0][0] + self.window_seconds - current_time) + 1 if user_queue else 1
                 return False, retry_after
 
             user_queue.append((current_time, cost))

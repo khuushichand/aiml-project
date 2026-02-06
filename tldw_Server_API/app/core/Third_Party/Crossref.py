@@ -5,6 +5,7 @@ standardized return signatures expected by the API layer.
 """
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from tldw_Server_API.app.core.http_client import fetch, fetch_json
@@ -52,9 +53,8 @@ def _date_from_message(msg: dict[str, Any]) -> str | None:
 
 def _pdf_link(msg: dict[str, Any]) -> str | None:
     for lk in (msg.get("link") or []):
-        if (lk.get("content-type") or "").lower() == "application/pdf":
-            if lk.get("URL"):
-                return lk.get("URL")
+        if (lk.get("content-type") or "").lower() == "application/pdf" and lk.get("URL"):
+            return lk.get("URL")
     return None
 
 
@@ -116,10 +116,8 @@ def get_crossref_by_doi(doi: str) -> tuple[dict | None, str | None]:
         url = f"{BASE_URL}/works/{doi_clean}"
         r = fetch(method="GET", url=url, timeout=20)
         if r.status_code == 404:
-            try:
+            with contextlib.suppress(Exception):
                 r.close()
-            except Exception:
-                pass
             return None, None
         data = r.json() or {}
         msg = (data.get("message") or {})

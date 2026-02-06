@@ -4,6 +4,7 @@ Uses database-backed locks for coordination.
 """
 
 import asyncio
+import contextlib
 import uuid
 from typing import Any, Callable, Optional
 
@@ -89,10 +90,8 @@ class LeaderElection:
             # Cancel renewal task if exists
             if resource in self._leadership_tasks:
                 self._leadership_tasks[resource].cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await self._leadership_tasks[resource]
-                except asyncio.CancelledError:
-                    pass
                 del self._leadership_tasks[resource]
 
             # Release in database
@@ -209,10 +208,8 @@ class LeaderElection:
         # Cancel all tasks
         for resource, task in list(self._leadership_tasks.items()):
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
 
             # Try to release leadership
             try:

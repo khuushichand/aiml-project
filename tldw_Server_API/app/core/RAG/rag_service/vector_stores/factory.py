@@ -59,7 +59,7 @@ class VectorStoreFactory:
         adapter_class = cls._adapters.get(config.store_type)
 
         if not adapter_class:
-            available = ", ".join([t.value for t in cls._adapters.keys()])
+            available = ", ".join([t.value for t in cls._adapters])
             raise UnsupportedVectorStoreError(config.store_type, available)
 
         logger.info(f"Creating {config.store_type.value} adapter")
@@ -106,7 +106,7 @@ class UnsupportedVectorStoreError(ValueError):
         Returns:
             List of available store type names
         """
-        return [store_type.value for store_type in cls._adapters.keys()]
+        return [store_type.value for store_type in cls._adapters]
 
     @classmethod
     def create_from_settings(

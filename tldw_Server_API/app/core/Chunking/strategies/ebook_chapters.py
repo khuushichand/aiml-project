@@ -7,7 +7,7 @@ Splits text into chunks based on chapter markers.
 import multiprocessing as mp
 import re
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from queue import Queue
 from typing import Any, Optional
 
@@ -568,10 +568,8 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                     return
                 chunk_start = seg_start + spans[start_idx][0]
                 chunk_end = seg_start + spans[end_idx - 1][1]
-                try:
+                with suppress(_EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS):
                     chunk_end = self._expand_end_to_grapheme_boundary(text, chunk_end)
-                except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS:
-                    pass
                 if chunk_end < chunk_start:
                     chunk_end = chunk_start
                 chunk_text = text[chunk_start:chunk_end]

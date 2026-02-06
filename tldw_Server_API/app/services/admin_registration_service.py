@@ -4,7 +4,7 @@ import json
 import secrets
 import string
 from datetime import datetime, timedelta
-from typing import Any, Dict
+from typing import Any
 
 from fastapi import HTTPException, status
 from loguru import logger
@@ -44,7 +44,7 @@ async def update_registration_settings(
     payload: RegistrationSettingsUpdateRequest,
 ) -> RegistrationSettingsResponse:
     """Update registration settings and refresh cached config."""
-    updates: Dict[str, Any] = {}
+    updates: dict[str, Any] = {}
     if payload.enable_registration is not None:
         updates["enable_registration"] = payload.enable_registration
     if payload.require_registration_code is not None:

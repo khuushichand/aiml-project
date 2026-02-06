@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 from collections import defaultdict
 from collections.abc import Iterable
@@ -758,10 +759,8 @@ async def _migrate_source(
                         counts.stats_inserted += stats_updated
 
                     last_row = rows[-1]
-                    try:
+                    with contextlib.suppress(_AUDIT_COERCE_EXCEPTIONS):
                         last_rowid = int(last_row["rowid"])
-                    except _AUDIT_COERCE_EXCEPTIONS:
-                        pass
                     try:
                         last_event = last_row["event_id"]
                     except (KeyError, TypeError, IndexError):

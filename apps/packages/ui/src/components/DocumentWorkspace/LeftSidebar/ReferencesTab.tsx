@@ -23,6 +23,7 @@ import { useConnectionStore } from "@/store/connection"
 import { tldwClient } from "@/services/tldw"
 import { useQueryClient } from "@tanstack/react-query"
 
+/** FNV-1a 32-bit hash for generating stable, short identifiers from reference text. */
 const hashReferenceText = (value: string): string => {
   let hash = 2166136261
   for (let i = 0; i < value.length; i += 1) {
@@ -472,24 +473,26 @@ export const ReferencesTab: React.FC = () => {
   const s2Count = data.references.filter((ref) => ref.semantic_scholar_id).length
 
   const query = searchQuery.trim().toLowerCase()
-  const filteredReferences = data.references
-    .map((ref, index) => ({ ref, index }))
-    .filter(({ ref }) => {
-      if (!query) return true
-      const haystack = [
-        ref.title,
-        ref.authors,
-        ref.venue,
-        ref.doi,
-        ref.arxiv_id,
-        ref.semantic_scholar_id,
-        ref.raw_text,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-      return haystack.includes(query)
-    })
+  const filteredReferences = React.useMemo(() => {
+    return data.references
+      .map((ref, index) => ({ ref, index }))
+      .filter(({ ref }) => {
+        if (!query) return true
+        const haystack = [
+          ref.title,
+          ref.authors,
+          ref.venue,
+          ref.doi,
+          ref.arxiv_id,
+          ref.semantic_scholar_id,
+          ref.raw_text,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+        return haystack.includes(query)
+      })
+  }, [data.references, query])
 
   const handleEnrichReference = async (index: number, key: string) => {
     if (!activeDocumentId) return

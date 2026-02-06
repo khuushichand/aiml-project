@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,7 +23,7 @@ class AnthropicMessage(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     role: Literal["user", "assistant"]
-    content: Union[str, list[AnthropicContentBlock]]
+    content: str | list[AnthropicContentBlock]
 
 
 class AnthropicTool(BaseModel):
@@ -40,14 +40,14 @@ class AnthropicMessagesRequest(BaseModel):
     model: str
     messages: list[AnthropicMessage]
     max_tokens: int | None = None
-    system: Union[str, list[AnthropicContentBlock]] | None = None
+    system: str | list[AnthropicContentBlock] | None = None
     temperature: float | None = None
     top_p: float | None = None
     top_k: int | None = None
     stop_sequences: list[str] | None = None
     stream: bool | None = False
     tools: list[AnthropicTool] | None = None
-    tool_choice: Union[str, dict[str, Any]] | None = None
+    tool_choice: str | dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
     # Extension: allow explicit provider selection when model has no prefix
     api_provider: str | None = Field(
@@ -61,9 +61,9 @@ class AnthropicCountTokensRequest(BaseModel):
 
     model: str
     messages: list[AnthropicMessage]
-    system: Union[str, list[AnthropicContentBlock]] | None = None
+    system: str | list[AnthropicContentBlock] | None = None
     tools: list[AnthropicTool] | None = None
-    tool_choice: Union[str, dict[str, Any]] | None = None
+    tool_choice: str | dict[str, Any] | None = None
     api_provider: str | None = Field(
         None,
         description="[Extension] Target LLM provider (e.g., 'anthropic', 'llama.cpp').",

@@ -495,10 +495,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
         # Calculate word counts
         max_words = max(1, int(max_size / ratio))
         raw_overlap_words = int(overlap / ratio)
-        if max_words == 1:
-            overlap_words = 0
-        else:
-            overlap_words = max(0, min(max_words - 1, raw_overlap_words))
+        overlap_words = 0 if max_words == 1 else max(0, min(max_words - 1, raw_overlap_words))
 
         logger.debug(f"Using fallback: {max_size} tokens ≈ {max_words} words")
 
@@ -577,9 +574,11 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                 # Choose an available decode: prefer wrapper.decode if present,
                 # otherwise fall back to the underlying tokenizer's decode.
                 if hasattr(self.tokenizer, 'decode'):
-                    decode_fn = lambda ids: self.tokenizer.decode(ids, skip_special_tokens=True)
+                    def decode_fn(ids):
+                        return self.tokenizer.decode(ids, skip_special_tokens=True)
                 elif hasattr(tok, 'decode'):
-                    decode_fn = lambda ids: tok.decode(ids)
+                    def decode_fn(ids):
+                        return tok.decode(ids)
                 else:
                     decode_fn = None
                 try:
@@ -598,10 +597,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
             else:
                 token_ids = self.tokenizer.encode(text)
                 # Generic tokenizer path (e.g., tiktoken or simple mocks): use plain decode(ids)
-                if hasattr(self.tokenizer, 'decode'):
-                    decode_fn = lambda ids: self.tokenizer.decode(ids)
-                else:
-                    decode_fn = None
+                decode_fn = (lambda ids: self.tokenizer.decode(ids)) if hasattr(self.tokenizer, 'decode') else None
                 offsets = self._reconstruct_offsets_by_decoding(token_ids, text)
         except _TOKENS_TOKENIZATION_EXCEPTIONS as e:
             logger.error(f"Tokenization failed: {e}")
@@ -875,5 +871,4 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
         # For token-based chunking, we need to encode the full text
         # So we just use the regular chunk method
         chunks = self.chunk(text, max_size, overlap, **options)
-        for chunk in chunks:
-            yield chunk
+        yield from chunks

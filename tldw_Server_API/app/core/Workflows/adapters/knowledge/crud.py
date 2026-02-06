@@ -608,10 +608,7 @@ async def run_chunking_adapter(config: dict[str, Any], context: dict[str, Any]) 
     else:
         # Try to get from context (last step output)
         last = context.get("last") or {}
-        if isinstance(last, dict):
-            text = last.get("text") or last.get("content") or last.get("summary") or ""
-        else:
-            text = ""
+        text = last.get("text") or last.get("content") or last.get("summary") or "" if isinstance(last, dict) else ""
     text = str(text) if text else ""
 
     if not text.strip():
@@ -737,10 +734,7 @@ async def run_claims_extract_adapter(config: dict[str, Any], context: dict[str, 
                 text = _render(text)
             else:
                 last = context.get("last") or {}
-                if isinstance(last, dict):
-                    text = last.get("text") or last.get("content") or ""
-                else:
-                    text = ""
+                text = last.get("text") or last.get("content") or "" if isinstance(last, dict) else ""
 
             if not text:
                 return {"error": "missing_text_for_extraction"}
@@ -910,10 +904,7 @@ async def run_voice_intent_adapter(config: dict[str, Any], context: dict[str, An
 
     # Get config options
     llm_enabled = config.get("llm_enabled")
-    if llm_enabled is None:
-        llm_enabled = True
-    else:
-        llm_enabled = bool(llm_enabled)
+    llm_enabled = True if llm_enabled is None else bool(llm_enabled)
 
     awaiting_confirmation = bool(config.get("awaiting_confirmation"))
 

@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import contextlib
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -120,10 +121,8 @@ class AuthNZScheduler:
             # Cleanup scheduler on initialization failure to prevent resource leak
             logger.error(f"Failed to initialize scheduler jobs: {e}")
             if self.scheduler:
-                try:
+                with contextlib.suppress(_AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS):
                     self.scheduler.shutdown(wait=False)
-                except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS:
-                    pass
             self.scheduler = None
             self._started = False
             self._loop = None
@@ -316,10 +315,8 @@ class AuthNZScheduler:
             deleted_total = 0
             # Include single-user fixed id explicitly
             candidate_ids = set()
-            try:
+            with contextlib.suppress(_AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS):
                 candidate_ids.add(int(_DP.get_single_user_id()))
-            except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS:
-                pass
             try:
                 if base.exists():
                     for entry in base.iterdir():

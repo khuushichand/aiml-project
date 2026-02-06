@@ -11,6 +11,7 @@ Enable via env:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 
 from loguru import logger
@@ -60,10 +61,8 @@ def _cleanup_for_user(user_id: int) -> int:
     try:
         return db.cleanup_old_activities()
     finally:
-        try:
+        with contextlib.suppress(_KANBAN_ACTIVITY_CLEANUP_NONCRITICAL_EXCEPTIONS):
             db.close()
-        except _KANBAN_ACTIVITY_CLEANUP_NONCRITICAL_EXCEPTIONS:
-            pass
 
 
 async def start_kanban_activity_cleanup_scheduler() -> asyncio.Task | None:

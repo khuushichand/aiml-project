@@ -4,7 +4,7 @@
 import asyncio
 import threading
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any, Optional
 
 from loguru import logger
@@ -102,10 +102,8 @@ class ConnectionPool:
             with self._lock:
                 self._usage_stats['active_connections'] -= 1
             if semaphore is not None:
-                try:
+                with suppress(Exception):
                     semaphore.release()
-                except Exception:
-                    pass
 
     async def request(
         self,

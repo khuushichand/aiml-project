@@ -450,7 +450,7 @@ class AuthnzBillingRepo:
 
         # SECURITY: Verify column names are in the allowed whitelist before dynamic SQL
         # This assertion should never fail since we filtered above, but provides defense-in-depth
-        assert all(k in allowed_fields for k in updates.keys()), "Invalid column name in updates"
+        assert all(k in allowed_fields for k in updates), "Invalid column name in updates"
 
         try:
             async with self.db_pool.transaction() as conn:
@@ -462,7 +462,7 @@ class AuthnzBillingRepo:
                         *params,
                     )
                 else:
-                    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+                    set_clause = ", ".join(f"{k} = ?" for k in updates)
                     params = list(updates.values()) + [org_id]
                     await conn.execute(
                         f"UPDATE org_subscriptions SET {set_clause} WHERE org_id = ?",

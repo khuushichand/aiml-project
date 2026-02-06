@@ -8,8 +8,8 @@ No hardcoded secrets allowed.
 import json
 import os
 import secrets
-from ipaddress import ip_address, ip_network
 from functools import lru_cache
+from ipaddress import ip_address, ip_network
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -146,10 +146,7 @@ def _is_local_only_safe_profile(config: "MCPConfig") -> bool:
     if not all(_is_loopback_origin(origin) for origin in cors_origins):
         return False
 
-    if bool(config.trust_x_forwarded_for):
-        return False
-
-    return True
+    return not bool(config.trust_x_forwarded_for)
 
 
 class MCPConfig(BaseSettings):

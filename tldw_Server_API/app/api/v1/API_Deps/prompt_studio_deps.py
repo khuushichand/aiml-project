@@ -2,6 +2,7 @@
 # FastAPI dependency injection for Prompt Studio feature
 
 import asyncio
+import contextlib
 import threading
 from functools import lru_cache
 from pathlib import Path
@@ -166,7 +167,7 @@ async def get_prompt_studio_user(
     import os
 
     # Debug trace to aid tests
-    try:
+    with contextlib.suppress(_PROMPT_STUDIO_CONTEXT_EXCEPTIONS):
         logger.debug(
             "PS get_user path={} method={} authz={} api_key={}",
             getattr(request.url, "path", ""),
@@ -174,8 +175,6 @@ async def get_prompt_studio_user(
             "yes" if request.headers.get("Authorization") else "no",
             "yes" if request.headers.get("X-API-KEY") else "no",
         )
-    except _PROMPT_STUDIO_CONTEXT_EXCEPTIONS:
-        pass
 
     # 1) Test mode: prefer patched hook if available; otherwise use deterministic test user id
     client_id_value = x_client_id if isinstance(x_client_id, str) else None

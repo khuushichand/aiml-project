@@ -95,10 +95,7 @@ async def list_users(
         repo = await AuthnzUsersRepo.from_pool()
         org_ids = await admin_scope_service.get_admin_org_ids(principal)
         if org_id is not None:
-            if org_ids is None:
-                org_ids = [org_id]
-            else:
-                org_ids = [org_id] if org_id in org_ids else []
+            org_ids = [org_id] if org_ids is None else [org_id] if org_id in org_ids else []
         users, total = await repo.list_users(
             offset=offset,
             limit=limit,
@@ -130,10 +127,7 @@ async def export_users(
     try:
         org_ids = await admin_scope_service.get_admin_org_ids(principal)
         if org_id is not None:
-            if org_ids is None:
-                org_ids = [org_id]
-            else:
-                org_ids = [org_id] if org_id in org_ids else []
+            org_ids = [org_id] if org_ids is None else [org_id] if org_id in org_ids else []
         repo = await AuthnzUsersRepo.from_pool()
         users, total = await repo.list_users(
             offset=offset,

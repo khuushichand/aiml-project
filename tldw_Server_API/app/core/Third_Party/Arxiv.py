@@ -4,8 +4,7 @@ import time
 from typing import Any, Optional  # Added for type hinting
 from urllib.parse import quote_plus, urlencode
 
-from bs4 import BeautifulSoup
-from bs4 import FeatureNotFound
+from bs4 import BeautifulSoup, FeatureNotFound
 
 from tldw_Server_API.app.core.http_client import fetch
 

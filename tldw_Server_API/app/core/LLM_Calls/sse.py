@@ -9,6 +9,7 @@ Highlights:
 - Use `sse_done()` to emit a single terminal `[DONE]` marker; do not forward provider DONE lines.
 """
 
+import contextlib
 import json
 from collections.abc import Iterable
 from typing import Any, Callable, Optional
@@ -106,16 +107,12 @@ def normalize_provider_line(
                     name, value = mapped
                 # Preserve control line without dispatching a blank line
                 return ensure_sse_control_line(f"{name}: {value}")
-            try:
+            with contextlib.suppress(Exception):
                 logger.debug(f"Dropping provider control line: {stripped}")
-            except Exception:
-                pass
             return None
     if stripped.startswith(":"):
-        try:
+        with contextlib.suppress(Exception):
             logger.debug(f"Dropping provider comment line: {stripped}")
-        except Exception:
-            pass
         return None
 
     if stripped.startswith("data:"):

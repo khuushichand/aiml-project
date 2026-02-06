@@ -21,7 +21,7 @@ def recall_at_k(ranked_ids: list[str], gt_ids: list[str], k: int) -> float:
 def mrr(ranked_ids: list[str], gt_ids: list[str], k: int) -> float:
     if not ranked_ids or not gt_ids:
         return 0.0
-    gt = set(str(x) for x in gt_ids)
+    gt = {str(x) for x in gt_ids}
     for idx, rid in enumerate(ranked_ids[:k]):
         if rid in gt:
             return 1.0 / float(idx + 1)
@@ -31,7 +31,7 @@ def mrr(ranked_ids: list[str], gt_ids: list[str], k: int) -> float:
 def ndcg(ranked_ids: list[str], gt_ids: list[str], k: int) -> float:
     if not ranked_ids or not gt_ids:
         return 0.0
-    gt = set(str(x) for x in gt_ids)
+    gt = {str(x) for x in gt_ids}
     dcg = 0.0
     for i, rid in enumerate(ranked_ids[:k]):
         rel = 1.0 if rid in gt else 0.0

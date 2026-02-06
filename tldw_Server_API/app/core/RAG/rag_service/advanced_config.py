@@ -367,7 +367,7 @@ class ConfigManager:
         context: Optional[dict[str, Any]] = None
     ) -> dict[str, Any]:
         """Apply feature flags to configuration."""
-        for flag_name, flag in self.feature_flags.items():
+        for _flag_name, flag in self.feature_flags.items():
             if flag.state == FeatureState.DISABLED:
                 continue
 

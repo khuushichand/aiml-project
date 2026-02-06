@@ -35,7 +35,7 @@ class LLMInferenceManager:
             self.ollama = OllamaHandler(self.config.ollama, self.config.app_config)
             self.logger.info("Ollama handler initialized.")
 
-        self.huggingface: Optional["HuggingFaceHandler"] = None
+        self.huggingface: Optional[HuggingFaceHandler] = None
         if self.config.huggingface and self.config.huggingface.enabled:
             # Ensure models_dir exists (use local variable to avoid mutating config)
             hf_cfg = self.config.huggingface

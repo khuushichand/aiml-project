@@ -69,7 +69,17 @@ Validation matrix (to implement in Stage 2/3):
 - `tldw_Server_API/tests/Watchlists/test_perf_scenarios.py` expanded with large-source and large-job cases.
 - New load-oriented test file for API-level scale paths (runs list/export/tallies and run details) using mocked fetchers/services.
 - Mark tests with `@pytest.mark.performance` / `@pytest.mark.load` and enforce explicit timing/assertion thresholds.
-**Status**: Not Started
+**Status**: Complete
+
+### Stage 2 Output (Implemented)
+- Expanded `tldw_Server_API/tests/Watchlists/test_perf_scenarios.py` with high-cardinality source/job listing performance coverage.
+- Added `tldw_Server_API/tests/Watchlists/test_watchlists_scale_load_api.py` covering:
+  - `/watchlists/runs` listing latency + throughput sanity
+  - `/watchlists/jobs/{job_id}/runs` listing latency
+  - `/watchlists/runs/export.csv` global export latency
+  - `/watchlists/runs/export.csv` aggregate tallies latency
+  - `/watchlists/runs/{run_id}/details` latency with tallies/sample
+- Marker registration guard remains in `tldw_Server_API/tests/Watchlists/test_perf_plan_metadata.py`.
 
 ## Stage 3: Operational Limits and Guardrails
 **Goal**: Implement and validate operational limits behavior under stress conditions.
@@ -77,7 +87,17 @@ Validation matrix (to implement in Stage 2/3):
 **Tests**:
 - Unit/integration tests for limit enforcement and boundary behavior (accepted vs rejected payloads).
 - Regression tests for no behavior drift on existing normal-sized watchlist workflows.
-**Status**: Not Started
+**Status**: Complete
+
+### Stage 3 Output (Implemented)
+- Added `tldw_Server_API/tests/Watchlists/test_operational_limits.py` (~25 tests) covering:
+  - `TestListEndpointSizeLimits`: size=200 accepted, size=201 rejected (422) for /sources, /jobs, /runs, /tags, /groups
+  - `TestPreviewEndpointLimits`: limit=200/201 and per_source=100/101 boundary enforcement
+  - `TestCsvExportLimits`: size=1000 accepted, size=1001 rejected (422)
+  - `TestTalliesAggregationScope`: scope=global+aggregate accepted, scope=job+aggregate rejected (400)
+  - `TestDedupSeenAuthGating`: own-user GET/DELETE succeeds, non-admin target_user_id returns 403, admin target_user_id succeeds
+  - `TestRegressionNormalWorkflows`: default-params list calls for sources/jobs/runs return data
+  - `TestPaginationParity`: repeated reads return identical first/last IDs
 
 ## Stage 4: Admin UI Surfacing for Dedup/Seen Tooling
 **Goal**: Surface dedup/seen diagnostics and reset controls in the admin watchlists UI.
@@ -86,7 +106,19 @@ Validation matrix (to implement in Stage 2/3):
 - UI component tests for display state, confirmation flow, and API error handling.
 - Endpoint/UI integration tests validating `target_user_id` behavior and admin-only restrictions.
 - E2E smoke for inspect + reset flow from the admin page.
-**Status**: Not Started
+**Status**: Complete
+
+### Stage 4 Output (Implemented)
+- Added TypeScript types: `SourceSeenStats`, `SourceSeenResetResponse` in `apps/packages/ui/src/types/watchlists.ts`
+- Added service functions: `getSourceSeenStats`, `clearSourceSeen` in `apps/packages/ui/src/services/watchlists.ts`
+- Created `SourceSeenDrawer` component in `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/SourceSeenDrawer.tsx`:
+  - Stats display (seen count, latest seen, backoff status badge)
+  - Backoff details section (defer_until, consecutive not-modified count)
+  - Recent keys scrollable list
+  - Reset controls: "Clear Seen Items" and "Clear All + Reset Backoff" with Popconfirm
+  - Admin section: target user ID input for inspecting other users' seen data
+- Wired Eye icon button into SourcesTab actions column
+- Component tests in `apps/packages/ui/src/components/Option/Watchlists/SourcesTab/__tests__/SourceSeenDrawer.test.tsx` (14 tests)
 
 ## Stage 5: Documentation, Verification, and Rollout Sign-off
 **Goal**: Finalize docs/runbooks and complete end-to-end verification for rollout readiness.
@@ -94,4 +126,26 @@ Validation matrix (to implement in Stage 2/3):
 **Tests**:
 - Focused watchlists suite including Stage 5 scale + dedup UI tests.
 - Regression subset for watchlists outputs and scheduler integration.
-**Status**: Not Started
+**Status**: Complete
+
+### Stage 5 Output
+- Documentation updated: this file and `Docs/Product/Watchlists/Watch_IMPLEMENTATION_PLAN.md`
+- All stages complete; verification commands documented below
+
+### Verification Commands
+```bash
+# Stage 3: Operational limits
+pytest tldw_Server_API/tests/Watchlists/test_operational_limits.py -v
+
+# Dedup/seen backend
+pytest tldw_Server_API/tests/Watchlists/test_dedup_seen_tools.py -v
+
+# All perf/scale
+pytest tldw_Server_API/tests/Watchlists/ -m "performance or load" -v
+
+# Full watchlists suite
+pytest tldw_Server_API/tests/Watchlists/ -v
+
+# Frontend component tests
+cd apps && npx vitest run --reporter=verbose -- SourceSeenDrawer
+```

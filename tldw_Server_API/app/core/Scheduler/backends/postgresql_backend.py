@@ -6,7 +6,7 @@ Leverages PostgreSQL-specific features for optimal performance.
 import asyncio
 import json
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -101,10 +101,8 @@ class PostgreSQLBackend(QueueBackend):
         """
         if self._listener_task:
             self._listener_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await self._listener_task
-            except asyncio.CancelledError:
-                pass
 
         if self.pool:
             await self.pool.close()
@@ -324,7 +322,7 @@ class PostgreSQLBackend(QueueBackend):
                 """, values)
 
             # Notify all affected queues
-            queues = set(t.queue_name or self.config.default_queue_name for t in tasks)
+            queues = {t.queue_name or self.config.default_queue_name for t in tasks}
             for queue in queues:
                 await self._notify_queue(conn, queue)
 
@@ -492,7 +490,7 @@ class PostgreSQLBackend(QueueBackend):
             """)
 
             # Notify affected queues
-            queues = set(row['queue_name'] for row in rows)
+            queues = {row['queue_name'] for row in rows}
             for queue in queues:
                 await self._notify_queue(conn, queue)
 
@@ -571,10 +569,8 @@ class PostgreSQLBackend(QueueBackend):
             row_dict = dict(row)
             payload = row_dict.get('payload')
             if isinstance(payload, str):
-                try:
+                with suppress(json.JSONDecodeError):
                     payload = json.loads(payload)
-                except json.JSONDecodeError:
-                    pass
             metadata = row_dict.get('metadata')
             if isinstance(metadata, str):
                 try:

@@ -20,7 +20,7 @@ import base64
 import binascii
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Union
+from typing import Any, Callable
 
 import numpy as np
 from loguru import logger
@@ -166,7 +166,7 @@ class ParakeetCoreTranscriber:
         """
         return " ".join(self._history)
 
-    async def process_audio_chunk(self, audio: Union[bytes, str, np.ndarray]) -> dict[str, Any] | None:
+    async def process_audio_chunk(self, audio: bytes | str | np.ndarray) -> dict[str, Any] | None:
         """
         Process an incoming audio chunk and emit a partial or final transcription frame when available.
 
@@ -299,7 +299,7 @@ class ParakeetCoreTranscriber:
         return None
 
     # --- Internals ---
-    def _coerce_to_np(self, audio: Union[bytes, str, np.ndarray]) -> np.ndarray | None:
+    def _coerce_to_np(self, audio: bytes | str | np.ndarray) -> np.ndarray | None:
         """
         Convert an audio input into a mono float32 NumPy array suitable for decoding.
 
@@ -443,10 +443,7 @@ class ParakeetCoreTranscriber:
         """
         chunk_duration = max(float(chunk_duration), 0.0)
         overlap_cfg = max(float(self.config.overlap_duration or 0.0), 0.0)
-        if self._segment_index == 0:
-            overlap_used = 0.0
-        else:
-            overlap_used = min(overlap_cfg, chunk_duration)
+        overlap_used = 0.0 if self._segment_index == 0 else min(overlap_cfg, chunk_duration)
 
         new_audio_duration = chunk_duration - overlap_used
         if self._segment_index == 0:

@@ -326,7 +326,7 @@ class TopicMonitoringDB:
                 ).fetchall()
                 watchlists: list[dict[str, Any]] = []
                 for row in rows:
-                    watchlists.append({k: row[k] for k in row.keys()})
+                    watchlists.append({k: row[k] for k in row})
                 if not include_rules or not watchlists:
                     return watchlists
                 ids = [str(w["id"]) for w in watchlists if w.get("id") is not None]
@@ -344,7 +344,7 @@ class TopicMonitoringDB:
                 ).fetchall()
                 rules_by_watchlist: dict[str, list[dict[str, Any]]] = {}
                 for row in rule_rows:
-                    item = {k: row[k] for k in row.keys()}
+                    item = {k: row[k] for k in row}
                     item["tags"] = self._deserialize_tags(item.get("tags"))
                     rules_by_watchlist.setdefault(str(item["watchlist_id"]), []).append(item)
                 for wl in watchlists:
@@ -367,7 +367,7 @@ class TopicMonitoringDB:
                 ).fetchone()
                 if not row:
                     return None
-                wl = {k: row[k] for k in row.keys()}
+                wl = {k: row[k] for k in row}
                 return wl
             finally:
                 conn.close()
@@ -401,7 +401,7 @@ class TopicMonitoringDB:
                     ).fetchone()
                 if not row:
                     return None
-                return {k: row[k] for k in row.keys()}
+                return {k: row[k] for k in row}
             finally:
                 conn.close()
 
@@ -653,7 +653,7 @@ class TopicMonitoringDB:
                 rows = cur.fetchall()
                 out: list[dict[str, Any]] = []
                 for r in rows:
-                    item = {k: r[k] for k in r.keys()}
+                    item = {k: r[k] for k in r}
                     out.append(item)
                 return out
             finally:

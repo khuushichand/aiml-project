@@ -24,6 +24,8 @@ try:
 except (ImportError, ModuleNotFoundError):  # pragma: no cover
     yaml = None  # type: ignore
 
+import contextlib
+
 from jinja2 import StrictUndefined, TemplateError, nodes
 from jinja2.sandbox import SandboxedEnvironment
 from loguru import logger
@@ -295,7 +297,7 @@ def _validate_entries(entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any
             errors.append({"code": "max_replacements_invalid", "field": f"{path}.max_replacements", "message": "Must be >= 0"})
 
         # Unknown fields
-        for k in e.keys():
+        for k in e:
             if k not in ALLOWED_ENTRY_FIELDS:
                 warnings.append({
                     "code": "unknown_field",
@@ -344,10 +346,8 @@ def validate_dictionary(data: dict[str, Any], schema_version: int = 1, strict: b
         _start_t = time.perf_counter()  # type: ignore[name-defined]
     except _VALIDATE_DICT_NONCRITICAL_EXCEPTIONS:
         pass
-    try:
+    with contextlib.suppress(_VALIDATE_DICT_NONCRITICAL_EXCEPTIONS):
         increment_counter("chat_dictionary_validate_requests_total", labels={"strict": str(bool(strict)).lower()})
-    except _VALIDATE_DICT_NONCRITICAL_EXCEPTIONS:
-        pass
 
     if not isinstance(data, dict):
         errors.append({"code": "schema_invalid", "field": "root", "message": "Payload must be an object"})

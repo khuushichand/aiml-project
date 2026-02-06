@@ -10,6 +10,7 @@ Location: tldw_Server_API/app/core/Scheduler/handlers/workflows.py
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any
 
 from loguru import logger
@@ -93,10 +94,8 @@ async def workflow_run(payload: dict[str, Any]) -> dict[str, Any]:
 
     # Shadow-write this run into the daily ledger so RG daily caps account for
     # scheduled runs as well. Fail open if ledger unavailable.
-    try:
+    with contextlib.suppress(Exception):
         await record_workflow_run(entity_scope="user", entity_value=str(user_id), run_id=run_id, units=1)
-    except Exception:
-        pass
 
     # Inject secrets ephemerally
     secrets = payload.get("secrets")

@@ -1,6 +1,7 @@
 # audio_tts.py
 # Description: Audio TTS endpoints and helpers.
 import base64
+import contextlib
 import inspect
 import json
 import time
@@ -365,10 +366,8 @@ async def create_speech(
         if request_data.lang_code:
             params_json["lang_code"] = request_data.lang_code
         if request_data.normalization_options is not None:
-            try:
+            with contextlib.suppress(_AUDIO_TTS_NONCRITICAL_EXCEPTIONS):
                 params_json["normalization_options"] = model_dump_compat(request_data.normalization_options)
-            except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
-                pass
 
         voice_info: dict[str, Any] | None = {}
         meta_voice_info = metadata.get("voice_info")
@@ -376,12 +375,10 @@ async def create_speech(
             voice_info.update(meta_voice_info)
         if voice_info is not None:
             voice_info.pop("voice_reference", None)
-        if request_data.voice_reference:
-            if voice_info is not None:
-                voice_info["has_voice_reference"] = True
-        if request_data.reference_duration_min is not None:
-            if voice_info is not None:
-                voice_info["reference_duration_min"] = request_data.reference_duration_min
+        if request_data.voice_reference and voice_info is not None:
+            voice_info["has_voice_reference"] = True
+        if request_data.reference_duration_min is not None and voice_info is not None:
+            voice_info["reference_duration_min"] = request_data.reference_duration_min
         if not voice_info:
             voice_info = None
 
@@ -570,10 +567,7 @@ async def create_speech(
     }
     try:
         metadata = getattr(request_data, "_tts_metadata", None)
-        if isinstance(metadata, dict):
-            alignment_payload = metadata.get("alignment")
-        else:
-            alignment_payload = None
+        alignment_payload = metadata.get("alignment") if isinstance(metadata, dict) else None
     except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
         alignment_payload = None
     if alignment_payload:
@@ -711,10 +705,8 @@ async def create_speech_metadata(
         _raise_for_tts_error(exc, request_id)
 
     try:
-        try:
+        with contextlib.suppress(StopAsyncIteration):
             await speech_iter.__anext__()
-        except StopAsyncIteration:
-            pass
     except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
         _raise_for_tts_error(exc, request_id)
     finally:

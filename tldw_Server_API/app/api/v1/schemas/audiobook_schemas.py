@@ -4,7 +4,7 @@ Pydantic schemas for audiobook creation APIs.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -24,7 +24,7 @@ class SourceRef(BaseModel):
 
     input_type: SourceInputType = Field(..., description="Source type for the input")
     upload_id: str | None = Field(None, description="Upload id for a file previously uploaded")
-    media_id: Union[int, str] | None = Field(None, description="Existing media id to read from")
+    media_id: int | str | None = Field(None, description="Existing media id to read from")
     raw_text: str | None = Field(None, description="Raw text to process directly")
 
     model_config = {

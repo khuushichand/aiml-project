@@ -113,6 +113,8 @@ except (ImportError, OSError):
             conversation_id: int | None = None,
         ) -> Any:
             return type("_Result", (), {"channel": "chatbook", "status": "skipped", "details": {"reason": "notifications_unavailable"}})()
+import contextlib
+
 from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
     Group,
     GroupCreateRequest,
@@ -132,11 +134,11 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
     ScrapedItemUpdateRequest,
     Source,
     SourceCreateRequest,
-    SourceSeenResetResponse,
-    SourceSeenStats,
     SourcesBulkCreateItem,
     SourcesBulkCreateRequest,
     SourcesBulkCreateResponse,
+    SourceSeenResetResponse,
+    SourceSeenStats,
     SourcesImportItem,
     SourcesImportResponse,
     SourcesListResponse,
@@ -152,9 +154,9 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
     WatchlistTemplateDetail,
     WatchlistTemplateListResponse,
     WatchlistTemplateSummary,
+    WatchlistTemplateValidationErrorResponse,
     WatchlistTemplateVersionsResponse,
     WatchlistTemplateVersionSummary,
-    WatchlistTemplateValidationErrorResponse,
 )
 
 _WATCHLISTS_NONCRITICAL_EXCEPTIONS = (
@@ -509,10 +511,7 @@ def _items_to_markdown_lines(items: list[ScrapedItem]) -> list[str]:
     lines: list[str] = []
     for idx, itm in enumerate(items, 1):
         entry_title = itm.title or f"Item {idx}"
-        if itm.url:
-            line = f"{idx}. [{entry_title}]({itm.url})"
-        else:
-            line = f"{idx}. {entry_title}"
+        line = f"{idx}. [{entry_title}]({itm.url})" if itm.url else f"{idx}. {entry_title}"
         if itm.summary:
             line += f" - {itm.summary}"
         lines.append(line)
@@ -525,10 +524,7 @@ def _items_to_html_entries(items: list[ScrapedItem]) -> list[str]:
         title_text = escape(itm.title or f"Item {idx}")
         summary_text = escape(itm.summary or "")
         url = itm.url
-        if url:
-            entry = f'<li><a href="{escape(url)}">{title_text}</a>'
-        else:
-            entry = f"<li>{title_text}"
+        entry = f'<li><a href="{escape(url)}">{title_text}</a>' if url else f"<li>{title_text}"
         if summary_text:
             entry += f" - {summary_text}"
         entry += "</li>"
@@ -993,10 +989,8 @@ async def create_source(
                         response.headers["X-YouTube-Canonical-URL"] = url_str
                 except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
                     pass
-                try:
+                with contextlib.suppress(_WATCHLISTS_NONCRITICAL_EXCEPTIONS):
                     logger.debug(f"watchlists.create_source: normalized YouTube URL {orig_url_for_log} -> {url_str}")
-                except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-                    pass
             else:
                 _validate_youtube_feed_or_raise(url_str, str(payload.source_type))
         row = db.create_source(
@@ -1016,10 +1010,8 @@ async def create_source(
             except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
                 pass
         if payload.group_ids is not None:
-            try:
+            with contextlib.suppress(_WATCHLISTS_NONCRITICAL_EXCEPTIONS):
                 db.set_source_groups(row.id, group_ids or [])
-            except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-                pass
     except HTTPException:
         # Propagate validation/HTTP errors unchanged
         raise
@@ -1390,10 +1382,8 @@ async def update_source(
                     response.headers["X-YouTube-Canonical-URL"] = target_url
             except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
                 pass
-            try:
+            with contextlib.suppress(_WATCHLISTS_NONCRITICAL_EXCEPTIONS):
                 logger.debug(f"watchlists.update_source: normalized YouTube URL {orig_url_for_log} -> {target_url}")
-            except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-                pass
         else:
             _validate_youtube_feed_or_raise(target_url, target_type)
     patch = payload.model_dump(exclude_unset=True)
@@ -1404,10 +1394,8 @@ async def update_source(
         patch["settings_json"] = json.dumps(patch.pop("settings")) if patch.get("settings") is not None else None
     # Coerce pydantic types to primitives for DB layer
     if "url" in patch and patch["url"] is not None:
-        try:
+        with contextlib.suppress(_WATCHLISTS_NONCRITICAL_EXCEPTIONS):
             patch["url"] = str(patch["url"])
-        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-            pass
     row = db.update_source(source_id, patch)
     # tags replacement
     if payload.tags is not None:
@@ -1514,10 +1502,8 @@ async def bulk_create_sources(
                 normalized = _normalize_youtube_feed_url(url_str)
                 if normalized:
                     url_str = normalized
-                    try:
+                    with contextlib.suppress(_WATCHLISTS_NONCRITICAL_EXCEPTIONS):
                         logger.debug(f"watchlists.bulk_create_sources: normalized YouTube URL {s.url} -> {url_str}")
-                    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-                        pass
                 else:
                     _validate_youtube_feed_or_raise(url_str, str(s.source_type))
         except HTTPException as ve:
@@ -1989,10 +1975,7 @@ async def preview_job(
             }
             action, meta = _evaluate_filters(job_filters, candidate)
             # Determine final decision with include-only gating
-            if action == "exclude" or include_gating_active and action != "include":
-                decision = "filtered"
-            else:
-                decision = "ingest"
+            decision = "filtered" if action == "exclude" or include_gating_active and action != "include" else "ingest"
             flagged = (action == "flag")
             if decision == "ingest":
                 total_ingestable += 1
@@ -2814,10 +2797,8 @@ async def stream_run(
         raise
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Watchlists WS error: {exc}")
-        try:
+        with contextlib.suppress(_WATCHLISTS_NONCRITICAL_EXCEPTIONS):
             await stream.ws.close(code=status.WS_1011_INTERNAL_ERROR)
-        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-            pass
 
 
 # --------------------
@@ -3095,10 +3076,8 @@ async def create_output(
 
     metadata: dict[str, Any] = {}
     if payload.metadata:
-        try:
+        with contextlib.suppress(_WATCHLISTS_NONCRITICAL_EXCEPTIONS):
             metadata.update(payload.metadata)
-        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-            pass
     metadata.update(
         {
             "item_count": len(item_models),

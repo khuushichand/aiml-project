@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import importlib.util
 import io
 import json
@@ -73,9 +74,8 @@ class HunyuanOCRBackend(OCRBackend):
     @classmethod
     def available(cls) -> bool:
         mode = _resolve_mode()
-        if mode in ("auto", "vllm"):
-            if os.getenv("HUNYUAN_VLLM_URL"):
-                return True
+        if mode in ("auto", "vllm") and os.getenv("HUNYUAN_VLLM_URL"):
+            return True
         if mode in ("auto", "transformers"):
             try:
                 has_tf = importlib.util.find_spec("transformers") is not None
@@ -245,10 +245,7 @@ def _load_transformers():
         device_env = os.getenv("HUNYUAN_DEVICE")
         device_map = device_env or "auto"
 
-        if torch.cuda.is_available():
-            dtype = torch.float16
-        else:
-            dtype = torch.float32
+        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
         _TF_MODEL = HunYuanVLForConditionalGeneration.from_pretrained(
             model_path,
@@ -281,10 +278,8 @@ def _ocr_via_transformers(image_bytes: bytes, prompt: str) -> str:
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     inputs = processor(text=[text], images=[img], return_tensors="pt")
 
-    try:
+    with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
         inputs = inputs.to(model.device)
-    except (AttributeError, RuntimeError, TypeError, ValueError):
-        pass
 
     max_new_tokens = int(os.getenv("HUNYUAN_MAX_NEW_TOKENS", "2048"))
     do_sample = str(os.getenv("HUNYUAN_DO_SAMPLE", "false")).lower() in ("1", "true", "yes")
@@ -333,10 +328,7 @@ def _build_result_from_output(
     fmt = normalize_ocr_format(output_format)
     if fmt == "unknown":
         preset = (prompt_preset or "").lower()
-        if preset in ("doc", "table"):
-            fmt = "markdown"
-        else:
-            fmt = "text"
+        fmt = "markdown" if preset in ("doc", "table") else "text"
 
     parsed = None
     if fmt == "json" or (prompt_preset or "").lower() == "json":

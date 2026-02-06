@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from dataclasses import dataclass
@@ -134,10 +135,8 @@ def enqueue_stage(
         return client.xadd(stream, _sanitize_stream_payload(payload))
     finally:
         if created_client:
-            try:
+            with contextlib.suppress(Exception):
                 client.close()
-            except Exception:
-                pass
 
 
 def enqueue_chunking_job(
@@ -183,10 +182,8 @@ def enqueue_chunking_job(
         return client.xadd(stream, _sanitize_stream_payload(payload))
     finally:
         if created_client:
-            try:
+            with contextlib.suppress(Exception):
                 client.close()
-            except Exception:
-                pass
 
 
 def enqueue_content_job(
@@ -232,10 +229,8 @@ def enqueue_content_job(
         return client.xadd(stream, _sanitize_stream_payload(payload))
     finally:
         if created_client:
-            try:
+            with contextlib.suppress(Exception):
                 client.close()
-            except Exception:
-                pass
 
 
 __all__ = [

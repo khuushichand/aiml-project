@@ -7,6 +7,7 @@ and resource management for handling multiple queries simultaneously.
 """
 
 import asyncio
+import contextlib
 import time
 import uuid
 from collections import deque
@@ -543,10 +544,8 @@ class BatchScheduler:
             self.running = False
             if self.scheduler_task:
                 self.scheduler_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await self.scheduler_task
-                except asyncio.CancelledError:
-                    pass
             logger.info("Batch scheduler stopped")
 
     async def _scheduler_loop(self):

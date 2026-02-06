@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import hashlib
 import json
@@ -1109,13 +1110,10 @@ async def persist_primary_av_item(
         combined_keywords.update(
             k.strip().lower() for k in extracted_keywords if k and isinstance(k, str) and k.strip()
         )
-    final_keywords_list = sorted(list(combined_keywords))
+    final_keywords_list = sorted(combined_keywords)
 
     # Use original input ref for default title to match legacy.
-    if original_input_ref:
-        default_title = FilePath(str(original_input_ref)).stem
-    else:
-        default_title = "Untitled"
+    default_title = FilePath(str(original_input_ref)).stem if original_input_ref else "Untitled"
 
     title_for_db = metadata_for_db.get(
         "title",
@@ -1281,22 +1279,22 @@ async def persist_primary_av_item(
         except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             pass
 
-        db_add_kwargs = dict(
-            url=str(original_input_ref),
-            title=title_for_db,
-            media_type=media_type,
-            content=content_for_db,
-            keywords=final_keywords_list,
-            prompt=getattr(form_data, "custom_prompt", None),
-            analysis_content=analysis_for_db,
-            safe_metadata=safe_metadata_json,
-            source_hash=source_hash_for_db,
-            transcription_model=transcription_model_used,
-            author=author_for_db,
-            overwrite=getattr(form_data, "overwrite_existing", False),
-            chunk_options=chunk_options,
-            chunks=chunks_for_sql,
-        )
+        db_add_kwargs = {
+            "url": str(original_input_ref),
+            "title": title_for_db,
+            "media_type": media_type,
+            "content": content_for_db,
+            "keywords": final_keywords_list,
+            "prompt": getattr(form_data, "custom_prompt", None),
+            "analysis_content": analysis_for_db,
+            "safe_metadata": safe_metadata_json,
+            "source_hash": source_hash_for_db,
+            "transcription_model": transcription_model_used,
+            "author": author_for_db,
+            "overwrite": getattr(form_data, "overwrite_existing", False),
+            "chunk_options": chunk_options,
+            "chunks": chunks_for_sql,
+        }
 
         def _db_worker() -> Any:
             worker_db: MediaDatabase | None = None
@@ -1557,13 +1555,11 @@ async def process_batch_media(
                 )
                 if not getattr(policy_result, "allowed", False):
                     reason = policy_result.reason or "URL blocked by security policy"
-                    try:
+                    with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
                         get_metrics_registry().increment(
                             "security_ssrf_block_total",
                             1,
                         )
-                    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
-                        pass
                     combined_results.append(
                         {
                             "status": "Error",
@@ -2270,7 +2266,7 @@ async def process_document_like_item(
                         "security_ssrf_block_total",
                         1,
                     )
-                    raise exc
+                    raise
 
             from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (  # type: ignore  # noqa: E501
                 download_url_async as _core_download_url_async,
@@ -2965,7 +2961,7 @@ async def persist_doc_item_and_children(
     except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
         pass
 
-    final_keywords_list = sorted(list(combined_keywords))
+    final_keywords_list = sorted(combined_keywords)
     try:
         final_result["keywords"] = final_keywords_list
         logger.info(
@@ -2982,10 +2978,7 @@ async def persist_doc_item_and_children(
             "parser", "Imported"
         )
 
-    if item_input_ref:
-        default_title = FilePath(item_input_ref).stem
-    else:
-        default_title = "Untitled"
+    default_title = FilePath(item_input_ref).stem if item_input_ref else "Untitled"
 
     title_for_db = (
         getattr(form_data, "title", None)
@@ -3054,10 +3047,8 @@ async def persist_doc_item_and_children(
                         normalize_safe_metadata,
                     )
 
-                    try:
+                    with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
                         safe_meta = normalize_safe_metadata(safe_meta)
-                    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
-                        pass
                     safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
             except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                 safe_metadata_json = None
@@ -3111,22 +3102,22 @@ async def persist_doc_item_and_children(
             except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                 chunks_for_sql = None
 
-            db_add_kwargs = dict(
-                url=item_input_ref,
-                title=title_for_db,
-                media_type=media_type,
-                content=content_for_db,
-                keywords=final_keywords_list,
-                prompt=getattr(form_data, "custom_prompt", None),
-                analysis_content=analysis_for_db,
-                safe_metadata=safe_metadata_json,
-                source_hash=source_hash_for_db,
-                transcription_model=model_used,
-                author=author_for_db,
-                overwrite=getattr(form_data, "overwrite_existing", False),
-                chunk_options=chunk_options,
-                chunks=chunks_for_sql,
-            )
+            db_add_kwargs = {
+                "url": item_input_ref,
+                "title": title_for_db,
+                "media_type": media_type,
+                "content": content_for_db,
+                "keywords": final_keywords_list,
+                "prompt": getattr(form_data, "custom_prompt", None),
+                "analysis_content": analysis_for_db,
+                "safe_metadata": safe_metadata_json,
+                "source_hash": source_hash_for_db,
+                "transcription_model": model_used,
+                "author": author_for_db,
+                "overwrite": getattr(form_data, "overwrite_existing", False),
+                "chunk_options": chunk_options,
+                "chunks": chunks_for_sql,
+            }
 
             def _db_worker() -> Any:
                 worker_db: MediaDatabase | None = None

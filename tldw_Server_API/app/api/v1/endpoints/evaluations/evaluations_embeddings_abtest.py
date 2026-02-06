@@ -2,6 +2,7 @@
 Embeddings A/B test endpoints extracted from evaluations_unified.
 """
 
+import contextlib
 import json
 import os
 from typing import Optional
@@ -176,22 +177,18 @@ async def run_embeddings_abtest(
     from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import ABTestChunking
     cfg = payload.config
     if getattr(cfg, 'chunking', None) is None:
-        try:
+        with contextlib.suppress(_EMB_ABTEST_NONCRITICAL_EXCEPTIONS):
             cfg.chunking = ABTestChunking(method='sentences', size=200, overlap=20, language=None)
-        except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
-            pass
     try:
         validate_abtest_policy(cfg, user=current_user)
     except EmbeddingsABTestPolicyError as exc:
-        try:
+        with contextlib.suppress(_EMB_ABTEST_NONCRITICAL_EXCEPTIONS):
             db.set_abtest_status(
                 test_id,
                 'failed',
                 stats_json={"error": str(exc), "policy": exc.details, "status_code": exc.status_code},
                 created_by=user_ctx,
             )
-        except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
-            pass
         raise HTTPException(status_code=exc.status_code, detail=str(exc))
 
     # In testing mode, execute synchronously to make polling deterministic
@@ -203,10 +200,8 @@ async def run_embeddings_abtest(
 
     if testing:
         logger.info(f"A/B test running synchronously in TESTING mode: {test_id}")
-        try:
+        with contextlib.suppress(_EMB_ABTEST_NONCRITICAL_EXCEPTIONS):
             db.set_abtest_status(test_id, 'running', stats_json={"progress": {"phase": 0.01}}, created_by=user_ctx)
-        except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
-            pass
         log_run_started(
             user_id=str(current_user.id),
             run_id=str(test_id),
@@ -218,20 +213,16 @@ async def run_embeddings_abtest(
             await run_abtest_full(db, cfg, test_id, str(current_user.id), media_db)
         except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS as _e:
             run_error = _e
-            try:
+            with contextlib.suppress(_EMB_ABTEST_NONCRITICAL_EXCEPTIONS):
                 logger.warning(f"A/B test synchronous run failed: {_e}")
-            except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
-                pass
         try:
             if idempotency_key:
                 db.record_idempotency("emb_abtest_run", idempotency_key, test_id, user_ctx)
         except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
             pass
         if run_error is not None:
-            try:
+            with contextlib.suppress(_EMB_ABTEST_NONCRITICAL_EXCEPTIONS):
                 db.set_abtest_status(test_id, 'failed', stats_json={"error": str(run_error)}, created_by=user_ctx)
-            except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
-                pass
             return EmbeddingsABTestStatusResponse(test_id=test_id, status='failed', progress={"phase": 0.0})
         return EmbeddingsABTestStatusResponse(test_id=test_id, status='completed', progress={"phase": 1.0})
 
@@ -253,15 +244,13 @@ async def run_embeddings_abtest(
             idempotency_key=abtest_jobs_idempotency_key(test_id, idempotency_key),
         )
         job_ref = job_row.get("uuid") or job_row.get("id")
-        try:
+        with contextlib.suppress(_EMB_ABTEST_NONCRITICAL_EXCEPTIONS):
             db.set_abtest_status(
                 test_id,
                 'running',
                 stats_json={"progress": {"phase": 0.01}, "job_id": job_ref},
                 created_by=user_ctx,
             )
-        except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
-            pass
         log_run_started(
             user_id=str(current_user.id),
             run_id=str(job_ref or test_id),

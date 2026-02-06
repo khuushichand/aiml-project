@@ -73,7 +73,7 @@ def load_prompt(module: str, key: str) -> Optional[str]:
             if isinstance(ydata, dict):
                 # two shapes supported: {key: str} or {templates: {name: {template:..., type:...}}}
                 # Try flat map first
-                if norm in {_norm_key(k): k for k in ydata.keys()}:
+                if norm in {_norm_key(k): k for k in ydata}:
                     # Find original key name casing
                     for k, v in ydata.items():
                         if _norm_key(k) == norm and isinstance(v, str):
@@ -110,7 +110,7 @@ def load_prompt(module: str, key: str) -> Optional[str]:
             text = ""
         if text:
             pattern = re.compile(
-                r"^\s*#{1,6}\s*([^\n]+?%s[^\n]*)\n+```([\s\S]*?)```" % re.escape(key),
+                rf"^\s*#{{1,6}}\s*([^\n]+?{re.escape(key)}[^\n]*)\n+```([\s\S]*?)```",
                 re.IGNORECASE | re.MULTILINE,
             )
             m = pattern.search(text)

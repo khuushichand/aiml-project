@@ -44,6 +44,8 @@ def _get_chunking_str(key: str, default: str) -> str:
     except (ImportError, AttributeError, KeyError, ValueError) as e:
         logger.debug(f"_get_chunking_str: config lookup failed for '{key}', using default='{default}': {e}")
         return default
+import contextlib
+
 from ..exceptions import InvalidInputError
 from ..security_logger import get_security_logger
 
@@ -128,9 +130,8 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
                         depth += 1
                         if depth > limit:
                             raise InvalidInputError(f"JSON nesting depth exceeds safe limit ({limit})")
-                    elif ch in '}]':
-                        if depth > 0:
-                            depth -= 1
+                    elif ch in '}]' and depth > 0:
+                        depth -= 1
 
         try:
             _estimate_nesting_depth(text, limit=2000)
@@ -210,9 +211,8 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
                         depth += 1
                         if depth > limit:
                             raise InvalidInputError(f"JSON nesting depth exceeds safe limit ({limit})")
-                    elif ch in '}]':
-                        if depth > 0:
-                            depth -= 1
+                    elif ch in '}]' and depth > 0:
+                        depth -= 1
 
         _estimate_nesting_depth(text, limit=2000)
 
@@ -240,10 +240,8 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
                     continue
                 start_char = window[0][0]
                 end_char = window[-1][1]
-                try:
+                with contextlib.suppress(Exception):
                     end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
-                except Exception:
-                    pass
                 chunk_text = text[start_char:end_char]
                 md = ChunkMetadata(
                     index=idx,
@@ -933,10 +931,8 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
         for idx, chunk in enumerate(chunks):
             start_char = min(e[3] for e in chunk)
             end_char = max(e[4] for e in chunk)
-            try:
+            with contextlib.suppress(Exception):
                 end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
-            except Exception:
-                pass
             # Build chunk text in requested output format (offsets still refer to source).
             if output_format == 'xml':
                 chunk_elements = [(p, t.strip(), el) for (p, t, el, _s, _e) in chunk]
@@ -1043,7 +1039,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
         current_chunk = []
         current_word_count = 0
 
-        for i, (path, content, elem) in enumerate(elements):
+        for _i, (path, content, elem) in enumerate(elements):
             word_count = len(content.split())
 
             # Check if adding this element exceeds max_size
@@ -1127,7 +1123,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
             current_parent = new_root
             current_path = root_tag
 
-            for i, part in enumerate(path_parts[1:-1] if len(path_parts) > 1 else []):
+            for _i, part in enumerate(path_parts[1:-1] if len(path_parts) > 1 else []):
                 # Strip array index if present (e.g., "item[0]" -> "item")
                 tag_name = part.split('[')[0] if '[' in part else part
                 current_path = f"{current_path}/{part}"

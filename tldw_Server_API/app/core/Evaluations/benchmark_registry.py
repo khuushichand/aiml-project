@@ -340,7 +340,7 @@ class BenchmarkRegistry:
                 )
                 return evaluator
             except Exception as e:
-                logger.error(f"Failed to create SimpleQA evaluator: {e}")
+                logger.exception(f"Failed to create SimpleQA evaluator: {e}")
                 return None
 
         eval_class = self.EVALUATION_TYPES.get(config.evaluation_type)
@@ -356,7 +356,7 @@ class BenchmarkRegistry:
             )
             return evaluator
         except Exception as e:
-            logger.error(f"Failed to create evaluator for {benchmark_name}: {e}")
+            logger.exception(f"Failed to create evaluator for {benchmark_name}: {e}")
             return None
 
     def load_dataset(self, benchmark_name: str, limit: Optional[int] = None) -> list[dict[str, Any]]:
@@ -412,7 +412,7 @@ class BenchmarkRegistry:
             return normalized_data
 
         except Exception as e:
-            logger.error(f"Failed to load dataset for {benchmark_name}: {e}")
+            logger.exception(f"Failed to load dataset for {benchmark_name}: {e}")
             return []
 
     def save_config(self, config: BenchmarkConfig, path: str) -> None:
@@ -447,7 +447,7 @@ class BenchmarkRegistry:
             return config
 
         except Exception as e:
-            logger.error(f"Failed to load config from {path}: {e}")
+            logger.exception(f"Failed to load config from {path}: {e}")
             return None
 
 

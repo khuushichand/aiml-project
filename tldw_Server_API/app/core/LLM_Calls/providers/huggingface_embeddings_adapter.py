@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Union
+from typing import Any
 
 from loguru import logger
 
@@ -35,7 +35,7 @@ class HuggingFaceEmbeddingsAdapter(EmbeddingsProvider):
             h["Authorization"] = f"Bearer {api_key}"
         return h
 
-    def _normalize(self, raw: Union[list[Any], dict[str, Any]], *, multi: bool) -> dict[str, Any]:
+    def _normalize(self, raw: list[Any] | dict[str, Any], *, multi: bool) -> dict[str, Any]:
         # HF returns list[list[float]] or sometimes dict containing embeddings
         if isinstance(raw, dict) and "data" in raw:
             return raw  # already normalized by caller

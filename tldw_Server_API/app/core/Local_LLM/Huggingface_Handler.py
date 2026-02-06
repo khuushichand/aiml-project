@@ -112,13 +112,13 @@ class HuggingFaceHandler(BaseLLMHandler):
             self.logger.info(f"Successfully downloaded model '{model_identifier}' to {model_save_path}")
             return str(model_save_path)
         except Exception as e:
-            self.logger.error(f"Failed to download model '{model_identifier}': {e}")
+            self.logger.exception(f"Failed to download model '{model_identifier}': {e}")
             if model_save_path.exists(): # Attempt to clean up partial download
                  try:
                     import shutil
                     await asyncio.to_thread(shutil.rmtree, model_save_path, ignore_errors=False)
                  except Exception as e_clean:
-                    self.logger.error(f"Failed to cleanup partial download at {model_save_path}: {e_clean}")
+                    self.logger.exception(f"Failed to cleanup partial download at {model_save_path}: {e_clean}")
             raise ModelDownloadError(f"Failed to download model '{model_identifier}': {e}")
 
     def _get_torch_dtype(self, dtype_str: Optional[str]):
@@ -183,12 +183,12 @@ class HuggingFaceHandler(BaseLLMHandler):
             self.logger.info(f"Model and tokenizer for '{model_name_or_path}' loaded successfully.")
             return model, tokenizer
         except Exception as e:
-            self.logger.error(f"Error loading model '{model_name_or_path}': {e}")
+            self.logger.exception(f"Error loading model '{model_name_or_path}': {e}")
             raise InferenceError(f"Error loading model '{model_name_or_path}': {e}")
 
     async def unload_model(self, model_name_or_path: str):
         """Unloads a model from memory to free up resources."""
-        keys_to_remove = [k for k in self.loaded_models.keys() if k[0] == model_name_or_path]
+        keys_to_remove = [k for k in self.loaded_models if k[0] == model_name_or_path]
         if keys_to_remove:
             for key in keys_to_remove:
                 del self.loaded_models[key]
@@ -243,7 +243,7 @@ class HuggingFaceHandler(BaseLLMHandler):
                 "max_new_tokens": max_new_tokens,
                 "temperature": temperature if temperature > 0 else None, # Temp 0 can be problematic
                 "top_p": top_p if temperature > 0 else None, # top_p ignored if temp is 0
-                "do_sample": True if temperature > 0 else False,
+                "do_sample": temperature > 0,
                 **generation_kwargs # Allow overriding defaults
             }
             # Filter out None values from gen_kwargs

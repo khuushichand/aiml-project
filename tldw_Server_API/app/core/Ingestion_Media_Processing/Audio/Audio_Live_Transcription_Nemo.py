@@ -144,7 +144,7 @@ class NemoLiveTranscriber:
             else:
                 logging.error(f"Failed to load {self.config.model} model")
         except Exception as e:
-            logging.error(f"Error loading model: {e}")
+            logging.exception(f"Error loading model: {e}")
 
     def _default_handler(self, text: str):
         """Default handler for transcriptions."""
@@ -263,7 +263,7 @@ class NemoLiveTranscriber:
                     self._process_silence_based(chunk)
 
             except Exception as e:
-                logging.error(f"Error in listen loop: {e}")
+                logging.exception(f"Error in listen loop: {e}")
 
     def _process_continuous(self):
         """Process audio in continuous mode."""
@@ -361,7 +361,7 @@ class NemoLiveTranscriber:
                 self.on_transcription(text)
 
         except Exception as e:
-            logging.error(f"Error processing buffer: {e}")
+            logging.exception(f"Error processing buffer: {e}")
 
     def _partial_loop(self):
         """Loop for generating partial transcriptions."""
@@ -379,7 +379,7 @@ class NemoLiveTranscriber:
                     self.last_partial_time = now
 
             except Exception as e:
-                logging.error(f"Error in partial loop: {e}")
+                logging.exception(f"Error in partial loop: {e}")
 
     def _process_partial(self):
         """Process partial buffer for interim results."""
@@ -420,7 +420,7 @@ class NemoLiveTranscriber:
             self.partial_buffer = self.partial_buffer[-5:]  # Keep last 5 chunks
 
         except Exception as e:
-            logging.error(f"Error processing partial: {e}")
+            logging.exception(f"Error processing partial: {e}")
 
     def __enter__(self):
         """Context manager entry."""

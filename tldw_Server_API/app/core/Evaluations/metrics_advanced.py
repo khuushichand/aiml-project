@@ -371,12 +371,10 @@ class AdvancedEvaluationMetrics:
             return
 
         start_time = time.time()
-        error_occurred = False
 
         try:
             yield
         except Exception:
-            error_occurred = True
             self._error_count += 1
             raise
         finally:

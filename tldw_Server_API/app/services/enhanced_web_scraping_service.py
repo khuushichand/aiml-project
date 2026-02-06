@@ -568,7 +568,7 @@ class WebScrapingService:
 
                 try:
                     # Prepare data for database
-                    info_dict = {
+                    {
                         "title": article.get("title", "Untitled"),
                         "author": article.get("author", "Unknown"),
                         "source": article.get("url", ""),
@@ -598,10 +598,9 @@ class WebScrapingService:
                     )
 
                     # Prepare segments
-                    segments = [{"Text": content_with_metadata}]
 
                     # Use summary if available
-                    summary = article.get("summary", "No summary available")
+                    article.get("summary", "No summary available")
 
                     # Add to database using the instance method
                     # Build safe metadata

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 from sqlite3 import Error as SQLiteError
 from typing import Any, Callable
@@ -310,10 +311,8 @@ async def persist_claims_if_applicable(
             )
             return inserted
         finally:
-            try:
+            with contextlib.suppress(_CLAIMS_DB_EXCEPTIONS):
                 db.close_connection()
-            except _CLAIMS_DB_EXCEPTIONS:
-                pass
 
     try:
         inserted_count = await loop.run_in_executor(None, _worker)

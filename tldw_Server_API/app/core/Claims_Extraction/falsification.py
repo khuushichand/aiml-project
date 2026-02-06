@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.Claims_Extraction.claims_engine import Claim
@@ -49,7 +49,7 @@ class FalsificationDecision:
     """Decision result from falsification trigger evaluation."""
 
     should_falsify: bool
-    reason: Optional[FalsificationReason]
+    reason: FalsificationReason | None
     priority: int  # 1-10, higher = more urgent to falsify
 
 
@@ -81,7 +81,7 @@ CONTROVERSIAL_INDICATORS = [
 
 
 def should_trigger_falsification(
-    claim: "Claim",
+    claim: Claim,
     verification_confidence: float,
     evidence_count: int,
     force_falsification: bool = False,
@@ -167,7 +167,7 @@ def should_trigger_falsification(
 
 
 def estimate_falsification_rate(
-    claims: list["Claim"],
+    claims: list[Claim],
     verification_confidences: list[float],
     evidence_counts: list[int],
 ) -> float:

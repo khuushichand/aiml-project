@@ -154,10 +154,7 @@ class ProgramEvaluator:
         for name in _FORBIDDEN_IMPORTS:
             if re.search(rf"\bimport\s+{re.escape(name)}\b", code):
                 return True
-        for pat in _FORBIDDEN_PATTERNS:
-            if re.search(pat, code):
-                return True
-        return False
+        return any(re.search(pat, code) for pat in _FORBIDDEN_PATTERNS)
 
     def _execute_in_sandbox(self, code: str) -> tuple[bool, str, str, dict[str, Any]]:
         """Execute code in a restricted subprocess using isolated mode.
@@ -166,7 +163,7 @@ class ProgramEvaluator:
         """
         cpu_lim = int(self.CPU_TIME_SEC)
         mem_lim = int(self.MEMORY_MB) * 1024 * 1024
-        forbidden_json = json.dumps(sorted(list(_FORBIDDEN_IMPORTS)))
+        forbidden_json = json.dumps(sorted(_FORBIDDEN_IMPORTS))
         code_json = json.dumps(code)
         wrapper_lines = [
             "import sys, json, builtins",
@@ -246,8 +243,7 @@ class ProgramEvaluator:
                     [sys.executable, "-I", "-B", script_path],
                     cwd=td,
                     env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    capture_output=True,
                     text=True,
                     timeout=self.WALL_TIME_SEC,
                 )

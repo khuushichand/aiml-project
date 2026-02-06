@@ -117,7 +117,7 @@ ROLE_PERMISSIONS = {
     Role.ADMIN: ADMIN_PERMISSIONS,
     Role.OWNER: {
         # All permissions
-        *[p for p in Permission]
+        *list(Permission)
     }
 }
 
@@ -412,7 +412,7 @@ class AuthenticationManager:
         """
         try:
             # Decode token
-            payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
+            jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
 
             # Check if session exists and not expired
             with self.db.transaction() as conn:

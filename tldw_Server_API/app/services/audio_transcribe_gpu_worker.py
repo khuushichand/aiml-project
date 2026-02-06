@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from functools import partial
 from pathlib import Path
@@ -112,10 +113,8 @@ async def run_audio_transcribe_gpu_worker(stop_event: asyncio.Event | None = Non
                 jm.fail_job(int(job["id"]), error=msg or "concurrency limit", retryable=True, backoff_seconds=10, worker_id=worker_id, lease_id=str(job.get("lease_id")))
                 continue
             acquired_slot = True
-            try:
+            with contextlib.suppress(Exception):
                 await increment_jobs_started(int(owner))
-            except Exception:
-                pass
 
             payload: dict[str, Any] = job.get("payload") or {}
             updated_payload = await _handle_gpu_audio_transcribe_stage(payload)
@@ -148,7 +147,5 @@ async def run_audio_transcribe_gpu_worker(stop_event: asyncio.Event | None = Non
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run_audio_transcribe_gpu_worker())
-    except KeyboardInterrupt:
-        pass

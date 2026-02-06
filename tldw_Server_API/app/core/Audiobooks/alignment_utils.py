@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Optional
 
 from loguru import logger
 
@@ -91,7 +90,7 @@ def stitch_alignment_payloads(
     payloads: Sequence[AlignmentPayload],
     *,
     segment_offsets_ms: Sequence[int],
-    segment_offsets_chars: Optional[Sequence[int]] = None,
+    segment_offsets_chars: Sequence[int] | None = None,
 ) -> AlignmentPayload:
     if not payloads:
         raise ValueError("payloads must not be empty")

@@ -61,7 +61,7 @@ class NotesInteropService:
             self._resolved_base_db_directory = self.base_db_directory.resolve()
             logger.info(f"NotesInteropService initialized. Base DB directory: {self.base_db_directory}")
         except OSError as e:
-            logger.error(f"Failed to create base DB directory {self.base_db_directory}: {e}")
+            logger.exception(f"Failed to create base DB directory {self.base_db_directory}: {e}")
             # This is a critical failure for the service's operation.
             raise CharactersRAGDBError(f"Failed to create base DB directory {self.base_db_directory}: {e}") from e
 
@@ -104,7 +104,7 @@ class NotesInteropService:
                 try:
                     user_dir.mkdir(parents=True, exist_ok=True)
                 except OSError as exc:
-                    logger.error(
+                    logger.exception(
                         "Failed to create notes directory '%s' for user_id '%s': %s",
                         user_dir,
                         user_id,
@@ -117,7 +117,7 @@ class NotesInteropService:
                 try:
                     candidate_path.relative_to(db_directory_resolved)
                 except ValueError as exc:
-                    logger.error(
+                    logger.exception(
                         "Resolved database path '%s' escapes base directory '%s' for user_id '%s'.",
                         candidate_path,
                         db_directory_resolved,

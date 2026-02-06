@@ -18,6 +18,7 @@ This helps reclaim disk space from files that were:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import time
 from pathlib import Path
@@ -280,13 +281,11 @@ async def _cleanup_loop():
             break
         except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"media_files_cleanup: error in cleanup cycle: {e}")
-            try:
+            with contextlib.suppress(_MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS):
                 get_metrics_registry().increment(
                     "media_files_cleanup_runs_total",
                     labels={"status": "error"}
                 )
-            except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS:
-                pass
 
         await asyncio.sleep(CLEANUP_INTERVAL_SEC)
 

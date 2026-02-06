@@ -4,6 +4,7 @@ All operations query the database directly.
 """
 
 import asyncio
+import contextlib
 from typing import Optional
 
 from loguru import logger
@@ -54,10 +55,8 @@ class LeaseService:
         """
         if self._reaper_task:
             self._reaper_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._reaper_task
-            except asyncio.CancelledError:
-                pass
             self._reaper_task = None
             logger.info("Lease reaper stopped")
 

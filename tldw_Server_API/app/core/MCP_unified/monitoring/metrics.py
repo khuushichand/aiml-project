@@ -5,6 +5,7 @@ Provides Prometheus-compatible metrics and health monitoring.
 """
 
 import asyncio
+import contextlib
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -459,10 +460,8 @@ class MetricsCollector:
         )
         self._metrics["tool_invalid_params"].append(metric)
         if self.enable_prometheus:
-            try:
+            with contextlib.suppress(Exception):
                 self.tool_invalid_params.labels(module=module, tool=tool).inc()
-            except Exception:
-                pass
 
     def record_tool_validator_missing(self, module: str, tool: str):
         metric = MetricData(
@@ -473,10 +472,8 @@ class MetricsCollector:
         )
         self._metrics["tool_validator_missing"].append(metric)
         if self.enable_prometheus:
-            try:
+            with contextlib.suppress(Exception):
                 self.tool_validator_missing.labels(module=module, tool=tool).inc()
-            except Exception:
-                pass
 
     def get_internal_metrics(self, period_seconds: int = 300) -> dict[str, Any]:
         """
@@ -598,10 +595,8 @@ class MetricsCollector:
         """Stop metrics collection"""
         if self._collection_task:
             self._collection_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._collection_task
-            except asyncio.CancelledError:
-                pass
             self._collection_task = None
             logger.info("Metrics collection stopped")
 
@@ -641,11 +636,11 @@ class MetricsCollector:
         """Get a summary of current metrics"""
         return {
             "total_metrics": sum(len(d) for d in self._metrics.values()),
-            "metric_types": list(set(
+            "metric_types": list({
                 m.type.value
                 for d in self._metrics.values()
                 for m in d
-            )),
+            }),
             "prometheus_enabled": self.enable_prometheus,
             "collection_interval": self._aggregation_interval,
             "recent_metrics": self.get_internal_metrics(60)  # Last minute

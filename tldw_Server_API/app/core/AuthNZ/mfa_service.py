@@ -66,7 +66,7 @@ class MFAService:
         self._repo: Optional[AuthnzMfaRepo] = repo
         self._cipher: Optional[Fernet] = None
         self._cipher_candidates: list[Fernet] = []
-        self._cipher_key_material: tuple[bytes, ...] = tuple()
+        self._cipher_key_material: tuple[bytes, ...] = ()
 
         # TOTP configuration
         self.issuer_name = self.settings.APP_NAME if hasattr(self.settings, 'APP_NAME') else "TLDW Server"

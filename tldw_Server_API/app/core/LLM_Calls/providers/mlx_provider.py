@@ -41,7 +41,6 @@ from tldw_Server_API.app.core.Utils.common import parse_boolean
 
 from .base import ChatProvider, EmbeddingsProvider
 
-
 _MLX_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
     AttributeError,
@@ -193,10 +192,8 @@ class MLXSessionRegistry:
                     )
             self._metrics_registered = True
         except _MLX_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - metrics must not break flow
-            try:
+            with contextlib.suppress(_MLX_NONCRITICAL_EXCEPTIONS):
                 logger.debug(f"MLX metrics registration failed: {exc}")
-            except _MLX_NONCRITICAL_EXCEPTIONS:
-                pass
 
     def _import_mlx(self):
         try:
@@ -346,17 +343,13 @@ class MLXSessionRegistry:
             yield session
         finally:
             if acquired:
-                try:
+                with contextlib.suppress(ValueError):
                     sema.release()
-                except ValueError:
-                    pass
             if counted:
                 with self._lock:
                     self._inflight = max(0, self._inflight - 1)
-                    try:
+                    with contextlib.suppress(_MLX_NONCRITICAL_EXCEPTIONS):
                         set_gauge("mlx_requests_inflight", float(self._inflight))
-                    except _MLX_NONCRITICAL_EXCEPTIONS:
-                        pass
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -414,10 +407,8 @@ def _messages_to_prompt(messages: Any, tokenizer: Any, system_message: str | Non
                     tokenizer.chat_template = template_override
                     return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
                 finally:
-                    try:
+                    with contextlib.suppress(_MLX_NONCRITICAL_EXCEPTIONS):
                         tokenizer.chat_template = original_template
-                    except _MLX_NONCRITICAL_EXCEPTIONS:
-                        pass
             return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
     except _MLX_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"MLX chat template application failed; falling back: {exc}")

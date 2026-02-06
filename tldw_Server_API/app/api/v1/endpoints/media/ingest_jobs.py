@@ -54,10 +54,7 @@ def get_job_manager() -> JobManager:
             return cached
 
         if not db_url:
-            if db_path:
-                job_manager = JobManager(db_path=Path(db_path))
-            else:
-                job_manager = JobManager()
+            job_manager = JobManager(db_path=Path(db_path)) if db_path else JobManager()
         else:
             backend = "postgres" if db_url.startswith("postgres") else None
             job_manager = JobManager(backend=backend, db_url=db_url)

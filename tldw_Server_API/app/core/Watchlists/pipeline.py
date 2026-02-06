@@ -30,6 +30,7 @@ Notes:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import os
@@ -271,7 +272,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
     db = WatchlistsDatabase.for_user(user_id)
     collections_db = CollectionsDatabase.for_user(user_id)
     job = db.get_job(job_id)
-    is_first_run = True if not getattr(job, "last_run_at", None) else False
+    is_first_run = bool(not getattr(job, "last_run_at", None))
     run = db.create_run(job_id=job_id, status="running")
 
     job_output_prefs: dict[str, Any] = {}
@@ -405,10 +406,8 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                 src_type = (src.source_type or "").lower()
                 if src_type == "forum":
                     if not _forums_enabled():
-                        try:
+                        with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                             db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="forum_disabled")
-                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-                            pass
                         continue
                     if not test_mode:
                         await asyncio.sleep(_forum_delay_seconds())
@@ -422,10 +421,8 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                             # still deferred
                             continue
                         # past due: clear defer
-                        try:
+                        with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                             db.clear_source_defer_until(int(src.id))
-                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-                            pass
                     except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                         # if parse fails, continue normal flow
                         pass
@@ -459,7 +456,6 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                         logger.debug(f"record_scraped_item failed (source_id={getattr(_src, 'id', '?')}): {rec_err}")
 
                 if src_type == "rss":
-                    urls = [src.url]
                     rss_items: list[dict[str, Any]]
                     # Per-source settings
                     settings = {}
@@ -572,7 +568,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 secs = max(0, secs + _rnd.randint(-j, j))
                             from datetime import timedelta as _td
                             defer_until_val = (datetime.utcnow().replace(tzinfo=timezone.utc) + _td(seconds=secs)).isoformat()
-                        try:
+                        with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                             db.update_source_scrape_meta(
                                 int(src.id),
                                 last_scraped_at=_utcnow_iso(),
@@ -580,8 +576,6 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 defer_until=defer_until_val,
                                 consec_not_modified=new_count,
                             )
-                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-                            pass
                         continue
                     if status == 429:
                         # Defer per Retry-After
@@ -589,25 +583,19 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                         if isinstance(ra, int) and ra > 0:
                             from datetime import timedelta
                             until = (datetime.utcnow().replace(tzinfo=timezone.utc) + timedelta(seconds=ra)).isoformat()
-                            try:
+                            with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                                 db.update_source_scrape_meta(int(src.id), status="deferred", defer_until=until)
-                            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-                                pass
                         continue
                     if status // 100 != 2:
                         # error path
-                        try:
+                        with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                             db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status=f"error:{status}")
-                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-                            pass
                         continue
 
                     # 200 OK
                     if res.get("etag") is not None or res.get("last_modified") is not None:
-                        try:
+                        with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                             db.update_source_scrape_meta(int(src.id), etag=res.get("etag"), last_modified=res.get("last_modified"), consec_not_modified=0)
-                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-                            pass
                     # Accumulate history counters for run stats when applicable
                     try:
                         if isinstance(res.get("pages_fetched"), int):
@@ -836,10 +824,8 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                             continue
 
                     # Update last_scraped_at/status for source
-                        try:
+                        with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                             db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="ok")
-                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-                            pass
 
                 elif src_type in {"site", "forum"}:
                     # Determine discovery preferences
@@ -1096,15 +1082,13 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                     )
                                 except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
                                     logger.debug(f"Embedding enqueue failed for watchlist item {item_row.id}: {exc}")
-                            try:
+                            with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                                 db.mark_seen_item(
                                     int(src.id),
                                     item_key,
                                     etag=None,
                                     last_modified=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
                                 )
-                            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-                                pass
                             _record_scraped(
                                 status="ingested",
                                 url=article.get("url") or page_url,
@@ -1124,19 +1108,15 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                                 media_uuid=ingested_media_uuid,
                                 published_at=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
                             )
-                    try:
+                    with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                         db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="ok")
-                    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-                        pass
                 else:
                     # Unknown type - skip
                     continue
             except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Source processing failed (id={getattr(src, 'id', '?')}): {e}")
-                try:
+                with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                     db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="error")
-                except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-                    pass
 
     stats = {"items_found": items_found, "items_ingested": items_ingested}
     try:

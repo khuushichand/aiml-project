@@ -12,7 +12,7 @@ import sqlite3
 import ssl
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -438,10 +438,8 @@ def _record_webhook_event(
     except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         return
     try:
-        try:
+        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
             db.initialize_db()
-        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-            pass
         payload = {
             "channel": channel,
             "status": status,
@@ -462,10 +460,8 @@ def _record_webhook_event(
     except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         pass
     finally:
-        try:
+        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
             db.close_connection()
-        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-            pass
 
 
 def _deliver_claims_alert_webhook(
@@ -642,16 +638,12 @@ def _load_persisted_rebuild_health() -> dict[str, Any]:
         db_path=db_path,
     )
     try:
-        try:
+        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
             db.initialize_db()
-        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-            pass
         return db.get_claims_monitoring_health(str(user_id))
     finally:
-        try:
+        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
             db.close_connection()
-        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-            pass
 
 
 def _dispatch_claims_alert_notifications(
@@ -826,7 +818,7 @@ async def send_claims_alert_email_digest_for_scheduler(
         if not recipients or not channels.get("email"):
             continue
 
-        key = tuple(sorted(set(str(r) for r in recipients if r)))
+        key = tuple(sorted({str(r) for r in recipients if r}))
         grouped.setdefault(key, []).append(event)
         names = group_alert_names.setdefault(key, {})
         if alert_id is not None:
@@ -938,10 +930,8 @@ def _refresh_claim_embedding(
     try:
         collection.delete(ids=[old_id])
     except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-        try:
+        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
             collection.delete(where={"media_id": str(media_id), "claim_text": str(old_text)})
-        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-            pass
 
     model_id = (
         settings.get("CLAIMS_EMBED_MODEL_ID")
@@ -1227,10 +1217,8 @@ async def _fetch_claims_provider_usage_async(
         if total_cost_usd is not None:
             bucket["total_cost_usd"] += float(total_cost_usd or 0.0)
         if latency_ms is not None:
-            try:
+            with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
                 bucket["latencies"].append(float(latency_ms))
-            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                pass
     out: list[dict[str, Any]] = []
     for bucket in grouped.values():
         latencies = bucket.pop("latencies", [])
@@ -1605,10 +1593,8 @@ def _resolve_media_db(
         yield target_db, owner_user_id
     finally:
         if override_db is not None:
-            try:
+            with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
                 override_db.close_connection()
-            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                pass
 
 
 def list_all_claims(
@@ -2015,10 +2001,8 @@ def list_claims_alerts(
         if not principal.is_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         target_user_id = str(int(user_id))
-    try:
+    with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
         db.migrate_legacy_claims_monitoring_alerts(target_user_id)
-    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-        pass
     rows = db.list_claims_monitoring_alerts(target_user_id)
     return [_normalize_alert_row(dict(r)) for r in rows]
 
@@ -2037,10 +2021,8 @@ def create_claims_alert(
         if not principal.is_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         target_user_id = str(int(user_id))
-    try:
+    with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
         db.migrate_legacy_claims_monitoring_alerts(target_user_id)
-    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-        pass
     name = payload.get("name")
     alert_type = payload.get("alert_type")
     if not name or not alert_type:
@@ -2050,12 +2032,11 @@ def create_claims_alert(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one channel must be enabled")
     threshold_val = payload.get("threshold_ratio")
     baseline_val = payload.get("baseline_ratio")
-    if threshold_val is not None and baseline_val is not None:
-        if float(baseline_val) > float(threshold_val):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="baseline_ratio must be <= threshold_ratio",
-            )
+    if threshold_val is not None and baseline_val is not None and float(baseline_val) > float(threshold_val):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="baseline_ratio must be <= threshold_ratio",
+        )
     email_json = None
     if payload.get("email_recipients") is not None:
         email_json = json.dumps(payload["email_recipients"])
@@ -2085,10 +2066,8 @@ def update_claims_alert(
     db: MediaDatabase,
 ) -> dict[str, Any]:
     _ensure_claims_admin(principal)
-    try:
+    with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
         db.migrate_legacy_claims_monitoring_alerts(str(current_user.id))
-    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-        pass
     existing = db.get_claims_monitoring_alert(int(config_id))
     if not existing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert config not found")
@@ -2096,12 +2075,11 @@ def update_claims_alert(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
     threshold_val = payload.get("threshold_ratio", existing.get("threshold_ratio"))
     baseline_val = payload.get("baseline_ratio", existing.get("baseline_ratio"))
-    if threshold_val is not None and baseline_val is not None:
-        if float(baseline_val) > float(threshold_val):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="baseline_ratio must be <= threshold_ratio",
-            )
+    if threshold_val is not None and baseline_val is not None and float(baseline_val) > float(threshold_val):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="baseline_ratio must be <= threshold_ratio",
+        )
     email_json = None
     if payload.get("email_recipients") is not None:
         email_json = json.dumps(payload["email_recipients"])
@@ -2144,10 +2122,8 @@ def delete_claims_alert(
     db: MediaDatabase,
 ) -> dict[str, Any]:
     _ensure_claims_admin(principal)
-    try:
+    with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
         db.migrate_legacy_claims_monitoring_alerts(str(current_user.id))
-    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-        pass
     existing = db.get_claims_monitoring_alert(int(config_id))
     if not existing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert config not found")
@@ -2203,10 +2179,8 @@ def _evaluate_claims_alerts_for_user(
     db: MediaDatabase,
 ) -> dict[str, Any]:
     monitoring_enabled = bool(settings.get("CLAIMS_MONITORING_ENABLED", False))
-    try:
+    with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
         db.migrate_legacy_claims_monitoring_alerts(target_user_id)
-    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-        pass
     ratios = _compute_unsupported_ratios(window_sec, baseline_sec)
     configs = db.list_claims_monitoring_alerts(target_user_id)
     config_defaults = db.get_claims_monitoring_settings(target_user_id) or {}
@@ -2619,10 +2593,8 @@ def bulk_review_claims(
             else:
                 updated_ids.append(int(cid))
                 if desired_status in {"flagged", "reassigned"} and desired_status != current_status:
-                    try:
+                    with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
                         rebuild_media_ids.add(int(claim_row.get("media_id") or 0))
-                    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                        pass
 
         if updated_ids:
             record_claims_review_metrics(processed=len(updated_ids))
@@ -3306,10 +3278,8 @@ def rebuild_claim_clusters(
                 similarity_threshold=similarity_threshold,
             )
         finally:
-            try:
+            with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
                 override_db.close_connection()
-            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                pass
 
     if cluster_method == "exact":
         result = db.rebuild_claim_clusters_exact(user_id=target_user_id, min_size=min_size)
@@ -3350,10 +3320,8 @@ def _evaluate_watchlist_cluster_notifications(db: MediaDatabase, user_id: str) -
     member_counts = db.get_claim_cluster_member_counts(cluster_ids)
     counts = watch_db.list_watchlist_cluster_counts(cluster_ids=cluster_ids)
     if counts:
-        try:
+        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
             db.update_claim_clusters_watchlist_counts(counts)
-        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-            pass
     inserted = record_watchlist_cluster_notifications(
         db=db,
         owner_user_id=str(user_id),
@@ -3796,10 +3764,8 @@ def rebuild_all_media(
         return {"status": "accepted", "enqueued": len(mids), "policy": policy}
     finally:
         if override_db is not None:
-            try:
+            with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
                 override_db.close_connection()
-            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                pass
 
 
 def rebuild_claims_fts(
@@ -3821,10 +3787,8 @@ def rebuild_claims_fts(
             count = db.rebuild_claims_fts()
     finally:
         if override_db is not None:
-            try:
+            with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
                 override_db.close_connection()
-            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                pass
     return {"status": "ok", "indexed": count}
 
 
@@ -3867,14 +3831,17 @@ async def verify_claims_with_fva(
     Returns:
         FVA verification results with status changes and timing
     """
+    import time
+    from uuid import uuid4
+
     from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
         ClaimsJobBudget,
         ClaimsJobContext,
     )
     from tldw_Server_API.app.core.Claims_Extraction.claims_engine import (
         Claim,
-        ClaimType,
         ClaimsEngine,
+        ClaimType,
     )
     from tldw_Server_API.app.core.Claims_Extraction.fva_pipeline import (
         FVAConfig,
@@ -3885,9 +3852,6 @@ async def verify_claims_with_fva(
         RetrievalConfig,
     )
     from tldw_Server_API.app.core.RAG.rag_service.types import DataSource
-
-    import time
-    from uuid import uuid4
 
     start_time = time.time()
 
@@ -3925,10 +3889,8 @@ async def verify_claims_with_fva(
     data_sources: list[DataSource] = []
     if sources:
         for src in sources:
-            try:
+            with suppress(ValueError, TypeError):
                 data_sources.append(DataSource(src))
-            except (ValueError, TypeError):
-                pass
     if not data_sources:
         data_sources = [DataSource.MEDIA_DB]
 
@@ -3947,10 +3909,10 @@ async def verify_claims_with_fva(
     async def _fva_analyze_fn(prompt: str) -> str:
         """Analyze function for FVA claims engine using configured LLM."""
         try:
+            from tldw_Server_API.app.core.config import settings as _cfg
             from tldw_Server_API.app.core.LLM_Calls.Unified_OpenAI_API import (
                 unified_llm_call,
             )
-            from tldw_Server_API.app.core.config import settings as _cfg
 
             provider = _cfg.get("CLAIMS_LLM_PROVIDER", "openai")
             model = _cfg.get("CLAIMS_LLM_MODEL", "gpt-4o-mini")
@@ -3980,7 +3942,7 @@ async def verify_claims_with_fva(
 
     # Convert input claims to Claim objects
     claim_objects: list[Claim] = []
-    for i, c in enumerate(claims):
+    for _i, c in enumerate(claims):
         claim_type = ClaimType.GENERAL
         if c.get("claim_type"):
             try:

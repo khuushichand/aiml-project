@@ -103,9 +103,8 @@ class DolphinOCRBackend(OCRBackend):
     @classmethod
     def available(cls) -> bool:
         mode = _resolve_mode()
-        if mode in ("auto", "remote"):
-            if os.getenv("DOLPHIN_URL"):
-                return True
+        if mode in ("auto", "remote") and os.getenv("DOLPHIN_URL"):
+            return True
         if mode in ("auto", "transformers"):
             try:
                 has_tf = importlib.util.find_spec("transformers") is not None
@@ -367,10 +366,7 @@ def _load_transformers():
 
         model_path = os.getenv("DOLPHIN_MODEL_PATH", "ByteDance/Dolphin-v2")
         device_env = os.getenv("DOLPHIN_DEVICE")
-        if device_env:
-            device = device_env
-        else:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = device_env or ("cuda" if torch.cuda.is_available() else "cpu")
 
         dtype = torch.float16 if "cuda" in device else torch.float32
 

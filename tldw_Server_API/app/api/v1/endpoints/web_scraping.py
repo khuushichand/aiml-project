@@ -268,9 +268,9 @@ async def check_url_duplicate(
         # SSRF guard
         try:
             assert_url_safe(url)
-        except HTTPException as he:
+        except HTTPException:
             get_metrics_registry().increment("security_ssrf_block_total", 1)
-            raise he
+            raise
 
         service = get_web_scraping_service()
         if not service._initialized:

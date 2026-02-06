@@ -180,11 +180,11 @@ def import_data(ctx, input_file, import_type, dry_run):
 
         if import_type == 'evaluations':
             from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
-            eval_manager = EvaluationManager()
+            EvaluationManager()
 
             # Import evaluations
             imported_count = 0
-            for eval_data in data if isinstance(data, list) else [data]:
+            for _eval_data in data if isinstance(data, list) else [data]:
                 try:
                     # This would need proper implementation
                     # eval_manager.import_evaluation(eval_data)

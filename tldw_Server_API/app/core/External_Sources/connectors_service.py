@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -425,11 +426,11 @@ async def create_account(db, user_id: int, provider: str, display_name: str, ema
         })
         access_token_store = _json.dumps(env) if env else str(tokens.get("access_token") or "")
         refresh_token_store = None  # envelope contains refresh
-        scopes_store = tokens.get("scope") or None
+        tokens.get("scope") or None
     except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
         access_token_store = str(tokens.get("access_token") or "")
         refresh_token_store = tokens.get("refresh_token")
-        scopes_store = tokens.get("scope") or None
+        tokens.get("scope") or None
 
     if is_pg:
         row = await db.fetchrow(
@@ -665,9 +666,7 @@ async def should_ingest_item(
         return False
     if version and r.get("version") and version == r.get("version"):
         return False
-    if modified_at and r.get("modified_at") and str(modified_at) == str(r.get("modified_at")):
-        return False
-    return True
+    return not (modified_at and r.get("modified_at") and str(modified_at) == str(r.get("modified_at")))
 
 
 async def record_ingested_item(
@@ -726,10 +725,8 @@ def count_connectors_jobs_today(user_id: int) -> int:
             ).fetchone()
             return int(row[0]) if row else 0
     finally:
-        try:
+        with contextlib.suppress(_CONNECTORS_NONCRITICAL_EXCEPTIONS):
             conn.close()
-        except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
-            pass
 
 
 async def list_accounts(db, user_id: int) -> list[dict[str, Any]]:
@@ -804,10 +801,8 @@ async def create_source(
         }
     except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
         row = dict(r)
-        try:
+        with contextlib.suppress(_CONNECTORS_NONCRITICAL_EXCEPTIONS):
             row["options"] = __import__("json").loads(row.get("options") or "{}")
-        except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
-            pass
         return row
 
 
@@ -855,10 +850,8 @@ async def list_sources(db, user_id: int) -> list[dict[str, Any]]:
             })
         except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
             row = dict(r)
-            try:
+            with contextlib.suppress(_CONNECTORS_NONCRITICAL_EXCEPTIONS):
                 row["options"] = __import__("json").loads(row.get("options") or "{}")
-            except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
-                pass
             out.append(row)
     return out
 
@@ -929,10 +922,8 @@ async def update_source(db, user_id: int, source_id: int, *, enabled: bool | Non
         }
     except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
         row = dict(r2)
-        try:
+        with contextlib.suppress(_CONNECTORS_NONCRITICAL_EXCEPTIONS):
             row["options"] = __import__("json").loads(row.get("options") or "{}")
-        except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
-            pass
         return row
 
 

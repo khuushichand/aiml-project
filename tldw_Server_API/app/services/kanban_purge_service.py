@@ -12,6 +12,7 @@ Enable via env:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 
 from loguru import logger
@@ -61,10 +62,8 @@ def _purge_for_user(user_id: int, grace_days: int) -> dict:
     try:
         return db.purge_deleted_items(days_old=grace_days)
     finally:
-        try:
+        with contextlib.suppress(_KANBAN_PURGE_NONCRITICAL_EXCEPTIONS):
             db.close()
-        except _KANBAN_PURGE_NONCRITICAL_EXCEPTIONS:
-            pass
 
 
 async def start_kanban_purge_scheduler() -> asyncio.Task | None:

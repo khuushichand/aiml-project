@@ -6,6 +6,7 @@ import os
 import re
 import threading
 from collections.abc import Sequence
+from itertools import islice
 from pathlib import Path
 
 # Redundant in some environments, but keep explicit Dict import for clarity
@@ -13,9 +14,6 @@ from typing import Any, Callable, Literal, Optional, Union
 
 # 3rd-Party Imports:
 import chromadb
-
-from itertools import islice
-
 import numpy as np
 from chromadb.api.models.Collection import Collection
 from chromadb.api.types import QueryResult
@@ -60,6 +58,8 @@ except _CHROMA_EMBEDDINGS_IMPORT_EXCEPTIONS:
         raise RuntimeError("Embeddings backend unavailable; install embeddings dependencies")
     def create_embeddings_batch(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Embeddings backend unavailable; install embeddings dependencies")
+import contextlib
+
 from tldw_Server_API.app.core.Embeddings.audit_adapter import (
     log_security_violation,
 )
@@ -373,10 +373,8 @@ class ChromaDBManager:
                 # Best-effort close; log and continue
                 logger.warning(f"User '{self.user_id}': Error while closing ChromaDB client: {e}")
             finally:
-                try:
+                with contextlib.suppress(_CHROMA_NONCRITICAL_EXCEPTIONS):
                     self.client = None
-                except _CHROMA_NONCRITICAL_EXCEPTIONS:
-                    pass
 
     # Support context manager usage
     def __enter__(self):
@@ -388,10 +386,8 @@ class ChromaDBManager:
 
     def __del__(self):
         # Last-resort cleanup if user forgot to close
-        try:
+        with contextlib.suppress(_CHROMA_NONCRITICAL_EXCEPTIONS):
             self.close()
-        except _CHROMA_NONCRITICAL_EXCEPTIONS:
-            pass
 
     def _batched(self, iterable, n):
         """Helper to yield batches from an iterable."""
@@ -518,10 +514,8 @@ class ChromaDBManager:
                     if 'metadata' in str(te):
                         collection = self.client.get_or_create_collection(name=name_to_use)
                         if cleaned and hasattr(collection, 'modify'):
-                            try:
+                            with contextlib.suppress(_CHROMA_NONCRITICAL_EXCEPTIONS):
                                 collection.modify(metadata=cleaned)
-                            except _CHROMA_NONCRITICAL_EXCEPTIONS:
-                                pass
                     else:
                         raise
                 logger.info(f"User '{self.user_id}': Accessed/Created collection '{name_to_use}'.")
@@ -776,10 +770,8 @@ class ChromaDBManager:
                                     extractor=mode,
                                     extractor_version="v1",
                                 )
-                                try:
+                                with contextlib.suppress(_CHROMA_NONCRITICAL_EXCEPTIONS):
                                     db.close_connection()
-                                except _CHROMA_NONCRITICAL_EXCEPTIONS:
-                                    pass
                                 logger.info(f"User '{self.user_id}': Stored {inserted} ingestion-time claims for media {mid}.")
                         # Optional: embed claims into a dedicated Chroma collection
                         try:
@@ -1608,10 +1600,7 @@ class ChromaDBManager:
 
         # The default value must also conform to List[ChromaIncludeLiteral]
         effective_include_fields: list[ChromaIncludeLiteral]
-        if include_fields is None:
-            effective_include_fields = ["documents", "metadatas", "distances"]
-        else:
-            effective_include_fields = include_fields
+        effective_include_fields = ["documents", "metadatas", "distances"] if include_fields is None else include_fields
 
         with self._lock:
             try:
@@ -1770,10 +1759,7 @@ class _InMemoryCollection:
         elif where:
             # Delete by metadata filter
             def _match(md: dict[str, Any]) -> bool:
-                for k, v in (where or {}).items():
-                    if md.get(k) != v:
-                        return False
-                return True
+                return all(md.get(k) == v for k, v in (where or {}).items())
             to_delete = [k for k, md in list(self._meta.items()) if _match(md)]
             for id_ in to_delete:
                 self._docs.pop(id_, None)
@@ -1787,16 +1773,10 @@ class _InMemoryCollection:
         if include is None:
             include = ["documents", "metadatas"]
         keys = []
-        if ids:
-            keys = [k for k in ids if k in self._docs]
-        else:
-            keys = list(self._docs.keys())
+        keys = [k for k in ids if k in self._docs] if ids else list(self._docs.keys())
         if where:
             def match(m: dict[str, Any]) -> bool:
-                for k, v in where.items():
-                    if m.get(k) != v:
-                        return False
-                return True
+                return all(m.get(k) == v for k, v in where.items())
             keys = [k for k in keys if match(self._meta.get(k, {}))]
         if offset is not None and offset > 0:
             try:
@@ -1825,12 +1805,9 @@ class _InMemoryCollection:
         def match(m: dict[str, Any]) -> bool:
             if not where:
                 return True
-            for k, v in where.items():
-                if m.get(k) != v:
-                    return False
-            return True
+            return all(m.get(k) == v for k, v in where.items())
         items = []
-        for k in self._docs.keys():
+        for k in self._docs:
             if not match(self._meta.get(k, {})):
                 continue
             v = self._embs.get(k, [])
@@ -1882,10 +1859,8 @@ class _InMemoryChromaClient:
             self._collections[name] = _InMemoryCollection(name, metadata=metadata)
         else:
             if metadata:
-                try:
+                with contextlib.suppress(_CHROMA_NONCRITICAL_EXCEPTIONS):
                     self._collections[name].modify(metadata=metadata)
-                except _CHROMA_NONCRITICAL_EXCEPTIONS:
-                    pass
         return self._collections[name]
 
     def create_collection(self, name: str, metadata: Optional[dict[str, Any]] = None) -> _InMemoryCollection:

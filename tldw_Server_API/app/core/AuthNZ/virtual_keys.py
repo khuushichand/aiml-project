@@ -32,10 +32,7 @@ def _utc_today() -> date:
 def _month_bounds_utc(dt: datetime | None = None) -> tuple[str, str]:
     now = dt or datetime.now(timezone.utc)
     start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    if start.month == 12:
-        nxt = start.replace(year=start.year + 1, month=1)
-    else:
-        nxt = start.replace(month=start.month + 1)
+    nxt = start.replace(year=start.year + 1, month=1) if start.month == 12 else start.replace(month=start.month + 1)
     # Return ISO strings; callers will normalize tz-awareness
     return start.isoformat(), nxt.isoformat()
 

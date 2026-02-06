@@ -5,6 +5,7 @@
 #
 # Imports
 import asyncio
+import contextlib
 import json
 import logging
 from typing import Any, Optional
@@ -292,7 +293,7 @@ async def process_web_scraping_task(
                 try:
                     for article in result_list:
                         # Construct info_dict
-                        info_dict = {
+                        {
                             "title": article.get("title", "Untitled"),
                             "author": "Unknown",
                             "source": article.get("url", ""),
@@ -302,7 +303,7 @@ async def process_web_scraping_task(
                         # If there's a summary, store it in summary field
                         summary = article.get("summary", "No summary available")
                         # "Segments" is how your DB manager expects text. We'll store one big chunk:
-                        segments = [{"Text": article.get("content", "")}]
+                        [{"Text": article.get("content", "")}]
 
                         # Combine content and metadata
                         content_text = article.get("content", "")
@@ -396,7 +397,7 @@ async def ingest_web_content_orchestrate(
     """
 
     # Log usage for web scraping ingest
-    try:
+    with contextlib.suppress(Exception):
         usage_log.log_event(
             "webscrape.ingest",
             tags=[str(getattr(request, "scrape_method", "") or "")],
@@ -407,8 +408,6 @@ async def ingest_web_content_orchestrate(
                 ),
             },
         )
-    except Exception:
-        pass
 
     # Topic monitoring (non-blocking): URLs and provided titles
     try:

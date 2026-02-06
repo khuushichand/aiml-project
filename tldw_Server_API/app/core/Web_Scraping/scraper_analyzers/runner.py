@@ -80,7 +80,7 @@ def run_analysis(
     This helper should only be used when no event loop is currently running.
     """
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(
             gather_analysis(url, find_all=find_all, impersonate=impersonate, scan_depth=scan_depth)

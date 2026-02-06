@@ -4,6 +4,7 @@ Structure-aware chunking strategy.
 Preserves document structure including tables, headers, code blocks, and lists.
 """
 
+import contextlib
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -312,10 +313,8 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
                 chunk_end = chunk_start
             if chunk_end < chunk_start:
                 chunk_end = chunk_start
-            try:
+            with contextlib.suppress(Exception):
                 chunk_end = self._expand_end_to_grapheme_boundary(text, chunk_end)
-            except Exception:
-                pass
 
             chunk_text = self._elements_to_text(
                 chunk_elements,
@@ -509,10 +508,8 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
                         try:
                             start_char = line_starts[i] if i < len(line_starts) else 0
                             end_char = line_starts[j] if j < len(line_starts) else len(text)
-                            try:
+                            with contextlib.suppress(Exception):
                                 end_char = self._expand_end_to_grapheme_boundary(text, end_char)
-                            except Exception:
-                                pass
                             if end_char < start_char:
                                 end_char = start_char
                         except Exception:
@@ -569,10 +566,7 @@ class StructureAwareChunkingStrategy(BaseChunkingStrategy):
 
     def _in_processed_range(self, position: int, ranges: list[tuple[int, int]]) -> bool:
         """Check if position is in any processed range."""
-        for start, end in ranges:
-            if start <= position < end:
-                return True
-        return False
+        return any(start <= position < end for start, end in ranges)
 
     def _group_elements_into_chunks(self,
                                    elements: list[DocumentElement],

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import configparser
+import contextlib
 import os
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -425,9 +426,7 @@ def _use_redis() -> bool:
         s = get_settings()
         if not getattr(s, "REDIS_URL", None):
             return False
-        if os.getenv("AUDIO_QUOTA_USE_REDIS", "true").lower() in {"0", "false", "no", "off"}:
-            return False
-        return True
+        return os.getenv("AUDIO_QUOTA_USE_REDIS", "true").lower() not in {"0", "false", "no", "off"}
     except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS:
         return False
 
@@ -464,7 +463,7 @@ def _metrics_set_gauge(name: str, value: float, labels: dict[str, str]) -> None:
         # Backward-compat alias with dots
         alias = name.replace('_', '.') if '_' in name else name
         for metric_name in (canonical, alias):
-            try:
+            with contextlib.suppress(_AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS):
                 reg.register_metric(
                     MetricDefinition(
                         name=metric_name,
@@ -473,8 +472,6 @@ def _metrics_set_gauge(name: str, value: float, labels: dict[str, str]) -> None:
                         labels=list(labels.keys()),
                     )
                 )
-            except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS:
-                pass
             reg.set_gauge(metric_name, float(value), labels)
     except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS:
         pass
@@ -497,7 +494,7 @@ def _metrics_increment(name: str, labels: dict[str, str]) -> None:
         canonical = name
         alias = name.replace('_', '.') if '_' in name else name
         for metric_name in (canonical, alias):
-            try:
+            with contextlib.suppress(_AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS):
                 reg.register_metric(
                     MetricDefinition(
                         name=metric_name,
@@ -506,8 +503,6 @@ def _metrics_increment(name: str, labels: dict[str, str]) -> None:
                         labels=list(labels.keys()),
                     )
                 )
-            except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS:
-                pass
             reg.increment(metric_name, 1, labels)
     except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS:
         pass

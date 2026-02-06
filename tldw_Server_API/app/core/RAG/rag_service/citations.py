@@ -347,10 +347,7 @@ class AcademicCitationFormatter:
         if not author:
             return None
 
-        if isinstance(author, list):
-            authors = author
-        else:
-            authors = [str(author)]
+        authors = author if isinstance(author, list) else [str(author)]
 
         if not authors:
             return None

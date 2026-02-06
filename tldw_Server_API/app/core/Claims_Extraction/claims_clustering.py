@@ -47,8 +47,7 @@ def _iter_claims_for_user(db: MediaDatabase, user_id: str, page_size: int = 1000
         rows = db.list_claims(owner_user_id=user_id, limit=page_size, offset=offset, include_deleted=False)
         if not rows:
             break
-        for row in rows:
-            yield row
+        yield from rows
         offset += len(rows)
         if len(rows) < page_size:
             break

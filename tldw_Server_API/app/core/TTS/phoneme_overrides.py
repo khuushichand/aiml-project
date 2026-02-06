@@ -225,9 +225,8 @@ def apply_overrides_to_text(
     lang_prefix = (lang_hint or "").split("-")[0].lower() if lang_hint else None
     updated = text
     for ent in entries:
-        if ent.lang and lang_prefix:
-            if not ent.lang.lower().startswith(lang_prefix):
-                continue
+        if ent.lang and lang_prefix and not ent.lang.lower().startswith(lang_prefix):
+            continue
         pattern = re.compile(
             rf"\b{re.escape(ent.term)}\b" if ent.boundary else re.escape(ent.term),
             flags=re.IGNORECASE,

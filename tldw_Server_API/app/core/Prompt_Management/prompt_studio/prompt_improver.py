@@ -313,10 +313,7 @@ class PromptImprover:
 
     def improve_with_llm(self, prompt: str, model: str = "gpt-4") -> ImprovementResult:
         """Improve using LLM assistance."""
-        if self.llm_client:
-            improved = self.llm_client.generate(prompt)
-        else:
-            improved = prompt + " (improved with LLM)"
+        improved = self.llm_client.generate(prompt) if self.llm_client else prompt + " (improved with LLM)"
 
         return ImprovementResult(
             original_prompt=prompt,

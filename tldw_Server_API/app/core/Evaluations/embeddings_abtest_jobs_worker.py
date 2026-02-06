@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from typing import Any
@@ -216,23 +217,19 @@ async def handle_abtest_job(job: dict[str, Any]) -> dict[str, Any]:
                 }
             )
         if not will_retry:
-            try:
+            with contextlib.suppress(Exception):
                 svc.db.set_abtest_status(
                     str(test_id),
                     "failed",
                     stats_json=error_payload,
                 )
-            except Exception:
-                pass
         else:
-            try:
+            with contextlib.suppress(Exception):
                 svc.db.set_abtest_status(
                     str(test_id),
                     "running",
                     stats_json={"last_error": str(exc), "retry_count": retry_count + 1, "max_retries": max_retries},
                 )
-            except Exception:
-                pass
         job_logger.warning(f"Embeddings A/B job failed: {exc} (retryable={retryable}, will_retry={will_retry})")
         if isinstance(exc, EmbeddingsABTestRunError):
             raise
@@ -269,10 +266,8 @@ async def run_embeddings_abtest_jobs_worker(stop_event: asyncio.Event | None = N
         await sdk.run(handler=handle_abtest_job)
     finally:
         if watcher is not None:
-            try:
+            with contextlib.suppress(Exception):
                 watcher.cancel()
-            except Exception:
-                pass
 
 
 if __name__ == "__main__":

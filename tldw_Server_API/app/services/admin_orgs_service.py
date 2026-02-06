@@ -224,10 +224,7 @@ async def list_orgs(
     try:
         org_ids = await admin_scope_service.get_admin_org_ids(principal)
         if org_id is not None:
-            if org_ids is None:
-                org_ids = [org_id]
-            else:
-                org_ids = [org_id] if org_id in org_ids else []
+            org_ids = [org_id] if org_ids is None else [org_id] if org_id in org_ids else []
 
         result = await core_list_organizations(
             limit=limit,

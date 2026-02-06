@@ -941,7 +941,7 @@ def _default_model_metadata(provider: str, model: str) -> dict[str, Any]:
             "tool_use": False,
             "json_mode": False,
             "function_calling": False,
-            "streaming": True if provider in {"openai", "anthropic", "google", "mistral", "groq", "openrouter"} else False,
+            "streaming": provider in {"openai", "anthropic", "google", "mistral", "groq", "openrouter"},
             "thinking": False,
         },
         "modalities": {"input": ["text"], "output": ["text"]},
@@ -1124,20 +1124,14 @@ def _extract_models_from_response(payload: Any) -> list[str]:
         data_section = payload.get("data")
         if isinstance(data_section, list):
             for item in data_section:
-                if isinstance(item, dict):
-                    candidate = item.get("id") or item.get("model") or item.get("name")
-                else:
-                    candidate = item
+                candidate = item.get("id") or item.get("model") or item.get("name") if isinstance(item, dict) else item
                 if isinstance(candidate, str) and candidate.strip():
                     models.append(candidate.strip())
 
         models_section = payload.get("models")
         if isinstance(models_section, list):
             for item in models_section:
-                if isinstance(item, dict):
-                    candidate = item.get("name") or item.get("model") or item.get("id")
-                else:
-                    candidate = item
+                candidate = item.get("name") or item.get("model") or item.get("id") if isinstance(item, dict) else item
                 if isinstance(candidate, str) and candidate.strip():
                     models.append(candidate.strip())
 
@@ -1490,7 +1484,7 @@ def get_configured_providers(include_deprecated: bool = False) -> dict[str, Any]
                     pricing_models = []
                 if pricing_models:
                     # Preserve order: config models first, then pricing extras
-                    seen = set(m.strip() for m in models)
+                    seen = {m.strip() for m in models}
                     extras = [m for m in pricing_models if m not in seen]
                     models = models + extras
             else:
@@ -1686,9 +1680,7 @@ def _model_matches_filters(
 
     if input_filters and not set(input_mods).intersection(input_filters):
         return False
-    if output_filters and not set(output_mods).intersection(output_filters):
-        return False
-    return True
+    return not (output_filters and not set(output_mods).intersection(output_filters))
 
 #######################################################################################################################
 #

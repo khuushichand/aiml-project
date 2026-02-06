@@ -5,6 +5,7 @@ Provides lightweight observability for the Prompt Studio job queue,
 including queue depth, processing counts, and lease health.
 """
 
+import contextlib
 import os
 from typing import Any, Optional
 
@@ -60,10 +61,8 @@ def _fetch_all(jm: JobManager, sql: str, params: list[Any]) -> list[Any]:
                 return list(cur.fetchall() or [])
         return list(conn.execute(sql, params).fetchall() or [])
     finally:
-        try:
+        with contextlib.suppress(Exception):
             conn.close()
-        except Exception:
-            pass
 
 
 def _fetch_one(jm: JobManager, sql: str, params: list[Any]) -> Optional[Any]:
@@ -358,7 +357,7 @@ async def get_prompt_studio_status(
             reg.set_gauge("prompt_studio_leases_stale_processing", float(leases.get("stale_processing", 0)), labels={"backend": backend_label})
             # Periodic refresh of per-type gauges (queued/processing/backlog) based on current DB counts
             try:
-                for jt in by_type.keys():
+                for jt in by_type:
                     q = int(queued_by_type.get(jt, 0))
                     p = int(processing_by_type.get(jt, 0))
                     prompt_studio_metrics.update_job_queue_size(jt, q)

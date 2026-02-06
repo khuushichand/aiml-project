@@ -66,8 +66,8 @@ def calculate_difficulty_score(results: dict[str, Any]) -> dict[str, Any]:
     if integrity.get("status") == "success":
         modified = integrity.get("modified_functions") or {}
         if modified:
-            has_canvas = any("Canvas" in func for func in modified.keys())
-            has_timing = any("Date.now" in func or "performance.now" in func for func in modified.keys())
+            has_canvas = any("Canvas" in func for func in modified)
+            has_timing = any("Date.now" in func or "performance.now" in func for func in modified)
             if has_canvas or has_timing:
                 score += 2
             else:

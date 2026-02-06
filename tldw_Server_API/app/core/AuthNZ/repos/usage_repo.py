@@ -109,10 +109,7 @@ class AuthnzUsageRepo:
         """
         try:
             day_val: date
-            if isinstance(day, date):
-                day_val = day
-            else:
-                day_val = datetime.now(timezone.utc).date()
+            day_val = day if isinstance(day, date) else datetime.now(timezone.utc).date()
 
             if getattr(self.db_pool, "pool", None) is not None:
                 total_tokens = await self.db_pool.fetchval(

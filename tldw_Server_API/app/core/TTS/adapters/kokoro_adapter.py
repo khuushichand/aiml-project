@@ -11,7 +11,7 @@ import re
 import sys
 import time
 from collections.abc import AsyncGenerator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from ctypes.util import find_library as _ctypes_find_library
 from typing import Any, Optional
 
@@ -662,10 +662,8 @@ class KokoroAdapter(TTSAdapter):
             # Move to device
             dev = str(self.device).lower()
             if dev.startswith("cuda"):
-                try:
+                with suppress(_KOKORO_NONCRITICAL_EXCEPTIONS):
                     self.kokoro_pt_model = self.kokoro_pt_model.cuda()
-                except _KOKORO_NONCRITICAL_EXCEPTIONS:
-                    pass
             elif dev == "mps":
                 try:
                     self.kokoro_pt_model = self.kokoro_pt_model.to(torch.device("mps"))
@@ -698,10 +696,8 @@ class KokoroAdapter(TTSAdapter):
                     self.model_pt = torch.jit.load(self.model_path, map_location=self.device)
                 except _KOKORO_NONCRITICAL_EXCEPTIONS:
                     self.model_pt = torch.load(self.model_path, map_location=self.device)
-                try:
+                with suppress(_KOKORO_NONCRITICAL_EXCEPTIONS):
                     self.model_pt.eval()
-                except _KOKORO_NONCRITICAL_EXCEPTIONS:
-                    pass
                 logger.info(f"{self.provider_name}: Loaded generic PyTorch model on {self.device}")
                 # Register model with resource manager (best-effort)
                 try:
@@ -910,8 +906,7 @@ class KokoroAdapter(TTSAdapter):
                     stream_iter = base_iter
                 else:
                     def _sync_source():
-                        for item in base_iter:
-                            yield item
+                        yield from base_iter
 
                     async def _async_wrap():
                         for item in _sync_source():
@@ -957,8 +952,7 @@ class KokoroAdapter(TTSAdapter):
 
                 # Define a sync generator wrapper to async iterate
                 def _sync_iter():
-                    for result in pipeline(text, voice=voice_path, speed=request.speed, model=self.kokoro_pt_model):
-                        yield result
+                    yield from pipeline(text, voice=voice_path, speed=request.speed, model=self.kokoro_pt_model)
 
                 async def _async_iter():
                     for result in _sync_iter():
@@ -988,10 +982,8 @@ class KokoroAdapter(TTSAdapter):
                 samples_chunk, sr_chunk = self._unpack_stream_item(item)
                 if samples_chunk is not None and len(samples_chunk) > 0:
                     # Heuristic de-duplication for providers that may repeat phrases
-                    try:
+                    with suppress(_KOKORO_NONCRITICAL_EXCEPTIONS):
                         samples_chunk = self._dedupe_repeated_audio(samples_chunk)
-                    except _KOKORO_NONCRITICAL_EXCEPTIONS:
-                        pass
                     chunk_count += 1
 
                     # Create writer on first chunk so we can pass the true SR
@@ -1365,10 +1357,7 @@ class KokoroAdapter(TTSAdapter):
             import json
             with open(path, encoding='utf-8') as f:
                 data = json.load(f)
-            if isinstance(data, dict) and "voices" in data:
-                entries = data["voices"]
-            else:
-                entries = data
+            entries = data["voices"] if isinstance(data, dict) and "voices" in data else data
             if not isinstance(entries, list):
                 return
             for entry in entries:
@@ -1568,10 +1557,8 @@ class KokoroAdapter(TTSAdapter):
             text = text.replace('‘', "'").replace('’', "'")
 
         # Insert periodic pause tags to keep very long inputs paced
-        try:
+        with suppress(_KOKORO_NONCRITICAL_EXCEPTIONS):
             text = self._insert_pause_tags(text, words_between=self.pause_interval_words, pause_tag=self.pause_tag)
-        except _KOKORO_NONCRITICAL_EXCEPTIONS:
-            pass
 
         return text
 

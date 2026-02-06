@@ -103,7 +103,7 @@ class OCREvaluator:
         ocr_options forwarded to PDF processing when pdf_path/bytes provided:
           enable_ocr (bool), ocr_backend, ocr_lang, ocr_dpi, ocr_mode, ocr_min_page_text_chars
         """
-        want = set([m.lower() for m in (metrics or ["cer", "wer", "coverage", "page_coverage"])])
+        want = {m.lower() for m in (metrics or ["cer", "wer", "coverage", "page_coverage"])}
 
         results: list[dict[str, Any]] = []
         macro = {

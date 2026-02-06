@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Union
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -20,7 +20,7 @@ class LlamaCppInferenceRequest(BaseModel):
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
     max_tokens: int | None = Field(default=None, ge=1)
-    stop: Union[str, list[str]] | None = Field(default=None)
+    stop: str | list[str] | None = Field(default=None)
     user: str | None = Field(default=None)
     n: int | None = Field(default=None, ge=1)
 

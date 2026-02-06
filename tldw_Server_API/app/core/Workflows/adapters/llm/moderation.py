@@ -205,10 +205,7 @@ async def run_policy_check_adapter(config: dict[str, Any], context: dict[str, An
             # Minimal dotted lookup
             obj = context
             for part in field.split('.'):
-                if isinstance(obj, dict):
-                    obj = obj.get(part)
-                else:
-                    obj = getattr(obj, part, None)
+                obj = obj.get(part) if isinstance(obj, dict) else getattr(obj, part, None)
             if isinstance(obj, (str, bytes)):
                 text = obj if isinstance(obj, str) else obj.decode("utf-8", errors="ignore")
             else:

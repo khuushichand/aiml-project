@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import contextlib
 import os
 import subprocess
 import tempfile
@@ -107,10 +108,8 @@ class AudioConverter:
             logger.info(f"Concatenated {len(input_paths)} files into {output_path.name}")
             return True
         finally:
-            try:
+            with contextlib.suppress(_AUDIO_CLEANUP_EXCEPTIONS):
                 os.unlink(list_path)
-            except _AUDIO_CLEANUP_EXCEPTIONS:
-                pass
 
     @staticmethod
     async def package_m4b_with_chapters(
@@ -159,14 +158,10 @@ class AudioConverter:
             logger.info(f"Packaged M4B with {len(input_paths)} chapters: {output_path.name}")
             return True
         finally:
-            try:
+            with contextlib.suppress(_AUDIO_CLEANUP_EXCEPTIONS):
                 os.unlink(list_path)
-            except _AUDIO_CLEANUP_EXCEPTIONS:
-                pass
-            try:
+            with contextlib.suppress(_AUDIO_CLEANUP_EXCEPTIONS):
                 os.unlink(meta_file.name)
-            except _AUDIO_CLEANUP_EXCEPTIONS:
-                pass
 
     @staticmethod
     def _build_ffmetadata(
@@ -508,7 +503,7 @@ class AudioConverter:
                 logger.error("Could not analyze audio loudness")
                 return False
 
-            loudness_info = json.loads(json_match.group())
+            json.loads(json_match.group())
 
             # Second pass: apply normalization
             cmd_normalize = [

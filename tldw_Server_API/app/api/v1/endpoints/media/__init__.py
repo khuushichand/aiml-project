@@ -49,6 +49,8 @@ except ImportError:  # pragma: no cover - keep import failures isolated during m
 
 # Router wiring (modular endpoints only) - import modules explicitly to avoid
 # name collisions with core processing helpers that share similar names.
+import contextlib
+
 from tldw_Server_API.app.api.v1.endpoints.media import add as add_endpoint  # noqa: E402
 from tldw_Server_API.app.api.v1.endpoints.media import debug as debug_endpoint  # noqa: E402
 from tldw_Server_API.app.api.v1.endpoints.media import (
@@ -240,10 +242,8 @@ def invalidate_cache(media_id: int) -> None:
             keys = set()
         for k in keys or []:
             cache.delete(k)
-        try:
+        with contextlib.suppress(MEDIA_CACHE_EXCEPTIONS):
             cache.delete(idx_key)
-        except MEDIA_CACHE_EXCEPTIONS:
-            pass
         if not keys:
             try:
                 cursor = 0

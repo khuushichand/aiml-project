@@ -7,7 +7,7 @@ Summarization_General_Lib to keep a single LLM call surface.
 from __future__ import annotations
 
 from collections.abc import Generator
-from typing import Any, Union
+from typing import Any
 
 from tldw_Server_API.app.core.LLM_Calls import Summarization_General_Lib as sgl
 from tldw_Server_API.app.core.LLM_Calls.deprecation import log_legacy_once
@@ -41,7 +41,7 @@ def _summarize(
     system_message: str | None = None,
     temp: float | None = None,
     streaming: bool = False,
-) -> Union[str, Generator[str, None, None]]:
+) -> str | Generator[str, None, None]:
     _log_legacy()
     return sgl.analyze(
         api_name=api_name,
@@ -60,7 +60,7 @@ def summarize_with_local_llm(
     temp: float | None,
     system_message: str | None = None,
     streaming: bool = False,
-) -> Union[str, Generator[str, None, None]]:
+) -> str | Generator[str, None, None]:
     return _summarize(
         "local-llm",
         input_data,
@@ -78,7 +78,7 @@ def summarize_with_llama(
     temp: float | None = None,
     system_message: str | None = None,
     streaming: bool = False,
-) -> Union[str, Generator[str, None, None]]:
+) -> str | Generator[str, None, None]:
     return _summarize(
         "llama.cpp",
         input_data,
@@ -98,7 +98,7 @@ def summarize_with_kobold(
     temp: float | None = None,
     kobold_api_ip: str = "http://127.0.0.1:5001/api/v1/generate",
     streaming: bool = False,
-) -> Union[str, Generator[str, None, None]]:
+) -> str | Generator[str, None, None]:
     _warn_ignored_override("kobold_api_ip", kobold_api_ip, "http://127.0.0.1:5001/api/v1/generate")
     return _summarize(
         "kobold",
@@ -119,7 +119,7 @@ def summarize_with_oobabooga(
     temp: float | None = None,
     api_url: str | None = None,
     streaming: bool = False,
-) -> Union[str, Generator[str, None, None]]:
+) -> str | Generator[str, None, None]:
     _warn_ignored_override("api_url", api_url)
     return _summarize(
         "ooba",
@@ -140,7 +140,7 @@ def summarize_with_tabbyapi(
     temp: float | None = None,
     api_IP: str = "http://127.0.0.1:5000/v1/chat/completions",
     streaming: bool = False,
-) -> Union[str, Generator[str, None, None]]:
+) -> str | Generator[str, None, None]:
     _warn_ignored_override("api_IP", api_IP, "http://127.0.0.1:5000/v1/chat/completions")
     return _summarize(
         "tabbyapi",
@@ -160,7 +160,7 @@ def summarize_with_vllm(
     temp: float | None = None,
     system_message: str | None = None,
     streaming: bool = False,
-) -> Union[str, Generator[str, None, None]]:
+) -> str | Generator[str, None, None]:
     return _summarize(
         "vllm",
         input_data,
@@ -184,7 +184,7 @@ def summarize_with_ollama(
     retry_delay: int = 20,
     streaming: bool = False,
     top_p: float | None = None,
-) -> Union[str, Generator[str, None, None]]:
+) -> str | Generator[str, None, None]:
     _warn_ignored_override("api_url", api_url)
     return _summarize(
         "ollama",
@@ -204,7 +204,7 @@ def summarize_with_custom_openai(
     temp: float | None = None,
     system_message: str | None = None,
     streaming: bool = False,
-) -> Union[str, Generator[str, None, None]]:
+) -> str | Generator[str, None, None]:
     return _summarize(
         "custom-openai-api",
         input_data,
@@ -223,7 +223,7 @@ def summarize_with_custom_openai_2(
     temp: float | None = None,
     system_message: str | None = None,
     streaming: bool = False,
-) -> Union[str, Generator[str, None, None]]:
+) -> str | Generator[str, None, None]:
     return _summarize(
         "custom-openai-api-2",
         input_data,

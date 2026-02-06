@@ -17,13 +17,14 @@ exactness, integrate with the APScheduler service later.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import sqlite3
 
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseError as BackendDatabaseError
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.exceptions import StoragePathValidationError
@@ -175,10 +176,8 @@ async def _purge_for_user(user_id: int, delete_files: bool, grace_days: int) -> 
             logger.debug(f"outputs_purge: failed to open Media DB for history update: {exc}")
         finally:
             if media_db is not None:
-                try:
+                with contextlib.suppress(_OUTPUTS_PURGE_NONCRITICAL_EXCEPTIONS):
                     media_db.close_connection()
-                except _OUTPUTS_PURGE_NONCRITICAL_EXCEPTIONS:
-                    pass
     removed = 0
     if ids:
         placeholders = ",".join(["?"] * len(ids))

@@ -136,10 +136,7 @@ async def run_evaluations_adapter(config: dict[str, Any], context: dict[str, Any
                     response = ""
 
             source_text = config.get("context") or config.get("source_text")
-            if source_text is not None:
-                source_text = _render(source_text)
-            else:
-                source_text = ""
+            source_text = _render(source_text) if source_text is not None else ""
 
             if not response:
                 return {"error": "missing_response_for_geval"}
@@ -171,20 +168,14 @@ async def run_evaluations_adapter(config: dict[str, Any], context: dict[str, Any
 
         if action == "rag":
             question = config.get("question") or config.get("query")
-            if question is not None:
-                question = _render(question)
-            else:
-                question = ""
+            question = _render(question) if question is not None else ""
 
             response = config.get("response")
             if response is not None:
                 response = _render(response)
             else:
                 last = context.get("last") or {}
-                if isinstance(last, dict):
-                    response = last.get("text") or last.get("content") or ""
-                else:
-                    response = ""
+                response = last.get("text") or last.get("content") or "" if isinstance(last, dict) else ""
 
             retrieved_contexts = config.get("retrieved_contexts") or config.get("contexts")
             if retrieved_contexts is None:
@@ -232,20 +223,14 @@ async def run_evaluations_adapter(config: dict[str, Any], context: dict[str, Any
 
         if action == "response_quality":
             prompt = config.get("prompt") or config.get("question")
-            if prompt is not None:
-                prompt = _render(prompt)
-            else:
-                prompt = ""
+            prompt = _render(prompt) if prompt is not None else ""
 
             response = config.get("response")
             if response is not None:
                 response = _render(response)
             else:
                 last = context.get("last") or {}
-                if isinstance(last, dict):
-                    response = last.get("text") or last.get("content") or ""
-                else:
-                    response = ""
+                response = last.get("text") or last.get("content") or "" if isinstance(last, dict) else ""
 
             if not response:
                 return {"error": "missing_response_for_quality_eval"}

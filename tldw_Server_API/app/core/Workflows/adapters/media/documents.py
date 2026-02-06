@@ -9,6 +9,7 @@ This module includes adapters for document operations:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -126,10 +127,7 @@ async def run_pdf_extract_adapter(config: dict[str, Any], context: dict[str, Any
         keywords = None
 
     perform_chunking = config.get("perform_chunking")
-    if perform_chunking is None:
-        perform_chunking = True
-    else:
-        perform_chunking = bool(perform_chunking)
+    perform_chunking = True if perform_chunking is None else bool(perform_chunking)
 
     chunk_method = str(config.get("chunk_method") or "sentences").strip()
     max_chunk_size = int(config.get("max_chunk_size") or 500)
@@ -147,10 +145,7 @@ async def run_pdf_extract_adapter(config: dict[str, Any], context: dict[str, Any
     enable_vlm = bool(config.get("enable_vlm"))
     vlm_backend = config.get("vlm_backend")
     vlm_detect_tables_only = config.get("vlm_detect_tables_only")
-    if vlm_detect_tables_only is None:
-        vlm_detect_tables_only = True
-    else:
-        vlm_detect_tables_only = bool(vlm_detect_tables_only)
+    vlm_detect_tables_only = True if vlm_detect_tables_only is None else bool(vlm_detect_tables_only)
 
     # Test mode simulation
     if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
@@ -511,10 +506,8 @@ async def run_document_table_extract_adapter(config: dict[str, Any], context: di
                 except _DOCUMENT_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"PDF read error: {e}")
             else:
-                try:
+                with contextlib.suppress(_DOCUMENT_FILE_IO_EXCEPTIONS):
                     content = Path(file_path).read_text(encoding="utf-8", errors="ignore")
-                except _DOCUMENT_FILE_IO_EXCEPTIONS:
-                    pass
 
             if content:
                 from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import importlib
 import inspect
 import tempfile
@@ -326,14 +327,13 @@ class Qwen3TTSAdapter(TTSAdapter):
         if check_params["trailing_silence_ms"] > 0 and metrics["trailing_silence_ms"] >= check_params["trailing_silence_ms"]:
             warnings.append(f"trailing_silence_ms={metrics['trailing_silence_ms']:.0f}")
 
-        if text and check_params["expected_chars_per_sec"] > 0:
-            if len(text) >= check_params["min_text_length"]:
-                expected = len(text) / float(check_params["expected_chars_per_sec"])
-                min_expected = max(check_params["min_duration_seconds"], expected * check_params["min_duration_ratio"])
-                if metrics["duration_sec"] < min_expected:
-                    warnings.append(
-                        f"duration_short(actual={metrics['duration_sec']:.2f}s, expected>={min_expected:.2f}s)"
-                    )
+        if text and check_params["expected_chars_per_sec"] > 0 and len(text) >= check_params["min_text_length"]:
+            expected = len(text) / float(check_params["expected_chars_per_sec"])
+            min_expected = max(check_params["min_duration_seconds"], expected * check_params["min_duration_ratio"])
+            if metrics["duration_sec"] < min_expected:
+                warnings.append(
+                    f"duration_short(actual={metrics['duration_sec']:.2f}s, expected>={min_expected:.2f}s)"
+                )
 
         if warnings:
             details = {
@@ -633,10 +633,8 @@ class Qwen3TTSAdapter(TTSAdapter):
         for attr in ("close", "shutdown", "cleanup"):
             handler = getattr(pipeline, attr, None)
             if callable(handler):
-                try:
+                with contextlib.suppress(_QWEN3_NONCRITICAL_EXCEPTIONS):
                     handler()
-                except _QWEN3_NONCRITICAL_EXCEPTIONS:
-                    pass
 
     def _build_pipeline(self, model_id: str) -> Any:
         last_error: Exception | None = None
@@ -753,10 +751,7 @@ class Qwen3TTSAdapter(TTSAdapter):
         param_names = set(sig.parameters.keys())
         if any(name in param_names for name in ("ref_audio_path", "reference_audio_path", "audio_prompt_path")):
             return True
-        for name in param_names:
-            if "path" in name and ("audio" in name or "ref" in name):
-                return True
-        return False
+        return any("path" in name and ("audio" in name or "ref" in name) for name in param_names)
 
     def _write_temp_audio(self, audio_bytes: bytes, suffix: str = ".wav") -> str:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False, prefix="qwen3_voice_") as tmp_file:
@@ -854,9 +849,7 @@ class Qwen3TTSAdapter(TTSAdapter):
         voice = request.voice
         if voice is None:
             return True
-        if isinstance(voice, str) and not voice.strip():
-            return True
-        return False
+        return bool(isinstance(voice, str) and not voice.strip())
 
     def _is_voice_clone_request(self, request: TTSRequest) -> bool:
         if request.voice_reference:
@@ -864,9 +857,7 @@ class Qwen3TTSAdapter(TTSAdapter):
         extras = request.extra_params or {}
         if extras.get("reference_text") or extras.get("x_vector_only_mode"):
             return True
-        if extras.get("voice_clone_prompt"):
-            return True
-        return False
+        return bool(extras.get("voice_clone_prompt"))
 
     def _resolve_auto_model(self) -> str:
         if self.device.startswith("cuda"):

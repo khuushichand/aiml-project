@@ -450,7 +450,7 @@ class PromptStudioMetrics:
         Args:
             strategy: Optimization strategy
         """
-        start_time = time.time()
+        time.time()
 
         try:
             yield
@@ -715,13 +715,12 @@ def monitor_optimization(strategy: str):
                 result = await func(*args, **kwargs)
 
                 # Record improvement if available
-                if isinstance(result, dict):
-                    if "improvement" in result and "iterations" in result:
-                        metrics.record_optimization_improvement(
-                            strategy,
-                            result["improvement"],
-                            result["iterations"]
-                        )
+                if isinstance(result, dict) and "improvement" in result and "iterations" in result:
+                    metrics.record_optimization_improvement(
+                        strategy,
+                        result["improvement"],
+                        result["iterations"]
+                    )
 
                 return result
 
@@ -731,13 +730,12 @@ def monitor_optimization(strategy: str):
                 result = func(*args, **kwargs)
 
                 # Record improvement if available
-                if isinstance(result, dict):
-                    if "improvement" in result and "iterations" in result:
-                        metrics.record_optimization_improvement(
-                            strategy,
-                            result["improvement"],
-                            result["iterations"]
-                        )
+                if isinstance(result, dict) and "improvement" in result and "iterations" in result:
+                    metrics.record_optimization_improvement(
+                        strategy,
+                        result["improvement"],
+                        result["iterations"]
+                    )
 
                 return result
 

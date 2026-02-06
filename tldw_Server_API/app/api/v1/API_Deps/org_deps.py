@@ -139,12 +139,11 @@ def require_org_role(*allowed_roles: str):
         user_role = membership.get("role", "member")
 
         # If specific roles are required, check them
-        if allowed_roles_normalized:
-            if not _role_allowed(user_role, allowed_roles_normalized):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Insufficient permissions. Required role: {', '.join(allowed_roles_normalized)}",
-                )
+        if allowed_roles_normalized and not _role_allowed(user_role, allowed_roles_normalized):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Insufficient permissions. Required role: {', '.join(allowed_roles_normalized)}",
+            )
 
         return OrgContext(
             org_id=org_id,

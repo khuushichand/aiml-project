@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Union
+from typing import Any
 
 from fastapi import HTTPException, status
 from fastapi.responses import JSONResponse
@@ -587,7 +587,7 @@ async def list_user_profiles(
         "page": page,
         "limit": limit,
         "total": total,
-        "sections": sorted(list(requested or [])),
+        "sections": sorted(requested or []),
         "include_sources": include_sources,
         "include_raw": include_raw,
         "mask_secrets": mask_secrets,
@@ -649,7 +649,7 @@ async def get_user_profile(
         )
         response = UserProfileResponse(**profile)
         audit_metadata = {
-            "sections": sorted(list(requested or [])),
+            "sections": sorted(requested or []),
             "include_sources": include_sources,
             "include_raw": include_raw,
             "mask_secrets": mask_secrets,
@@ -685,7 +685,7 @@ async def update_user_profile(
     payload: UserProfileUpdateRequest,
     principal: AuthPrincipal,
     db,
-) -> tuple[Union[UserProfileUpdateResponse, JSONResponse], dict[str, Any] | None]:
+) -> tuple[UserProfileUpdateResponse | JSONResponse, dict[str, Any] | None]:
     """Update a user's profile within admin scope."""
     if not payload.updates:
         return (

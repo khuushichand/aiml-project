@@ -227,10 +227,7 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
                     while t:
                         part = t[:max_chars]
                         chunks.append(part)
-                        if len(t) <= max_chars:
-                            t = ''
-                        else:
-                            t = t[max_chars:]
+                        t = '' if len(t) <= max_chars else t[max_chars:]
                     buf = ''
                 else:
                     buf = text
@@ -271,7 +268,7 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
             if imp_e > imp_s:
                 blocks.append((imp_s, imp_e))
             if headers:
-                for idx, h in enumerate(headers):
+                for _idx, h in enumerate(headers):
                     start = h.line_index
                     if self._is_brace_lang(language):
                         end = self._find_block_for_header_braces(lines, start)
@@ -313,14 +310,8 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
         # Helper to convert (start_line, end_line_exclusive) -> (start_char, end_char)
         def span_chars(s_line: int, e_line: int) -> tuple:
             # Clamp indices safely
-            if not (0 <= s_line < len(line_starts)):
-                s_char = 0
-            else:
-                s_char = line_starts[s_line]
-            if 0 <= e_line < len(line_starts):
-                e_char = line_starts[e_line]
-            else:
-                e_char = total_chars
+            s_char = 0 if not 0 <= s_line < len(line_starts) else line_starts[s_line]
+            e_char = line_starts[e_line] if 0 <= e_line < len(line_starts) else total_chars
             if e_char < s_char:
                 e_char = s_char
             return s_char, e_char
@@ -425,7 +416,6 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
                     start = s_char
                     while start < e_char:
                         end = min(e_char, start + max_size)
-                        md_blocks = [(s_line, e_line, btype, name)]
                         # Calculate line indices
                         try:
                             end_expanded = self._expand_end_to_grapheme_boundary(text, end)

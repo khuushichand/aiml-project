@@ -256,7 +256,7 @@ class AuthnzOrgProviderSecretsRepo:
                     tuple(params),
                 )
 
-            return [dict(row) if isinstance(row, dict) else {k: row[k] for k in row.keys()} for row in rows]
+            return [dict(row) if isinstance(row, dict) else {k: row[k] for k in row} for row in rows]
         except Exception as exc:
             logger.error(f"AuthnzOrgProviderSecretsRepo.list_secrets failed: {exc}")
             raise

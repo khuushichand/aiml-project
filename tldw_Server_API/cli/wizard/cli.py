@@ -82,10 +82,7 @@ def _resolve_sqlite_db_path(db_url: str) -> Path | None:
     if not fs_path or fs_path == ":memory:":
         return None
     path = Path(fs_path).expanduser()
-    if not path.is_absolute():
-        path = (Path.cwd() / path).resolve()
-    else:
-        path = path.resolve()
+    path = (Path.cwd() / path).resolve() if not path.is_absolute() else path.resolve()
     return path
 
 
@@ -96,10 +93,7 @@ def _resolve_user_db_base_dir_for_dry_run() -> Path:
             candidate = Path(raw).expanduser()
         except (OSError, TypeError, ValueError):
             candidate = Path(raw)
-        if not candidate.is_absolute():
-            candidate = (Path.cwd() / candidate).resolve()
-        else:
-            candidate = candidate.resolve()
+        candidate = (Path.cwd() / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
         return candidate
     return (Path.cwd() / "Databases" / "user_databases").resolve()
 

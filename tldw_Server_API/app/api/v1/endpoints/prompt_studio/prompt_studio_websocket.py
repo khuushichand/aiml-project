@@ -239,6 +239,8 @@ class ConnectionManager:
 # SSE (Server-Sent Events) Fallback
 
 
+import contextlib
+
 from fastapi.responses import StreamingResponse
 
 
@@ -296,22 +298,16 @@ async def sse_endpoint(
             except asyncio.CancelledError:
                 # Cancel producer promptly on client disconnect
                 if not prod.done():
-                    try:
+                    with contextlib.suppress(_TASK_CLEANUP_EXCEPTIONS):
                         prod.cancel()
-                    except _TASK_CLEANUP_EXCEPTIONS:
-                        pass
-                    try:
+                    with contextlib.suppress(_TASK_CLEANUP_EXCEPTIONS):
                         await prod
-                    except _TASK_CLEANUP_EXCEPTIONS:
-                        pass
                 raise
             else:
                 # Ensure producer completes cleanly on normal shutdown
                 if not prod.done():
-                    try:
+                    with contextlib.suppress(_TASK_CLEANUP_EXCEPTIONS):
                         await prod
-                    except _TASK_CLEANUP_EXCEPTIONS:
-                        pass
 
         headers = {
             "Cache-Control": "no-cache",
@@ -422,10 +418,8 @@ async def websocket_endpoint_base(websocket: WebSocket):
         while True:
             # Keep connection alive and handle incoming messages
             data = await websocket.receive_json()
-            try:
+            with contextlib.suppress(_STREAM_ACTIVITY_EXCEPTIONS):
                 stream.mark_activity()
-            except _STREAM_ACTIVITY_EXCEPTIONS:
-                pass
 
             # Handle subscription requests
             if data.get("type") == "subscribe":
@@ -479,10 +473,8 @@ async def websocket_endpoint(
         while True:
             # Keep connection alive and handle incoming messages
             data = await websocket.receive_text()
-            try:
+            with contextlib.suppress(_STREAM_ACTIVITY_EXCEPTIONS):
                 stream.mark_activity()
-            except _STREAM_ACTIVITY_EXCEPTIONS:
-                pass
 
             # Handle ping/pong for keepalive
             if data == "ping":

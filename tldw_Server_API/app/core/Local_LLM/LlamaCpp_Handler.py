@@ -2,6 +2,7 @@
 # Description: Handler for Llama.cpp models, managing server processes and inference.
 #
 import asyncio
+import contextlib
 import os
 import platform
 import signal
@@ -10,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.LLM_Calls.sse import (
     ensure_sse_line,
     openai_delta_chunk,
@@ -17,7 +19,6 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
 )
 from tldw_Server_API.app.core.Local_LLM import handler_utils, http_utils
-from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 
 # Local imports
 from .LLM_Base_Handler import BaseLLMHandler
@@ -230,7 +231,7 @@ class LlamaCppHandler(BaseLLMHandler):
         except ProcessLookupError:
             return f"No process found with PID {pid}."
         except subprocess.CalledProcessError as e_taskkill:
-            self.logger.error(f"taskkill failed for PID {pid}: {e_taskkill.stderr.decode()}")
+            self.logger.exception(f"taskkill failed for PID {pid}: {e_taskkill.stderr.decode()}")
             return f"Failed to stop unmanaged PID {pid} with taskkill."
         except Exception as e:
             self.logger.error(f"Error stopping unmanaged PID {pid}: {e}", exc_info=True)
@@ -523,13 +524,13 @@ class LlamaCppHandler(BaseLLMHandler):
                 stderr_redir = log_file_handle
                 self.logger.info(f"Llama.cpp server logs will be written to: {self.config.log_output_file}")
             except _LLAMACPP_NONCRITICAL_EXCEPTIONS as e:
-                self.logger.error(f"Could not open log file {self.config.log_output_file}: {e}. Logging to PIPE.")
+                self.logger.exception(f"Could not open log file {self.config.log_output_file}: {e}. Logging to PIPE.")
 
         try:
-            cpe_kwargs = dict(
-                stdout=stdout_redir,
-                stderr=stderr_redir,
-            )
+            cpe_kwargs = {
+                "stdout": stdout_redir,
+                "stderr": stderr_redir,
+            }
             if platform.system() != "Windows":
                 cpe_kwargs["preexec_fn"] = os.setsid
             else:
@@ -636,10 +637,8 @@ class LlamaCppHandler(BaseLLMHandler):
                         f"Llama.cpp server PID {pid} (Model: {model_name}) did not terminate gracefully. Killing.")
                     if platform.system() == "Windows":
                         if hasattr(process_to_stop, "send_signal"):
-                            try:
+                            with contextlib.suppress(_LLAMACPP_NONCRITICAL_EXCEPTIONS):
                                 process_to_stop.send_signal(signal.CTRL_BREAK_EVENT)
-                            except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
-                                pass
                         if hasattr(process_to_stop, "terminate"):
                             process_to_stop.terminate()
                         if hasattr(process_to_stop, "kill"):
@@ -912,24 +911,18 @@ class LlamaCppHandler(BaseLLMHandler):
                 if proc.returncode is None:
                     if platform.system() == "Windows":
                         if hasattr(proc, "kill"):
-                            try:
+                            with contextlib.suppress(_LLAMACPP_NONCRITICAL_EXCEPTIONS):
                                 proc.kill()
-                            except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
-                                pass
                     else:
                         try:
                             os.killpg(os.getpgid(pid), signal.SIGKILL)
                         except (ProcessLookupError, PermissionError, OSError):
                             if hasattr(proc, "kill"):
-                                try:
+                                with contextlib.suppress(_LLAMACPP_NONCRITICAL_EXCEPTIONS):
                                     proc.kill()
-                                except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
-                                    pass
             if self._active_server_log_handle:
-                try:
+                with contextlib.suppress(_LLAMACPP_NONCRITICAL_EXCEPTIONS):
                     self._active_server_log_handle.close()
-                except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
-                    pass
             self._stop_stream_drainers()
 
         self._active_server_process = None

@@ -69,8 +69,8 @@ async def process_xml_task(
         summary_text = "No summary provided"
         if auto_summarize and api_name and api_name.lower() != "none" and api_key:
             # Combine all chunk text
-            full_text = '\n'.join(ch['text'] for ch in chunks)
-            combined_prompt = (system_prompt or "") + "\n\n" + (custom_prompt or "")
+            '\n'.join(ch['text'] for ch in chunks)
+            (system_prompt or "") + "\n\n" + (custom_prompt or "")
             # summary_text = perform_summarization(api_name, full_text, combined_prompt, api_key)
             summary_text = f"[Auto-summarized with {api_name}]"
 

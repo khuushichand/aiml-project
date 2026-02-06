@@ -35,7 +35,6 @@ from tldw_Server_API.app.core.Workflows.adapters.content._config import (
     SlidesGenerateConfig,
 )
 
-
 _GENERATION_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
     ImportError,

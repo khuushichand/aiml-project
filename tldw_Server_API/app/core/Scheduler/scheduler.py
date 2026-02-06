@@ -3,6 +3,7 @@ Main Scheduler class that orchestrates all components.
 """
 
 import asyncio
+import contextlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -134,10 +135,8 @@ class Scheduler:
         for task in [self._cleanup_task, self._monitor_task]:
             if task:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
 
         # Stop worker pool
         if self.worker_pool:
@@ -833,11 +832,7 @@ class Scheduler:
         ]
 
         content_lower = content.lower()
-        for pattern in suspicious_patterns:
-            if pattern.lower() in content_lower:
-                return True
-
-        return False
+        return any(pattern.lower() in content_lower for pattern in suspicious_patterns)
 
     def _has_code_injection(self, obj: Any) -> bool:
         """

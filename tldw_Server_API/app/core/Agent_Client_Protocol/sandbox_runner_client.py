@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import socket
@@ -196,15 +197,11 @@ class ACPSandboxRunnerManager:
             )
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             if status is not None:
-                try:
+                with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
                     sandbox_service.cancel_run(status.id)
-                except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
-                    pass
             if sandbox_session is not None:
-                try:
+                with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
                     sandbox_service.destroy_session(sandbox_session.id)
-                except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
-                    pass
             if ssh_port is not None:
                 await self._release_ssh_port(ssh_port)
             raise
@@ -275,22 +272,14 @@ class ACPSandboxRunnerManager:
 
             return session_id
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
-            try:
+            with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
                 reader_task.cancel()
-            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
-                pass
-            try:
+            with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
                 await client.close()
-            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
-                pass
-            try:
+            with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
                 sandbox_service.cancel_run(status.id)
-            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
-                pass
-            try:
+            with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
                 sandbox_service.destroy_session(sandbox_session.id)
-            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
-                pass
             if ssh_port is not None:
                 await self._release_ssh_port(ssh_port)
             raise
@@ -314,19 +303,15 @@ class ACPSandboxRunnerManager:
         sess = await self._get_session(session_id, required=False)
         if not sess:
             return
-        try:
+        with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
             await sess.client.call("_tldw/session/close", {"sessionId": session_id})
-        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
-            pass
         try:
             if sess.reader_task:
                 sess.reader_task.cancel()
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
-        try:
+        with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
             await sess.client.close()
-        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
-            pass
         try:
             sandbox_ep._service.cancel_run(sess.run_id)  # type: ignore[attr-defined]
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
@@ -586,10 +571,7 @@ class ACPSandboxRunnerManager:
                     if not isinstance(data_field, str):
                         continue
                     try:
-                        if enc == "base64":
-                            raw = base64.b64decode(data_field)
-                        else:
-                            raw = data_field.encode("utf-8")
+                        raw = base64.b64decode(data_field) if enc == "base64" else data_field.encode("utf-8")
                     except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
                         raw = b""
                     if not raw:

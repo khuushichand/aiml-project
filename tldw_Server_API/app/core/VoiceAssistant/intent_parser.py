@@ -334,10 +334,7 @@ Only respond with valid JSON, no other text."""
             try:
                 # Extract JSON from response
                 json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
-                if json_match:
-                    result = json.loads(json_match.group())
-                else:
-                    result = json.loads(response)
+                result = json.loads(json_match.group()) if json_match else json.loads(response)
 
                 confidence = float(result.get("confidence", 0.5))
 

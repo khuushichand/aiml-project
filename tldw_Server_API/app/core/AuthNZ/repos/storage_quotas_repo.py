@@ -6,6 +6,7 @@ User-level quotas are stored on the users table.
 """
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -42,26 +43,19 @@ class AuthnzStorageQuotasRepo:
         if row is None:
             return {}
         try:
-            if hasattr(row, "keys") or isinstance(row, dict):
-                record = dict(row)
-            else:
-                record = {}
+            record = dict(row) if hasattr(row, "keys") or isinstance(row, dict) else {}
         except Exception:
             record = {}
 
         # Type conversions
         for field in ("id", "org_id", "team_id", "quota_mb", "soft_limit_pct", "hard_limit_pct"):
             if field in record and record[field] is not None:
-                try:
+                with contextlib.suppress(Exception):
                     record[field] = int(record[field])
-                except Exception:
-                    pass
 
         if "used_mb" in record and record["used_mb"] is not None:
-            try:
+            with contextlib.suppress(Exception):
                 record["used_mb"] = float(record["used_mb"])
-            except Exception:
-                pass
 
         return record
 

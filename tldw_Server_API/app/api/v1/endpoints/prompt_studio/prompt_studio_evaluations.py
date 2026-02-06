@@ -50,6 +50,8 @@ from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requir
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager import EvaluationManager
 
 router = APIRouter(prefix="/api/v1/prompt-studio", tags=["prompt-studio"])
+import contextlib
+
 from tldw_Server_API.app.core.Logging.log_context import (
     ensure_request_id,
     ensure_traceparent,
@@ -962,15 +964,13 @@ async def run_evaluation_async(
             ),
         )
         conn.commit()
-        try:
+        with contextlib.suppress(_PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS):
             _log.info(
                 "PS evaluation.async.done evaluation_id={} total_tests={} pass_rate={}",
                 evaluation_id,
                 aggregate_metrics.get("total_tests", 0),
                 round(aggregate_metrics.get("pass_rate", 0.0), 3),
             )
-        except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
-            pass
 
     except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS as e:
         get_ps_logger(

@@ -6,6 +6,7 @@ This module provides query understanding, intent detection, query rewriting,
 and other advanced query processing capabilities.
 """
 
+import contextlib
 import os
 import re
 from collections import defaultdict
@@ -38,10 +39,8 @@ def _download_with_timeout(resource: str, timeout_s: int = 60) -> bool:
         except Exception as e:  # pragma: no cover - defensive
             logger.warning(f"NLTK download error for '{resource}': {e}")
             ok = False
-        try:
+        with contextlib.suppress(Exception):
             q.put_nowait(ok)
-        except Exception:
-            pass
 
     t = threading.Thread(target=_runner, daemon=True)
     t.start()

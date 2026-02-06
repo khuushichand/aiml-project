@@ -124,10 +124,7 @@ def check_ffmpeg():
             "ffmpeg is not installed. You can install it manually or via your package manager. "
             "Windows builds: https://www.gyan.dev/ffmpeg/builds/"
         )
-        if userOS == "Unknown":
-            userOS_guess = platform.system()
-        else:
-            userOS_guess = userOS
+        userOS_guess = platform.system() if userOS == "Unknown" else userOS
 
         if userOS_guess == "Windows":
             if download_ffmpeg(): # call and check the return

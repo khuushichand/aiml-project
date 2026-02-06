@@ -61,6 +61,8 @@ except ImportError:
                 setattr(self, key, value)
 
     OpenAIModelCfg = _FallbackOpenAIModelCfg  # type: ignore[assignment]
+import contextlib
+
 from tldw_Server_API.app.core.Claims_Extraction.claims_engine import ClaimsEngine
 from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitOpenError, llm_circuit_breaker
 from tldw_Server_API.app.core.RAG.rag_service.types import Document
@@ -254,10 +256,10 @@ class RAGEvaluator:
             failed_metrics = []
             explicit_metrics = caller_provided_metrics
             # Provide aliases only when explicitly requested or when using defaults with ground truth
-            requested_aliases = set(metrics or []) & {"answer_relevance", "answer_faithfulness"}
-            alias_by_weights = (
+            set(metrics or []) & {"answer_relevance", "answer_faithfulness"}
+            (
                 isinstance(metric_weights, dict)
-                and any(k in {"answer_relevance", "answer_faithfulness"} for k in metric_weights.keys())
+                and any(k in {"answer_relevance", "answer_faithfulness"} for k in metric_weights)
             )
             for i, result in enumerate(metric_results):
                 if isinstance(result, Exception):
@@ -292,10 +294,8 @@ class RAGEvaluator:
                     except _RAG_EVAL_NONCRITICAL_EXCEPTIONS:
                         pass
                 if "answer_faithfulness" in results["metrics"] and "faithfulness" in results["metrics"]:
-                    try:
+                    with contextlib.suppress(_RAG_EVAL_NONCRITICAL_EXCEPTIONS):
                         results["metrics"].pop("faithfulness", None)
-                    except _RAG_EVAL_NONCRITICAL_EXCEPTIONS:
-                        pass
         except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Critical failure in evaluation: {e}")
             raise ValueError(f"Evaluation failed: {str(e)}")
@@ -327,7 +327,8 @@ class RAGEvaluator:
 
             analyze_fn = analyze
             if model:
-                analyze_fn = lambda *args, **kwargs: analyze(*args, model_override=model, **kwargs)
+                def analyze_fn(*args, **kwargs):
+                    return analyze(*args, model_override=model, **kwargs)
             engine = ClaimsEngine(analyze_fn)
             claims_result = await engine.run(
                 answer=response or "",
@@ -662,7 +663,7 @@ class RAGEvaluator:
         # Check each context for relevance
         relevance_scores = []
 
-        for i, context in enumerate(contexts):
+        for _i, context in enumerate(contexts):
             prompt = f"""
             Rate how relevant this context is to the query on a scale of 1-5.
 

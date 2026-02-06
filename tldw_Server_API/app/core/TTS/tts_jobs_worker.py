@@ -9,6 +9,7 @@ TTS Jobs worker for long-form speech generation.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from typing import Any
@@ -232,10 +233,8 @@ async def _handle_tts_job(job: dict[str, Any]) -> dict[str, Any]:
     def _emit_progress(percent: float, message: str, eta_seconds: float | None = None) -> None:
         if job_id <= 0:
             return
-        try:
+        with contextlib.suppress(_TTS_JOBS_NONCRITICAL_EXCEPTIONS):
             jm.update_job_progress(job_id, progress_percent=percent, progress_message=message)
-        except _TTS_JOBS_NONCRITICAL_EXCEPTIONS:
-            pass
         try:
             attrs = {"progress_percent": percent, "progress_message": message}
             if eta_seconds is not None:
@@ -333,10 +332,8 @@ async def _handle_tts_job(job: dict[str, Any]) -> dict[str, Any]:
         }
     finally:
         if history_db is not None:
-            try:
+            with contextlib.suppress(_TTS_JOBS_NONCRITICAL_EXCEPTIONS):
                 history_db.close_connection()
-            except _TTS_JOBS_NONCRITICAL_EXCEPTIONS:
-                pass
 
 
 async def run_tts_jobs_worker(stop_event: asyncio.Event | None = None) -> None:
@@ -369,10 +366,8 @@ async def run_tts_jobs_worker(stop_event: asyncio.Event | None = None) -> None:
     finally:
         if _stop_watcher_task is not None and not _stop_watcher_task.done():
             _stop_watcher_task.cancel()
-            try:
+            with contextlib.suppress(_TTS_JOBS_NONCRITICAL_EXCEPTIONS):
                 await _stop_watcher_task
-            except _TTS_JOBS_NONCRITICAL_EXCEPTIONS:
-                pass
 
 
 if __name__ == "__main__":

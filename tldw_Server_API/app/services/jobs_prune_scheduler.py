@@ -163,7 +163,7 @@ async def start_jobs_prune_scheduler() -> asyncio.Task | None:
         finally:
             JobManager.clear_rls_context()
         if total:
-            group_summary = {k: v for k, v in sorted(groups.items())}
+            group_summary = dict(sorted(groups.items()))
             logger.info(
                 f"Jobs prune run complete: total={total} dry_run={dry_run} "
                 f"groups={group_summary} "

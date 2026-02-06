@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import fnmatch
 import hashlib
 import json
@@ -168,33 +169,27 @@ class LimaRunner:
 
         try:
             # Stop the VM
-            try:
+            with contextlib.suppress(_LIMA_RUNNER_NONCRITICAL_EXCEPTIONS):
                 subprocess.run(
                     ["limactl", "stop", vm_name],
                     check=False,
                     timeout=30,
                     capture_output=True,
                 )
-            except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
 
             # Delete the VM
-            try:
+            with contextlib.suppress(_LIMA_RUNNER_NONCRITICAL_EXCEPTIONS):
                 subprocess.run(
                     ["limactl", "delete", vm_name, "-f"],
                     check=False,
                     timeout=30,
                     capture_output=True,
                 )
-            except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
 
             # Cleanup run directory
             if run_dir:
-                try:
+                with contextlib.suppress(_LIMA_RUNNER_NONCRITICAL_EXCEPTIONS):
                     shutil.rmtree(run_dir, ignore_errors=True)
-                except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
-                    pass
 
             return True
         finally:
@@ -222,14 +217,12 @@ class LimaRunner:
         started = datetime.utcnow()
         hub = get_hub()
 
-        try:
+        with contextlib.suppress(_LIMA_RUNNER_NONCRITICAL_EXCEPTIONS):
             hub.publish_event(run_id, "start", {
                 "ts": started.isoformat(),
                 "runtime": "lima",
                 "net": "off",
             })
-        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
-            pass
 
         # Compute pseudo image digest
         image_digest: str | None = None
@@ -256,10 +249,8 @@ class LimaRunner:
         except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
             artifacts_map = {}
 
-        try:
+        with contextlib.suppress(_LIMA_RUNNER_NONCRITICAL_EXCEPTIONS):
             hub.publish_event(run_id, "end", {"exit_code": 0})
-        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
-            pass
 
         finished = datetime.utcnow()
 
@@ -299,14 +290,12 @@ class LimaRunner:
         started = datetime.utcnow()
         hub = get_hub()
 
-        try:
+        with contextlib.suppress(_LIMA_RUNNER_NONCRITICAL_EXCEPTIONS):
             hub.publish_event(run_id, "start", {
                 "ts": started.isoformat(),
                 "runtime": "lima",
                 "net": "off" if (spec.network_policy or "deny_all") == "deny_all" else "on",
             })
-        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
-            pass
 
         # Create temp directory for this run
         run_dir = tempfile.mkdtemp(prefix="tldw_lima_")
@@ -398,7 +387,7 @@ class LimaRunner:
                 )
 
             # Execute the command in the VM
-            user_cmd = " ".join(f"'{x}'" for x in list(spec.command))
+            " ".join(f"'{x}'" for x in list(spec.command))
             shell_cmd = "cd /workspace && chmod +x entry.sh && ./entry.sh"
 
             timeout_sec = int(spec.timeout_sec or 300)
@@ -426,10 +415,8 @@ class LimaRunner:
 
             # Stop log streaming
             stop_flag["stop"] = True
-            try:
+            with contextlib.suppress(_LIMA_RUNNER_NONCRITICAL_EXCEPTIONS):
                 log_thread.join(timeout=2)
-            except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
 
             # Publish remaining logs
             if os.path.exists(log_path):
@@ -469,41 +456,33 @@ class LimaRunner:
             message = f"Lima execution error: {str(e)}"
         finally:
             # Cleanup: stop and delete VM
-            try:
+            with contextlib.suppress(_LIMA_RUNNER_NONCRITICAL_EXCEPTIONS):
                 subprocess.run(
                     ["limactl", "stop", vm_name],
                     check=False,
                     timeout=30,
                     capture_output=True,
                 )
-            except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
 
-            try:
+            with contextlib.suppress(_LIMA_RUNNER_NONCRITICAL_EXCEPTIONS):
                 subprocess.run(
                     ["limactl", "delete", vm_name, "-f"],
                     check=False,
                     timeout=30,
                     capture_output=True,
                 )
-            except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
 
             # Cleanup run directory
-            try:
+            with contextlib.suppress(_LIMA_RUNNER_NONCRITICAL_EXCEPTIONS):
                 shutil.rmtree(run_dir, ignore_errors=True)
-            except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
-                pass
 
             # Unregister VM
             with LimaRunner._active_lock:
                 LimaRunner._active_vm.pop(run_id, None)
                 LimaRunner._active_run_dir.pop(run_id, None)
 
-        try:
+        with contextlib.suppress(_LIMA_RUNNER_NONCRITICAL_EXCEPTIONS):
             hub.publish_event(run_id, "end", {"exit_code": exit_code})
-        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
-            pass
 
         finished = datetime.utcnow()
 
@@ -548,10 +527,8 @@ class LimaRunner:
             for fn in files:
                 s = os.path.join(root, fn)
                 t = os.path.join(tgt_root, fn)
-                try:
+                with contextlib.suppress(_LIMA_RUNNER_NONCRITICAL_EXCEPTIONS):
                     shutil.copy2(s, t)
-                except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
-                    pass
 
     @staticmethod
     def _write_entry_script(workspace: str, command: list[str]) -> None:

@@ -9,9 +9,9 @@ import inspect
 import os
 import time
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
-from typing import Any, Optional, Tuple
+from typing import Any, Optional
 
 #
 # Third-party Imports
@@ -232,17 +232,13 @@ class TTSServiceV2:
         if metadata.get("duration_seconds") is None:
             duration = response.duration_seconds if response.duration_seconds is not None else response.duration
             if duration is not None:
-                try:
+                with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                     metadata["duration_seconds"] = float(duration)
-                except _TTS_NONCRITICAL_EXCEPTIONS:
-                    pass
         if metadata.get("sample_rate") is None and response.sample_rate:
             metadata["sample_rate"] = response.sample_rate
 
-        try:
+        with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
             target._tts_metadata = metadata
-        except _TTS_NONCRITICAL_EXCEPTIONS:
-            pass
         return None
 
     def _get_performance_config(self) -> dict[str, Any]:
@@ -917,10 +913,8 @@ class TTSServiceV2:
         # Optional resource check hook expected by tests
         try:
             resource_mgr = await get_resource_manager()
-            try:
+            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                 resource_mgr.touch_model(provider, getattr(request, "model", None))
-            except _TTS_NONCRITICAL_EXCEPTIONS:
-                pass
             try:
                 ok = await resource_mgr.check_resources()
             except TypeError:
@@ -1145,7 +1139,7 @@ class TTSServiceV2:
 
         # Normalize language set and formats
         try:
-            data["languages"] = sorted(list(languages))
+            data["languages"] = sorted(languages)
         except _TTS_NONCRITICAL_EXCEPTIONS:
             data["languages"] = list(languages)
         data["formats"] = [getattr(f, "value", str(f)) for f in formats]
@@ -1196,7 +1190,7 @@ class TTSServiceV2:
 
     async def generate_with_fallback(self, request: TTSRequest, fallback_providers: Optional[list[str]] = None) -> TTSResponse:
         """Legacy helper to try primary provider then fall back to others."""
-        primary = getattr(request, "provider", None) or getattr(self, "_default_provider", "openai")
+        getattr(request, "provider", None) or getattr(self, "_default_provider", "openai")
         # Try primary
         try:
             return await self.generate(request)
@@ -1371,7 +1365,7 @@ class TTSServiceV2:
         audio_size = 0
         chunks_count = 0
         released_active_slot = False
-        fallback_plan: Optional[Tuple[list[str], str]] = None
+        fallback_plan: Optional[tuple[list[str], str]] = None
         voice_to_voice_recorded = False
         voice_to_voice_route_label = voice_to_voice_route or "audio.speech"
         voice_to_voice_start_ts: Optional[float] = None
@@ -1484,11 +1478,9 @@ class TTSServiceV2:
                         )
                         if metadata_only:
                             if response.audio_stream and hasattr(response.audio_stream, "aclose"):
-                                try:
+                                with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                                     await response.audio_stream.aclose()
-                                except _TTS_NONCRITICAL_EXCEPTIONS:
-                                    pass
-                            try:
+                            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                                 self._record_tts_metrics(
                                     provider=provider_key,
                                     model=request_for_provider.model or "default",
@@ -1499,8 +1491,6 @@ class TTSServiceV2:
                                     duration=time.time() - start_time,
                                     success=True,
                                 )
-                            except _TTS_NONCRITICAL_EXCEPTIONS:
-                                pass
                             return
                         if response.audio_stream:
                             async for chunk in response.audio_stream:
@@ -1522,12 +1512,10 @@ class TTSServiceV2:
                                 chunks_count += 1
                                 audio_size += len(chunk)
                                 yield chunk
-                            try:
+                            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                                 await self._maybe_store_qwen3_voice_prompt(
                                     request_for_provider, user_id, provider_key
                                 )
-                            except _TTS_NONCRITICAL_EXCEPTIONS:
-                                pass
                         elif response.audio_data:
                             chunks_count = 1
                             # Record TTFB when first audio bytes are available
@@ -1546,18 +1534,16 @@ class TTSServiceV2:
                                 pass
                             audio_size = len(response.audio_data)
                             yield response.audio_data
-                            try:
+                            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                                 await self._maybe_store_qwen3_voice_prompt(
                                     request_for_provider, user_id, provider_key
                                 )
-                            except _TTS_NONCRITICAL_EXCEPTIONS:
-                                pass
                         else:
                             error_msg = f"No audio data returned by {provider_key}"
                             logger.error(error_msg)
                             if fallback:
                                 # Record a soft failure for observability before falling back.
-                                try:
+                                with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                                     self._record_tts_metrics(
                                         provider=provider_key,
                                         model=request_for_provider.model or "default",
@@ -1569,8 +1555,6 @@ class TTSServiceV2:
                                         success=False,
                                         error=error_msg,
                                     )
-                                except _TTS_NONCRITICAL_EXCEPTIONS:
-                                    pass
                                 await self._handle_provider_fallback(request_for_provider, provider_key, error_msg)
                                 await self._decrement_active_requests(provider_key)
                                 released_active_slot = True
@@ -1626,7 +1610,7 @@ class TTSServiceV2:
                 if self._stream_errors_as_audio:
                     yield f"ERROR: {error_msg}".encode()
                 else:
-                    raise e
+                    raise
         except _TTS_NONCRITICAL_EXCEPTIONS as e:
             # Handle unexpected errors
             error_msg = f"Unexpected error generating speech with {provider_key}: {str(e)}"
@@ -1757,10 +1741,8 @@ class TTSServiceV2:
                 if metadata_only:
                     success = True
                     if response.audio_stream and hasattr(response.audio_stream, "aclose"):
-                        try:
+                        with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                             await response.audio_stream.aclose()
-                        except _TTS_NONCRITICAL_EXCEPTIONS:
-                            pass
                     return
 
                 if response.audio_stream:
@@ -1813,10 +1795,8 @@ class TTSServiceV2:
                 yield f"ERROR: All providers failed - {str(e)}".encode()
             raise TTSGenerationError(f"All providers failed - {str(e)}") from e
         finally:
-            try:
+            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                 await self._decrement_active_requests(provider_key)
-            except _TTS_NONCRITICAL_EXCEPTIONS:
-                pass
             try:
                 duration = time.time() - start_time
                 self._record_tts_metrics(
@@ -2134,14 +2114,12 @@ class TTSServiceV2:
         async with self._active_requests_lock:
             current = self._active_request_counts.get(provider, 0) + 1
             self._active_request_counts[provider] = current
-        try:
+        with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
             self.metrics.set_gauge(
                 "tts_active_requests",
                 current,
                 labels={"provider": provider}
             )
-        except _TTS_NONCRITICAL_EXCEPTIONS:
-            pass
 
     async def _decrement_active_requests(self, provider: str) -> None:
         """Decrement per-provider active request count and update gauge."""
@@ -2153,14 +2131,12 @@ class TTSServiceV2:
                 self._active_request_counts.pop(provider, None)
             else:
                 self._active_request_counts[provider] = current
-        try:
+        with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
             self.metrics.set_gauge(
                 "tts_active_requests",
                 current,
                 labels={"provider": provider}
             )
-        except _TTS_NONCRITICAL_EXCEPTIONS:
-            pass
 
     async def _get_fallback_adapter(
         self,
@@ -2452,7 +2428,7 @@ class TTSServiceV2:
                             if self._stream_errors_as_audio:
                                 yield f"ERROR: {error_msg}".encode()
                             else:
-                                raise final_e
+                                raise
                     else:
                         origin_provider = next_failed_provider
                         if self._stream_errors_as_audio:
@@ -2464,7 +2440,7 @@ class TTSServiceV2:
                     if self._stream_errors_as_audio:
                         yield f"ERROR: {str(e)} (non-retryable)".encode()
                     else:
-                        raise e
+                        raise
             except _TTS_NONCRITICAL_EXCEPTIONS as e:
                 # Handle unexpected errors
                 logger.error(f"Unexpected error in fallback: {e}", exc_info=True)
@@ -2581,10 +2557,7 @@ class TTSServiceAdapter:
         }
 
         # Update request model if needed
-        if internal_model_id in model_mapping:
-            request.model = model_mapping[internal_model_id]
-        else:
-            request.model = internal_model_id
+        request.model = model_mapping.get(internal_model_id, internal_model_id)
 
         # Generate with V2 service
         async for chunk in self.service_v2.generate_speech(request, fallback=True):

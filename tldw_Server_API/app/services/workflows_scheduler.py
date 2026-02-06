@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import contextlib
 import os
 import random
 from datetime import datetime, timedelta
@@ -118,10 +119,8 @@ class _WFRecurringScheduler:
             try:
                 if self._rescan_task:
                     self._rescan_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await self._rescan_task
-                    except asyncio.CancelledError:
-                        pass
             except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows scheduler: rescan task cancel failed: {e}")
             self._rescan_task = None
@@ -519,10 +518,8 @@ async def stop_workflows_scheduler(task: asyncio.Task | None) -> None:
     try:
         if task:
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
     except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Workflows scheduler: stop task cancel failed: {e}")
     try:

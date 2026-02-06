@@ -292,10 +292,7 @@ class LLMGenerator(BaseGenerator):
             prompt = self.build_prompt(context_text, query)
 
             # Add system prompt if configured
-            if self.config.system_prompt:
-                full_prompt = f"{self.config.system_prompt}\n\n{prompt}"
-            else:
-                full_prompt = prompt
+            full_prompt = f"{self.config.system_prompt}\n\n{prompt}" if self.config.system_prompt else prompt
 
             # Call appropriate LLM provider
             response: Any = await self._call_llm(full_prompt, **kwargs)
@@ -393,10 +390,7 @@ class StreamingGenerator(LLMGenerator):
             prompt = self.build_prompt(context_text, query)
 
             # Add system prompt if configured
-            if self.config.system_prompt:
-                full_prompt = f"{self.config.system_prompt}\n\n{prompt}"
-            else:
-                full_prompt = prompt
+            full_prompt = f"{self.config.system_prompt}\n\n{prompt}" if self.config.system_prompt else prompt
 
             # Call LLM with streaming
             response = await self._call_llm(full_prompt, **kwargs)

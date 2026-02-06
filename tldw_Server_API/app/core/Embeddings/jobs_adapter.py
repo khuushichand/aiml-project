@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -215,15 +216,13 @@ class EmbeddingsJobsAdapter:
                     require_redis=not redis_pipeline.allow_stub(),
                 )
         except Exception:
-            try:
+            with contextlib.suppress(Exception):
                 self._jm.fail_job(
                     int(root_job["id"]),
                     error="Failed to enqueue embeddings job to Redis",
                     retryable=False,
                     enforce=False,
                 )
-            except Exception:
-                pass
             raise
         return root_job
 

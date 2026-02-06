@@ -53,7 +53,7 @@ def _build_role_grants(permission_names: Iterable[str], *, include_mcp_permissio
         "user": [p for p in ("media.read", "media.create") if p in base],
         "viewer": [p for p in ("media.read",) if p in base],
         "reviewer": [p for p in ("media.read", "claims.review") if p in base],
-        "admin": [p for p in sorted(base)],
+        "admin": sorted(base),
     }
 
     if include_mcp_permissions:

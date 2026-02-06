@@ -319,18 +319,16 @@ class ChatDictionaryEntry:
     def should_apply(self) -> bool:
         """Check probability and timed effects to determine if replacement should occur."""
         # Check probability (0.0 - 1.0)
-        if self.probability < 1.0:
-            if random.random() > self.probability:
-                return False
+        if self.probability < 1.0 and random.random() > self.probability:
+            return False
 
         # Check timed effects
         now = datetime.now(timezone.utc)
         if self.last_triggered:
             # Cooldown check
             cooldown = self.timed_effects.get("cooldown", 0)
-            if cooldown > 0:
-                if (now - self.last_triggered) < timedelta(seconds=cooldown):
-                    return False
+            if cooldown > 0 and (now - self.last_triggered) < timedelta(seconds=cooldown):
+                return False
 
             # Delay check (initial delay before first trigger)
             delay = self.timed_effects.get("delay", 0)
@@ -1334,7 +1332,7 @@ class ChatDictionaryService:
             except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
                 pass
 
-        for iteration in range(max_iterations):
+        for _iteration in range(max_iterations):
             iteration_replacements = 0
 
             for entry in entries:
@@ -1359,7 +1357,7 @@ class ChatDictionaryService:
                         if token_budget and self.count_tokens(text) > token_budget:
                             warnings.warn(
                                 f"Token budget ({token_budget}) exceeded after {stats['replacements']} replacements",
-                                TokenBudgetExceededWarning,
+                                TokenBudgetExceededWarning, stacklevel=2,
                             )
                             stats["token_budget_exceeded"] = True
                             if return_stats:

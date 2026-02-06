@@ -7,6 +7,7 @@ with storage in MediaDatabase.Claims. Optional, behind config flags.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import re
 import sqlite3
@@ -300,10 +301,8 @@ def extract_claims_for_chunks(
                                 estimated_cost=cost_estimate,
                             )
                         except _futures.TimeoutError:
-                            try:
+                            with contextlib.suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
                                 fut.cancel()
-                            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                                pass
                             record_claims_provider_request(
                                 provider=provider,
                                 model=model_override or "",

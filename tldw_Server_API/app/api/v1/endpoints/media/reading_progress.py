@@ -80,7 +80,7 @@ async def get_reading_progress(
     media_id: int = Path(..., description="The ID of the media item"),
     db: MediaDatabase = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
-) -> Union[ReadingProgressResponse, ReadingProgressNotFound]:
+) -> ReadingProgressResponse | ReadingProgressNotFound:
     """
     Get the reading progress for a document.
 

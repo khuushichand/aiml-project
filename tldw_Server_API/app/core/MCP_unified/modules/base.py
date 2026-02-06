@@ -5,6 +5,7 @@ Includes health checking, metrics, circuit breaker support, and proper error han
 """
 
 import asyncio
+import contextlib
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -299,7 +300,6 @@ class BaseModule(ABC):
         """Execute an operation with circuit breaker protection"""
         if self.is_circuit_breaker_open():
             raise Exception(f"Circuit breaker is open for module {self.name}")
-        was_half_open = self._circuit_breaker_half_open
         start_time = time.time()
         acquired = False
         try:
@@ -339,10 +339,8 @@ class BaseModule(ABC):
             raise
         finally:
             if acquired:
-                try:
+                with contextlib.suppress(Exception):
                     self._semaphore.release()
-                except Exception:
-                    pass
 
     async def get_tool_def(self, tool_name: str) -> Optional[dict[str, Any]]:
         """Return a single tool definition, using cached tool list if available."""

@@ -537,8 +537,7 @@ class AnthropicAdapter(ChatProvider):
                                         "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
                                         "provider_response": ev,
                                     })
-                        for tail in finalize_stream(response=resp, done_already=done_sent):
-                            yield tail
+                        yield from finalize_stream(response=resp, done_already=done_sent)
                 return
             except _ANTHROPIC_NONCRITICAL_EXCEPTIONS as e:
                 raise self.normalize_error(e)

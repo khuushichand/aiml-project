@@ -14,7 +14,7 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
@@ -31,8 +31,8 @@ try:
         VerificationStatus,
     )
 except ImportError:
-    from enum import Enum as _Enum
     from dataclasses import dataclass as _dc
+    from enum import Enum as _Enum
 
     class VerificationStatus(_Enum):  # type: ignore
         VERIFIED = "verified"
@@ -63,7 +63,7 @@ class EvidenceAssessment:
     document: Document
     stance: EvidenceStance
     confidence: float
-    rationale: Optional[str] = None  # Use 'rationale' to match existing ClaimVerification
+    rationale: str | None = None  # Use 'rationale' to match existing ClaimVerification
 
 
 @dataclass
@@ -107,8 +107,8 @@ class ClaimAdjudicator:
 
     def __init__(
         self,
-        nli_pipeline: Optional[Any] = None,
-        llm_analyze_fn: Optional[Callable] = None,
+        nli_pipeline: Any | None = None,
+        llm_analyze_fn: Callable | None = None,
         contested_threshold: float = 0.4,
         min_contradict_score: float = 0.1,
         strong_contradict_threshold: float = 0.7,
@@ -134,10 +134,10 @@ class ClaimAdjudicator:
 
     async def adjudicate(
         self,
-        claim: "Claim",
+        claim: Claim,
         supporting_docs: list[Document],
         contradicting_docs: list[Document],
-        original_verification: "ClaimVerification",
+        original_verification: ClaimVerification,
     ) -> AdjudicationResult:
         """
         Given both supporting and potentially contradicting documents,
@@ -190,7 +190,7 @@ class ClaimAdjudicator:
 
     async def _assess_documents(
         self,
-        claim: "Claim",
+        claim: Claim,
         documents: list[Document],
         expected_stance: EvidenceStance,
     ) -> list[EvidenceAssessment]:
@@ -250,10 +250,7 @@ class ClaimAdjudicator:
             return EvidenceStance.NEUTRAL, 0.5
 
         # Handle nested list structure
-        if isinstance(results, list) and results and isinstance(results[0], list):
-            result_list = results[0]
-        else:
-            result_list = results
+        result_list = results[0] if isinstance(results, list) and results and isinstance(results[0], list) else results
 
         if not result_list:
             return EvidenceStance.NEUTRAL, 0.5
@@ -338,7 +335,7 @@ Respond with a JSON object:
         self,
         support_score: float,
         contradict_score: float,
-        original: "ClaimVerification",
+        original: ClaimVerification,
     ) -> tuple[VerificationStatus, str]:
         """
         Determine final verification status based on evidence balance.
@@ -398,8 +395,8 @@ Respond with a JSON object:
 
 
 def create_adjudicator(
-    nli_pipeline: Optional[Any] = None,
-    llm_analyze_fn: Optional[Callable] = None,
+    nli_pipeline: Any | None = None,
+    llm_analyze_fn: Callable | None = None,
     contested_threshold: float = 0.4,
 ) -> ClaimAdjudicator:
     """

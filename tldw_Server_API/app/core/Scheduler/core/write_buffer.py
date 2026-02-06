@@ -4,6 +4,7 @@ Guarantees no data loss even under concurrent load.
 """
 
 import asyncio
+import contextlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -181,10 +182,8 @@ class SafeWriteBuffer:
         # Cancel timer
         if self._flush_task:
             self._flush_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._flush_task
-            except asyncio.CancelledError:
-                pass
 
         # Final flush with retries
         max_retries = 3

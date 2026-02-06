@@ -240,7 +240,7 @@ class TableParser:
             if isinstance(item, dict):
                 all_keys.update(item.keys())
 
-        headers = sorted(list(all_keys))
+        headers = sorted(all_keys)
 
         # Extract rows
         rows = []

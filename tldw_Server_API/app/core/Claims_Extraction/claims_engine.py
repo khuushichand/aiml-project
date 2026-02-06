@@ -10,6 +10,7 @@ app/core/RAG/rag_service/claims.py and is designed to be extended.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import time
@@ -731,7 +732,7 @@ class LLMBasedClaimExtractor:
             text = raw if isinstance(raw, str) else str(raw)
             if budget is not None:
                 budget.add_usage(tokens=estimate_claims_tokens(text))
-            try:
+            with contextlib.suppress(_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS):
                 await _log_claims_llm_usage(
                     job_context=job_context,
                     operation="claims_extract",
@@ -743,8 +744,6 @@ class LLMBasedClaimExtractor:
                     status=200,
                     estimated=True,
                 )
-            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                pass
             # find JSON block (support fenced blocks)
             jtxt = None
             fence_json = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
@@ -777,7 +776,7 @@ class LLMBasedClaimExtractor:
                 error=str(e),
                 estimated_cost=cost_estimate,
             )
-            try:
+            with contextlib.suppress(_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS):
                 await _log_claims_llm_usage(
                     job_context=job_context,
                     operation="claims_extract",
@@ -789,8 +788,6 @@ class LLMBasedClaimExtractor:
                     status=500,
                     estimated=True,
                 )
-            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                pass
             logger.warning(f"Claim extraction via LLM failed: {e}")
             return await HeuristicSentenceExtractor().extract(answer, max_claims)
 
@@ -1023,7 +1020,7 @@ class HybridClaimVerifier:
             text = raw if isinstance(raw, str) else str(raw)
             if budget is not None:
                 budget.add_usage(tokens=estimate_claims_tokens(text))
-            try:
+            with contextlib.suppress(_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS):
                 await _log_claims_llm_usage(
                     job_context=job_context,
                     operation="claims_verify",
@@ -1035,8 +1032,6 @@ class HybridClaimVerifier:
                     status=200,
                     estimated=True,
                 )
-            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                pass
             # Parse fenced JSON if present
             jtxt = None
             fence_json = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
@@ -1065,7 +1060,7 @@ class HybridClaimVerifier:
                 error=str(e),
                 estimated_cost=cost_estimate,
             )
-            try:
+            with contextlib.suppress(_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS):
                 await _log_claims_llm_usage(
                     job_context=job_context,
                     operation="claims_verify",
@@ -1077,8 +1072,6 @@ class HybridClaimVerifier:
                     status=500,
                     estimated=True,
                 )
-            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-                pass
             logger.warning(f"LLM judge failed; defaulting to NEI: {e}")
         # Check numeric precision for statistic claims
         numeric_match: bool | None = None
@@ -1119,10 +1112,7 @@ class HybridClaimVerifier:
 
         # Override with LLM-based result if it's more confident
         if label in {"supported", "refuted"} and confidence > decision_conf:
-            if label == "supported":
-                status = VerificationStatus.VERIFIED
-            else:
-                status = VerificationStatus.REFUTED
+            status = VerificationStatus.VERIFIED if label == "supported" else VerificationStatus.REFUTED
             decision_rationale = rationale or decision_rationale
             decision_conf = confidence
 
@@ -1388,7 +1378,7 @@ class ClaimsEngine:
 
         # Count by new status values
         verified_count = sum(1 for v in verifications if v.status == VerificationStatus.VERIFIED)
-        refuted_count = sum(1 for v in verifications if v.status == VerificationStatus.REFUTED)
+        sum(1 for v in verifications if v.status == VerificationStatus.REFUTED)
         hallucination_count = sum(1 for v in verifications if v.status == VerificationStatus.HALLUCINATION)
         numerical_error_count = sum(1 for v in verifications if v.status == VerificationStatus.NUMERICAL_ERROR)
         misquoted_count = sum(1 for v in verifications if v.status == VerificationStatus.MISQUOTED)

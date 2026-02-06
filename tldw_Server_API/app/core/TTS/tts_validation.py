@@ -642,14 +642,13 @@ class TTSInputValidator:
 
     def _validate_format(self, format: AudioFormat, provider: Optional[str] = None):
         """Validate audio format"""
-        if provider and provider in self.SUPPORTED_FORMATS:
-            if format not in self.SUPPORTED_FORMATS[provider]:
-                supported = [fmt.value for fmt in self.SUPPORTED_FORMATS[provider]]
-                raise TTSUnsupportedFormatError(
-                    f"Format '{format.value}' not supported by {provider}. Supported: {supported}",
-                    provider=provider,
-                    details={"requested_format": format.value, "supported_formats": supported}
-                )
+        if provider and provider in self.SUPPORTED_FORMATS and format not in self.SUPPORTED_FORMATS[provider]:
+            supported = [fmt.value for fmt in self.SUPPORTED_FORMATS[provider]]
+            raise TTSUnsupportedFormatError(
+                f"Format '{format.value}' not supported by {provider}. Supported: {supported}",
+                provider=provider,
+                details={"requested_format": format.value, "supported_formats": supported}
+            )
 
     def _validate_language(self, language: str, provider: Optional[str] = None):
         """Validate language code"""
@@ -927,10 +926,7 @@ class TTSInputValidator:
                 return True
 
         # Check for MP4/M4A (more complex)
-        if len(data) >= 8 and data[4:8] == b'ftyp':
-            return True
-
-        return False
+        return bool(len(data) >= 8 and data[4:8] == b'ftyp')
 
 
 # Convenience validation functions

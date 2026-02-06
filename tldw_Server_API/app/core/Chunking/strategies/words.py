@@ -4,6 +4,7 @@ Word-based chunking strategy.
 Splits text into chunks based on word count with optional overlap.
 """
 
+import contextlib
 from collections.abc import Generator
 from typing import Any
 
@@ -433,10 +434,8 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             start_idx = token_indices[0]
             end_idx = token_indices[-1]
             start_char, end_char = spans[start_idx][0], spans[end_idx][1]
-            try:
+            with contextlib.suppress(Exception):
                 end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
-            except Exception:
-                pass
             # Default to source-aligned text for multilingual fidelity.
             chunk_text = record.get('text', '')
             if align_text_to_source:

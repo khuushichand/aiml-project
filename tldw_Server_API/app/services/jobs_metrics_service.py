@@ -20,6 +20,7 @@ Usage:
 Tests can call reconcile_once(limit) directly for determinism.
 """
 
+import contextlib
 import os
 import time
 from sqlite3 import Error as SQLiteError
@@ -119,10 +120,8 @@ class JobsMetricsService:
                             ),
                             (d, q, jt, int(r_ready), int(r_sched), int(r_proc)),
                         )
-                        try:
+                        with contextlib.suppress(_JOBS_METRICS_BEST_EFFORT_EXCEPTIONS):
                             jm._update_gauges(domain=d, queue=q, job_type=jt)
-                        except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS:
-                            pass
                         reconciled += 1
             else:
                 # SQLite
@@ -161,20 +160,14 @@ class JobsMetricsService:
                         ),
                         (d, q, jt, int(q_ready), int(q_sched), int(p)),
                     )
-                    try:
+                    with contextlib.suppress(_JOBS_METRICS_BEST_EFFORT_EXCEPTIONS):
                         self.jm._update_gauges(domain=d, queue=q, job_type=jt)
-                    except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS:
-                        pass
                     reconciled += 1
-                try:
+                with contextlib.suppress(_JOBS_METRICS_BEST_EFFORT_EXCEPTIONS):
                     conn.commit()
-                except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS:
-                    pass
         finally:
-            try:
+            with contextlib.suppress(_JOBS_METRICS_BEST_EFFORT_EXCEPTIONS):
                 conn.close()
-            except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS:
-                pass
         return reconciled
 
     def run_forever(self) -> None:
@@ -225,10 +218,8 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
         from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
     except ImportError:
         return
-    try:
+    with contextlib.suppress(_JOBS_METRICS_BEST_EFFORT_EXCEPTIONS):
         ensure_jobs_metrics_registered()
-    except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS:
-        pass
     reg = get_metrics_registry()
     if not reg:
         return
@@ -320,10 +311,8 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
                     if count >= max_groups:
                         break
             finally:
-                try:
+                with contextlib.suppress(_JOBS_METRICS_BEST_EFFORT_EXCEPTIONS):
                     conn.close()
-                except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS:
-                    pass
         except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS as e:
             logger.debug(f"Jobs SLO gauges loop error: {e}")
         await asyncio.sleep(interval)

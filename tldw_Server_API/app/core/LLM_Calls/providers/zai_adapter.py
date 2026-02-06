@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterable
 from typing import Any
 
@@ -144,10 +145,8 @@ def _zai_request(
                         try:
                             response.close()
                         finally:
-                            try:
+                            with contextlib.suppress(Exception):
                                 session.close()
-                            except Exception:
-                                pass
                         raise
                     except Exception as e_stream:
                         if is_chunked_encoding_error(e_stream):
@@ -163,20 +162,15 @@ def _zai_request(
                     finally:
                         try:
                             if not skip_finalize:
-                                for tail in finalize_stream(response, done_already=done_sent):
-                                    yield tail
+                                yield from finalize_stream(response, done_already=done_sent)
                         finally:
-                            try:
+                            with contextlib.suppress(Exception):
                                 session.close()
-                            except Exception:
-                                pass
 
                 return stream_generator()
             except Exception:
-                try:
+                with contextlib.suppress(Exception):
                     session.close()
-                except Exception:
-                    pass
                 raise
 
         logging.debug("Z.AI: Posting request (non-streaming)")
@@ -194,17 +188,13 @@ def _zai_request(
             try:
                 response_data = response.json()
             finally:
-                try:
+                with contextlib.suppress(Exception):
                     response.close()
-                except Exception:
-                    pass
             logging.debug("Z.AI: Non-streaming request successful.")
             return response_data
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 session.close()
-            except Exception:
-                pass
 
     except Exception as e:
         if is_http_status_error(e):

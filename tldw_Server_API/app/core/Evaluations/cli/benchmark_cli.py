@@ -314,7 +314,7 @@ def validate_benchmark(ctx, benchmark_name, samples):
             # Try formatting first sample
             if dataset and config.field_mappings:
                 try:
-                    formatted = evaluator.format_for_custom_metric(dataset[0])
+                    evaluator.format_for_custom_metric(dataset[0])
                     print_success("Successfully formatted sample for evaluation")
                 except Exception as e:
                     print_warning(f"Error formatting sample: {e}")

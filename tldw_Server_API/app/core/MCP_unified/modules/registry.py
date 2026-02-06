@@ -5,6 +5,7 @@ Manages module lifecycle and provides intelligent routing with failover.
 """
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -86,10 +87,8 @@ class ModuleRegistry:
         self._shutdown = True
         if self._health_check_task:
             self._health_check_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._health_check_task
-            except asyncio.CancelledError:
-                pass
             logger.info("Health monitoring stopped")
         self._health_check_task = None
 
@@ -381,7 +380,7 @@ class ModuleRegistry:
         """List all module registrations"""
         registrations = []
 
-        for module_id, registration in self._modules.items():
+        for module_id, _registration in self._modules.items():
             registrations.append(await self.get_module_status(module_id))
 
         return registrations
@@ -482,10 +481,8 @@ async def reset_module_registry() -> None:
     """Reset module registry singleton (used in tests)."""
     global _module_registry
     if _module_registry is not None:
-        try:
+        with contextlib.suppress(Exception):
             await _module_registry.shutdown_all()
-        except Exception:
-            pass
     _module_registry = None
 
 

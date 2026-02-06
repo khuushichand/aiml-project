@@ -5,6 +5,7 @@
 #
 # Imports
 import configparser
+import contextlib
 import os
 from pathlib import Path
 from typing import Optional, Union
@@ -396,10 +397,8 @@ def validate_postgres_content_backend() -> None:
                             "python -m tldw_Server_API.app.core.DB_Management.migration_tools --apply-rls"
                         )
     finally:
-        try:
+        with contextlib.suppress(DB_MANAGER_RUNTIME_EXCEPTIONS):
             validator.close_connection()
-        except DB_MANAGER_RUNTIME_EXCEPTIONS:
-            pass
 
 
 def create_chacha_database(

@@ -22,6 +22,7 @@ Notes:
   available, we can upgrade later to leverage it behind a feature flag.
 """
 
+import contextlib
 import re
 from typing import Any, Optional
 
@@ -164,10 +165,8 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
             end_char = max(e for _s, e in window)
             if end_char < start_char:
                 end_char = start_char
-            try:
+            with contextlib.suppress(Exception):
                 end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
-            except Exception:
-                pass
             chunk_text = text[start_char:end_char]
             md = ChunkMetadata(
                 index=len(results),
@@ -421,10 +420,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
                 continue
 
             # 1) Subordinate clause markers (aggressiveness >= 1)
-            if aggressiveness >= 1:
-                seg_parts = self._split_on_subordinate_markers(seg)
-            else:
-                seg_parts = [seg]
+            seg_parts = self._split_on_subordinate_markers(seg) if aggressiveness >= 1 else [seg]
 
             for part in seg_parts:
                 part = part.strip()
@@ -502,7 +498,6 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
             pattern = rf"[,\s]+({re.escape(marker)})\b"
             for seg in parts:
                 # Split but keep the marker in the next segment
-                idx = 0
                 last = 0
                 for m in re.finditer(pattern, seg, flags=re.IGNORECASE):
                     cut = seg[last:m.start()].strip()

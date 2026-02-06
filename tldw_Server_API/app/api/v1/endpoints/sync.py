@@ -363,7 +363,7 @@ class ServerSyncProcessor:
             logger.error(f"[{self.user_id}] Cannot resolve conflict for {entity} {entity_uuid}: server record info is missing.")
             return False, "Cannot resolve conflict without server record state."
 
-        server_version = server_record_info[0]
+        server_record_info[0]
         server_last_modified_str = server_record_info[2] if len(server_record_info) > 2 and isinstance(
             server_record_info[2], str) else '1970-01-01T00:00:00Z'
 
@@ -486,8 +486,7 @@ class ServerSyncProcessor:
                  logger.debug(f"[{self.user_id}] Applying {operation} (Sync) based on client version {client_version}...")
 
         sql = ""
-        params_tuple = tuple()
-        sql_executed_in_fts_block = False # Flag to prevent double execution
+        params_tuple = ()
 
         # --- SQL Generation (Sync) ---
         if operation == 'create':

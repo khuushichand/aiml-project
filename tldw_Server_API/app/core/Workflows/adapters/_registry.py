@@ -159,7 +159,7 @@ class AdapterRegistry:
         Returns:
             List of unique category names
         """
-        return list(set(spec.category for spec in self._adapters.values()))
+        return list({spec.category for spec in self._adapters.values()})
 
     def get_catalog(self) -> dict[str, dict[str, Any]]:
         """Get full catalog for API documentation.

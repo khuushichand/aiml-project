@@ -292,10 +292,7 @@ async def generate_quiz_from_media(
 
     content_text = extract_response_content(raw_response)
     payload = _extract_json_payload(content_text if content_text is not None else raw_response)
-    if isinstance(payload, dict):
-        raw_questions = payload.get("questions")
-    else:
-        raw_questions = payload
+    raw_questions = payload.get("questions") if isinstance(payload, dict) else payload
     if not isinstance(raw_questions, list):
         raise ValueError("LLM response did not include a questions list")
 

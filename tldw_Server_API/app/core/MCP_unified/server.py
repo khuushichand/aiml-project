@@ -8,7 +8,7 @@ import asyncio
 import ipaddress
 import json
 from collections import deque
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -534,10 +534,8 @@ class MCPServer:
                 await connection.close(code=1001, reason="Connection timeout")
                 del self.connections[conn_id]
             # Update connection gauge
-            try:
+            with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                 get_metrics_collector().update_connection_count("websocket", len(self.connections))
-            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-                pass
 
     async def _metrics_collection_loop(self):
         """Periodically collect and log metrics"""
@@ -664,13 +662,11 @@ class MCPServer:
             resolved_ip = "127.0.0.1"
 
         if not controller.is_allowed(resolved_ip) and not _is_test_env:
-            try:
+            with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                 logger.warning(
                     "Rejecting MCP WebSocket connection from disallowed IP",
                     extra={"audit": True, "ip": resolved_ip or "unknown", "client_id": client_id},
                 )
-            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-                pass
             await websocket.close(code=1008, reason="IP not allowed")
             return
 
@@ -885,10 +881,8 @@ class MCPServer:
             self.connections[connection_id] = connection
             # per-IP count already reserved; nothing to do here
             # Update connection gauge
-            try:
+            with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                 get_metrics_collector().update_connection_count("websocket", len(self.connections))
-            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-                pass
 
         logger.bind(connection_id=connection_id, user_id=user_id, client_id=client_id, client_ip=client_ip).info(
             f"WebSocket connected: {connection_id} (client={client_id}, user={user_id}, ip={client_ip})"
@@ -913,21 +907,15 @@ class MCPServer:
             logger.bind(connection_id=connection_id).error(f"WebSocket error for {connection_id}: {e}")
             # Preserve JSON-RPC transport semantics: do not emit non-JSON-RPC error frames here.
             # Close the socket with 1011 (internal error).
-            try:
+            with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                 await connection.close(code=1011, reason="Internal error")
-            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-                pass
-            try:
+            with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                 get_metrics_collector().record_connection_error("websocket", "exception")
-            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-                pass
         finally:
             # Stop WS background tasks (ping/idle loops) to avoid leaks
             if stream is not None:
-                try:
+                with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                     await stream.stop()
-                except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-                    pass
             # Remove connection
             async with self.connection_lock:
                 if connection_id in self.connections:
@@ -943,10 +931,8 @@ class MCPServer:
 
             logger.bind(connection_id=connection_id).info(f"WebSocket cleanup complete: {connection_id}")
             # Update connection gauge
-            try:
+            with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                 get_metrics_collector().update_connection_count("websocket", len(self.connections))
-            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-                pass
 
     async def _handle_websocket_messages(self, connection: WebSocketConnection, stream: WebSocketStream):
         """Handle incoming WebSocket messages"""
@@ -956,10 +942,8 @@ class MCPServer:
             try:
                 data = await connection.receive_json()
                 # Mark activity for idle timer on receive
-                try:
+                with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                     stream.mark_activity()
-                except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-                    pass
             except json.JSONDecodeError as e:
                 await stream.send_json({
                     "jsonrpc": "2.0",
@@ -1005,18 +989,14 @@ class MCPServer:
                         },
                         "id": data.get("id") if isinstance(data, dict) else None
                     })
-                    try:
+                    with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                         get_metrics_collector().record_ws_session_closure("session_rate")
-                    except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-                        pass
                     # Close with 1013 (try again later), matching prior behavior
                     try:
                         await stream.ws.close(code=1013, reason="Session rate limit exceeded")
                     except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-                        try:
+                        with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                             await connection.close(code=1013, reason="Session rate limit exceeded")
-                        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-                            pass
                     break
             except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                 pass
@@ -1051,7 +1031,7 @@ class MCPServer:
                 sess.touch()
             except PermissionError:
                 # Session ownership mismatch - return authorization error and close
-                try:
+                with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                     await stream.send_json({
                         "jsonrpc": "2.0",
                         "error": {
@@ -1060,12 +1040,8 @@ class MCPServer:
                         },
                         "id": data.get("id") if isinstance(data, dict) else None
                     })
-                except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-                    pass
-                try:
+                with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                     await stream.ws.close(code=1008, reason="Session ownership mismatch")
-                except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-                    pass
                 break
             except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                 pass
@@ -1437,10 +1413,8 @@ async def reset_mcp_server() -> None:
     """Reset MCP server singleton for test environments."""
     global _server
     if _server is not None:
-        try:
+        with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
             await _server.shutdown()
-        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-            pass
     _server = None
     try:
         from .modules.registry import reset_module_registry

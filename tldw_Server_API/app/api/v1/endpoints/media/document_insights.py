@@ -369,10 +369,7 @@ async def generate_document_insights(
         content_text = extract_response_content(raw_response)
         payload = _extract_json_payload(content_text if content_text is not None else raw_response)
 
-        if isinstance(payload, dict):
-            raw_insights = payload.get("insights")
-        else:
-            raw_insights = payload
+        raw_insights = payload.get("insights") if isinstance(payload, dict) else payload
 
         if not isinstance(raw_insights, list):
             logger.warning(

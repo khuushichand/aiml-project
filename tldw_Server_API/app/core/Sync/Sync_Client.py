@@ -325,12 +325,12 @@ class ClientSyncEngine:
                          if not resolved:
                               logger.error(f"Conflict resolution failed for change ID {change['change_id']}. Rolling back batch.")
                               all_applied_or_skipped = False
-                              raise cf_err # Re-raise to trigger transaction rollback
+                              raise # Re-raise to trigger transaction rollback
 
                     except (DatabaseError, sqlite3.Error, json.JSONDecodeError, KeyError, InputError) as item_error:
                         logger.error(f"Failed to apply change ID {change['change_id']} ({change['entity']} {change['operation']}): {item_error}", exc_info=True)
                         all_applied_or_skipped = False
-                        raise item_error # Re-raise to trigger transaction rollback
+                        raise # Re-raise to trigger transaction rollback
 
             # If the loop completes without exceptions, the transaction commits here.
             logger.info("Batch of remote changes applied transactionally.")
@@ -518,7 +518,7 @@ class ClientSyncEngine:
         # --- End Optimistic Lock SQL ---
 
         main_sql = ""
-        main_params_tuple = tuple()
+        main_params_tuple = ()
         execute_main_sql = False  # Flag to control execution flow
 
         # --- Prepare SQL for main operation ---
@@ -596,11 +596,11 @@ class ClientSyncEngine:
 
         # --- Determine Manual FTS Operations Needed ---
         fts_update_sql = None
-        fts_update_params = tuple()
+        fts_update_params = ()
         fts_delete_sql = None
-        fts_delete_params = tuple()
+        fts_delete_params = ()
         fts_insert_sql = None
-        fts_insert_params = tuple()
+        fts_insert_params = ()
 
         if entity == 'Media':
             if operation == 'create' and ('title' in payload or 'content' in payload):
@@ -718,7 +718,7 @@ class ClientSyncEngine:
         keyword_id_local = kw_rec[0]  # Access by index for SQLite Row
 
         sql = ""
-        params_tuple = tuple()
+        params_tuple = ()
 
         if operation == 'link':
             # Use INSERT OR IGNORE for idempotency. If the link already exists, it does nothing.

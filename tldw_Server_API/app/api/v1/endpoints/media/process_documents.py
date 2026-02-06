@@ -104,7 +104,7 @@ async def process_documents_endpoint(
     # Map to track original ref -> temp path
     source_map: dict[str, Path] = {}
 
-    loop = asyncio.get_running_loop()
+    asyncio.get_running_loop()
     # Use TempDirManager for reliable cleanup
     with TempDirManager(
         cleanup=(not form_data.keep_original_file),
@@ -204,9 +204,7 @@ async def process_documents_endpoint(
                 for url in form_data.urls
             ]
 
-            url_task_map = {
-                task: url for task, url in zip(download_tasks, form_data.urls)
-            }
+            url_task_map = dict(zip(download_tasks, form_data.urls))
 
             if download_tasks:
                 download_results = await asyncio.gather(
@@ -473,10 +471,7 @@ async def process_documents_endpoint(
         batch_result.get("processed_count", 0) == 0
         and batch_result.get("errors_count", 0) == 0
     ):
-        if batch_result["results"]:
-            final_status_code = status.HTTP_207_MULTI_STATUS
-        else:
-            final_status_code = status.HTTP_400_BAD_REQUEST
+        final_status_code = status.HTTP_207_MULTI_STATUS if batch_result["results"] else status.HTTP_400_BAD_REQUEST
     else:
         logger.warning(
             "Reached unexpected state for final status code determination "

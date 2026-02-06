@@ -105,7 +105,7 @@ def get_chrome_cookies(domain_name):
     try:
         cursor.execute("SELECT host_key, name, path, encrypted_value, expires_utc FROM cookies WHERE host_key LIKE ?",
                        ('%' + domain_name + '%',))
-        for host_key, name, path, encrypted_value, expires_utc in cursor.fetchall():
+        for _host_key, name, _path, encrypted_value, expires_utc in cursor.fetchall():
             if sys.platform == 'win32':
                 try:
                     decrypted_value = win32crypt.CryptUnprotectData(encrypted_value, None, None, None, 0)[1]
@@ -173,7 +173,7 @@ def get_firefox_cookies(domain_name):
         try:
             cursor.execute("SELECT host, name, value, expiry FROM moz_cookies WHERE host LIKE ?",
                            ('%' + domain_name + '%',))
-            for host, name, value, expiry in cursor.fetchall():
+            for _host, name, value, expiry in cursor.fetchall():
                 expires = datetime.datetime.fromtimestamp(expiry)
                 if expires < datetime.datetime.now():
                     continue  # Skip expired cookies
@@ -256,7 +256,7 @@ def get_edge_cookies(domain_name):
                 FROM cookies WHERE host_key LIKE ?
             """, ('%' + domain_name + '%',))
 
-            for host_key, name, path, encrypted_value, expires_utc in cursor.fetchall():
+            for _host_key, name, _path, encrypted_value, expires_utc in cursor.fetchall():
                 if sys.platform == 'win32':
                     try:
                         # Try to decrypt using CryptUnprotectData
@@ -336,7 +336,7 @@ def get_safari_cookies(domain_name):
 
 def parse_safari_page(page_data, domain_name):
     cookies = {}
-    page_header = page_data[:4]
+    page_data[:4]
     num_cookies = struct.unpack('>i', page_data[4:8])[0]
     cookie_offsets = []
     for i in range(num_cookies):
@@ -350,10 +350,10 @@ def parse_safari_page(page_data, domain_name):
 
 def parse_safari_cookie(data, domain_name):
     try:
-        flags = struct.unpack('<i', data[0:4])[0]
+        struct.unpack('<i', data[0:4])[0]
         url_offset = struct.unpack('<i', data[4:8])[0]
         name_offset = struct.unpack('<i', data[8:12])[0]
-        path_offset = struct.unpack('<i', data[12:16])[0]
+        struct.unpack('<i', data[12:16])[0]
         value_offset = struct.unpack('<i', data[16:20])[0]
         end_of_cookie = data.find(b'\x00', value_offset)
         cookie_name = data[name_offset:data.find(b'\x00', name_offset)].decode('utf-8')

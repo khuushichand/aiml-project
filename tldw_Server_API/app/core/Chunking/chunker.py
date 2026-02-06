@@ -13,7 +13,7 @@ import time
 import unicodedata
 from collections import OrderedDict
 from collections.abc import Generator
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -463,10 +463,7 @@ class Chunker:
             for kind, pat in template_patterns:
                 try:
                     ok = False
-                    if safe_search is not None:
-                        ok = bool(safe_search(pat, s))
-                    else:
-                        ok = pat.search(s) is not None
+                    ok = bool(safe_search(pat, s)) if safe_search is not None else pat.search(s) is not None
                     if ok:
                         return kind
                 except _CHUNKER_NONCRITICAL_EXCEPTIONS:
@@ -1494,7 +1491,7 @@ class Chunker:
 
         # Use defaults if not specified
         options_raw: dict[str, Any] = dict(options)
-        align_text_to_source = bool(options_raw.pop("align_text_to_source", False))
+        bool(options_raw.pop("align_text_to_source", False))
         method = self._normalize_method_argument(method) or self.config.default_method.value
         max_size = max_size if max_size is not None else self.config.default_max_size
         overlap = overlap if overlap is not None else self.config.default_overlap
@@ -1565,23 +1562,17 @@ class Chunker:
             )
             cached_result = self._cache.get(cache_key)
             if cached_result is not None:
-                try:
+                with suppress(_CHUNKER_NONCRITICAL_EXCEPTIONS):
                     increment_counter("chunker_cache_get_total", labels={"result": "hit", "reason": cache_reason})
-                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
-                    pass
                 logger.debug("Returning cached result")
                 return cached_result
             else:
-                try:
+                with suppress(_CHUNKER_NONCRITICAL_EXCEPTIONS):
                     increment_counter("chunker_cache_get_total", labels={"result": "miss", "reason": cache_reason})
-                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
-                    pass
         else:
             # cache disabled or not allowed by policy
-            try:
+            with suppress(_CHUNKER_NONCRITICAL_EXCEPTIONS):
                 increment_counter("chunker_cache_get_total", labels={"result": "skip", "reason": cache_reason})
-            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
-                pass
 
         strategy_lock = self._strategy_lock if self._strategy_cache_mode == "shared" else nullcontext()
         try:
@@ -1615,27 +1606,21 @@ class Chunker:
             if self._cache is not None and len(chunks) > 0 and cache_allowed and cache_key is not None:
                 try:
                     self._cache.put(cache_key, chunks)
-                    try:
+                    with suppress(_CHUNKER_NONCRITICAL_EXCEPTIONS):
                         increment_counter(
                             "chunker_cache_put_total",
                             labels={"result": "stored", "reason": cache_reason or "allowed"},
                         )
-                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
-                        pass
                 except _CHUNKER_NONCRITICAL_EXCEPTIONS:
                     # Defensive: never fail chunking due to cache policy
-                    try:
+                    with suppress(_CHUNKER_NONCRITICAL_EXCEPTIONS):
                         increment_counter(
                             "chunker_cache_put_total",
                             labels={"result": "error", "reason": cache_reason or "allowed"},
                         )
-                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
-                        pass
             elif self._cache is not None and len(chunks) > 0:
-                try:
+                with suppress(_CHUNKER_NONCRITICAL_EXCEPTIONS):
                     increment_counter("chunker_cache_put_total", labels={"result": "skipped", "reason": cache_reason})
-                except _CHUNKER_NONCRITICAL_EXCEPTIONS:
-                    pass
 
             if getattr(self.config, 'verbose_logging', False):
                 logger.info(f"Created {len(chunks)} chunks using {method} method")
@@ -1952,10 +1937,8 @@ class Chunker:
             strategy.language = language
         except _CHUNKER_NONCRITICAL_EXCEPTIONS:
             logger.debug("Failed to update strategy language", exc_info=True)
-            try:
+            with suppress(_CHUNKER_NONCRITICAL_EXCEPTIONS):
                 strategy.language = language
-            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
-                pass
 
     def _resolve_method(
         self,
@@ -2317,16 +2300,12 @@ class Chunker:
             raise InvalidInputError(f"Expected string input, got {type(text).__name__}")
         # Shallow copy of options
         opts = dict(options or {})
-        if tokenizer_name_or_path:
-            if 'tokenizer_name_or_path' not in opts and 'tokenizer_name' not in opts:
-                opts['tokenizer_name_or_path'] = tokenizer_name_or_path
+        if tokenizer_name_or_path and 'tokenizer_name_or_path' not in opts and 'tokenizer_name' not in opts:
+            opts['tokenizer_name_or_path'] = tokenizer_name_or_path
 
         # Extract and remove frontmatter controls so they are not forwarded downstream
         frontmatter_enabled_opt = opts.pop("enable_frontmatter_parsing", None)
-        if frontmatter_enabled_opt is None:
-            frontmatter_enabled = True
-        else:
-            frontmatter_enabled = bool(frontmatter_enabled_opt)
+        frontmatter_enabled = True if frontmatter_enabled_opt is None else bool(frontmatter_enabled_opt)
         sentinel_key_raw = opts.pop("frontmatter_sentinel_key", FRONTMATTER_SENTINEL_KEY)
         sentinel_key = str(sentinel_key_raw or FRONTMATTER_SENTINEL_KEY)
 
@@ -2574,10 +2553,7 @@ class Chunker:
 
                             local_start = md.get('start_char')
                             local_end = md.get('end_char')
-                            if isinstance(local_start, int):
-                                global_start = start + local_start
-                            else:
-                                global_start = start
+                            global_start = start + local_start if isinstance(local_start, int) else start
                             if isinstance(local_end, int):
                                 global_end = start + local_end
                             else:
@@ -2654,10 +2630,8 @@ class Chunker:
             # Restore previous LLM overrides even if chunking fails
             if apply_llm_overrides:
                 if prev_llm_overrides is _LLM_UNSET:
-                    try:
+                    with suppress(_CHUNKER_NONCRITICAL_EXCEPTIONS):
                         delattr(self._thread_local, "llm_overrides")
-                    except _CHUNKER_NONCRITICAL_EXCEPTIONS:
-                        pass
                 else:
                     self._thread_local.llm_overrides = prev_llm_overrides
 
@@ -2769,10 +2743,8 @@ class Chunker:
                 md.setdefault('initial_document_header_text', header_text)
 
             # Content hash
-            try:
+            with suppress(_CHUNKER_NONCRITICAL_EXCEPTIONS):
                 md.setdefault('chunk_content_hash', hashlib.md5(txt.encode('utf-8')).hexdigest())
-            except _CHUNKER_NONCRITICAL_EXCEPTIONS:
-                pass
 
             # Mark origin
             md.setdefault('origin', 'unified_chunker')
@@ -3104,9 +3076,6 @@ def create_chunker(config: Optional[dict[str, Any]] = None) -> Chunker:
     Returns:
         Configured Chunker instance
     """
-    if config:
-        chunker_config = ChunkerConfig(**config)
-    else:
-        chunker_config = ChunkerConfig()
+    chunker_config = ChunkerConfig(**config) if config else ChunkerConfig()
 
     return Chunker(chunker_config)

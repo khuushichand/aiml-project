@@ -9,6 +9,7 @@ Environment:
       via the multi-user API key manager path regardless of AUTH_MODE/PROFILE.
 """
 
+import contextlib
 import ipaddress
 import os
 import secrets
@@ -905,15 +906,11 @@ async def list_tool_catalogs(
     org_ids: set[int] = set()
     team_ids: set[int] = set()
     if metadata.get("org_id") is not None:
-        try:
+        with contextlib.suppress(_MCP_UNIFIED_NONCRITICAL_EXCEPTIONS):
             org_ids.add(int(metadata["org_id"]))
-        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
-            pass
     if metadata.get("team_id") is not None:
-        try:
+        with contextlib.suppress(_MCP_UNIFIED_NONCRITICAL_EXCEPTIONS):
             team_ids.add(int(metadata["team_id"]))
-        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
-            pass
 
     if user and not admin_all:
         try:

@@ -6,6 +6,7 @@ for all evaluation system components.
 """
 
 import asyncio
+import contextlib
 import sys
 from typing import Any
 
@@ -199,7 +200,7 @@ def _perform_health_check(config: dict[str, Any], detailed: bool = False) -> dic
         _uid = _DP.get_single_user_id()
         _limiter = get_user_rate_limiter_for_user(_uid)
         # Simple health check - try to get user stats in that DB
-        test_stats = _limiter.get_user_stats('health_check_user')
+        _limiter.get_user_stats('health_check_user')
         health_data['components']['rate_limiting'] = {
             'status': 'ok',
             'message': 'Rate limiting service operational'
@@ -252,10 +253,8 @@ def _perform_health_check(config: dict[str, Any], detailed: bool = False) -> dic
         from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
         svc = UnifiedAuditService()
         import asyncio as _asyncio
-        try:
+        with contextlib.suppress(RuntimeError):
             _asyncio.run(svc.initialize())
-        except RuntimeError:
-            pass
         try:
             events = _asyncio.run(svc.query_events(limit=1))
         except RuntimeError:

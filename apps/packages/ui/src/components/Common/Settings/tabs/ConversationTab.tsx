@@ -730,14 +730,19 @@ export function ConversationTab({
   }
   const persistParticipantCharacterIds = async (values: string[]) => {
     const normalized = normalizeParticipantCharacterIds(values).map((id) =>
-      Number.parseInt(id, 10)
+      /^\d+$/.test(id) ? Number.parseInt(id, 10) : id
     )
     await updateSettings({ participantCharacterIds: normalized })
   }
   const persistDirectedCharacterId = async (value: string | null) => {
     const normalized = normalizeDirectedCharacterId(value)
     await updateSettings({
-      directedCharacterId: normalized ? Number.parseInt(normalized, 10) : null
+      directedCharacterId:
+        normalized === null
+          ? null
+          : /^\d+$/.test(normalized)
+            ? Number.parseInt(normalized, 10)
+            : normalized
     })
   }
   const persistCharacterMemoryNote = async (

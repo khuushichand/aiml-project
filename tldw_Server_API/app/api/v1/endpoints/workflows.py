@@ -1312,6 +1312,8 @@ async def workflows_virtual_key(
     }
 
 
+import contextlib
+
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 
 
@@ -1396,7 +1398,7 @@ async def run_saved(
                         # Append minimal events and step failure (fast-fail)
                         db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "run_started", {"mode": mode})
                         step_run_id = f"{run_id}:{s0.get('id','s1')}:{int(__import__('time').time()*1000)}"
-                        try:
+                        with contextlib.suppress(_WORKFLOWS_NONCRITICAL_EXCEPTIONS):
                             db.create_step_run(
                                 step_run_id=step_run_id,
                                 tenant_id=str(getattr(current_user, "tenant_id", "default")),
@@ -1406,13 +1408,9 @@ async def run_saved(
                                 step_type="prompt",
                                 inputs={"config": cfg},
                             )
-                        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
-                            pass
                         db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "step_started", {"step_id": s0.get('id','s1'), "type": "prompt"})
-                        try:
+                        with contextlib.suppress(_WORKFLOWS_NONCRITICAL_EXCEPTIONS):
                             db.complete_step_run(step_run_id=step_run_id, status="failed", outputs={}, error="forced_error")
-                        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
-                            pass
                         db.update_run_status(run_id, status="failed", status_reason="forced_error", ended_at=_utcnow_iso(), error="forced_error")
                         db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "run_failed", {"error": "forced_error"})
                         run = db.get_run(run_id)
@@ -1872,10 +1870,8 @@ async def run_adhoc(
     else:
         run = db.get_run(run_id)
     from loguru import logger as _logger
-    try:
+    with contextlib.suppress(_WORKFLOWS_NONCRITICAL_EXCEPTIONS):
         _logger.debug(f"Workflows endpoint: post-submit (adhoc) status={run.status if run else 'missing'} run_id={run_id}")
-    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
-        pass
     if run is None:
         raise HTTPException(status_code=404, detail="Workflow run not found")
     # Audit: ad-hoc run created
@@ -2411,10 +2407,8 @@ def _resolve_artifact_file_path(
     p = Path(fpath).resolve()
 
     allowed_roots: list[Path] = []
-    try:
+    with contextlib.suppress(_WORKFLOWS_NONCRITICAL_EXCEPTIONS):
         allowed_roots.append(artifacts_base_dir())
-    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
-        pass
     if workdir:
         try:
             wd = Path(str(workdir).replace("file://", "")).resolve()
@@ -2725,10 +2719,8 @@ async def download_artifact(
                 if not non_block and str(_os.getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")).lower() in {"1", "true", "yes", "on"}:
                     raise HTTPException(status_code=409, detail="Artifact checksum mismatch")
                 else:
-                    try:
+                    with contextlib.suppress(_WORKFLOWS_NONCRITICAL_EXCEPTIONS):
                         logger.warning(f"Artifact checksum mismatch for {artifact_id}; proceeding due to non-strict mode")
-                    except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
-                        pass
     except HTTPException:
         raise
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
@@ -2986,10 +2978,8 @@ async def control_run(
         engine.resume(run_id)
     elif action == "cancel":
         # Mark cancel flag in DB and emit event via engine helper
-        try:
+        with contextlib.suppress(_WORKFLOWS_NONCRITICAL_EXCEPTIONS):
             db.set_cancel_requested(run_id, True)
-        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
-            pass
         engine.cancel(run_id)
     elif action == "retry":
         run = db.get_run(run_id)
@@ -3705,9 +3695,8 @@ async def approve_step(
         raise HTTPException(status_code=404, detail="Step run not found")
     assigned_to = step_run.get("assigned_to")
     user_id = str(current_user.id)
-    if not is_admin:
-        if not assigned_to or str(assigned_to) != user_id:
-            raise HTTPException(status_code=404, detail="Run not found")
+    if not is_admin and (not assigned_to or str(assigned_to) != user_id):
+        raise HTTPException(status_code=404, detail="Run not found")
     # Update step decision via DB adapter
     try:
         db.approve_step_decision(run_id=run_id, step_id=step_id, approved_by=str(current_user.id), comment=payload.comment or "")
@@ -3773,9 +3762,8 @@ async def reject_step(
         raise HTTPException(status_code=404, detail="Step run not found")
     assigned_to = step_run.get("assigned_to")
     user_id = str(current_user.id)
-    if not is_admin:
-        if not assigned_to or str(assigned_to) != user_id:
-            raise HTTPException(status_code=404, detail="Run not found")
+    if not is_admin and (not assigned_to or str(assigned_to) != user_id):
+        raise HTTPException(status_code=404, detail="Run not found")
     failure_next = None
     try:
         definition = json.loads(run.definition_snapshot_json or "{}")
@@ -4050,7 +4038,5 @@ async def workflows_ws(
         raise
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Workflows WS error: {e}")
-        try:
+        with contextlib.suppress(_WORKFLOWS_NONCRITICAL_EXCEPTIONS):
             await stream.ws.close(code=status.WS_1011_INTERNAL_ERROR)
-        except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
-            pass

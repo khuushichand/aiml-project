@@ -2,6 +2,7 @@
 # Description: Database migrations for AuthNZ module tables
 #
 # Imports
+import contextlib
 import json
 import sqlite3
 from pathlib import Path
@@ -188,10 +189,8 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)")
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
-    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
-        pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
 
     conn.commit()
@@ -405,10 +404,8 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
     except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         pass
     # Indexes
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reset_tokens_hash ON password_reset_tokens(token_hash)")
-    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
-        pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_reset_tokens_user ON password_reset_tokens(user_id)")
 
     # Failed attempts table for lockout tracking
@@ -1022,22 +1019,14 @@ def migration_017_extend_api_keys_virtual(conn: sqlite3.Connection) -> None:
 
 def migration_018_add_usage_indexes(conn: sqlite3.Connection) -> None:
     """Add helpful indexes for usage tables (SQLite)."""
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_log(ts)")
-    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
-        pass
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_user ON usage_log(user_id)")
-    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
-        pass
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_status ON usage_log(status)")
-    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
-        pass
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_daily_day_user ON usage_daily(day, user_id)")
-    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
-        pass
     conn.commit()
     logger.info("Migration 018: Added indexes for usage_log and usage_daily")
 
@@ -1049,10 +1038,8 @@ def migration_019_usage_log_add_request_id(conn: sqlite3.Connection) -> None:
     except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         # Column may already exist
         pass
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_request_id ON usage_log(request_id)")
-    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
-        pass
     conn.commit()
     logger.info("Migration 019: Added request_id column to usage_log")
 
@@ -1081,12 +1068,10 @@ def migration_021_usage_daily_add_bytes_in_total(conn: sqlite3.Connection) -> No
 
 def migration_049_add_llm_usage_log_key_ts_index(conn: sqlite3.Connection) -> None:
     """Add composite index for llm_usage_log key_id + ts (SQLite)."""
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_llm_usage_log_key_ts ON llm_usage_log(key_id, ts)"
         )
-    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
-        pass
     conn.commit()
     logger.info("Migration 049: Added llm_usage_log key_id + ts index")
 
@@ -1362,14 +1347,10 @@ def migration_023_create_virtual_key_counters(conn: sqlite3.Connection) -> None:
             """
         )
         # Helpful indexes for reporting/cleanup (best-effort)
-        try:
+        with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_vk_jwt_counters_type ON vk_jwt_counters(counter_type)")
-        except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
-            pass
-        try:
+        with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_vk_api_key_counters_type ON vk_api_key_counters(counter_type)")
-        except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
-            pass
         conn.commit()
         logger.info("Migration 023: Created virtual key counters tables")
     except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS as e:

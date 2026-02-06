@@ -137,7 +137,7 @@ class NeuTTSAir:
                 n_gpu_layers=-1 if backbone_device == "gpu" else 0,
                 n_ctx=self.max_context,
                 mlock=True,
-                flash_attn=True if backbone_device == "gpu" else False,
+                flash_attn=backbone_device == "gpu",
             )
             self._is_quantized_model = True
 

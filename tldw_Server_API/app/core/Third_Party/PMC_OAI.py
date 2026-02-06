@@ -10,6 +10,7 @@ Returns normalized dictionaries and resumption tokens where applicable.
 """
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 from xml.etree import ElementTree as ET
 
@@ -37,10 +38,8 @@ def _get_xml(params: dict[str, Any]) -> ET.Element:
     try:
         return ET.fromstring(r.text)
     finally:
-        try:
+        with contextlib.suppress(AttributeError, OSError):
             r.close()
-        except (AttributeError, OSError):
-            pass
 
 
 def pmc_oai_identify() -> tuple[dict[str, Any] | None, str | None]:
@@ -132,15 +131,11 @@ def _parse_dc_metadata(md: ET.Element) -> dict[str, Any]:
                 except (AttributeError, IndexError, TypeError, ValueError):
                     pass
             if "pubmed.ncbi.nlm.nih.gov" in val:
-                try:
+                with contextlib.suppress(AttributeError, IndexError, TypeError, ValueError):
                     out["pmid"] = val.rstrip('/').split('/')[-1]
-                except (AttributeError, IndexError, TypeError, ValueError):
-                    pass
             if "doi.org/" in val:
-                try:
+                with contextlib.suppress(AttributeError, IndexError, TypeError, ValueError):
                     out["doi"] = val.split("doi.org/")[-1]
-                except (AttributeError, IndexError, TypeError, ValueError):
-                    pass
     for r in md.findall(".//dc:rights", ns):
         if r.text:
             txt = r.text.strip()

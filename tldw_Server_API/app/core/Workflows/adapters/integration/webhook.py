@@ -7,6 +7,7 @@ This module includes adapters for webhook and notification operations:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -89,10 +90,8 @@ async def run_notify_adapter(config: dict[str, Any], context: dict[str, Any]) ->
             return {"dispatched": False, "error": "blocked_egress"}
 
         headers = {"content-type": "application/json"}
-        try:
+        with contextlib.suppress(_WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS):
             headers.update({k: str(v) for k, v in extra_headers.items()})
-        except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
-            pass
 
         body = {"text": message}
         if subject:
@@ -318,15 +317,13 @@ async def run_webhook_adapter(config: dict[str, Any], context: dict[str, Any]) -
                     except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                         headers_r[str(hk)] = str(hv)
             # Drop empty headers (avoid sending empty Authorization/X-API-KEY)
-            try:
+            with contextlib.suppress(_WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS):
                 headers_r = {k: v for k, v in headers_r.items() if isinstance(v, str) and v.strip()}
-            except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
-                pass
             # If no explicit auth headers provided, allow secrets from workflow run to supply them
             try:
                 secrets = context.get("secrets") if isinstance(context, dict) else None
                 if isinstance(secrets, dict):
-                    has_auth = any(k.lower() == "authorization" for k in headers_r.keys()) or any(k.lower() == "x-api-key" for k in headers_r.keys())
+                    has_auth = any(k.lower() == "authorization" for k in headers_r) or any(k.lower() == "x-api-key" for k in headers_r)
                     if not has_auth:
                         _jwt = secrets.get("jwt") or secrets.get("bearer")
                         _api = secrets.get("api_key") or secrets.get("x_api_key")
@@ -349,7 +346,7 @@ async def run_webhook_adapter(config: dict[str, Any], context: dict[str, Any]) -
                 return {"dispatched": False, "error": "blocked_egress", "reason": reason}
             # Default auth fallbacks for scheduled runs (optional)
             try:
-                _had_auth = any(k.lower() == "authorization" for k in headers_r.keys()) or any(k.lower() == "x-api-key" for k in headers_r.keys())
+                _had_auth = any(k.lower() == "authorization" for k in headers_r) or any(k.lower() == "x-api-key" for k in headers_r)
                 used_fallback = False
                 if not _had_auth:
                     _bear = os.getenv("WORKFLOWS_DEFAULT_BEARER_TOKEN", "").strip()
@@ -466,10 +463,8 @@ async def run_webhook_adapter(config: dict[str, Any], context: dict[str, Any]) -
                     if not follow_redirects or resp.status_code not in (301, 302, 303, 307, 308):
                         break
                     location = resp.headers.get("location")
-                    try:
+                    with contextlib.suppress(_WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS):
                         resp.close()
-                    except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
-                        pass
                     if not location:
                         return {"dispatched": False, "error": "redirect_missing_location"}
                     redirects += 1
@@ -493,10 +488,8 @@ async def run_webhook_adapter(config: dict[str, Any], context: dict[str, Any]) -
                         if clen:
                             try:
                                 if int(clen) > max_bytes:
-                                    try:
+                                    with contextlib.suppress(_WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS):
                                         r.close()
-                                    except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
-                                        pass
                                     raise ValueError("response_too_large")
                             except ValueError:
                                 raise
@@ -510,20 +503,16 @@ async def run_webhook_adapter(config: dict[str, Any], context: dict[str, Any]) -
                         except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                             return b""
                         finally:
-                            try:
+                            with contextlib.suppress(_WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS):
                                 r.close()
-                            except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
-                                pass
                     try:
                         for chunk in r.iter_bytes():
                             buf.extend(chunk)
                             if max_bytes is not None and len(buf) > max_bytes:
                                 raise ValueError("response_too_large")
                     finally:
-                        try:
+                        with contextlib.suppress(_WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS):
                             r.close()
-                        except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
-                            pass
                     return bytes(buf)
 
                 ok = 200 <= resp.status_code < 300

@@ -86,10 +86,7 @@ async def run_citations_adapter(config: dict[str, Any], context: dict[str, Any])
         style = "apa"
 
     include_inline = config.get("include_inline")
-    if include_inline is None:
-        include_inline = True
-    else:
-        include_inline = bool(include_inline)
+    include_inline = True if include_inline is None else bool(include_inline)
 
     max_citations = int(config.get("max_citations") or 10)
     max_citations = max(1, min(max_citations, 50))

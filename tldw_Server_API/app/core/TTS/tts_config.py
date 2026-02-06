@@ -19,6 +19,8 @@ except Exception:
     from pydantic import validator as field_validator  # type: ignore
 #
 # Local Imports
+import contextlib
+
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.config_utils import (
     apply_default_sources,
@@ -230,10 +232,8 @@ class TTSConfigManager:
                     config_dict['default_voice'] = tts_section['default_tts_voice']
 
                 if "default_tts_speed" in tts_section:
-                    try:
+                    with contextlib.suppress(ValueError):
                         config_dict['default_speed'] = float(tts_section['default_tts_speed'])
-                    except ValueError:
-                        pass
 
                 if "local_tts_device" in tts_section:
                     config_dict['local_device'] = tts_section['local_tts_device']

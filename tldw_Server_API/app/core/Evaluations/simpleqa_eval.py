@@ -355,7 +355,7 @@ class SimpleQADataset:
         try:
             from datasets import load_dataset
         except ImportError:
-            logger.error("HuggingFace datasets not installed. Install with: pip install datasets")
+            logger.exception("HuggingFace datasets not installed. Install with: pip install datasets")
             return []
 
         try:
@@ -384,7 +384,7 @@ class SimpleQADataset:
             return questions
 
         except Exception as e:
-            logger.error(f"Failed to load SimpleQA from HuggingFace: {e}")
+            logger.exception(f"Failed to load SimpleQA from HuggingFace: {e}")
             return []
 
     @staticmethod

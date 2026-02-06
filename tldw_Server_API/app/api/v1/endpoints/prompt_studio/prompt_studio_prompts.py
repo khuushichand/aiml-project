@@ -17,6 +17,7 @@ Security
 - Prompt length and content validated against SecurityConfig
 """
 
+import contextlib
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
@@ -71,10 +72,7 @@ async def create_prompt_simple(
 ) -> dict[str, Any]:
     resp = await create_prompt(prompt_data, db, security_config, user_context)  # type: ignore[arg-type]
     # Unwrap StandardResponse regardless of Pydantic/dict
-    if hasattr(resp, "model_dump"):
-        obj = resp.model_dump()
-    else:
-        obj = resp if isinstance(resp, dict) else {}
+    obj = resp.model_dump() if hasattr(resp, "model_dump") else resp if isinstance(resp, dict) else {}
     data = obj.get("data", obj)
     if hasattr(data, "model_dump"):
         return data.model_dump()
@@ -206,17 +204,13 @@ async def create_prompt(
             raise DatabaseError("Prompt creation returned empty record")
 
         logger.info(f"User {user_context['user_id']} created prompt: {prompt_data.name} (project_id={prompt_data.project_id})")
-        try:
+        with contextlib.suppress(Exception):
             logger.info("Created prompt record: %s", prompt_record)
-        except Exception:
-            pass
 
         # Record idempotency mapping if provided
         if idempotency_key and prompt_record.get("id"):
-            try:
+            with contextlib.suppress(Exception):
                 db.record_idempotency("prompt", idempotency_key, int(prompt_record["id"]), user_id_str)
-            except Exception:
-                pass
 
         return StandardResponse(
             success=True,

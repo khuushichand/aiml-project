@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 from typing import Any
 from urllib.parse import urlparse
@@ -344,10 +345,8 @@ async def create_feed_subscription(
         )
     except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"collections_feeds_create_job_failed: {exc}")
-        try:
+        with contextlib.suppress(_COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS):
             db.delete_source(int(source.id))
-        except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
-            pass
         raise HTTPException(status_code=400, detail="feed_create_failed")
 
     settings["collections_feed_job_id"] = int(job.id)
@@ -515,10 +514,8 @@ async def delete_feed_subscription(
                 get_workflows_scheduler().delete(job.wf_schedule_id)  # type: ignore[arg-type]
         except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
             pass
-        try:
+        with contextlib.suppress(_COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS):
             db.delete_job(job_id)
-        except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
-            pass
     deleted = db.delete_source(feed_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="feed_not_found")

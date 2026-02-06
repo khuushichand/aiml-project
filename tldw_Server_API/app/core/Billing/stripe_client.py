@@ -10,7 +10,7 @@ import asyncio
 import os
 import threading
 from dataclasses import dataclass
-from typing import Any, Union
+from typing import Any
 
 from loguru import logger
 
@@ -320,7 +320,7 @@ class StripeClient:
 
     def construct_webhook_event(
         self,
-        payload: Union[bytes, str],
+        payload: bytes | str,
         signature: str,
     ) -> Any:
         """
