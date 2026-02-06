@@ -72,7 +72,7 @@ class UnifiedRAGRequest(BaseModel):
 
     if model_validator is not None:
         @model_validator(mode="before")
-        def _map_legacy_min_relevance(self, values):  # type: ignore
+        def _map_legacy_min_relevance(cls, values):  # type: ignore
             try:
                 if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
                     values["min_score"] = values.get("min_relevance_score")
@@ -114,7 +114,7 @@ class UnifiedRAGRequest(BaseModel):
     # Map corpus -> index_namespace at model-level (before validation)
     if model_validator is not None:
         @model_validator(mode="before")
-        def _alias_corpus_namespace(self, values):  # type: ignore
+        def _alias_corpus_namespace(cls, values):  # type: ignore
             try:
                 if isinstance(values, dict):
                     v = values.get("index_namespace")
@@ -1746,7 +1746,7 @@ class UnifiedBatchRequest(BaseModel):
 
     if model_validator is not None:
         @model_validator(mode="before")
-        def _map_legacy_min_relevance_batch(self, values):  # type: ignore
+        def _map_legacy_min_relevance_batch(cls, values):  # type: ignore
             try:
                 if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
                     values["min_score"] = values.get("min_relevance_score")
@@ -1756,7 +1756,7 @@ class UnifiedBatchRequest(BaseModel):
     # Batch: Map corpus -> index_namespace at model-level
     if model_validator is not None:
         @model_validator(mode="before")
-        def _alias_corpus_namespace_batch(self, values):  # type: ignore
+        def _alias_corpus_namespace_batch(cls, values):  # type: ignore
             try:
                 if isinstance(values, dict):
                     v = values.get("index_namespace")
@@ -1841,7 +1841,7 @@ class ImplicitFeedbackEvent(BaseModel):
 
     if model_validator is not None:
         @model_validator(mode="before")
-        def _validate_dwell_ms(self, values):  # type: ignore
+        def _validate_dwell_ms(cls, values):  # type: ignore
             if isinstance(values, dict) and values.get("event_type") == "dwell_time":
                 dwell_ms = values.get("dwell_ms")
                 if dwell_ms is None:

@@ -20,7 +20,7 @@ class CollectionsFeedCreateRequest(BaseModel):
     )
 
     @validator("tags", pre=True, each_item=True)
-    def _strip_tags(self, value: str) -> str:
+    def _strip_tags(cls, value: str) -> str:
         return value.strip()
 
 
@@ -37,7 +37,7 @@ class CollectionsFeedUpdateRequest(BaseModel):
     )
 
     @validator("tags", pre=True, each_item=True)
-    def _strip_tags(self, value: str) -> str:
+    def _strip_tags(cls, value: str) -> str:
         return value.strip()
 
 

@@ -60,7 +60,7 @@ class DataTableGenerateRequest(BaseModel):
         from pydantic import root_validator as _rv  # type: ignore
 
         @_rv
-        def _validate_payload(self, values: dict[str, Any]) -> dict[str, Any]:  # type: ignore[no-redef]
+        def _validate_payload(cls, values: dict[str, Any]) -> dict[str, Any]:  # type: ignore[no-redef]
             sources = values.get("sources") or []
             if not sources:
                 raise ValueError("sources are required")
@@ -93,7 +93,7 @@ class DataTableUpdateRequest(BaseModel):
         from pydantic import root_validator as _rv  # type: ignore
 
         @_rv
-        def _validate_payload(self, values: dict[str, Any]) -> dict[str, Any]:  # type: ignore[no-redef]
+        def _validate_payload(cls, values: dict[str, Any]) -> dict[str, Any]:  # type: ignore[no-redef]
             if values.get("name") is None and values.get("description") is None:
                 raise ValueError("at least one field is required")
             name = values.get("name")
