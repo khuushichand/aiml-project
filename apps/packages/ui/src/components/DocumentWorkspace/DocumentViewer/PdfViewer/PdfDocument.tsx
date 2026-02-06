@@ -81,6 +81,8 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
   const scrollRafRef = useRef<number | null>(null)
   const wheelAccumulatorRef = useRef(0)
   const wheelResetRef = useRef<number | null>(null)
+  const [pageHeights, setPageHeights] = useState<number[]>([])
+  const [pageOffsets, setPageOffsets] = useState<number[]>([])
 
   // Text selection for popover actions
   const { selection, clearSelection } = useTextSelection(containerRef)
@@ -201,26 +203,49 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
     return () => observer.disconnect()
   }, [viewMode, currentPage, zoomLevel, loading, updatePageMetrics])
 
-  // Compute initial page dimensions for virtual single-page scrolling.
+  // Compute per-page dimensions for virtual single-page scrolling.
   useEffect(() => {
-    if (!pdfInstance) return
+    if (!pdfInstance) {
+      setPageHeights([])
+      setPageOffsets([])
+      return
+    }
     let cancelled = false
-    const scale = zoomLevel / 100
-    const computeMetrics = async () => {
+    const s = zoomLevel / 100
+    const gap = 16 // must match pageGap
+    const computeAllMetrics = async () => {
       try {
-        const firstPage = await pdfInstance.getPage(1)
-        const viewport = firstPage.getViewport({ scale })
+        const heights: number[] = []
+        const offsets: number[] = []
+        let offset = 0
+        let firstHeight = 0
+        let firstWidth = 0
+        for (let i = 1; i <= pdfInstance.numPages; i++) {
+          const page = await pdfInstance.getPage(i)
+          const viewport = page.getViewport({ scale: s })
+          if (i === 1) {
+            firstHeight = viewport.height
+            firstWidth = viewport.width
+          }
+          heights.push(viewport.height)
+          offsets.push(offset)
+          offset += viewport.height + gap
+        }
         if (!cancelled) {
-          updatePageMetrics({ height: viewport.height, width: viewport.width })
+          setPageHeights(heights)
+          setPageOffsets(offsets)
+          updatePageMetrics({ height: firstHeight, width: firstWidth })
         }
       } catch (error) {
         if (!cancelled) {
-          console.warn('[PdfDocument] Failed to compute initial page metrics', error)
+          console.warn('[PdfDocument] Failed to compute page metrics', error)
+          setPageHeights([])
+          setPageOffsets([])
           updatePageMetrics({ height: 0, width: 0 })
         }
       }
     }
-    void computeMetrics()
+    void computeAllMetrics()
     return () => {
       cancelled = true
     }
@@ -235,7 +260,37 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
   const virtualPageHeight = basePageHeight + pageGap
   const totalPageCount =
     numPages || pdfDocumentRef?.current?.numPages || 0
-  const virtualScrollEnabled = viewMode === "single" && totalPageCount > 0
+
+  // Disable virtual scroll when per-page heights vary too much (mixed-size PDFs)
+  const perPageReady = pageOffsets.length === totalPageCount && totalPageCount > 0
+  const heightVarianceHigh = pageHeights.length > 1 && (() => {
+    const mean = pageHeights.reduce((s, h) => s + h, 0) / pageHeights.length
+    if (mean === 0) return false
+    const maxDev = Math.max(...pageHeights.map(h => Math.abs(h - mean)))
+    return maxDev / mean > 0.3
+  })()
+  const virtualScrollEnabled =
+    viewMode === "single" && perPageReady && !heightVarianceHigh
+
+  const totalVirtualHeight = perPageReady
+    ? pageOffsets[pageOffsets.length - 1] + pageHeights[pageHeights.length - 1] + pageGap
+    : virtualPageHeight * totalPageCount
+
+  // Binary search: find 1-based page whose offset region contains scrollTop
+  const findPageAtOffset = useCallback(
+    (scrollTop: number): number => {
+      if (pageOffsets.length === 0) return 1
+      let lo = 0
+      let hi = pageOffsets.length - 1
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1
+        if (pageOffsets[mid] <= scrollTop) lo = mid
+        else hi = mid - 1
+      }
+      return Math.min(totalPageCount, Math.max(1, lo + 1))
+    },
+    [pageOffsets, totalPageCount]
+  )
 
   const handleVirtualScroll = useCallback(() => {
     if (!virtualScrollEnabled || !containerRef.current) return
@@ -253,25 +308,22 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
       cancelAnimationFrame(scrollRafRef.current)
     }
     scrollRafRef.current = requestAnimationFrame(() => {
-      const nextPage = Math.min(
-        totalPageCount,
-        Math.max(1, Math.floor(container.scrollTop / virtualPageHeight) + 1)
-      )
+      const nextPage = findPageAtOffset(container.scrollTop)
       if (nextPage !== currentPage) {
         onPageChange(nextPage)
       }
     })
-  }, [virtualScrollEnabled, totalPageCount, currentPage, onPageChange, virtualPageHeight])
+  }, [virtualScrollEnabled, currentPage, onPageChange, findPageAtOffset])
 
   useEffect(() => {
     if (!virtualScrollEnabled || !containerRef.current) return
     const container = containerRef.current
-    const targetTop = (currentPage - 1) * virtualPageHeight
+    const targetTop = pageOffsets[currentPage - 1] ?? 0
     if (isUserScrollingRef.current) return
     if (Math.abs(container.scrollTop - targetTop) > 4) {
       container.scrollTop = targetTop
     }
-  }, [virtualScrollEnabled, currentPage, virtualPageHeight])
+  }, [virtualScrollEnabled, currentPage, pageOffsets])
 
   useEffect(() => {
     // Fallback path only when virtual scrolling is disabled (e.g., page count
@@ -392,7 +444,7 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
             <div
               className="relative"
               style={{
-                height: virtualPageHeight * totalPageCount,
+                height: totalVirtualHeight,
                 width: basePageWidth,
                 minWidth: basePageWidth,
                 margin: "0 auto"
@@ -407,7 +459,7 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
                   <div
                     key={`virtual-page-${pageNumber}`}
                     className="absolute left-1/2 -translate-x-1/2"
-                    style={{ top: (pageNumber - 1) * virtualPageHeight }}
+                    style={{ top: pageOffsets[pageNumber - 1] ?? 0 }}
                   >
                     <PdfPage
                       pageNumber={pageNumber}

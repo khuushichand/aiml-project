@@ -134,6 +134,8 @@ export const EpubSettingsPanel: React.FC<EpubSettingsPanelProps> = ({
             tooltip={{ formatter: (v) => `${v}%` }}
           />
           <button
+            type="button"
+            aria-label="Increase font size"
             onClick={() => setFontSize(fontSize + 10)}
             disabled={fontSize >= 200}
             className="flex h-7 w-7 items-center justify-center rounded hover:bg-hover disabled:opacity-50"

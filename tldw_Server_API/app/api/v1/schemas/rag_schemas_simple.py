@@ -91,7 +91,7 @@ class SimpleSearchRequest(BaseModel):
     )
 
     @field_validator('databases')
-    def validate_databases(self, v):
+    def validate_databases(cls, v):
         """Validate and normalize database names"""
         valid_dbs = {"media_db", "media", "notes", "characters", "chat_history", "chats"}
         normalized = []
@@ -278,7 +278,7 @@ class SimpleAgentRequest(BaseModel):
     )
 
     @field_validator('search_databases')
-    def validate_search_databases(self, v):
+    def validate_search_databases(cls, v):
         """Validate and normalize database names"""
         valid_dbs = {"media_db", "media", "notes", "characters", "chat_history", "chats"}
         normalized = []

@@ -155,7 +155,7 @@ class SubmitAudioJobRequest(BaseModel):
 
     if model_validator is not None:
         @model_validator(mode="before")
-        def _validate_inputs(self, values: Any) -> Any:  # type: ignore[override]
+        def _validate_inputs(cls, values: Any) -> Any:  # type: ignore[override]
             if not isinstance(values, dict):
                 return values
             url = (values.get("url") or "").strip()
