@@ -13,6 +13,44 @@ from loguru import logger
 from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
 from ..exceptions import TokenizerError
 
+_TOKENS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ImportError,
+    UnicodeError,
+)
+
+_TOKENS_TIKTOKEN_RESOLUTION_EXCEPTIONS = (
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+)
+
+_TOKENS_TOKENIZATION_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+)
+
+_TOKENS_DECODE_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    NotImplementedError,
+)
+
 
 class TokenizerProtocol(Protocol):
     """Protocol for tokenizer interface."""
@@ -65,7 +103,7 @@ class TransformersTokenizer:
                 logger.info(f"Loading tokenizer: {self.model_name}")
                 self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
                 logger.debug(f"Tokenizer {self.model_name} loaded successfully")
-            except Exception as e:
+            except _TOKENS_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to load tokenizer '{self.model_name}': {e}")
                 raise TokenizerError(f"Failed to load tokenizer: {e}")
 
@@ -103,7 +141,7 @@ class TiktokenTokenizer:
             # Prefer model-specific encoding; fallback to cl100k_base
             try:
                 self._enc = tiktoken.encoding_for_model(model_name)
-            except Exception:
+            except _TOKENS_TIKTOKEN_RESOLUTION_EXCEPTIONS:
                 self._enc = tiktoken.get_encoding("cl100k_base")
             self.available = True
             logger.debug(f"tiktoken available for tokenization (model={model_name})")
@@ -360,13 +398,13 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                     )
                     token_ids = list(enc.get('input_ids') or enc['input_ids'])
                     offsets = list(enc.get('offset_mapping') or enc['offset_mapping'])
-                except Exception:
+                except _TOKENS_TOKENIZATION_EXCEPTIONS:
                     token_ids = tok.encode(text, add_special_tokens=add_special)
                     offsets = None
             else:
                 token_ids = self.tokenizer.encode(text)
 
-        except Exception as e:
+        except _TOKENS_TOKENIZATION_EXCEPTIONS as e:
             logger.error(f"Tokenization failed: {e}")
             raise TokenizerError(f"Failed to tokenize text: {e}")
 
@@ -418,7 +456,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                             chunk_text = self.tokenizer.tokenizer.decode(chunk_tokens)
                     else:
                         raise AttributeError('No decode() available on tokenizer or underlying implementation')
-                except Exception as e:
+                except _TOKENS_DECODE_EXCEPTIONS as e:
                     logger.warning(f"Failed to decode chunk at position {i}: {e}; falling back to word approximation")
                     return self._chunk_with_fallback(text, max_size, overlap, **options)
 
@@ -554,7 +592,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                     )
                     token_ids = list(enc.get('input_ids') or enc['input_ids'])
                     offsets = list(enc.get('offset_mapping') or enc['offset_mapping'])
-                except Exception:
+                except _TOKENS_TOKENIZATION_EXCEPTIONS:
                     token_ids = tok.encode(text, add_special_tokens=add_special)
                     offsets = None
             else:
@@ -565,7 +603,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                 else:
                     decode_fn = None
                 offsets = self._reconstruct_offsets_by_decoding(token_ids, text)
-        except Exception as e:
+        except _TOKENS_TOKENIZATION_EXCEPTIONS as e:
             logger.error(f"Tokenization failed: {e}")
             raise TokenizerError(f"Failed to tokenize text: {e}")
 
@@ -576,7 +614,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
         if offsets is not None and len(offsets) != len(token_ids):
             try:
                 offsets = self._reconstruct_offsets_by_decoding(token_ids, text)
-            except Exception:
+            except _TOKENS_TOKENIZATION_EXCEPTIONS:
                 offsets = None
 
         results: list[ChunkResult] = []
@@ -594,7 +632,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                     chunk_text = decode_fn(ids_window)
                 else:
                     chunk_text = self.tokenizer.decode(ids_window, skip_special_tokens=True)
-            except Exception as e:
+            except _TOKENS_DECODE_EXCEPTIONS as e:
                 logger.warning(f"Failed to decode token window at {i}: {e}")
                 continue
 
@@ -625,7 +663,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                             # Accept if either equals or one is a prefix of the other (ZWJ/vs16 tolerated)
                             if a == b or a.startswith(b) or b.startswith(a):
                                 end_char = expanded_end
-                    except Exception:
+                    except _TOKENS_NONCRITICAL_EXCEPTIONS:
                         pass
                 else:
                     start_char, end_char = self._bounds_via_rolling_pointer(text, chunk_text, start_from=rolling_pos)
@@ -675,22 +713,22 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
             try:
                 # Prefer wrapper decode to ensure skip_special_tokens=True
                 return self.tokenizer.decode([tid], skip_special_tokens=True)
-            except Exception:
+            except _TOKENS_DECODE_EXCEPTIONS:
                 try:
                     if hasattr(self.tokenizer, 'tokenizer'):
                         return self.tokenizer.tokenizer.decode([tid], skip_special_tokens=True)
-                except Exception:
+                except _TOKENS_DECODE_EXCEPTIONS:
                     pass
                 return ''
 
         def _decode_all(tids: list[int]) -> str:
             try:
                 return self.tokenizer.decode(tids, skip_special_tokens=True)
-            except Exception:
+            except _TOKENS_DECODE_EXCEPTIONS:
                 try:
                     if hasattr(self.tokenizer, 'tokenizer'):
                         return self.tokenizer.tokenizer.decode(tids, skip_special_tokens=True)
-                except Exception:
+                except _TOKENS_DECODE_EXCEPTIONS:
                     pass
                 return ''
 

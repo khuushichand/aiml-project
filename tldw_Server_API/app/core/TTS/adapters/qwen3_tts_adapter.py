@@ -41,6 +41,43 @@ from .base import (
     VoiceInfo,
 )
 
+_QWEN3_COERCE_EXCEPTIONS = (
+    TypeError,
+    ValueError,
+    OverflowError,
+)
+
+_QWEN3_SIGNATURE_EXCEPTIONS = (
+    TypeError,
+    ValueError,
+)
+
+_QWEN3_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ImportError,
+)
+
+_QWEN3_WORKER_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ImportError,
+    TTSAudioQualityError,
+    TTSGenerationError,
+    TTSInvalidVoiceReferenceError,
+    TTSProviderInitializationError,
+    TTSStreamingError,
+    TTSValidationError,
+)
+
 
 class Qwen3TTSAdapter(TTSAdapter):
     """Adapter for Qwen3-TTS local models (CustomVoice/VoiceDesign/Base)."""
@@ -149,7 +186,7 @@ class Qwen3TTSAdapter(TTSAdapter):
             if value is None:
                 return None
             return int(value)
-        except Exception:
+        except _QWEN3_COERCE_EXCEPTIONS:
             return None
 
     def _coerce_float(self, value: Any) -> float | None:
@@ -157,7 +194,7 @@ class Qwen3TTSAdapter(TTSAdapter):
             if value is None:
                 return None
             return float(value)
-        except Exception:
+        except _QWEN3_COERCE_EXCEPTIONS:
             return None
 
     def _resolve_chunking_params(self, extras: dict[str, Any]) -> tuple[bool, int, int, int, int]:
@@ -384,7 +421,7 @@ class Qwen3TTSAdapter(TTSAdapter):
             if extra_language is not None:
                 try:
                     extra_language = str(extra_language)
-                except Exception:
+                except _QWEN3_NONCRITICAL_EXCEPTIONS:
                     extra_language = None
             if extra_language:
                 language = extra_language
@@ -416,7 +453,7 @@ class Qwen3TTSAdapter(TTSAdapter):
             return None
         try:
             import torch
-        except Exception:
+        except ImportError:
             return self.dtype
         mapping = {
             "float16": torch.float16,
@@ -462,7 +499,7 @@ class Qwen3TTSAdapter(TTSAdapter):
         kwargs = {k: v for k, v in self._build_model_kwargs(model_id).items() if v is not None}
         try:
             sig = inspect.signature(builder)
-        except Exception:
+        except _QWEN3_SIGNATURE_EXCEPTIONS:
             sig = None
         params = []
         if sig:
@@ -542,7 +579,7 @@ class Qwen3TTSAdapter(TTSAdapter):
         for sub in ("pipeline", "tts"):
             try:
                 submodule = importlib.import_module(f"qwen_tts.{sub}")
-            except Exception:
+            except ImportError:
                 continue
             scan_module(submodule)
 
@@ -584,7 +621,7 @@ class Qwen3TTSAdapter(TTSAdapter):
                 )
                 if asyncio.iscoroutine(register_result):
                     await register_result
-            except Exception:
+            except _QWEN3_NONCRITICAL_EXCEPTIONS:
                 pass
             return pipeline
 
@@ -598,7 +635,7 @@ class Qwen3TTSAdapter(TTSAdapter):
             if callable(handler):
                 try:
                     handler()
-                except Exception:
+                except _QWEN3_NONCRITICAL_EXCEPTIONS:
                     pass
 
     def _build_pipeline(self, model_id: str) -> Any:
@@ -640,7 +677,7 @@ class Qwen3TTSAdapter(TTSAdapter):
     ) -> dict[str, Any]:
         try:
             sig = inspect.signature(fn)
-        except Exception:
+        except _QWEN3_SIGNATURE_EXCEPTIONS:
             sig = None
         params = []
         if sig:
@@ -711,7 +748,7 @@ class Qwen3TTSAdapter(TTSAdapter):
     def _wants_ref_audio_path(self, fn: Callable[..., Any]) -> bool:
         try:
             sig = inspect.signature(fn)
-        except Exception:
+        except _QWEN3_SIGNATURE_EXCEPTIONS:
             return False
         param_names = set(sig.parameters.keys())
         if any(name in param_names for name in ("ref_audio_path", "reference_audio_path", "audio_prompt_path")):
@@ -759,7 +796,7 @@ class Qwen3TTSAdapter(TTSAdapter):
             )
             writer.close()
             return True, None
-        except Exception as exc:
+        except _QWEN3_NONCRITICAL_EXCEPTIONS as exc:
             return False, str(exc)
 
     def _chunk_bytes(self, payload: bytes, chunk_size: int = 64 * 1024) -> AsyncGenerator[bytes, None]:
@@ -842,13 +879,13 @@ class Qwen3TTSAdapter(TTSAdapter):
                     if ":" in self.device:
                         try:
                             device_idx = int(self.device.split(":", 1)[1])
-                        except Exception:
+                        except (ValueError, TypeError, IndexError):
                             device_idx = 0
                     props = torch.cuda.get_device_properties(device_idx)
                     total_gb = props.total_memory / (1024 ** 3)
                     if total_gb >= float(self.auto_min_vram_gb):
                         resolved = self.MODEL_CUSTOMVOICE_17B
-            except Exception:
+            except _QWEN3_NONCRITICAL_EXCEPTIONS:
                 logger.debug("Qwen3-TTS auto model selection could not read CUDA VRAM; falling back")
             logger.info(
                 f"{self.provider_name}: auto model resolved to {resolved} "
@@ -923,7 +960,7 @@ class Qwen3TTSAdapter(TTSAdapter):
                 try:
                     for item in gen:
                         loop.call_soon_threadsafe(queue.put_nowait, item)
-                except Exception as exc:
+                except _QWEN3_WORKER_EXCEPTIONS as exc:
                     loop.call_soon_threadsafe(queue.put_nowait, exc)
                 finally:
                     loop.call_soon_threadsafe(queue.put_nowait, None)

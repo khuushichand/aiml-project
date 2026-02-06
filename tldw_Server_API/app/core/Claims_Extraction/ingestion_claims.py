@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sqlite3
 import time
 import uuid
 from typing import Any
@@ -48,10 +49,51 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
 )
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
+_CLAIMS_IMPORT_EXCEPTIONS = (
+    ImportError,
+    OSError,
+    RuntimeError,
+)
+
+_CLAIMS_COERCE_EXCEPTIONS = (
+    TypeError,
+    ValueError,
+    OverflowError,
+)
+
+_CLAIMS_TEMPLATE_FORMAT_EXCEPTIONS = (
+    KeyError,
+    IndexError,
+    TypeError,
+    ValueError,
+)
+
+_CLAIMS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ImportError,
+    TimeoutError,
+    ConnectionError,
+)
+
+_CLAIMS_RESPONSE_PARSE_EXCEPTIONS = (
+    TypeError,
+    ValueError,
+    KeyError,
+    IndexError,
+    AttributeError,
+)
+
+_CLAIMS_STORE_EXCEPTIONS = _CLAIMS_NONCRITICAL_EXCEPTIONS + (sqlite3.Error,)
+
 try:
     # Local import for DB helper
     from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-except Exception:  # pragma: no cover
+except _CLAIMS_IMPORT_EXCEPTIONS:  # pragma: no cover
     MediaDatabase = None  # type: ignore
 
 
@@ -112,7 +154,7 @@ def extract_claims_for_chunks(
                 if not sents:
                     # fallback to heuristic
                     sents = split_claims_sentences(txt, lang_hint, max_sentences=max_per_chunk)
-            except Exception as e:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"NER-assisted extraction failed: {e}; falling back to heuristic")
                 sents = split_claims_sentences(txt, lang_hint, max_sentences=max_per_chunk)
 
@@ -130,7 +172,7 @@ def extract_claims_for_chunks(
                 model_override = str(_settings.get("CLAIMS_LLM_MODEL", "") or "") or None
                 try:
                     temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.1))
-                except Exception:
+                except _CLAIMS_COERCE_EXCEPTIONS:
                     temperature = 0.1
 
                 system = load_prompt("ingestion", "claims_extractor_system") or (
@@ -144,7 +186,7 @@ def extract_claims_for_chunks(
                 # Safely format template that may contain JSON braces
                 try:
                     prompt = base.format(max_claims=max_per_chunk, answer=txt)
-                except Exception:
+                except _CLAIMS_TEMPLATE_FORMAT_EXCEPTIONS:
                     _tmpl = base.replace('{', '{{').replace('}', '}}')
                     _tmpl = _tmpl.replace('{{max_claims}}', '{max_claims}').replace('{{answer}}', '{answer}')
                     prompt = _tmpl.format(max_claims=max_per_chunk, answer=txt)
@@ -155,7 +197,7 @@ def extract_claims_for_chunks(
                 timeout_sec = 8.0
                 try:
                     timeout_sec = float(_settings.get("CLAIMS_LLM_TIMEOUT_SEC", 8.0))
-                except Exception:
+                except _CLAIMS_COERCE_EXCEPTIONS:
                     timeout_sec = 8.0
 
                 def _call_provider(
@@ -260,7 +302,7 @@ def extract_claims_for_chunks(
                         except _futures.TimeoutError:
                             try:
                                 fut.cancel()
-                            except Exception:
+                            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                                 pass
                             record_claims_provider_request(
                                 provider=provider,
@@ -286,12 +328,12 @@ def extract_claims_for_chunks(
                                 text = content if isinstance(content, str) else str(resp)
                             else:
                                 text = str(resp)
-                        except Exception:
+                        except _CLAIMS_RESPONSE_PARSE_EXCEPTIONS:
                             text = str(resp)
                     else:
                         try:
                             text = "".join(list(resp))
-                        except Exception:
+                        except _CLAIMS_RESPONSE_PARSE_EXCEPTIONS:
                             text = str(resp)
                     if budget is not None:
                         budget.add_usage(tokens=estimate_claims_tokens(text))
@@ -307,7 +349,7 @@ def extract_claims_for_chunks(
                             _ = _json.loads(block)
                             jtxt = block
                             break
-                        except Exception:
+                        except _CLAIMS_COERCE_EXCEPTIONS:
                             continue
                     if jtxt is None:
                         # Fallback: last JSON-looking object in text
@@ -321,7 +363,7 @@ def extract_claims_for_chunks(
                     if not sents:
                         # fallback to heuristic
                         sents = split_claims_sentences(txt, lang_hint, max_sentences=max_per_chunk)
-            except Exception as e:
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS as e:
                 record_claims_provider_request(
                     provider=provider,
                     model=model_override or "",
@@ -399,14 +441,14 @@ def store_claims(
                 try:
                     owner_user_id = owner_row["owner_user_id"]
                     client_id = owner_row["client_id"]
-                except Exception:
+                except _CLAIMS_RESPONSE_PARSE_EXCEPTIONS:
                     try:
                         owner_user_id = owner_row[0]
-                    except Exception:
+                    except _CLAIMS_RESPONSE_PARSE_EXCEPTIONS:
                         owner_user_id = None
                     try:
                         client_id = owner_row[1]
-                    except Exception:
+                    except _CLAIMS_RESPONSE_PARSE_EXCEPTIONS:
                         client_id = None
             if owner_user_id is None:
                 owner_user_id = client_id or db.client_id
@@ -425,6 +467,6 @@ def store_claims(
                     notification_ids=notification_ids,
                 )
         return inserted
-    except Exception as e:  # pragma: no cover
+    except _CLAIMS_STORE_EXCEPTIONS as e:  # pragma: no cover
         logger.error(f"Failed to store claims for media_id={media_id}: {e}")
         return 0

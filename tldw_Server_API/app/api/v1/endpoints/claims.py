@@ -933,3 +933,63 @@ def rebuild_claims_fts(
         current_user=current_user,
         db=db,
     )
+
+
+# =============================================================================
+# FVA (Falsification-Verification Alignment) Endpoints
+# =============================================================================
+
+
+@router.post("/verify/fva", response_model=FVAVerifyResponse)
+async def verify_claims_fva(
+    payload: FVAVerifyRequest,
+    user_id: Optional[int] = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+) -> dict[str, Any]:
+    """
+    Verify claims using the FVA (Falsification-Verification Alignment) pipeline.
+
+    The FVA pipeline extends standard claim verification with active counter-evidence
+    retrieval. For each claim, it:
+
+    1. Performs standard verification against retrieved documents
+    2. Determines if falsification checking is needed based on confidence/claim type
+    3. If triggered, retrieves anti-context (counter-evidence) documents
+    4. Adjudicates between supporting and contradicting evidence
+    5. Returns final verification status which may include CONTESTED for conflicting evidence
+
+    This implements the approach from the FVA-RAG paper (arXiv:2512.07015).
+    """
+    # Convert claims to dict format
+    claims_data = [c.model_dump() for c in payload.claims]
+
+    # Get FVA config
+    fva_config = payload.fva_config.model_dump() if payload.fva_config else None
+
+    # Resolve user_id string
+    resolved_user_id: Optional[str] = None
+    if user_id is not None:
+        resolved_user_id = str(user_id)
+    elif current_user is not None:
+        resolved_user_id = str(getattr(current_user, "username", None) or getattr(current_user, "id", None))
+
+    return await claims_service.verify_claims_with_fva(
+        claims=claims_data,
+        query=payload.query,
+        sources=payload.sources,
+        top_k=payload.top_k,
+        fva_config=fva_config,
+        user_id=resolved_user_id,
+        current_user=current_user,
+        db=db,
+    )
+
+
+@router.get("/verify/fva/settings", response_model=FVASettingsResponse)
+def get_fva_settings(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict[str, Any]:
+    """Return current FVA pipeline settings."""
+    return claims_service.get_fva_settings()

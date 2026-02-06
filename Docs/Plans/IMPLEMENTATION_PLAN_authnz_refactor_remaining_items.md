@@ -24,7 +24,7 @@ This active plan tracks unfinished work split from:
 **Tests**:
 - Unit tests for cache keying/namespacing behavior.
 - Focused tests for exemplar logging to ensure user/namespace metadata is present and redaction is applied.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Pipeline Refactor & API Cleanups
 **Goal**: Factor the ~2000-line `unified_rag_pipeline` into composable, testable steps with clearer required/optional components, enforced budgets, and cleaner public API boundaries.

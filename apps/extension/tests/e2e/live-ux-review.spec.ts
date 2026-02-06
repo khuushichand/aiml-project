@@ -329,7 +329,9 @@ describeLive('Live server UX review (no mocks)', () => {
         // RAG health is ready and index exists: the full workspace
         // should be visible instead of an empty card.
         await expect(
-          page.getByText(/Knowledge search & chat/i)
+          page.getByRole("heading", {
+            name: /Knowledge QA|Knowledge search & chat/i,
+          })
         ).toBeVisible({ timeout: 20_000 })
       }
 
@@ -338,16 +340,16 @@ describeLive('Live server UX review (no mocks)', () => {
         fullPage: true
       })
 
-      const serverChip = await page
-        .getByText(/Server:/i)
-        .first()
-        .textContent()
-        .catch(() => null)
-      const knowledgeChip = await page
-        .getByText(/Knowledge:/i)
-        .first()
-        .textContent()
-        .catch(() => null)
+      const readOptionalChipText = async (pattern: RegExp) => {
+        const chip = page.getByText(pattern).first()
+        if ((await chip.count()) === 0) {
+          return null
+        }
+        return chip.textContent().catch(() => null)
+      }
+
+      const serverChip = await readOptionalChipText(/Server:/i)
+      const knowledgeChip = await readOptionalChipText(/Knowledge:/i)
 
       if (serverChip) {
         console.log(

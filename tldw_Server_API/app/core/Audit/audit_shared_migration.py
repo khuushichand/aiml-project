@@ -31,6 +31,37 @@ from tldw_Server_API.app.core.Utils.Utils import get_project_root
 
 _UNIDENTIFIED_TENANT_ID = "unidentified_user"
 
+_AUDIT_COERCE_EXCEPTIONS = (
+    TypeError,
+    ValueError,
+    AttributeError,
+)
+
+_AUDIT_JSON_EXCEPTIONS = (
+    TypeError,
+    ValueError,
+    OverflowError,
+)
+
+_AUDIT_DB_EXCEPTIONS = (
+    aiosqlite.Error,
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+)
+
+_AUDIT_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+)
+
 
 @dataclass(frozen=True)
 class AuditMigrationSource:
@@ -87,7 +118,7 @@ def _normalize_subpath(raw: str | None) -> Path | None:
         return None
     try:
         value = str(raw).strip()
-    except Exception:
+    except _AUDIT_COERCE_EXCEPTIONS:
         return None
     if not value:
         return None
@@ -235,7 +266,7 @@ def _normalize_tenant_value(value: Any) -> str:
         return ""
     try:
         return str(value).strip()
-    except Exception:
+    except _AUDIT_COERCE_EXCEPTIONS:
         return ""
 
 
@@ -243,14 +274,14 @@ def _is_system_event(event_type: Any, category: Any) -> bool:
     if category is not None:
         try:
             cat_val = str(category).lower()
-        except Exception:
+        except _AUDIT_COERCE_EXCEPTIONS:
             cat_val = ""
         if cat_val == "system":
             return True
     if event_type is not None:
         try:
             event_val = str(event_type).lower()
-        except Exception:
+        except _AUDIT_COERCE_EXCEPTIONS:
             event_val = ""
         if event_val.startswith("system"):
             return True
@@ -311,7 +342,7 @@ def _coerce_timestamp(value: Any) -> str:
         if dt_val.tzinfo is None:
             dt_val = dt_val.replace(tzinfo=timezone.utc)
         return dt_val.astimezone(timezone.utc).isoformat()
-    except Exception:
+    except _AUDIT_COERCE_EXCEPTIONS:
         return str(value)
 
 
@@ -323,11 +354,11 @@ def _checkpoint_timestamp(value: Any, previous: str | None) -> str | None:
         s = str(value).strip()
         if not s:
             return previous
-    except Exception:
+    except _AUDIT_COERCE_EXCEPTIONS:
         return previous
     try:
         return _coerce_timestamp(value)
-    except Exception:
+    except _AUDIT_NONCRITICAL_EXCEPTIONS:
         return previous
 
 
@@ -398,7 +429,7 @@ def _safe_json_text(value: Any, default: str) -> str:
         return value
     try:
         return json.dumps(value, ensure_ascii=False)
-    except Exception:
+    except _AUDIT_JSON_EXCEPTIONS:
         return str(value)
 
 
@@ -523,7 +554,7 @@ def _normalize_result(value: Any) -> str:
         if value is None:
             return ""
         return str(value).strip().lower()
-    except Exception:
+    except _AUDIT_COERCE_EXCEPTIONS:
         return ""
 
 
@@ -729,21 +760,21 @@ async def _migrate_source(
                     last_row = rows[-1]
                     try:
                         last_rowid = int(last_row["rowid"])
-                    except Exception:
+                    except _AUDIT_COERCE_EXCEPTIONS:
                         pass
                     try:
                         last_event = last_row["event_id"]
-                    except Exception:
+                    except (KeyError, TypeError, IndexError):
                         last_event = None
                     if last_event:
                         last_event_id = str(last_event)
                     try:
                         last_timestamp = _checkpoint_timestamp(last_row["timestamp"], last_timestamp)
-                    except Exception:
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         last_timestamp = last_timestamp
                     await _save_checkpoint(shared_db, source_key, last_rowid, last_event_id, last_timestamp)
                     await shared_db.commit()
-    except Exception as exc:
+    except _AUDIT_DB_EXCEPTIONS as exc:
         counts.failed = True
         counts.error = f"{type(exc).__name__}: {exc}"
         logger.warning(
@@ -807,7 +838,7 @@ async def migrate_to_shared_audit_db(
             await shared_db.execute("PRAGMA temp_store=MEMORY;")
             await shared_db.execute("PRAGMA foreign_keys=ON;")
             await shared_db.execute("PRAGMA busy_timeout=5000;")
-        except Exception:
+        except _AUDIT_DB_EXCEPTIONS:
             pass
         await _ensure_checkpoint_table(shared_db)
         await shared_db.commit()

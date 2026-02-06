@@ -16,11 +16,39 @@ from pydantic import Field, field_validator
 # 3rd-party imports
 from pydantic_settings import BaseSettings, NoDecode
 
+_SETTINGS_IMPORT_EXCEPTIONS = (
+    ImportError,
+    RuntimeError,
+    AttributeError,
+)
+
+_SETTINGS_JSON_PARSE_EXCEPTIONS = (
+    json.JSONDecodeError,
+    TypeError,
+    ValueError,
+)
+
+_SETTINGS_CAST_EXCEPTIONS = (
+    TypeError,
+    ValueError,
+    AttributeError,
+)
+
+_SETTINGS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ImportError,
+)
+
 try:
     # Prefer centralized loader to honor project config precedence
     from tldw_Server_API.app.core.config import load_comprehensive_config
     from tldw_Server_API.app.core.config import settings as core_settings
-except Exception:
+except _SETTINGS_IMPORT_EXCEPTIONS:
     load_comprehensive_config = None  # Fallback if import graph changes
     core_settings = None
 
@@ -741,7 +769,7 @@ class Settings(BaseSettings):
             # presence of the pytest module and the TESTING flag.
             try:
                 import sys as _sys  # Local import to avoid module-level cost
-            except Exception:
+            except ImportError:
                 _sys = None
             in_test_context = (
                 os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes")
@@ -831,10 +859,7 @@ class Settings(BaseSettings):
         if not v:
             return []
         if isinstance(v, str):
-            try:
-                return [s.strip() for s in v.split(',') if s.strip()]
-            except Exception:
-                return []
+            return [s.strip() for s in v.split(',') if s.strip()]
         if isinstance(v, (list, tuple)):
             return [str(x).strip() for x in v if str(x).strip()]
         return []
@@ -846,10 +871,7 @@ class Settings(BaseSettings):
         if not v:
             return []
         if isinstance(v, str):
-            try:
-                return [s.strip() for s in v.split(',') if s.strip()]
-            except Exception:
-                return []
+            return [s.strip() for s in v.split(',') if s.strip()]
         if isinstance(v, (list, tuple)):
             return [str(x).strip() for x in v if str(x).strip()]
         return []
@@ -861,10 +883,7 @@ class Settings(BaseSettings):
         if not v:
             return []
         if isinstance(v, str):
-            try:
-                return [s.strip() for s in v.split(',') if s.strip()]
-            except Exception:
-                return []
+            return [s.strip() for s in v.split(',') if s.strip()]
         if isinstance(v, (list, tuple)):
             return [str(x).strip() for x in v if str(x).strip()]
         return []
@@ -992,7 +1011,7 @@ def _split_csv(val) -> list[str]:
         if stripped.startswith("[") and stripped.endswith("]"):
             try:
                 parsed = json.loads(stripped)
-            except Exception:
+            except _SETTINGS_JSON_PARSE_EXCEPTIONS:
                 parsed = None
             if isinstance(parsed, list):
                 return [str(x).strip() for x in parsed if str(x).strip()]
@@ -1022,7 +1041,7 @@ def _load_overrides_from_config() -> dict:
             if os.getenv(env_name) is None and cfg.has_option("AuthNZ", key):
                 try:
                     overrides[field] = caster(cfg.get("AuthNZ", key))
-                except Exception:
+                except _SETTINGS_CAST_EXCEPTIONS:
                     pass
 
         maybe_set("AUTH_MODE", "auth_mode", lambda v: v.strip())
@@ -1114,7 +1133,7 @@ def _load_overrides_from_config() -> dict:
                     else:
                         overrides["DATABASE_URL"] = f"postgresql://{user}:{pwd}@{host}:{port}/{db}?sslmode={sslm}"
                 # else: ignore unknown types
-    except Exception as e:
+    except _SETTINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"AuthNZ settings: failed to load overrides from config.txt: {e}")
     return overrides
 
@@ -1153,7 +1172,7 @@ def get_settings() -> Settings:
                 overrides["ORG_INVITE_ALLOW_MISSING_EMAIL"] = _alias_bool(
                     "ORG_INVITE_ALLOW_MISSING_EMAIL"
                 )
-        except Exception:
+        except _SETTINGS_IMPORT_EXCEPTIONS:
             pass
         _settings = Settings(**overrides)
         try:
@@ -1162,7 +1181,7 @@ def get_settings() -> Settings:
                 base_dir = core_settings.get("USER_DB_BASE_DIR")
             if base_dir:
                 _settings.USER_DATA_BASE_PATH = str(Path(base_dir).resolve())
-        except Exception as exc:
+        except _SETTINGS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"AuthNZ settings: failed to align USER_DATA_BASE_PATH with core settings: {exc}")
         # In pytest/TEST_MODE contexts, default-disable rate limiting to keep tests deterministic.
         # Explicit falsey flags (e.g., TEST_MODE=0) should take precedence so tests can
@@ -1196,7 +1215,7 @@ def get_settings() -> Settings:
                 explicit_true or _os.getenv("PYTEST_CURRENT_TEST") or "pytest" in _sys.modules
             ):
                 _settings.RATE_LIMIT_ENABLED = False
-        except Exception:
+        except _SETTINGS_NONCRITICAL_EXCEPTIONS:
             pass
         # Log a lightweight profile hint for coordination/UX and optional
         # hardening. AUTH_MODE remains the canonical behavioral switch; PROFILE
@@ -1216,7 +1235,7 @@ def get_settings() -> Settings:
                 )
             else:
                 logger.info("Settings initialized - Auth mode: %s", _settings.AUTH_MODE)
-        except Exception:
+        except _SETTINGS_NONCRITICAL_EXCEPTIONS:
             logger.info("Settings initialized - Auth mode: %s", _settings.AUTH_MODE)
     return _settings
 
@@ -1277,7 +1296,7 @@ def _infer_profile_from_settings(settings: Settings) -> Optional[str]:
     try:
         mode = settings.AUTH_MODE
         db_url = str(settings.DATABASE_URL or "")
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return None
 
     db_lower = db_url.lower()
@@ -1314,7 +1333,7 @@ def get_profile() -> Optional[str]:
     settings = get_settings()
     try:
         value = getattr(settings, "PROFILE", None)
-    except Exception:
+    except (AttributeError, TypeError):
         value = None
     if isinstance(value, str) and value.strip():
         return value.strip()

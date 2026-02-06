@@ -507,6 +507,7 @@ Notes:
 - `get_multi_tenant_safe_kwargs(namespace)` builds on the `production` profile, enforces `index_namespace=namespace`, and disables OTEL-style observability (`enable_observability=False`) while keeping lightweight metrics (`enable_monitoring=True`).
 - The unified pipeline passes `index_namespace`/`user_id` into semantic caches and payload exemplars, so cache entries and debug samples are logically grouped per tenant/user.
 - To fully disable payload exemplars in a SaaS setup, set `RAG_PAYLOAD_EXEMPLAR_SAMPLING=0` in the environment.
+- Detailed tenant boundaries and trust assumptions: `Docs/Design/RAG_Multi_Tenant_Isolation.md`.
 
 ## Generation & Grounding (opt-in)
 

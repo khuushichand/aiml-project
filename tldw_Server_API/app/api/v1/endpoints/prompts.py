@@ -47,6 +47,26 @@ router = APIRouter()
 _TEMPLATE_VAR_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 _MAX_DUPLICATE_NAME_ITERATIONS = 10000
 
+_PROMPTS_LOOKUP_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ImportError,
+)
+
+_PROMPTS_ENDPOINT_EXCEPTIONS = _PROMPTS_LOOKUP_EXCEPTIONS + (
+    HTTPException,
+)
+
+_PROMPTS_DB_OPERATION_EXCEPTIONS = _PROMPTS_LOOKUP_EXCEPTIONS + (
+    DatabaseError,
+    ConflictError,
+    InputError,
+)
+
 
 def _extract_template_variables(template: str) -> list[str]:
     variables: list[str] = []
@@ -82,7 +102,7 @@ def _is_single_user_auth_mode() -> bool:
         return True
     try:
         return get_auth_settings().AUTH_MODE == "single_user"
-    except Exception:
+    except _PROMPTS_LOOKUP_EXCEPTIONS:
         return bool(settings.get("SINGLE_USER_MODE"))
 
 
@@ -92,7 +112,7 @@ def _get_single_user_api_key() -> Optional[str]:
         return key if key else None
     try:
         key = getattr(get_auth_settings(), "SINGLE_USER_API_KEY", None)
-    except Exception:
+    except _PROMPTS_LOOKUP_EXCEPTIONS:
         key = None
     if key:
         return key
@@ -275,7 +295,7 @@ async def prompts_health():
                     f.write("ok")
                 os.remove(test_path)
                 writable = True
-            except Exception:
+            except OSError:
                 writable = False
 
         health["components"]["storage"] = {
@@ -288,7 +308,7 @@ async def prompts_health():
         try:
             importlib.import_module("tldw_Server_API.app.core.DB_Management.Prompts_DB")
             lib_ok = True
-        except Exception as e:
+        except ImportError as e:
             lib_ok = False
             health["components"]["library_error"] = str(e)
 
@@ -298,7 +318,7 @@ async def prompts_health():
             health["status"] = "degraded"
         if base_dir and exists and not writable:
             health["status"] = "degraded"
-    except Exception as e:
+    except _PROMPTS_LOOKUP_EXCEPTIONS as e:
         health["status"] = "unhealthy"
         health["error"] = str(e)
 
@@ -412,7 +432,7 @@ async def create_keyword(
     except DatabaseError as e:
         logger.error(f"Database error creating keyword: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
-    except Exception as e:
+    except _PROMPTS_DB_OPERATION_EXCEPTIONS as e:
         logger.error(f"Unexpected error creating keyword: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"An unexpected error occurred: {str(e)}")
 
@@ -520,7 +540,7 @@ async def export_prompts_api(
     except DatabaseError as e:
         logger.error(f"Database error during export: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error during export.")
-    except Exception as e:
+    except _PROMPTS_DB_OPERATION_EXCEPTIONS as e:
         logger.error(f"Unexpected error during export: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unexpected error during export: {str(e)}")
 
@@ -549,7 +569,7 @@ async def export_keywords_api(
         except OSError as e:
             logger.debug(f"Failed to remove temporary export file {file_path}: {e}")
         return schemas.ExportResponse(message=status_msg, file_content_b64=file_b64)
-    except Exception as e:
+    except _PROMPTS_DB_OPERATION_EXCEPTIONS as e:
         logger.error(f"Unexpected error during keyword export: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unexpected error during keyword export: {str(e)}")
 
@@ -569,7 +589,7 @@ async def import_prompts_api(
     try:
         try:
             used_names = set(db.fetch_all_prompt_names(include_deleted=True))
-        except Exception as e:
+        except _PROMPTS_DB_OPERATION_EXCEPTIONS as e:
             logger.warning(f"Failed to fetch existing prompt names for import: {e}")
             used_names = set()
 
@@ -629,7 +649,7 @@ async def import_prompts_api(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PROMPTS_DB_OPERATION_EXCEPTIONS as e:
         logger.error(f"Unexpected error during import: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -723,7 +743,7 @@ async def bulk_update_prompt_keywords(
     def _normalize_for_compare(value: str) -> str:
         try:
             return db._normalize_keyword(value).casefold()
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             return str(value).strip().casefold()
 
     remove_set = {
@@ -802,7 +822,7 @@ async def legacy_create_prompt(
     except DatabaseError as e:
         logger.error(f"Database error creating prompt (legacy): {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
-    except Exception as e:
+    except _PROMPTS_DB_OPERATION_EXCEPTIONS as e:
         logger.error(f"Unexpected error creating prompt (legacy): {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unexpected error.")
 
@@ -870,7 +890,7 @@ async def create_prompt(
         logger.error(f"Database error creating prompt: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="Database error during prompt creation.")
-    except Exception as e:  # Catch-all for other unexpected errors
+    except _PROMPTS_DB_OPERATION_EXCEPTIONS as e:  # Catch-all for other unexpected errors
         logger.error(f"Unexpected error creating prompt: {e}", exc_info=True)
         # Avoid leaking the raw 'msg' variable if it was a NameError
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
@@ -1009,7 +1029,7 @@ async def update_prompt(
                             detail="Database error during prompt update.")
     except HTTPException:  # Re-raise
         raise
-    except Exception as e:
+    except _PROMPTS_DB_OPERATION_EXCEPTIONS as e:
         logger.error(f"Unexpected error updating prompt '{prompt_identifier}': {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="An unexpected error occurred during prompt update.")

@@ -20,6 +20,45 @@ from tldw_Server_API.app.core.Local_LLM import handler_utils, http_utils
 from tldw_Server_API.app.core.Local_LLM.LLM_Base_Handler import BaseLLMHandler
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import InferenceError, ModelDownloadError, ServerError
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import OllamaConfig
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
+
+_OLLAMA_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+)
+
+_OLLAMA_PROCESS_CONTROL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    RuntimeError,
+    ProcessLookupError,
+    asyncio.TimeoutError,
+)
+
+_OLLAMA_REQUEST_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    NetworkError,
+    RetryExhaustedError,
+    http_utils.LocalHTTPStatusError,
+)
+
+_OLLAMA_PSUTIL_EXCEPTIONS = _OLLAMA_NONCRITICAL_EXCEPTIONS
+if PSUTIL_AVAILABLE:
+    _OLLAMA_PSUTIL_EXCEPTIONS = _OLLAMA_NONCRITICAL_EXCEPTIONS + (psutil.Error,)
 
 
 def create_async_client(*args, **kwargs):
@@ -63,7 +102,7 @@ class OllamaHandler(BaseLLMHandler):
                     break
         except asyncio.CancelledError:
             return
-        except Exception:
+        except _OLLAMA_NONCRITICAL_EXCEPTIONS:
             # Best-effort drain; ignore errors
             return
 
@@ -110,7 +149,7 @@ class OllamaHandler(BaseLLMHandler):
         except ServerError as e:  # Catching generic server error from _run_subprocess
             self.logger.error(f"Error executing Ollama 'list': {e}")
             return []
-        except Exception as e:
+        except _OLLAMA_NONCRITICAL_EXCEPTIONS as e:
             self.logger.error(f"Unexpected error in get_ollama_models: {e}")
             return []
 
@@ -151,12 +190,12 @@ class OllamaHandler(BaseLLMHandler):
                 try:
                     process.terminate()
                     await asyncio.wait_for(process.wait(), timeout=5)
-                except Exception as e_term:
+                except _OLLAMA_PROCESS_CONTROL_EXCEPTIONS as e_term:
                     self.logger.error(f"Error terminating timed-out ollama pull process: {e_term}")
                     process.kill()  # Force kill if terminate fails
                     await process.wait()
             raise ModelDownloadError(f"Failed to pull model '{model_name}': Operation timed out.")
-        except Exception as e:
+        except _OLLAMA_NONCRITICAL_EXCEPTIONS as e:
             self.logger.error(f"Unexpected error in pull_ollama_model: {e}")
             raise ModelDownloadError(f"Failed to pull model '{model_name}': {e}")
 
@@ -208,7 +247,7 @@ class OllamaHandler(BaseLLMHandler):
                                         "port": port}
                     # Port appears free, break out of retry loop
                     break
-                except Exception as e:
+                except _OLLAMA_PSUTIL_EXCEPTIONS as e:
                     self.logger.warning(f"Could not check port status (attempt {attempt + 1}): {e}")
                     if attempt < max_port_check_retries - 1:
                         await asyncio.sleep(0.5 * (attempt + 1))  # Backoff
@@ -250,11 +289,11 @@ class OllamaHandler(BaseLLMHandler):
                     try:
                         process.terminate()
                         await asyncio.wait_for(process.wait(), timeout=5)
-                    except Exception:
+                    except _OLLAMA_PROCESS_CONTROL_EXCEPTIONS:
                         try:
                             process.kill()
                             await process.wait()
-                        except Exception:
+                        except _OLLAMA_PROCESS_CONTROL_EXCEPTIONS:
                             pass
                 raise ServerError("Ollama server did not become ready in time.")
 
@@ -271,7 +310,7 @@ class OllamaHandler(BaseLLMHandler):
             msg = "Ollama executable not found."
             self.logger.error(msg)
             raise ServerError(msg)
-        except Exception as e:
+        except _OLLAMA_NONCRITICAL_EXCEPTIONS as e:
             self.logger.error(f"Error starting Ollama server: {e}")
             raise ServerError(f"Error starting Ollama server: {e}")
 
@@ -295,7 +334,7 @@ class OllamaHandler(BaseLLMHandler):
             except ProcessLookupError:
                 self.logger.warning(f"No process found with PID {pid}")
                 return f"No process found with PID {pid}"
-            except Exception as e:
+            except _OLLAMA_NONCRITICAL_EXCEPTIONS as e:
                 self.logger.error(f"Error stopping Ollama server PID {pid}: {e}")
                 return f"Error stopping Ollama server PID {pid}: {e}"
         elif port:
@@ -317,23 +356,19 @@ class OllamaHandler(BaseLLMHandler):
                     return f"Attempted to stop Ollama server (PID {found_pid}) on port {port}"
                 else:
                     return f"No Ollama server found listening on port {port}"
-            except Exception as e:
+            except _OLLAMA_PSUTIL_EXCEPTIONS as e:
                 self.logger.error(f"Error stopping Ollama server on port {port}: {e}")
                 return f"Error stopping Ollama server on port {port}: {e}"
         else:
             # General stop command `ollama stop` - this might not exist or work as expected for `ollama serve`
             # `ollama ps` and then finding the server PID might be more reliable if `ollama stop` isn't for `serve`
             self.logger.info("Attempting to stop the main Ollama application/service (if running).")
-            try:
-                # The 'ollama stop' command usually refers to stopping a model being run, not 'ollama serve'
-                # For 'ollama serve', typically pkill or systemctl is used if managed.
-                # This is a best-effort and might not stop a detached `ollama serve`.
-                # stdout, stderr = await self._run_subprocess(['ollama', 'stop']) # This command does not exist
-                # self.logger.info(f"Ollama stop command output: {stdout}")
-                return "General 'ollama stop' for a server is not a standard command. Please provide PID or manage via system services."
-            except Exception as e:
-                self.logger.error(f"Error sending general stop signal to Ollama: {e}")
-                return f"Error sending general stop signal to Ollama: {e}"
+            # The 'ollama stop' command usually refers to stopping a model being run, not 'ollama serve'
+            # For 'ollama serve', typically pkill or systemctl is used if managed.
+            # This is a best-effort and might not stop a detached `ollama serve`.
+            # stdout, stderr = await self._run_subprocess(['ollama', 'stop']) # This command does not exist
+            # self.logger.info(f"Ollama stop command output: {stdout}")
+            return "General 'ollama stop' for a server is not a standard command. Please provide PID or manage via system services."
 
     def _terminate_process(self, pid: int):
         """Helper to terminate a process by PID. Requires psutil."""
@@ -353,7 +388,7 @@ class OllamaHandler(BaseLLMHandler):
                 self.logger.info(f"Process {pid} killed.")
         except psutil.NoSuchProcess:
             raise ProcessLookupError(f"No process found with PID {pid}")
-        except Exception as e:
+        except _OLLAMA_PSUTIL_EXCEPTIONS as e:
             raise ServerError(f"Failed to terminate process {pid}: {e}")
 
     async def inference(self, model_name: str, prompt: str, system_message: Optional[str] = None,
@@ -408,7 +443,7 @@ class OllamaHandler(BaseLLMHandler):
                 result = await request_json(client, "POST", api_url, json=payload)
                 self.logger.debug(f"Ollama inference successful for {model_name}.")
                 return result
-            except Exception as e:
+            except _OLLAMA_REQUEST_EXCEPTIONS as e:
                 status = http_utils.get_http_status_from_exception(e)
                 if status is not None:
                     text = http_utils.get_http_error_text(e)
@@ -439,7 +474,7 @@ class OllamaHandler(BaseLLMHandler):
                     return await request_json(client, "POST", api_url, json=payload)
                 except ServerError as se:
                     raise InferenceError(f"Could not start or connect to Ollama server: {se}")
-                except Exception as e_retry:
+                except _OLLAMA_REQUEST_EXCEPTIONS as e_retry:
                     raise InferenceError(f"Failed to perform inference after server start attempt: {e_retry}")
 
 #
