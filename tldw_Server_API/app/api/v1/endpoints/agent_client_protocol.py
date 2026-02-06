@@ -31,6 +31,26 @@ from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 
 router = APIRouter(prefix="/acp", tags=["acp"])
 
+_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
+    ACPResponseError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 # -----------------------------------------------------------------------------
 # WebSocket Authentication Helper
@@ -50,7 +70,7 @@ async def _authenticate_ws(
             token_data = jwtm.verify_token(token)
             if token_data and token_data.user_id:
                 return token_data.user_id
-        except Exception as e:
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("JWT auth failed for WebSocket: {}", e)
 
     # Try API key (single-user mode)
@@ -60,7 +80,7 @@ async def _authenticate_ws(
             expected_key = os.getenv("SINGLE_USER_API_KEY", "")
             if expected_key and api_key == expected_key:
                 return 1  # Single-user mode user ID
-        except Exception as e:
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("API key auth failed for WebSocket: {}", e)
 
     # Try Authorization header
@@ -123,7 +143,7 @@ async def acp_session_stream(
     if user_id is None:
         try:
             await websocket.close(code=4401)
-        except Exception:
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             pass
         return
 
@@ -173,7 +193,7 @@ async def acp_session_stream(
                     "message": f"Invalid JSON: {e}",
                     "session_id": session_id,
                 })
-            except Exception as e:
+            except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
                 logger.exception("Error handling WebSocket message for session {}", session_id)
                 await stream.send_json({
                     "type": "error",
@@ -182,14 +202,14 @@ async def acp_session_stream(
                     "session_id": session_id,
                 })
 
-    except Exception:
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         logger.exception("WebSocket error for ACP session {}", session_id)
     finally:
         # Unregister WebSocket
         try:
             client = await get_runner_client()
             await client.unregister_websocket(session_id, send_callback)
-        except Exception:
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             pass
         await stream.stop()
 
@@ -206,7 +226,7 @@ async def acp_session_ssh(
     if user_id is None:
         try:
             await websocket.close(code=4401)
-        except Exception:
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             pass
         return
 
@@ -223,17 +243,17 @@ async def acp_session_ssh(
             await websocket.close(code=4404)
             return
         ssh_host, ssh_port, ssh_user, ssh_key = ssh_info
-    except Exception:
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         try:
             await websocket.close(code=4404)
-        except Exception:
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             pass
         return
 
     await websocket.accept()
     try:
         import asyncssh  # type: ignore
-    except Exception:
+    except ImportError:
         await websocket.close(code=1011)
         return
 
@@ -267,7 +287,7 @@ async def acp_session_ssh(
                         text = msg["text"]
                         try:
                             payload = json.loads(text)
-                        except Exception:
+                        except json.JSONDecodeError:
                             payload = None
                         if isinstance(payload, dict) and payload.get("type") == "resize":
                             cols = int(payload.get("cols") or 0)
@@ -275,7 +295,7 @@ async def acp_session_ssh(
                             if cols > 0 and rows > 0:
                                 try:
                                     process.set_term_size(cols, rows)
-                                except Exception:
+                                except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                                     pass
                             continue
                         process.stdin.write(text)
@@ -289,10 +309,10 @@ async def acp_session_ssh(
                 _read_output(process.stderr),
                 _write_input(),
             )
-    except Exception:
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         try:
             await websocket.close(code=1011)
-        except Exception:
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             pass
 
 async def _handle_client_message(
@@ -441,7 +461,7 @@ async def _get_available_agents() -> tuple[list[ACPAgentInfo], str]:
     try:
         client = await get_runner_client()
         raw = await client.list_agents()
-    except Exception:
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         return _get_static_agents()
 
     agents_raw = raw.get("agents", []) if isinstance(raw, dict) else []
@@ -554,7 +574,7 @@ async def acp_session_new(
                 sandbox_meta = await client.get_session_metadata(session_id, user_id=user.id)
             except TypeError:
                 sandbox_meta = await client.get_session_metadata(session_id)
-    except Exception:
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         sandbox_meta = None
 
     resolved_agent_type = payload.agent_type
@@ -562,7 +582,7 @@ async def acp_session_new(
         try:
             _, default_agent = await _get_available_agents()
             resolved_agent_type = default_agent
-        except Exception:
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             resolved_agent_type = "custom"
 
     return ACPSessionNewResponse(

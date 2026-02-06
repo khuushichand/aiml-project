@@ -5205,7 +5205,7 @@ async def unified_rag_pipeline(
                                 await set_fn(cq, cache_payload, ttl=cache_ttl)
                             else:
                                 set_fn(cq, cache_payload, ttl=cache_ttl)
-            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.error(f"Cache storage error: {e}")
 
         # ========== OBSERVABILITY ==========

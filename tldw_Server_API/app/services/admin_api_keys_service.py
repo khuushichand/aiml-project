@@ -22,6 +22,16 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.services import admin_scope_service
 from tldw_Server_API.app.services.admin_service import update_api_key_metadata
 
+_ADMIN_API_KEYS_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 
 async def list_user_api_keys(
     principal: AuthPrincipal,
@@ -36,7 +46,7 @@ async def list_user_api_keys(
         return [APIKeyMetadata(**row) for row in rows]
     except HTTPException:
         raise
-    except Exception as e:
+    except _ADMIN_API_KEYS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Admin failed to list API keys for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to list API keys")
 
@@ -59,7 +69,7 @@ async def create_user_api_key(
         return APIKeyCreateResponse(**result)
     except HTTPException:
         raise
-    except Exception as e:
+    except _ADMIN_API_KEYS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Admin failed to create API key for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to create API key")
 
@@ -81,7 +91,7 @@ async def rotate_user_api_key(
         return APIKeyCreateResponse(**result)
     except HTTPException:
         raise
-    except Exception as e:
+    except _ADMIN_API_KEYS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Admin failed to rotate API key {key_id} for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to rotate API key")
 
@@ -100,7 +110,7 @@ async def revoke_user_api_key(
         return {"message": "API key revoked", "user_id": user_id, "key_id": key_id}
     except HTTPException:
         raise
-    except Exception as e:
+    except _ADMIN_API_KEYS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Admin failed to revoke API key {key_id} for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to revoke API key")
 
@@ -129,7 +139,7 @@ async def update_user_api_key(
         return APIKeyMetadata(**row)
     except HTTPException:
         raise
-    except Exception as e:
+    except _ADMIN_API_KEYS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Admin failed to update API key {key_id} for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to update API key")
 
@@ -170,7 +180,7 @@ async def create_virtual_key(
         return result
     except HTTPException:
         raise
-    except Exception as e:
+    except _ADMIN_API_KEYS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Admin failed to create virtual key for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to create virtual key")
 
@@ -291,7 +301,7 @@ async def list_virtual_keys(
         return items
     except HTTPException:
         raise
-    except Exception as e:
+    except _ADMIN_API_KEYS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Admin failed to list virtual keys for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to list virtual keys")
 
@@ -351,6 +361,6 @@ async def get_api_key_audit_log(
         return APIKeyAuditListResponse(key_id=key_id, items=items)
     except HTTPException:
         raise
-    except Exception as e:
+    except _ADMIN_API_KEYS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Admin failed to fetch audit log for key {key_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to load audit log")

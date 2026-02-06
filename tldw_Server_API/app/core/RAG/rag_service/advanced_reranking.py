@@ -1278,10 +1278,10 @@ class LLMReranker(BaseReranker):
                     # Use default provider from env/config inside analyze
                     out = await asyncio.wait_for(
                         asyncio.to_thread(
-                            lambda: sgl.analyze(
+                            lambda _passage=passage, _prompt=prompt: sgl.analyze(
                                 api_name='openai',
-                                input_data=passage,
-                                prompt=prompt,
+                                input_data=_passage,
+                                prompt=_prompt,
                                 context=None,
                                 user_embedding_config=None,
                             )

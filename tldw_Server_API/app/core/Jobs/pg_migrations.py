@@ -6,6 +6,8 @@ semantics. This module does not connect to Postgres directly; callers should
 apply this DDL using their own connection or via a future Postgres JobManager.
 """
 
+import os
+
 _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
     AttributeError,

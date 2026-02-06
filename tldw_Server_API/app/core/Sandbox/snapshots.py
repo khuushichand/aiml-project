@@ -9,6 +9,27 @@ from pathlib import Path
 
 from loguru import logger
 
+_SNAPSHOTS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EOFError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    shutil.Error,
+    tarfile.TarError,
+)
+
 
 class SnapshotManager:
     """Manages session snapshots for checkpoint/restore workflows.
@@ -34,7 +55,7 @@ class SnapshotManager:
         # Ensure storage directory exists
         try:
             os.makedirs(self.storage_path, exist_ok=True)
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to create snapshot storage path: {e}")
 
     def _snapshot_dir(self, session_id: str) -> Path:
@@ -76,7 +97,7 @@ class SnapshotManager:
 
         try:
             snapshot_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             raise OSError(f"Failed to create snapshot directory: {e}")
 
         # Create the tarball
@@ -86,18 +107,18 @@ class SnapshotManager:
                 for item in os.listdir(workspace_path):
                     item_path = os.path.join(workspace_path, item)
                     tar.add(item_path, arcname=item)
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             # Clean up on failure
             try:
                 snapshot_path.unlink(missing_ok=True)
-            except Exception:
+            except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS:
                 pass
             raise OSError(f"Failed to create snapshot archive: {e}")
 
         # Get snapshot size
         try:
             size_bytes = snapshot_path.stat().st_size
-        except Exception:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS:
             size_bytes = 0
 
         # Create metadata
@@ -115,7 +136,7 @@ class SnapshotManager:
             import json
             with open(metadata_path, "w") as f:
                 json.dump(metadata, f, indent=2)
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to write snapshot metadata: {e}")
 
         return {
@@ -161,11 +182,11 @@ class SnapshotManager:
                     else:
                         try:
                             os.remove(item_path)
-                        except Exception:
+                        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS:
                             pass
             else:
                 os.makedirs(workspace_path, exist_ok=True)
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             raise OSError(f"Failed to clear workspace: {e}")
 
         # Extract snapshot
@@ -183,7 +204,7 @@ class SnapshotManager:
                 safe_extract(tar, workspace_path)
         except ValueError:
             raise
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             raise OSError(f"Failed to extract snapshot: {e}")
 
         return True
@@ -227,7 +248,7 @@ class SnapshotManager:
                 shutil.rmtree(new_workspace, ignore_errors=True)
 
             shutil.copytree(source_workspace, new_workspace, dirs_exist_ok=True)
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             raise OSError(f"Failed to clone workspace: {e}")
 
         logger.info(f"Cloned session {source_session_id} to {new_session_id}")
@@ -262,10 +283,10 @@ class SnapshotManager:
                             # Update size in case it changed
                             try:
                                 metadata["size_bytes"] = archive_path.stat().st_size
-                            except Exception:
+                            except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS:
                                 pass
                             snapshots.append(metadata)
-            except Exception as e:
+            except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Failed to read snapshot metadata {meta_file}: {e}")
 
         # Sort by created_at, newest first
@@ -291,14 +312,14 @@ class SnapshotManager:
             if snapshot_path.exists():
                 snapshot_path.unlink()
                 deleted = True
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to delete snapshot archive {snapshot_id}: {e}")
 
         try:
             if metadata_path.exists():
                 metadata_path.unlink()
                 deleted = True
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to delete snapshot metadata {snapshot_id}: {e}")
 
         # Clean up empty session snapshot directory
@@ -306,7 +327,7 @@ class SnapshotManager:
             snapshot_dir = self._snapshot_dir(session_id)
             if snapshot_dir.exists() and not any(snapshot_dir.iterdir()):
                 snapshot_dir.rmdir()
-        except Exception:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS:
             pass
 
         return deleted
@@ -331,7 +352,7 @@ class SnapshotManager:
             count = len(list(snapshot_dir.glob("*.tar.gz")))
             # Remove the entire directory
             shutil.rmtree(snapshot_dir, ignore_errors=True)
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to cleanup session snapshots: {e}")
 
         return count
@@ -359,10 +380,10 @@ class SnapshotManager:
                 # Update size
                 try:
                     metadata["size_bytes"] = snapshot_path.stat().st_size
-                except Exception:
+                except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS:
                     pass
                 return metadata
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Failed to read snapshot metadata: {e}")
             return None
 
@@ -384,7 +405,7 @@ class SnapshotManager:
         for archive in snapshot_dir.glob("*.tar.gz"):
             try:
                 total += archive.stat().st_size
-            except Exception:
+            except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS:
                 pass
 
         return total

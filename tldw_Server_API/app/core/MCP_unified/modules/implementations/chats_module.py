@@ -6,12 +6,22 @@ FTS-only search backed by ChaChaNotes DB.
 """
 
 import asyncio
+from sqlite3 import Error as SQLiteError
 from typing import Any
 
 from loguru import logger
 
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from ..base import BaseModule, create_tool_definition
+
+_CHATS_HEALTHCHECK_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TypeError,
+    ValueError,
+)
+_CHATS_CLOSE_EXCEPTIONS = (OSError, RuntimeError, SQLiteError, TypeError, ValueError)
 
 
 class ChatsModule(BaseModule):
@@ -26,7 +36,7 @@ class ChatsModule(BaseModule):
         try:
             _ = CharactersRAGDB  # noqa: F401
             checks["driver_available"] = True
-        except Exception:
+        except NameError:
             checks["driver_available"] = False
         try:
             import os
@@ -34,12 +44,12 @@ class ChatsModule(BaseModule):
             try:
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root
                 base = Path(get_project_root())
-            except Exception:
+            except (ImportError, OSError, RuntimeError, TypeError, ValueError):
                 base = Path(__file__).resolve().parents[5]
             stat = os.statvfs(str(base))
             free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
             checks["disk_space"] = free_gb > 1
-        except Exception:
+        except (AttributeError, OSError, TypeError, ValueError):
             checks["disk_space"] = False
         # Optional ephemeral DB write test (heavy) for deeper validation
         try:
@@ -51,7 +61,7 @@ class ChatsModule(BaseModule):
                     # Trivial call to ensure DB usable
                     _ = db.search_messages_by_content("ping", conversation_id=None, limit=1)
                 checks["ephemeral_db_ok"] = True
-        except Exception:
+        except _CHATS_HEALTHCHECK_EXCEPTIONS:
             checks["ephemeral_db_ok"] = False
 
         return checks
@@ -102,7 +112,7 @@ class ChatsModule(BaseModule):
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
-        except Exception as ve:
+        except (TypeError, ValueError) as ve:
             raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
         if tool_name == "chats.search":
             return await self._search(args, context)
@@ -303,7 +313,7 @@ class ChatsModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _CHATS_CLOSE_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after chats search: {}", exc)
 
     def _get_sync(
@@ -351,7 +361,7 @@ class ChatsModule(BaseModule):
                 try:
                     if isinstance(loc, dict) and loc.get("message_id"):
                         anchor_id = str(loc.get("message_id"))
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     anchor_id = None
                 anchor_index = 0
                 if anchor_id:
@@ -403,5 +413,5 @@ class ChatsModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _CHATS_CLOSE_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after chats get: {}", exc)

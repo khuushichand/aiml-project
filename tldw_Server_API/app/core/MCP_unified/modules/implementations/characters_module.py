@@ -5,12 +5,28 @@ Search/get character cards via ChaChaNotes DB FTS.
 """
 
 import asyncio
+from sqlite3 import Error as SQLiteError
 from typing import Any
 
 from loguru import logger
 
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from ..base import BaseModule, create_tool_definition
+
+_CHARACTERS_HEALTHCHECK_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TypeError,
+    ValueError,
+)
+_CHARACTERS_CLOSE_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TypeError,
+    ValueError,
+)
 
 
 class CharactersModule(BaseModule):
@@ -25,7 +41,7 @@ class CharactersModule(BaseModule):
         try:
             _ = CharactersRAGDB  # noqa: F401
             checks["driver_available"] = True
-        except Exception:
+        except NameError:
             checks["driver_available"] = False
         try:
             import os
@@ -33,7 +49,7 @@ class CharactersModule(BaseModule):
             stat = os.statvfs(base)
             free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
             checks["disk_space"] = free_gb > 1
-        except Exception:
+        except (AttributeError, OSError, TypeError, ValueError):
             checks["disk_space"] = False
         # Optional ephemeral DB write test (heavy) for deeper validation
         try:
@@ -45,7 +61,7 @@ class CharactersModule(BaseModule):
                     # Trivial read
                     _ = db.get_character_card_by_id(-1)
                 checks["ephemeral_db_ok"] = True
-        except Exception:
+        except _CHARACTERS_HEALTHCHECK_EXCEPTIONS:
             checks["ephemeral_db_ok"] = False
 
         return checks
@@ -83,7 +99,7 @@ class CharactersModule(BaseModule):
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
-        except Exception as ve:
+        except (TypeError, ValueError) as ve:
             raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
         if tool_name == "characters.search":
             return await self._search(args, context)
@@ -150,7 +166,7 @@ class CharactersModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _CHARACTERS_CLOSE_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after characters search: {}", exc)
 
     def _get_sync(self, context: Any | None, character_id: int) -> dict[str, Any]:
@@ -183,7 +199,7 @@ class CharactersModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _CHARACTERS_CLOSE_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after characters get: {}", exc)
 
     def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):

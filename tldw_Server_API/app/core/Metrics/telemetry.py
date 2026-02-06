@@ -8,6 +8,8 @@ This module provides centralized telemetry configuration supporting:
 - Multiple export backends (OTLP, Prometheus, Jaeger)
 """
 
+from __future__ import annotations
+
 import inspect
 import os
 import socket
@@ -18,6 +20,7 @@ from loguru import logger
 
 # Narrowed exception tuple for optional telemetry components and runtime safety.
 _TELEMETRY_NONCRITICAL_EXCEPTIONS = (
+    ImportError,
     OSError,
     ValueError,
     TypeError,
@@ -99,11 +102,18 @@ try:
     from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 
     OTEL_AVAILABLE = True
-except ImportError as e:
+except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:
     # Demote to debug/info to reduce noisy logs during tests; telemetry is optional
     logger.debug(f"OpenTelemetry not fully available: {e}")
     logger.debug("Install with: pip install opentelemetry-distro opentelemetry-exporter-otlp opentelemetry-instrumentation-fastapi")
     OTEL_AVAILABLE = False
+    metrics = None  # type: ignore[assignment]
+    trace = None  # type: ignore[assignment]
+    Meter = Any  # type: ignore[assignment,misc]
+    MeterProvider = Any  # type: ignore[assignment,misc]
+    TracerProvider = Any  # type: ignore[assignment,misc]
+    Tracer = Any  # type: ignore[assignment,misc]
+    Resource = Any  # type: ignore[assignment,misc]
     Status = None  # type: ignore
     StatusCode = None  # type: ignore
 
@@ -548,7 +558,7 @@ class TelemetryManager:
         if not self.tracer:
             return DummyTracer()
 
-        if name:
+        if name and OTEL_AVAILABLE and trace is not None:
             return trace.get_tracer(name, self.config.service_version)
         return self.tracer
 
@@ -565,7 +575,7 @@ class TelemetryManager:
         if not self.meter:
             return DummyMeter()
 
-        if name:
+        if name and OTEL_AVAILABLE and metrics is not None:
             return metrics.get_meter(name, self.config.service_version)
         return self.meter
 

@@ -14,6 +14,7 @@ Reference upstream: https://github.com/neuphonic/neutts-air
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
 from collections.abc import AsyncGenerator

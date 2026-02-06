@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import os
 import threading
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
+from sqlite3 import Error as SQLiteError
 from typing import Any
 from uuid import uuid4
 
@@ -17,7 +18,7 @@ try:
         AuditSeverity,
         UnifiedAuditService,
     )
-except Exception as e:  # pragma: no cover - audit optional
+except ImportError as e:  # pragma: no cover - audit optional
     UnifiedAuditService = None  # type: ignore
     AuditEventCategory = None  # type: ignore
     AuditEventType = None  # type: ignore
@@ -27,6 +28,15 @@ except Exception as e:  # pragma: no cover - audit optional
 
 
 _TRUTHY = {"1", "true", "yes", "y", "on"}
+_AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS = (
+    ConnectionError,
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 def _audit_enabled() -> bool:
     """Return whether jobs→audit bridge is enabled.
@@ -39,7 +49,7 @@ def _audit_enabled() -> bool:
             UnifiedAuditService is not None
             and str(os.getenv("JOBS_AUDIT_ENABLED", "")).strip().lower() in _TRUTHY
         )
-    except Exception:
+    except (TypeError, ValueError):
         return False
 
 
@@ -50,7 +60,7 @@ def _parse_int_env(name: str, default: int, *, min_value: int | None = None, max
     else:
         try:
             value = int(str(raw).strip())
-        except Exception:
+        except (TypeError, ValueError):
             logger.warning(f"Invalid {name}={raw!r}; using default {default}")
             value = default
     if min_value is not None:
@@ -67,7 +77,7 @@ def _parse_float_env(name: str, default: float, *, min_value: float | None = Non
     else:
         try:
             value = float(str(raw).strip())
-        except Exception:
+        except (TypeError, ValueError):
             logger.warning(f"Invalid {name}={raw!r}; using default {default}")
             value = default
     if min_value is not None:
@@ -106,7 +116,7 @@ def submit_job_audit_event(event: str, *, job: dict[str, Any] | None, attrs: dic
         return
     try:
         _EVENT_QUEUE.put_nowait((event, job, attrs))
-    except Exception as exc:  # pragma: no cover - queue failure unlikely
+    except Full as exc:  # pragma: no cover - queue failure unlikely
         logger.debug(f"Jobs audit queue enqueue failed: {exc}")
 
 
@@ -120,7 +130,7 @@ def shutdown_jobs_audit_bridge() -> None:
         if _WORKER_THREAD and _WORKER_THREAD.is_alive():
             try:
                 _EVENT_QUEUE.put_nowait(_SHUTDOWN_SENTINEL)
-            except Exception:
+            except Full:
                 pass
             _WORKER_THREAD.join(timeout=5)
         _WORKER_THREAD = None
@@ -159,7 +169,7 @@ def _ensure_worker_started() -> bool:
                 logger.warning("Jobs audit worker failed to initialize within timeout")
                 return False
             return True
-        except Exception as exc:
+        except _AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Failed to start Jobs audit worker: {exc}")
             _WORKER_THREAD = None
             return False
@@ -184,12 +194,12 @@ def _audit_worker_loop() -> None:
     )
     try:
         loop.run_until_complete(service.initialize())
-    except Exception as exc:  # pragma: no cover - init failure
+    except _AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - init failure
         logger.warning(f"Jobs audit worker failed to initialize service: {exc}")
         return
     try:
         _WORKER_READY.set()
-    except Exception:
+    except _AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         while True:
@@ -201,16 +211,16 @@ def _audit_worker_loop() -> None:
                 break
             try:
                 loop.run_until_complete(_log_audit_event(service, event, job or {}, attrs or {}))
-            except Exception as exc:  # pragma: no cover - best effort
+            except _AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - best effort
                 logger.warning(f"Jobs audit worker failed to log event {event}: {exc}")
     finally:
         try:
             loop.run_until_complete(service.flush())
-        except Exception:
+        except _AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             loop.run_until_complete(service.stop())
-        except Exception:
+        except _AUDIT_BRIDGE_NONCRITICAL_EXCEPTIONS:
             pass
         loop.close()
 

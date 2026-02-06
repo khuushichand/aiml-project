@@ -10,11 +10,39 @@ from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import quote as urlquote
 
+from tldw_Server_API.app.core.exceptions import (
+    EgressPolicyError,
+    JSONDecodeError,
+    NetworkError,
+    RetryExhaustedError,
+)
 from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 BIO_RXIV_API_BASE = "https://api.biorxiv.org"
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+_BIORXIV_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EgressPolicyError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    JSONDecodeError,
+    KeyError,
+    LookupError,
+    NetworkError,
+    OSError,
+    PermissionError,
+    RetryExhaustedError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
 
 
 def _validate_date(d: str | None) -> str | None:
@@ -55,7 +83,7 @@ def _raw_get(path: str, fmt: str | None = None, params: dict[str, Any] | None = 
             return None, None, f"BioRxiv HTTP error: {r.status_code}"
         media_type = _media_type_for_format(fmt or "json")
         return r.content, media_type, None
-    except Exception as e:
+    except _BIORXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, None, f"BioRxiv error: {str(e)}"
 
 
@@ -73,7 +101,7 @@ def _normalize_item(raw: dict[str, Any]) -> dict[str, Any]:
         # BioRxiv uses content/{doi}v{version}
         try:
             v_suffix = f"v{int(version)}" if str(version).isdigit() else ""
-        except Exception:
+        except (TypeError, ValueError):
             v_suffix = ""
         content_url = f"https://www.{base_host}/content/{doi}{v_suffix}" if v_suffix else f"https://www.{base_host}/content/{doi}"
         pdf_url = f"{content_url}.full.pdf" if content_url else None
@@ -176,13 +204,13 @@ def search_biorxiv(
                 if isinstance(msg0, dict) and "count" in msg0:
                     try:
                         total = int(msg0["count"])  # may be string
-                    except Exception:
+                    except (TypeError, ValueError):
                         total = 0
                 # Prefer overall total if available
                 if isinstance(msg0, dict) and "total" in msg0:
                     try:
                         total = int(msg0["total"])  # total across date range
-                    except Exception:
+                    except (TypeError, ValueError):
                         pass
 
             collection = data.get("collection") or []
@@ -204,11 +232,11 @@ def search_biorxiv(
             # Apply client-side filters (ensure results reflect requested filters even if server ignores params)
             if query and query.strip():
                 ql = query.strip().lower()
-                def _match(item: dict[str, Any]) -> bool:
+                def _match(item: dict[str, Any], _ql=ql) -> bool:
                     return (
-                        (item.get("title") or "").lower().find(ql) >= 0
-                        or (item.get("abstract") or "").lower().find(ql) >= 0
-                        or (item.get("authors") or "").lower().find(ql) >= 0
+                        (item.get("title") or "").lower().find(_ql) >= 0
+                        or (item.get("abstract") or "").lower().find(_ql) >= 0
+                        or (item.get("authors") or "").lower().find(_ql) >= 0
                     )
                 batch_items = [it for it in batch_items if _match(it)]
             if category and category.strip():
@@ -225,7 +253,7 @@ def search_biorxiv(
         # Now slice according to within-batch offset and limit
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, (len(collected) if query or category else total), None
-    except Exception as e:
+    except _BIORXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, 0, f"BioRxiv error: {str(e)}"
 
 
@@ -252,7 +280,7 @@ def get_biorxiv_by_doi(
         # Take the first item
         item = _normalize_item(coll[0])
         return item, None
-    except Exception as e:
+    except _BIORXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, f"BioRxiv error: {str(e)}"
 
 
@@ -303,7 +331,7 @@ def search_biorxiv_pubs(
             if isinstance(msgs, list) and msgs:
                 try:
                     cnt = int(msgs[0].get("count") or 0)
-                except Exception:
+                except (TypeError, ValueError):
                     cnt = 0
             coll = [_normalize_published_item(it) for it in (data.get("collection") or [])]
             time.sleep(0.2)
@@ -329,7 +357,7 @@ def search_biorxiv_pubs(
 
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, (len(collected) if q else total_count), None
-    except Exception as e:
+    except _BIORXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, 0, f"BioRxiv error: {str(e)}"
 
 
@@ -351,7 +379,7 @@ def get_biorxiv_published_by_doi(
         if not coll:
             return None, None
         return _normalize_published_item(coll[0]), None
-    except Exception as e:
+    except _BIORXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, f"BioRxiv error: {str(e)}"
 
 
@@ -398,7 +426,7 @@ def search_biorxiv_publisher(
             if isinstance(msgs, list) and msgs:
                 try:
                     cnt = int(msgs[0].get("count") or 0)
-                except Exception:
+                except (TypeError, ValueError):
                     cnt = 0
             coll = [_normalize_published_item(it) for it in (data.get("collection") or [])]
             time.sleep(0.2)
@@ -421,7 +449,7 @@ def search_biorxiv_publisher(
 
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, total_count, None
-    except Exception as e:
+    except _BIORXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, 0, f"BioRxiv error: {str(e)}"
 
 
@@ -461,7 +489,7 @@ def search_biorxiv_pub(
             if isinstance(msgs, list) and msgs:
                 try:
                     cnt = int(msgs[0].get("count") or 0)
-                except Exception:
+                except (TypeError, ValueError):
                     cnt = 0
             coll = [_normalize_published_item(it) for it in (data.get("collection") or [])]
             time.sleep(0.2)
@@ -484,7 +512,7 @@ def search_biorxiv_pub(
 
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, total_count, None
-    except Exception as e:
+    except _BIORXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, 0, f"BioRxiv error: {str(e)}"
 
 
@@ -543,7 +571,7 @@ def search_biorxiv_funder(
             if isinstance(msgs, list) and msgs:
                 try:
                     cnt = int(msgs[0].get("count") or 0)
-                except Exception:
+                except (TypeError, ValueError):
                     cnt = 0
             coll = [_normalize_funder_item(it) for it in (data.get("collection") or [])]
             time.sleep(0.2)
@@ -566,7 +594,7 @@ def search_biorxiv_funder(
 
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, total_count, None
-    except Exception as e:
+    except _BIORXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, 0, f"BioRxiv error: {str(e)}"
 
 
@@ -585,7 +613,7 @@ def get_biorxiv_summary(interval: str = "m") -> tuple[list[dict[str, Any]] | Non
         else:
             items = data if isinstance(data, list) else []
         return items, None
-    except Exception as e:
+    except _BIORXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, f"BioRxiv error: {str(e)}"
 
 
@@ -602,7 +630,7 @@ def get_biorxiv_usage(interval: str = "m") -> tuple[list[dict[str, Any]] | None,
         else:
             items = data if isinstance(data, list) else []
         return items, None
-    except Exception as e:
+    except _BIORXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, f"BioRxiv error: {str(e)}"
 
 

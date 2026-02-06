@@ -22,6 +22,26 @@ from typing import Any, Optional
 
 from loguru import logger
 
+_UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+)
+
 # Import database components
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_evaluations_database as _create_evals_db,
@@ -159,7 +179,7 @@ class UnifiedEvaluationService:
             try:
                 from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager
                 self.webhook_manager = WebhookManager(db_path=effective_db_path)
-            except Exception:
+            except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                 self.webhook_manager = None
 
         logger.info("Unified Evaluation Service initialized")
@@ -184,7 +204,7 @@ class UnifiedEvaluationService:
                 result = runner_shutdown()
                 if asyncio.iscoroutine(result):
                     await result
-            except Exception as exc:
+            except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Evaluation runner shutdown encountered an error: {exc}")
         else:
             # Fallback: cancel any tracked tasks directly
@@ -297,7 +317,7 @@ class UnifiedEvaluationService:
 
             return evaluation
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create evaluation: {e}")
             raise
 
@@ -327,7 +347,7 @@ class UnifiedEvaluationService:
                 eval_type=eval_type,
                 created_by=created_by
             )
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to list evaluations: {e}")
             raise
 
@@ -335,7 +355,7 @@ class UnifiedEvaluationService:
         """Get evaluation by ID"""
         try:
             return self.db.get_evaluation(eval_id, created_by=created_by)
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get evaluation {eval_id}: {e}")
             raise
 
@@ -365,7 +385,7 @@ class UnifiedEvaluationService:
             updated = self.db.get_evaluation(eval_id, created_by=created_by)
             return updated
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to update evaluation {eval_id}: {e}")
             raise
 
@@ -384,7 +404,7 @@ class UnifiedEvaluationService:
 
             return success
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to delete evaluation {eval_id}: {e}")
             raise
 
@@ -470,7 +490,7 @@ class UnifiedEvaluationService:
             run = self.db.get_run(run_id)
             return run
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create run: {e}")
             raise
 
@@ -525,7 +545,7 @@ class UnifiedEvaluationService:
                 )
             raise
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Evaluation run {run_id} failed: {e}")
 
             # Update run status
@@ -548,7 +568,7 @@ class UnifiedEvaluationService:
         """Get run by ID"""
         try:
             return self.db.get_run(run_id, created_by=created_by)
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get run {run_id}: {e}")
             raise
 
@@ -571,7 +591,7 @@ class UnifiedEvaluationService:
                 created_by=created_by,
             )
             return runs, has_more
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to list runs: {e}")
             raise
 
@@ -593,7 +613,7 @@ class UnifiedEvaluationService:
 
             return True
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to cancel run {run_id}: {e}")
             raise
 
@@ -678,7 +698,7 @@ class UnifiedEvaluationService:
                         try:
                             from tldw_Server_API.app.core.config import settings as _app_settings
                             effective_user_id = f"user_{_app_settings.get('SINGLE_USER_FIXED_ID', '1')}"
-                        except Exception:
+                        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                             effective_user_id = "user_1"
                     if self.webhook_manager and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
                         await self.webhook_manager.send_webhook(
@@ -702,7 +722,7 @@ class UnifiedEvaluationService:
                                 "processing_time": evaluation_time
                             }
                         ))
-                except Exception:
+                except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                     # Never fail the evaluation due to webhook issues
                     pass
 
@@ -712,7 +732,7 @@ class UnifiedEvaluationService:
                 "evaluation_time": evaluation_time
             }
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"G-Eval evaluation failed: {e}")
             raise
 
@@ -785,7 +805,7 @@ class UnifiedEvaluationService:
                         try:
                             from tldw_Server_API.app.core.config import settings as _app_settings
                             effective_user_id = f"user_{_app_settings.get('SINGLE_USER_FIXED_ID', '1')}"
-                        except Exception:
+                        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                             effective_user_id = "user_1"
                     if self.webhook_manager and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
                         await self.webhook_manager.send_webhook(
@@ -809,7 +829,7 @@ class UnifiedEvaluationService:
                                 "processing_time": evaluation_time
                             }
                         ))
-                except Exception:
+                except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                     pass
 
             return {
@@ -818,7 +838,7 @@ class UnifiedEvaluationService:
                 "evaluation_time": evaluation_time
             }
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"RAG evaluation failed: {e}")
             raise
 
@@ -888,7 +908,7 @@ class UnifiedEvaluationService:
                         try:
                             from tldw_Server_API.app.core.config import settings as _app_settings
                             effective_user_id = f"user_{_app_settings.get('SINGLE_USER_FIXED_ID', '1')}"
-                        except Exception:
+                        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                             effective_user_id = "user_1"
                     if self.webhook_manager and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
                         await self.webhook_manager.send_webhook(
@@ -912,7 +932,7 @@ class UnifiedEvaluationService:
                                 "processing_time": evaluation_time
                             }
                         ))
-                except Exception:
+                except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                     pass
 
             return {
@@ -921,7 +941,7 @@ class UnifiedEvaluationService:
                 "evaluation_time": evaluation_time
             }
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Response quality evaluation failed: {e}")
             raise
 
@@ -968,7 +988,7 @@ class UnifiedEvaluationService:
                 "results": results,
                 "evaluation_time": evaluation_time,
             }
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"OCR evaluation failed: {e}")
             raise
 
@@ -1040,7 +1060,7 @@ class UnifiedEvaluationService:
                 if isinstance(result, tuple) and result:
                     return str(result[0])
                 return str(result)
-            except Exception as e:
+            except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"LLM call failed in QA3: {e}")
                 return ""
 
@@ -1174,7 +1194,7 @@ class UnifiedEvaluationService:
                 "evaluation_time": evaluation_time
             }
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Proposition evaluation failed: {e}")
             raise
 
@@ -1202,7 +1222,7 @@ class UnifiedEvaluationService:
 
             return dataset_id
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create dataset: {e}")
             raise
 
@@ -1216,7 +1236,7 @@ class UnifiedEvaluationService:
         """List datasets with pagination"""
         try:
             return self.db.list_datasets(limit=limit, after=after, offset=offset, created_by=created_by)
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to list datasets: {e}")
             raise
 
@@ -1224,7 +1244,7 @@ class UnifiedEvaluationService:
         """Get dataset by ID"""
         try:
             return self.db.get_dataset(dataset_id, created_by=created_by)
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get dataset {dataset_id}: {e}")
             raise
 
@@ -1243,7 +1263,7 @@ class UnifiedEvaluationService:
 
             return success
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to delete dataset {dataset_id}: {e}")
             raise
 
@@ -1282,7 +1302,7 @@ class UnifiedEvaluationService:
 
             return evaluations
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get evaluation history: {e}")
             raise
 
@@ -1313,7 +1333,7 @@ class UnifiedEvaluationService:
                 end_date=end_date,
             )
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to count evaluations: {e}")
             raise
 
@@ -1346,7 +1366,7 @@ class UnifiedEvaluationService:
             try:
                 ts = value.replace("Z", "+00:00")
                 return int(datetime.fromisoformat(ts).timestamp())
-            except Exception:
+            except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                 return None
         return None
 
@@ -1379,7 +1399,7 @@ class UnifiedEvaluationService:
                     )
                     if success:
                         logger.info(f"Stored evaluation {eval_id} in unified table")
-                except Exception:
+                except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                     pass
 
             # Fallback to standard approach (ensure evals are runnable via CRUD)
@@ -1423,7 +1443,7 @@ class UnifiedEvaluationService:
 
             return eval_id
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to store evaluation result: {e}")
             return f"temp_{int(time.time())}"
 
@@ -1433,7 +1453,7 @@ class UnifiedEvaluationService:
             if advanced_metrics.enabled:
                 return advanced_metrics.get_summary()
             return {"metrics_enabled": False}
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get metrics summary: {e}")
             # Do not expose internal error details to external clients
             return {"error": "Failed to collect metrics"}
@@ -1449,7 +1469,7 @@ class UnifiedEvaluationService:
                     cur.execute("SELECT 1")
                     _ = cur.fetchone()
                     db_healthy = True
-            except Exception as db_err:
+            except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as db_err:
                 logger.error(f"DB health probe failed: {db_err}")
 
             # Check circuit breaker
@@ -1464,7 +1484,7 @@ class UnifiedEvaluationService:
                 "version": "1.0.0"
             }
 
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Health check failed: {e}")
             return {
                 "status": "unhealthy",
@@ -1479,7 +1499,7 @@ _service_instances_lock = None
 # LRU cache for per-user services to bound memory in long-lived servers
 try:
     from collections import OrderedDict
-except Exception:  # pragma: no cover - stdlib guard
+except ImportError:  # pragma: no cover - stdlib guard
     OrderedDict = dict  # type: ignore
 
 _MAX_SERVICE_INSTANCES = 128
@@ -1522,11 +1542,11 @@ def get_unified_evaluation_service_for_user(user_id: int) -> UnifiedEvaluationSe
         # Normalize user id for cache key
         try:
             uid_key = int(user_id)  # type: ignore[arg-type]
-        except Exception:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
             try:
                 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
                 uid_key = int(_DP.get_single_user_id())
-            except Exception:
+            except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                 uid_key = 1
         # Return existing and mark as recently used
         if uid_key in _service_instances_by_user:
@@ -1538,7 +1558,7 @@ def get_unified_evaluation_service_for_user(user_id: int) -> UnifiedEvaluationSe
                 if override_path and getattr(getattr(svc, "db", None), "db_path", None) != override_path:
                     # Replace with a new instance bound to the override path
                     svc = UnifiedEvaluationService(db_path=override_path)
-            except Exception:
+            except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                 pass
             _service_instances_by_user[uid_key] = svc
             return svc
@@ -1557,8 +1577,8 @@ def get_unified_evaluation_service_for_user(user_id: int) -> UnifiedEvaluationSe
                     import asyncio as _aio
                     if hasattr(old_svc, "shutdown"):
                         _aio.create_task(old_svc.shutdown())
-                except Exception:
+                except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                     pass
-            except Exception:
+            except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                 pass
         return svc

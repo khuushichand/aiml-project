@@ -174,7 +174,7 @@ async def get_llamacpp_metrics_endpoint(llm_manager: LLMInferenceManager = Depen
 
 
 @router.get("/llamafile/metrics", summary="Get Llamafile Metrics")
-async def get_llamafile_metrics_endpoint():
+async def get_llamafile_metrics_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
         if not getattr(llm_manager, "llamafile", None):
             raise HTTPException(status_code=400, detail="Llamafile backend is not enabled or configured.")

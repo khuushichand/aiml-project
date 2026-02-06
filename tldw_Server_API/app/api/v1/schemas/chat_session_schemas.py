@@ -4,7 +4,7 @@ Pydantic schemas for character chat sessions and messages.
 """
 
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -89,6 +89,10 @@ class ChatSessionResponse(BaseModel):
     last_modified: datetime = Field(..., description="Last modification timestamp")
     message_count: Optional[int] = Field(0, description="Number of messages in the chat")
     version: int = Field(1, description="Version number for optimistic locking")
+    settings: Optional[dict[str, Any]] = Field(
+        None,
+        description="Optional per-chat settings payload when explicitly requested.",
+    )
 
     model_config = {"from_attributes": True}
 
@@ -150,13 +154,29 @@ class MessageCreate(BaseModel):
 
 class MessageUpdate(BaseModel):
     """Schema for updating a message."""
-    content: str = Field(..., description="New message content", min_length=1)
+    content: Optional[str] = Field(
+        None,
+        description="New message content",
+        min_length=1,
+    )
+    pinned: Optional[bool] = Field(
+        None,
+        description="Optional pin state for this message.",
+    )
 
     model_config = {"json_schema_extra": {
         "example": {
             "content": "Updated message content"
         }
     }}
+
+    @model_validator(mode="after")
+    def _validate_content_or_pin_update(self) -> "MessageUpdate":
+        content_set = bool(self.content and str(self.content).strip())
+        pin_set = self.pinned is not None
+        if not content_set and not pin_set:
+            raise ValueError("Provide either non-empty content or pinned.")
+        return self
 
 
 class MessageResponse(BaseModel):
@@ -243,6 +263,23 @@ class CharacterChatCompletionPrepRequest(BaseModel):
         description="Optional user message to append to the end",
         max_length=1_000_000,
     )
+    directed_character_id: Optional[int] = Field(
+        None,
+        gt=0,
+        description="Optional participant character ID to direct the next response to.",
+    )
+    continue_as_user: bool = Field(
+        False,
+        description="Single response: continue in the user's voice.",
+    )
+    impersonate_user: bool = Field(
+        False,
+        description="Single response: write the reply as if authored by the user.",
+    )
+    force_narrate: bool = Field(
+        False,
+        description="Single response: force narration style for the assistant reply.",
+    )
 
 
 class CharacterChatCompletionPrepResponse(BaseModel):
@@ -269,11 +306,32 @@ class CharacterChatCompletionV2Request(BaseModel):
         description="Optional user message to append and (optionally) persist",
         max_length=1_000_000,
     )
+    directed_character_id: Optional[int] = Field(
+        None,
+        gt=0,
+        description="Optional participant character ID to direct this response to.",
+    )
     save_to_db: Optional[bool] = Field(None, description="Persist appended user and assistant messages to this chat")
+    # Message steering (single-response controls)
+    continue_as_user: bool = Field(
+        False,
+        description="Single response: continue in the user's voice.",
+    )
+    impersonate_user: bool = Field(
+        False,
+        description="Single response: write the reply as if authored by the user.",
+    )
+    force_narrate: bool = Field(
+        False,
+        description="Single response: force narration style for the assistant reply.",
+    )
     # LLM controls
     provider: Optional[str] = Field(None, description="LLM provider (e.g., openai, anthropic, local-llm). Defaults to local-llm if omitted.")
     model: Optional[str] = Field(None, description="Model identifier. Defaults to a local test model if omitted.")
-    temperature: Optional[float] = Field(None, description="Sampling temperature")
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Sampling temperature")
+    top_p: Optional[float] = Field(None, ge=0.0, le=1.0, description="Nucleus sampling probability")
+    repetition_penalty: Optional[float] = Field(None, ge=0.0, le=3.0, description="Repetition penalty")
+    stop: Optional[Union[str, list[str]]] = Field(None, description="Stop sequence(s)")
     max_tokens: Optional[int] = Field(None, description="Max tokens in the completion")
     tools: Optional[list[dict[str, Any]]] = Field(None, description="Tool definitions")
     tool_choice: Optional[dict[str, Any]] = Field(None, description="Tool choice specification")
@@ -289,6 +347,8 @@ class CharacterChatCompletionV2Response(BaseModel):
     user_message_id: Optional[str] = None
     assistant_message_id: Optional[str] = None
     assistant_content: str
+    speaker_character_id: Optional[int] = None
+    speaker_character_name: Optional[str] = None
 
 
 # New: Persist streamed assistant content after SSE

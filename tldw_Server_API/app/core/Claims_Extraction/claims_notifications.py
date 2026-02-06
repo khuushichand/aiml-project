@@ -20,6 +20,37 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_datab
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.exceptions import EgressPolicyError, RetryExhaustedError
 
+_CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+_CLAIMS_NOTIFICATION_PARSE_EXCEPTIONS = (TypeError, ValueError, json.JSONDecodeError)
+
+try:
+    import httpx as _claims_httpx
+except ImportError:
+    _CLAIMS_HTTPX_EXCEPTIONS: tuple[type[BaseException], ...] = ()
+else:
+    _CLAIMS_HTTPX_EXCEPTIONS = (_claims_httpx.HTTPError,)
+
+_CLAIMS_WEBHOOK_EXCEPTIONS = (
+    ConnectionError,
+    EgressPolicyError,
+    RetryExhaustedError,
+    ssl.SSLError,
+    socket.gaierror,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+) + _CLAIMS_HTTPX_EXCEPTIONS
+
 
 def record_review_assignment_notifications(
     *,
@@ -62,7 +93,7 @@ def record_review_assignment_notifications(
             notif_id = created.get("id")
             if notif_id is not None:
                 inserted_ids.append(int(notif_id))
-        except Exception as exc:
+        except _CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to insert review assignment notification: {exc}")
     return inserted_ids
 
@@ -94,12 +125,12 @@ def record_watchlist_cluster_notifications(
         if latest:
             try:
                 payload = json.loads(latest.get("payload_json") or "{}")
-            except Exception:
+            except _CLAIMS_NOTIFICATION_PARSE_EXCEPTIONS:
                 payload = {}
             try:
                 if int(payload.get("member_count") or 0) == member_count:
                     continue
-            except Exception:
+            except (TypeError, ValueError):
                 pass
         payload = {
             "cluster_id": int(cluster_id),
@@ -117,7 +148,7 @@ def record_watchlist_cluster_notifications(
                 payload_json=json.dumps(payload),
             )
             inserted += 1
-        except Exception as exc:
+        except _CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to insert watchlist cluster notification: {exc}")
     return inserted
 
@@ -132,7 +163,7 @@ def _parse_email_recipients(raw_value: str | None) -> list[str]:
         payload = json.loads(text)
         if isinstance(payload, list):
             return [str(v).strip() for v in payload if str(v).strip()]
-    except Exception:
+    except _CLAIMS_NOTIFICATION_PARSE_EXCEPTIONS:
         pass
     return [item.strip() for item in text.split(",") if item.strip()]
 
@@ -153,7 +184,7 @@ def _normalize_notification_row(row: dict[str, Any]) -> dict[str, Any]:
     raw = normalized.get("payload_json")
     try:
         normalized["payload"] = json.loads(raw) if raw else {}
-    except Exception:
+    except _CLAIMS_NOTIFICATION_PARSE_EXCEPTIONS:
         normalized["payload"] = {}
     normalized.pop("payload_json", None)
     return normalized
@@ -202,7 +233,7 @@ def _deliver_review_webhook(
 ) -> bool:
     try:
         from tldw_Server_API.app.core.http_client import RetryPolicy, create_client, fetch
-    except Exception:
+    except ImportError:
         return False
     backoff_schedule = [5, 15, 45, 120, 300]
     max_attempts = 5
@@ -235,7 +266,7 @@ def _deliver_review_webhook(
             else:
                 reason = "other"
             record_claims_review_webhook_delivery(status="failure", reason=reason, latency_s=duration)
-        except Exception as exc:
+        except _CLAIMS_WEBHOOK_EXCEPTIONS as exc:
             reason = _classify_webhook_exception(exc)
             duration = time.time() - start_ts
             record_claims_review_webhook_delivery(status="failure", reason=reason, latency_s=duration)
@@ -255,7 +286,7 @@ async def _deliver_review_email(
         return False
     try:
         from tldw_Server_API.app.core.AuthNZ.email_service import get_email_service
-    except Exception:
+    except ImportError:
         return False
     service = get_email_service()
     deliveries: list[bool] = []
@@ -268,7 +299,7 @@ async def _deliver_review_email(
                 text_body=text_body,
             )
             deliveries.append(bool(ok))
-        except Exception:
+        except _CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS:
             deliveries.append(False)
     return any(deliveries)
 
@@ -292,7 +323,7 @@ def _deliver_review_email_sync(
             )
         )
         return ok
-    except Exception as exc:
+    except _CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"Claims review email delivery failed: {exc}")
         return False
     finally:
@@ -348,12 +379,12 @@ def dispatch_claim_review_notifications(
                 client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
                 db_path=db_path,
             )
-        except Exception:
+        except _CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS:
             return
         try:
             try:
                 db.initialize_db()
-            except Exception:
+            except _CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS:
                 pass
             config_row = db.get_claims_monitoring_settings(str(owner_user_id)) or {}
             if config_row and not bool(config_row.get("enabled", True)):
@@ -398,12 +429,12 @@ def dispatch_claim_review_notifications(
 
             if delivered:
                 db.mark_claim_notifications_delivered(notification_ids)
-        except Exception as exc:
+        except _CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Claims review notification delivery failed: {exc}")
         finally:
             try:
                 db.close_connection()
-            except Exception:
+            except _CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS:
                 pass
 
     threading.Thread(target=_deliver, daemon=True).start()

@@ -3,11 +3,30 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timezone
+from sqlite3 import Error as SQLiteError
 from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
+
+_STORE_NONCRITICAL_EXCEPTIONS = (
+    ConnectionError,
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_ROW_PARSE_EXCEPTIONS = (
+    AttributeError,
+    IndexError,
+    KeyError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+)
 
 
 class AuthNZPolicyStore:
@@ -30,7 +49,7 @@ class AuthNZPolicyStore:
     async def get_latest_policy(self) -> tuple[int, dict[str, Any], dict[str, Any], float] | tuple[int, dict[str, Any], dict[str, Any], dict[str, Any], float]:
         try:
             pool = self._pool or await get_db_pool()
-        except Exception as e:
+        except _STORE_NONCRITICAL_EXCEPTIONS as e:
             logger.warning("AuthNZPolicyStore: failed to get DB pool: {}", e)
             # Fallback to empty snapshot with current time
             return 1, {}, {}, time.time()
@@ -39,7 +58,7 @@ class AuthNZPolicyStore:
             rows = await pool.fetchall(
                 "SELECT id, payload, version, updated_at FROM rg_policies ORDER BY updated_at DESC"
             )
-        except Exception as e:
+        except _STORE_NONCRITICAL_EXCEPTIONS as e:
             # Table may not exist yet; return empty
             logger.debug("AuthNZPolicyStore: rg_policies fetch failed (likely missing table): {}", e)
             return 1, {}, {}, time.time()
@@ -62,7 +81,7 @@ class AuthNZPolicyStore:
                 if isinstance(raw_payload, str):
                     try:
                         payload = json.loads(raw_payload)
-                    except Exception:
+                    except (TypeError, ValueError, json.JSONDecodeError):
                         payload = {}
                 else:
                     payload = dict(raw_payload) if isinstance(raw_payload, dict) else {}
@@ -82,7 +101,7 @@ class AuthNZPolicyStore:
                         ts = datetime.fromisoformat(updated.replace("Z", "+00:00")).timestamp()
                     else:
                         ts = time.time()
-                except Exception:
+                except (OverflowError, TypeError, ValueError):
                     ts = time.time()
                 latest_updated = max(latest_updated, ts)
 
@@ -101,7 +120,7 @@ class AuthNZPolicyStore:
                 # Otherwise, treat as policy payload keyed by id
                 if rid:
                     policies[str(rid)] = payload or {}
-            except Exception as row_err:
+            except _ROW_PARSE_EXCEPTIONS as row_err:
                 logger.debug("AuthNZPolicyStore: skipping row due to error: {}", row_err)
                 continue
 

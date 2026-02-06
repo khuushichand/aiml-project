@@ -124,10 +124,11 @@ def _get_embeddings_fn():
         globals()["create_embeddings_batch"] = _impl
         return _impl
     except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as exc:
+        _captured_exc = exc
         def _err(*_args, **_kwargs):
             raise RuntimeError(
                 "Embeddings service not available; patch _get_embeddings_fn() or create_embeddings_batch"
-            ) from exc
+            ) from _captured_exc
         return _err
 
 router = APIRouter(

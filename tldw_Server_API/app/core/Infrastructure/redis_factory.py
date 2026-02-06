@@ -16,12 +16,26 @@ from tldw_Server_API.app.core.config import settings
 try:  # pragma: no cover - import guard
     import redis  # type: ignore
     import redis.asyncio as aioredis  # type: ignore
-except Exception as exc:  # pragma: no cover
+except ImportError as exc:  # pragma: no cover
     redis = None  # type: ignore
     aioredis = None  # type: ignore
     _import_error = exc
 else:
     _import_error = None
+
+if redis is not None:
+    _REDIS_CLIENT_EXCEPTIONS: tuple[type[Exception], ...] = (redis.RedisError,)  # type: ignore[attr-defined]
+else:
+    _REDIS_CLIENT_EXCEPTIONS = ()
+
+_REDIS_NONCRITICAL_EXCEPTIONS: tuple[type[Exception], ...] = (
+    AttributeError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+) + _REDIS_CLIENT_EXCEPTIONS
 
 _ASYNC_STUB_CACHE: dict[str, InMemoryAsyncRedis] = {}
 
@@ -29,7 +43,7 @@ try:  # pragma: no cover - optional metrics dependency
     from tldw_Server_API.app.core.Metrics.metrics_manager import (
         get_metrics_registry as _get_metrics_registry,
     )
-except Exception:  # pragma: no cover - metrics optional during early startup
+except ImportError:  # pragma: no cover - metrics optional during early startup
     _get_metrics_registry = None  # type: ignore[assignment]
 
 DEFAULT_REDIS_URL = "redis://127.0.0.1:6379"
@@ -48,7 +62,7 @@ def _settings_lookup(*keys: str) -> str | None:
             value = settings.get(key)  # type: ignore[attr-defined]
             if isinstance(value, str) and value.strip():
                 return value.strip()
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             pass
         # Prefer explicit environment overrides when present
         env = os.getenv(key)
@@ -69,7 +83,7 @@ def _metrics_registry():
         return None
     try:
         return _get_metrics_registry()
-    except Exception:
+    except _REDIS_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -104,7 +118,7 @@ def _record_connection_metrics(
                 1,
                 {"mode": mode, "context": context, "error": reason},
             )
-    except Exception as metric_exc:
+    except _REDIS_NONCRITICAL_EXCEPTIONS as metric_exc:
         logger.debug(
             "Failed to record Redis infrastructure metrics: {err}",
             err=metric_exc,
@@ -164,11 +178,11 @@ async def create_async_redis_client(
         result = ping()
         if inspect.isawaitable(result):
             await result
-    except Exception as exc:
+    except _REDIS_NONCRITICAL_EXCEPTIONS as exc:
         if client is not None:
             try:
                 await client.close()
-            except Exception:
+            except _REDIS_NONCRITICAL_EXCEPTIONS:
                 pass
         if not fallback_to_fake:
             _record_connection_metrics(
@@ -238,11 +252,11 @@ def create_sync_redis_client(
     try:
         client = redis.from_url(url, **options)
         client.ping()
-    except Exception as exc:
+    except _REDIS_NONCRITICAL_EXCEPTIONS as exc:
         if client is not None:
             try:
                 client.close()
-            except Exception:
+            except _REDIS_NONCRITICAL_EXCEPTIONS:
                 pass
         if not fallback_to_fake:
             _record_connection_metrics(
@@ -336,13 +350,13 @@ class _InMemoryRedisCore:
         parts = text.split("-", 1)
         try:
             ts = int(parts[0])
-        except Exception:
+        except (TypeError, ValueError):
             ts = 0
         seq = 0
         if len(parts) > 1:
             try:
                 seq = int(parts[1])
-            except Exception:
+            except (TypeError, ValueError):
                 seq = 0
         return (ts, seq)
 
@@ -1127,7 +1141,7 @@ async def ensure_async_client_closed(client) -> None:
         result = close()
         if inspect.isawaitable(result):
             await result
-    except Exception:
+    except _REDIS_NONCRITICAL_EXCEPTIONS:
         pass
 
 
@@ -1141,5 +1155,5 @@ def ensure_sync_client_closed(client) -> None:
         close = getattr(client, "close", None)
         if close:
             close()
-    except Exception:
+    except _REDIS_NONCRITICAL_EXCEPTIONS:
         pass

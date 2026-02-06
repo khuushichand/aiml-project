@@ -11,6 +11,15 @@ from starlette.responses import PlainTextResponse, Response
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
+_SETUP_ACCESS_GUARD_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
 
 def _env_true(name: str) -> bool:
     raw = os.getenv(name)
@@ -23,7 +32,7 @@ def _env_true(name: str) -> bool:
 def _get_peer_ip(request: Request) -> str | None:
     try:
         return request.client.host if request.client else None
-    except Exception:
+    except _SETUP_ACCESS_GUARD_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -35,7 +44,7 @@ def _is_loopback(ip_str: str | None) -> bool:
     try:
         ip_obj = ipaddress.ip_address(ip_str)
         return ip_obj.is_loopback
-    except Exception:
+    except ValueError:
         # Non-IP or parse failure; treat as remote
         return False
 
@@ -47,7 +56,7 @@ def setup_remote_access_enabled() -> bool:
         cp = load_comprehensive_config()
         if cp and cp.has_section("Setup"):
             return cp.getboolean("Setup", "allow_remote_setup_access", fallback=False)
-    except Exception:
+    except _SETUP_ACCESS_GUARD_NONCRITICAL_EXCEPTIONS:
         pass
     return False
 
@@ -72,7 +81,7 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
                 else:
                     ip = ipaddress.ip_address(token)
                     nets.append(ipaddress.ip_network(ip.exploded + ("/32" if ip.version == 4 else "/128"), strict=False))
-            except Exception:
+            except ValueError:
                 logger.warning(f"Invalid allowlist entry ignored: {token}")
         return nets
 
@@ -87,7 +96,7 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
                 raw_cfg = cp.get(section, field, fallback="").strip()
                 if raw_cfg:
                     return self._parse_allowlist(raw_cfg)
-        except Exception:
+        except _SETUP_ACCESS_GUARD_NONCRITICAL_EXCEPTIONS:
             pass
         return []
 
@@ -101,7 +110,7 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
         peer = _get_peer_ip(request)
         try:
             peer_ip_obj = ipaddress.ip_address(peer) if peer else None
-        except Exception:
+        except ValueError:
             peer_ip_obj = None
         def _is_trusted(ip: ipaddress._BaseAddress | None) -> bool:
             return bool(ip and any(ip in net for net in trusted_proxies))
@@ -113,7 +122,7 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
                 try:
                     ipaddress.ip_address(xr.strip())
                     return xr.strip()
-                except Exception:
+                except ValueError:
                     pass
             fwd = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
             if fwd:
@@ -121,7 +130,7 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
                     leftmost = fwd.split(",")[0].strip()
                     ipaddress.ip_address(leftmost)
                     return leftmost
-                except Exception:
+                except ValueError:
                     pass
         return peer
 
@@ -143,7 +152,7 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
         client_ip_obj: ipaddress._BaseAddress | None = None
         try:
             client_ip_obj = ipaddress.ip_address(client_ip) if client_ip else None
-        except Exception:
+        except ValueError:
             client_ip_obj = None
 
         # Denylist takes precedence (except loopback handled above)

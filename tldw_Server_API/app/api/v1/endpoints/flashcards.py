@@ -455,11 +455,11 @@ def import_flashcards(
             deck_name = front = back = tags_s = notes = extra = model_type = deck_desc = None
             reverse_flag = None
             is_cloze_flag = None
-            def get_col(*names: str) -> Optional[str]:
+            def get_col(*names: str, _parts=parts) -> Optional[str]:
                 for nm in names:
                     idx = header_map.get(nm)
-                    if idx is not None and idx < len(parts):
-                        return parts[idx].strip()
+                    if idx is not None and idx < len(_parts):
+                        return _parts[idx].strip()
                 return None
 
             if header_map:

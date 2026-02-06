@@ -19,8 +19,10 @@ import {
   consumeStreamingChunk,
   type StreamingChunk
 } from "@/utils/streaming-chunks"
+import { buildMessageSteeringSnippet } from "@/utils/message-steering"
 import type { ChatHistory, Message, ToolChoice } from "~/store/option"
 import type { ToolCall } from "@/types/tool-calls"
+import type { MessageSteeringFlags } from "@/types/message-steering"
 
 const STREAMING_UPDATE_INTERVAL_MS = 80
 
@@ -49,6 +51,7 @@ export type ChatModeParamsBase = {
   assistantParentMessageId?: string | null
   historyForModel?: ChatHistory
   regenerateFromMessage?: Message
+  messageSteering?: MessageSteeringFlags
 }
 
 export type ChatModeContext<TParams extends ChatModeParamsBase> = TParams & {
@@ -348,6 +351,19 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     }
 
     const promptData = await mode.preparePrompt(context)
+    const steeringSnippet = buildMessageSteeringSnippet(
+      context.messageSteering || {
+        continueAsUser: false,
+        impersonateUser: false,
+        forceNarrate: false
+      }
+    )
+    if (steeringSnippet) {
+      promptData.chatHistory = [
+        ...promptData.chatHistory,
+        { role: "system", content: steeringSnippet }
+      ]
+    }
     promptContent = promptData.promptContent
     promptId = promptData.promptId
     const sources = promptData.sources ?? []

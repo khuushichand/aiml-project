@@ -193,11 +193,11 @@ class OCREvaluator:
                                         pix = page.get_pixmap(matrix=mat, alpha=False)
                                         img_bytes = pix.tobytes("png")
                                         if output_format or prompt_preset:
-                                            def _call_structured(b: bytes) -> Any:
+                                            def _call_structured(b: bytes, _backend=backend, _lang=lang, _output_format=output_format, _prompt_preset=prompt_preset) -> Any:
                                                 try:
-                                                    return backend.ocr_image_structured(b, lang, output_format, prompt_preset)
+                                                    return _backend.ocr_image_structured(b, _lang, _output_format, _prompt_preset)
                                                 except TypeError:
-                                                    return backend.ocr_image_structured(b, lang)
+                                                    return _backend.ocr_image_structured(b, _lang)
 
                                             fut = pool.submit(_call_structured, img_bytes)
                                         else:

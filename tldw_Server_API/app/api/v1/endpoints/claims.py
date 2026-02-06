@@ -34,6 +34,9 @@ from tldw_Server_API.app.api.v1.schemas.claims_schemas import (
     ClaimsSettingsResponse,
     ClaimsSettingsUpdate,
     ClaimUpdateRequest,
+    FVASettingsResponse,
+    FVAVerifyRequest,
+    FVAVerifyResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal

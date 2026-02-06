@@ -4,7 +4,7 @@ import inspect
 import json
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Tuple
 
 
 def _blocks_to_text(blocks: list[dict[str, Any]]) -> str:

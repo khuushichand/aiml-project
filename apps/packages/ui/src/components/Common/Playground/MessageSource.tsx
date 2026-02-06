@@ -91,7 +91,7 @@ export const MessageSource: React.FC<Props> = ({
       <div className="mt-2 rounded-md border border-border bg-surface px-2 py-2 text-xs text-text-muted">
         <p className="whitespace-pre-wrap text-xs text-text-muted">{content}</p>
         {(page != null || lineFrom != null || url) && (
-          <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-text-subtle">
+          <div className="mt-2 flex flex-wrap gap-2 text-xs text-text-subtle">
             {page != null && (
               <span className="rounded-md border border-border bg-surface2 px-2 py-0.5">
                 {`Page ${page}`}

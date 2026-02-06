@@ -787,35 +787,45 @@ export const NotesDockPanel: React.FC = () => {
             <div className="border-t border-border px-3 py-2">
               <div className="flex flex-wrap gap-2">
                 {notes.map((note) => (
-                  <button
+                  <div
                     key={note.localId}
-                    type="button"
-                    onClick={() => setActiveNote(note.localId)}
                     className={classNames(
                       "flex items-center gap-2 rounded-full border px-3 py-1 text-xs",
                       note.localId === activeNoteId
                         ? "border-primary text-primary"
-                        : "border-border text-text-muted hover:text-text"
+                        : "border-border text-text-muted"
                     )}
                   >
-                    <span className="max-w-[120px] truncate">
-                      {note.title || t("option:notesDock.untitled", "Untitled")}
-                    </span>
-                    {note.isDirty && (
-                      <span className="h-1.5 w-1.5 rounded-full bg-warning" />
-                    )}
-                    <span
-                      data-no-drag
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        handleCloseNoteTab(note.localId)
-                      }}
-                      className="text-text-muted hover:text-text"
+                    <button
+                      type="button"
+                      onClick={() => setActiveNote(note.localId)}
+                      aria-pressed={note.localId === activeNoteId}
+                      className={classNames(
+                        "flex min-w-0 items-center gap-2",
+                        note.localId === activeNoteId
+                          ? "text-primary"
+                          : "text-text-muted hover:text-text"
+                      )}
+                    >
+                      <span className="max-w-[120px] truncate">
+                        {note.title || t("option:notesDock.untitled", "Untitled")}
+                      </span>
+                      {note.isDirty && (
+                        <span className="h-1.5 w-1.5 rounded-full bg-warning" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCloseNoteTab(note.localId)}
+                      className={classNames(
+                        "rounded-full text-text-muted hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+                        note.localId === activeNoteId && "text-primary hover:text-primary"
+                      )}
                       aria-label={t("option:notesDock.closeTab", "Close note")}
                     >
                       <X className="h-3 w-3" />
-                    </span>
-                  </button>
+                    </button>
+                  </div>
                 ))}
               </div>
             </div>

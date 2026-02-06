@@ -107,7 +107,7 @@ export const WorkflowLanding: React.FC<WorkflowLandingProps> = ({
 
   const handleResearchClick = useCallback(() => {
     setShowLanding(false)
-    navigate("/workspace-playground")
+    navigate("/knowledge")
     onClose?.()
   }, [navigate, onClose, setShowLanding])
 

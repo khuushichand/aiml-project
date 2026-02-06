@@ -108,29 +108,6 @@ from tldw_Server_API.app.core.Usage.usage_tracker import (
 )
 
 # ============================================================================
-# Embeddings Implementation Import (Safe/Lazy)
-# Avoid hard-failing on import so non-embedding tests can import the app.
-# ============================================================================
-
-try:
-    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-        HFModelCfg,
-        LocalAPICfg,
-        ONNXModelCfg,
-        OpenAIModelCfg,
-        resolve_model_storage_base_dir,
-    )
-    EMBEDDINGS_AVAILABLE = True
-except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
-    # Do not raise here; allow the API to import and mark the embeddings service as unavailable.
-    logger.error(f"Embeddings implementation unavailable: {e}")
-    logger.error("Embeddings endpoints will respond 503 until dependencies are installed")
-    EMBEDDINGS_AVAILABLE = False
-
-    def resolve_model_storage_base_dir(*_args, **_kwargs):
-        return "./models/embedding_models_data/"
-
-# ============================================================================
 # Metrics and Monitoring
 # ============================================================================
 from prometheus_client import REGISTRY
@@ -169,6 +146,29 @@ _EMBEDDINGS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     json.JSONDecodeError,
     *_REDIS_ERRORS,
 )
+
+# ============================================================================
+# Embeddings Implementation Import (Safe/Lazy)
+# Avoid hard-failing on import so non-embedding tests can import the app.
+# ============================================================================
+
+try:
+    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+        HFModelCfg,
+        LocalAPICfg,
+        ONNXModelCfg,
+        OpenAIModelCfg,
+        resolve_model_storage_base_dir,
+    )
+    EMBEDDINGS_AVAILABLE = True
+except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
+    # Do not raise here; allow the API to import and mark the embeddings service as unavailable.
+    logger.error(f"Embeddings implementation unavailable: {e}")
+    logger.error("Embeddings endpoints will respond 503 until dependencies are installed")
+    EMBEDDINGS_AVAILABLE = False
+
+    def resolve_model_storage_base_dir(*_args, **_kwargs):
+        return "./models/embedding_models_data/"
 
 
 # Safely get or create metrics

@@ -32,7 +32,7 @@ def _norm_key(key: str) -> str:
 def _load_yaml(path: str) -> Optional[dict[str, Any]]:
     try:
         import yaml  # type: ignore
-    except Exception:
+    except ImportError:
         return None
     try:
         with open(path, encoding="utf-8") as f:
@@ -40,7 +40,7 @@ def _load_yaml(path: str) -> Optional[dict[str, Any]]:
         if isinstance(data, dict):
             return data
         return None
-    except Exception:
+    except (OSError, TypeError, ValueError, yaml.YAMLError):
         return None
 
 
@@ -51,7 +51,7 @@ def _load_json(path: str) -> Optional[dict[str, Any]]:
         if isinstance(data, dict):
             return data
         return None
-    except Exception:
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return None
 
 
@@ -106,7 +106,7 @@ def load_prompt(module: str, key: str) -> Optional[str]:
         try:
             with open(md_path, encoding="utf-8") as f:
                 text = f.read()
-        except Exception:
+        except OSError:
             text = ""
         if text:
             pattern = re.compile(

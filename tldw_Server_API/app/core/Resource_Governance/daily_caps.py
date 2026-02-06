@@ -12,6 +12,7 @@ avoid breaking request flows during upgrades.
 """
 
 import asyncio
+from sqlite3 import Error as SQLiteError
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -21,11 +22,18 @@ try:  # pragma: no cover - DAL optional in early startup/tests
     from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import (  # type: ignore
         ResourceDailyLedger,
     )
-except Exception:  # pragma: no cover - safe fallback
+except ImportError:  # pragma: no cover - safe fallback
     ResourceDailyLedger = None  # type: ignore
 
 _daily_ledger: ResourceDailyLedger | None = None  # type: ignore[name-defined]
 _daily_ledger_lock = asyncio.Lock()
+_LEDGER_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TypeError,
+    ValueError,
+)
 
 
 async def _get_ledger() -> ResourceDailyLedger | None:
@@ -42,7 +50,7 @@ async def _get_ledger() -> ResourceDailyLedger | None:
             await ledger.initialize()
             _daily_ledger = ledger
             return ledger
-        except Exception as exc:  # pragma: no cover - defensive
+        except _LEDGER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
             logger.debug(f"RG daily caps: ledger init failed; caps disabled: {exc}")
             _daily_ledger = None
             return None
@@ -55,7 +63,7 @@ def _seconds_until_next_utc_day(now_dt: datetime | None = None) -> int:
     next_midnight = datetime.combine(tomorrow, datetime.min.time(), tzinfo=timezone.utc)
     try:
         return max(1, int((next_midnight - dt).total_seconds()))
-    except Exception:
+    except (OverflowError, TypeError, ValueError):
         return 60 * 60 * 24
 
 
@@ -78,7 +86,7 @@ async def check_daily_cap(
         cap = int(daily_cap or 0)
         if cap <= 0:
             return True, 0, {}
-    except Exception:
+    except (TypeError, ValueError):
         return True, 0, {}
 
     ledger = await _get_ledger()
@@ -102,6 +110,6 @@ async def check_daily_cap(
             "daily_reset_seconds": int(retry_after),
         }
         return bool(allowed), int(retry_after), details
-    except Exception as exc:  # pragma: no cover - defensive
+    except _LEDGER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
         logger.debug(f"RG daily caps: check failed for {entity_scope}:{entity_value}:{category}: {exc}")
         return True, 0, {}

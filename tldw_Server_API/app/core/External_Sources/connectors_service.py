@@ -9,6 +9,25 @@ from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 from tldw_Server_API.app.core.External_Sources.google_drive import GoogleDriveConnector
 from tldw_Server_API.app.core.External_Sources.notion import NotionConnector
 
+_CONNECTORS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EOFError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 def get_connector_by_name(name: str):
     n = name.lower()
@@ -185,7 +204,7 @@ async def _ensure_tables(db) -> None:
                 )
                 """,
             )
-    except Exception as e:
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to ensure connector tables: {e}")
         raise
 
@@ -295,7 +314,7 @@ async def get_policy(db, org_id: int) -> dict[str, Any]:
     try:
         keys = [c[0] for c in getattr(cur, "description", [])]  # aiosqlite cursor
         row = {k: r[i] for i, k in enumerate(keys)}
-    except Exception:
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
         # Fallback assuming sqlite Row-like access
         row = dict(r)
     row["enabled_providers"] = (row.get("enabled_providers") or "").split(",") if row.get("enabled_providers") else []
@@ -309,7 +328,7 @@ async def get_policy(db, org_id: int) -> dict[str, Any]:
     # quotas_per_role as JSON string
     try:
         row["quotas_per_role"] = __import__("json").loads(row.get("quotas_per_role") or "{}")
-    except Exception:
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
         row["quotas_per_role"] = {}
     return row
 
@@ -407,7 +426,7 @@ async def create_account(db, user_id: int, provider: str, display_name: str, ema
         access_token_store = _json.dumps(env) if env else str(tokens.get("access_token") or "")
         refresh_token_store = None  # envelope contains refresh
         scopes_store = tokens.get("scope") or None
-    except Exception:
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
         access_token_store = str(tokens.get("access_token") or "")
         refresh_token_store = tokens.get("refresh_token")
         scopes_store = tokens.get("scope") or None
@@ -435,7 +454,7 @@ async def create_account(db, user_id: int, provider: str, display_name: str, ema
     r = await cur2.fetchone()
     try:
         return {"id": r[0], "user_id": r[1], "provider": r[2], "display_name": r[3], "email": r[4], "created_at": r[5]}
-    except Exception:
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
         return dict(r)
 
 
@@ -454,7 +473,7 @@ async def _get_account_with_tokens(db, user_id: int, account_id: int) -> dict[st
             return None
         try:
             d = {"id": r[0], "user_id": r[1], "provider": r[2], "display_name": r[3], "email": r[4], "access_token": r[5], "refresh_token": r[6]}
-        except Exception:
+        except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
             d = dict(r)
     # Decrypt envelope if present
     tokens: dict[str, Any] = {}
@@ -466,7 +485,7 @@ async def _get_account_with_tokens(db, user_id: int, account_id: int) -> dict[st
             env = _json.loads(at_raw)
             dec = decrypt_json_blob(env) or {}
             tokens.update(dec)
-        except Exception:
+        except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
             pass
     if not tokens.get("access_token") and isinstance(at_raw, str):
         tokens["access_token"] = at_raw
@@ -521,7 +540,7 @@ async def get_account_for_user(db, user_id: int, account_id: int) -> dict[str, A
             "email": r[4],
             "created_at": r[5],
         }
-    except Exception:
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
         return dict(r)
 
 
@@ -554,7 +573,7 @@ async def update_account_tokens(db, user_id: int, account_id: int, new_tokens: d
         access_token_store = _json.dumps(env) if env else str(new_tokens.get("access_token") or "")
         refresh_token_store = None
         scopes_store = new_tokens.get("scope") or None
-    except Exception:
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
         access_token_store = str(new_tokens.get("access_token") or "")
         refresh_token_store = refresh_token_value
         scopes_store = new_tokens.get("scope") or None
@@ -618,7 +637,7 @@ async def get_source_by_id(db, user_id: int, source_id: int) -> dict[str, Any] |
             "options": __import__("json").loads(r[6] or "{}"), "enabled": bool(r[7]), "last_synced_at": r[8],
             "user_id": r[9], "email": r[10],
         }
-    except Exception:
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
         return dict(r)
 
 
@@ -639,7 +658,7 @@ async def should_ingest_item(
             return True
         try:
             r = {"version": r[0], "modified_at": r[1], "hash": r[2]}
-        except Exception:
+        except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
             r = dict(r)
     # Decide using hash > version > modified_at
     if content_hash and r.get("hash") and content_hash == r.get("hash"):
@@ -709,7 +728,7 @@ def count_connectors_jobs_today(user_id: int) -> int:
     finally:
         try:
             conn.close()
-        except Exception:
+        except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
             pass
 
 
@@ -783,11 +802,11 @@ async def create_source(
             "enabled": bool(r[7]),
             "last_synced_at": r[8],
         }
-    except Exception:
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
         row = dict(r)
         try:
             row["options"] = __import__("json").loads(row.get("options") or "{}")
-        except Exception:
+        except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
             pass
         return row
 
@@ -834,11 +853,11 @@ async def list_sources(db, user_id: int) -> list[dict[str, Any]]:
                 "enabled": bool(r[7]),
                 "last_synced_at": r[8],
             })
-        except Exception:
+        except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
             row = dict(r)
             try:
                 row["options"] = __import__("json").loads(row.get("options") or "{}")
-            except Exception:
+            except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
                 pass
             out.append(row)
     return out
@@ -908,11 +927,11 @@ async def update_source(db, user_id: int, source_id: int, *, enabled: bool | Non
             "enabled": bool(r2[7]),
             "last_synced_at": r2[8],
         }
-    except Exception:
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
         row = dict(r2)
         try:
             row["options"] = __import__("json").loads(row.get("options") or "{}")
-        except Exception:
+        except _CONNECTORS_NONCRITICAL_EXCEPTIONS:
             pass
         return row
 
@@ -941,7 +960,7 @@ async def create_import_job(user_id: int, source_id: int, *, request_id: str | N
             "progress_pct": 0,
             "counts": {"processed": 0, "skipped": 0, "failed": 0},
         }
-    except Exception as e:
+    except _CONNECTORS_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Failed to create connectors job via JobManager: {e}")
         # Fallback to synthetic ID
         import uuid

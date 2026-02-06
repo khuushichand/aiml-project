@@ -13,8 +13,16 @@ from loguru import logger
 # the scheduler DB alongside other Databases by default.
 try:
     from tldw_Server_API.app.core.config import settings as core_settings  # type: ignore
-except Exception:
+except ImportError:
     core_settings = None  # Fallback if import graph changes
+
+_SCHEDULER_CONFIG_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def _default_scheduler_db_url() -> str:
@@ -46,7 +54,7 @@ def _default_scheduler_db_url() -> str:
         if project_root:
             db_path = Path(project_root) / 'Databases' / 'scheduler.db'
             return f"sqlite:///{str(db_path.resolve())}"
-    except Exception:
+    except _SCHEDULER_CONFIG_NONCRITICAL_EXCEPTIONS:
         pass
 
     # As a final fallback, use a relative Databases path if present
@@ -54,7 +62,7 @@ def _default_scheduler_db_url() -> str:
         cwd = Path(os.getcwd())
         candidate = cwd / 'Databases' / 'scheduler.db'
         return f"sqlite:///{str(candidate.resolve())}"
-    except Exception:
+    except _SCHEDULER_CONFIG_NONCRITICAL_EXCEPTIONS:
         # Last resort: CWD scheduler.db
         return 'sqlite:///scheduler.db'
 
@@ -65,7 +73,7 @@ def _default_scheduler_base_path() -> Path:
     if env_base:
         try:
             return Path(env_base)
-        except Exception:
+        except _SCHEDULER_CONFIG_NONCRITICAL_EXCEPTIONS:
             pass
 
     try:
@@ -73,14 +81,14 @@ def _default_scheduler_base_path() -> Path:
             project_root = core_settings.get('PROJECT_ROOT')
             if project_root:
                 return Path(project_root) / 'Databases' / 'scheduler'
-    except Exception:
+    except _SCHEDULER_CONFIG_NONCRITICAL_EXCEPTIONS:
         pass
 
     # Fallback: put under local Databases if present; else default to ~/.local/share/scheduler
     try:
         local = Path(os.getcwd()) / 'Databases' / 'scheduler'
         return local
-    except Exception:
+    except _SCHEDULER_CONFIG_NONCRITICAL_EXCEPTIONS:
         return Path.home() / '.local' / 'share' / 'scheduler'
 
 
@@ -263,7 +271,7 @@ class SchedulerConfig:
             realpath = _os.path.realpath(original_base)
             if abspath != realpath or _os.path.islink(original_base):
                 raise ValueError(f"Base path cannot be a symlink: {self.base_path}")
-        except Exception:
+        except _SCHEDULER_CONFIG_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Detect and prevent directory traversal attempts

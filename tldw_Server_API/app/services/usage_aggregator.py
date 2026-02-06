@@ -9,6 +9,16 @@ from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
+_USAGE_AGGREGATOR_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    AttributeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
 
 async def aggregate_usage_daily(db_pool: DatabasePool | None = None, day: str | None = None) -> None:
     """
@@ -25,13 +35,13 @@ async def aggregate_usage_daily(db_pool: DatabasePool | None = None, day: str | 
         if day:
             try:
                 day_val = datetime.fromisoformat(day).date()
-            except Exception:
+            except (TypeError, ValueError):
                 day_val = datetime.now(timezone.utc).date()
 
         repo = AuthnzUsageRepo(pool)
         await repo.aggregate_usage_daily_for_day(day=day_val)
         logger.debug(f"usage_daily aggregated for {day_val.isoformat()}")
-    except Exception as e:
+    except _USAGE_AGGREGATOR_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"usage_daily aggregation skipped/failed: {e}")
 
 
@@ -49,7 +59,7 @@ async def _aggregator_loop(stop_event: asyncio.Event):
                 await asyncio.wait_for(stop_event.wait(), timeout=interval_minutes * 60)
             except asyncio.TimeoutError:
                 continue
-    except Exception as e:
+    except _USAGE_AGGREGATOR_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Usage aggregator loop exited: {e}")
 
 
@@ -73,5 +83,5 @@ async def stop_usage_aggregator(task: asyncio.Task | None) -> None:
         if isinstance(stop_event, asyncio.Event):
             stop_event.set()
         task.cancel()
-    except Exception:
+    except _USAGE_AGGREGATOR_NONCRITICAL_EXCEPTIONS:
         pass

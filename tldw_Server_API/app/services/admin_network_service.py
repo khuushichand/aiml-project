@@ -9,6 +9,15 @@ from fastapi import Request
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.Security.setup_access_guard import setup_remote_access_enabled
 
+_ADMIN_NETWORK_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
 
 def parse_nets(raw: str | None) -> list[ipaddress._BaseNetwork]:
     nets: list[ipaddress._BaseNetwork] = []
@@ -21,7 +30,7 @@ def parse_nets(raw: str | None) -> list[ipaddress._BaseNetwork]:
             else:
                 ip = ipaddress.ip_address(token)
                 nets.append(ipaddress.ip_network(ip.exploded + ("/32" if ip.version == 4 else "/128"), strict=False))
-        except Exception:
+        except ValueError:
             # Skip invalid entries
             pass
     return nets
@@ -37,7 +46,7 @@ def load_list(section: str, field: str, env_name: str) -> list[ipaddress._BaseNe
             raw_cfg = cp.get(section, field, fallback="").strip()
             if raw_cfg:
                 return parse_nets(raw_cfg)
-    except Exception:
+    except _ADMIN_NETWORK_NONCRITICAL_EXCEPTIONS:
         pass
     return []
 
@@ -49,7 +58,7 @@ def resolve_client_ip(request: Request, trusted_proxies: list[ipaddress._BaseNet
     peer = request.client.host if request.client else None
     try:
         peer_ip_obj = ipaddress.ip_address(peer) if peer else None
-    except Exception:
+    except ValueError:
         peer_ip_obj = None
 
     if _is_trusted(peer_ip_obj):
@@ -58,7 +67,7 @@ def resolve_client_ip(request: Request, trusted_proxies: list[ipaddress._BaseNet
             try:
                 ipaddress.ip_address(xr.strip())
                 return xr.strip(), True
-            except Exception:
+            except ValueError:
                 pass
         fwd = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
         if fwd:
@@ -66,7 +75,7 @@ def resolve_client_ip(request: Request, trusted_proxies: list[ipaddress._BaseNet
                 leftmost = fwd.split(",")[0].strip()
                 ipaddress.ip_address(leftmost)
                 return leftmost, True
-            except Exception:
+            except ValueError:
                 pass
     return peer, False
 
@@ -78,7 +87,7 @@ def is_loopback(ip_str: str | None) -> bool:
         return True
     try:
         return ipaddress.ip_address(ip_str).is_loopback
-    except Exception:
+    except ValueError:
         return False
 
 
@@ -91,7 +100,7 @@ def build_network_info(request: Request) -> dict[str, Any]:
     loopback = is_loopback(resolved_ip)
     try:
         ip_obj = ipaddress.ip_address(resolved_ip) if resolved_ip else None
-    except Exception:
+    except ValueError:
         ip_obj = None
 
     def _decide_setup() -> dict[str, str]:

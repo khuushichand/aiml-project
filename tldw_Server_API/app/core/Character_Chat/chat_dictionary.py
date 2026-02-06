@@ -39,7 +39,7 @@ from loguru import logger
 
 try:
     from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens  # Case-sensitive envs
-except Exception:  # fallback for alternate casing
+except ImportError:  # fallback for alternate casing
     from tldw_Server_API.app.core.utils.tokenizer import count_tokens as _count_tokens
 
 # Local imports
@@ -60,6 +60,35 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDBError,
     ConflictError,
     InputError,
+)
+
+# `regex.TimeoutError` is not present in all `regex` package builds.
+_REGEX_TIMEOUT_ERROR = getattr(_regex, "TimeoutError", TimeoutError)
+
+_CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    CharactersRAGDBError,
+    ConflictError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    InputError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    sqlite3.Error,
+    re.error,
+    _regex.error,
+    _REGEX_TIMEOUT_ERROR,
+    json.JSONDecodeError,
 )
 
 # Whitelisted field names for dynamic UPDATE statements (SQL injection prevention)
@@ -273,7 +302,7 @@ class ChatDictionaryEntry:
                 if isinstance(self.key, _regex.Pattern):
                     return bool(self.key.search(text, timeout=_regex_timeout_seconds()))
                 return bool(self.key.search(text))
-            except _regex.TimeoutError:
+            except _REGEX_TIMEOUT_ERROR:
                 preview = self.key_pattern_str
                 if len(preview) > 50:
                     preview = preview[:50] + "..."
@@ -343,7 +372,7 @@ class ChatDictionaryEntry:
                     )
                 else:
                     text, replacement_count = self.key.subn(self.content, text, count=max_count)
-            except _regex.TimeoutError:
+            except _REGEX_TIMEOUT_ERROR:
                 preview = self.key_pattern_str
                 if len(preview) > 50:
                     preview = preview[:50] + "..."
@@ -434,7 +463,7 @@ class ChatDictionaryEntry:
                     entry._loaded_at = (
                         parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
                     )
-            except Exception:
+            except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
                 entry._loaded_at = datetime.now(timezone.utc)
         return entry
 
@@ -553,7 +582,7 @@ class ChatDictionaryService:
 
                 conn.commit()
                 logger.info("Chat dictionary tables initialized")
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to initialize dictionary tables: {e}")
             raise CharactersRAGDBError(f"Failed to initialize dictionary tables: {e}")
 
@@ -616,7 +645,7 @@ class ChatDictionaryService:
             if _is_unique_violation(e):
                 raise ConflictError(f"Dictionary '{name}' already exists", "chat_dictionaries", name)
             raise
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Database error creating dictionary: {e}")
             raise CharactersRAGDBError(f"Database error creating dictionary: {e}") from e
 
@@ -651,7 +680,7 @@ class ChatDictionaryService:
                     return dict(row)
                 return None
 
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching dictionary: {e}")
             raise CharactersRAGDBError(f"Error fetching dictionary: {e}")
 
@@ -677,7 +706,7 @@ class ChatDictionaryService:
                 cursor = conn.execute(query, tuple(params))
                 return [dict(row) for row in cursor.fetchall()]
 
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error listing dictionaries: {e}")
             raise CharactersRAGDBError(f"Error listing dictionaries: {e}")
 
@@ -711,7 +740,7 @@ class ChatDictionaryService:
 
                 cursor = conn.execute(query, tuple(params))
                 return [dict(row) for row in cursor.fetchall()]
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error listing dictionaries with counts: {e}")
             raise CharactersRAGDBError(f"Error listing dictionaries with counts: {e}")
 
@@ -812,7 +841,7 @@ class ChatDictionaryService:
                     return True
                 return False
 
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error deleting dictionary: {e}")
             raise CharactersRAGDBError(f"Error deleting dictionary: {e}")
 
@@ -949,7 +978,7 @@ class ChatDictionaryService:
         except re.error:
             # Preserve regex errors for caller/tests
             raise
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error adding dictionary entry: {e}")
             raise CharactersRAGDBError(f"Error adding dictionary entry: {e}")
 
@@ -1003,7 +1032,7 @@ class ChatDictionaryService:
                         entry["group"] = row_dict.get("group_name")
                     result.append(entry)
                 return result
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching dictionary entries: {e}")
             raise CharactersRAGDBError(f"Error fetching dictionary entries: {e}")
 
@@ -1042,7 +1071,7 @@ class ChatDictionaryService:
                 if not entry.get("group") and row_dict.get("group_name"):
                     entry["group"] = row_dict.get("group_name")
                 return entry
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching dictionary entry: {e}")
             raise CharactersRAGDBError(f"Error fetching dictionary entry: {e}")
 
@@ -1100,10 +1129,10 @@ class ChatDictionaryService:
                         rows = self.db.execute_query("dictionary_entries")
                         for r in rows or []:
                             entries.append(ChatDictionaryEntry.from_dict(r))
-                    except Exception:
+                    except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
                         pass
                 return entries
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching dictionary entry objects: {e}")
             raise CharactersRAGDBError(f"Error fetching dictionary entry objects: {e}")
 
@@ -1207,7 +1236,7 @@ class ChatDictionaryService:
                     return True
                 return False
 
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error updating dictionary entry: {e}")
             raise CharactersRAGDBError(f"Error updating dictionary entry: {e}")
 
@@ -1232,7 +1261,7 @@ class ChatDictionaryService:
                     return True
                 return False
 
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error deleting dictionary entry: {e}")
             raise CharactersRAGDBError(f"Error deleting dictionary entry: {e}")
 
@@ -1302,7 +1331,7 @@ class ChatDictionaryService:
             try:
                 self._usage_counts[dictionary_id] = self._usage_counts.get(dictionary_id, 0) + 1
                 self._last_used_at[dictionary_id] = datetime.now()
-            except Exception:
+            except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
                 pass
 
         for iteration in range(max_iterations):
@@ -1445,7 +1474,7 @@ class ChatDictionaryService:
                         self.add_entry(dict_id, pattern=k.strip(), replacement=v.strip())
 
             return dict_id
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             self.delete_dictionary(dict_id, hard_delete=True)
             raise CharactersRAGDBError(f"Failed to import dictionary: {e}")
 
@@ -1497,7 +1526,7 @@ class ChatDictionaryService:
             with open(fp, "w", encoding="utf-8") as f:
                 f.write(content)
             return True
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to export dictionary: {e}")
             raise CharactersRAGDBError(f"Failed to export dictionary: {e}")
 
@@ -1515,7 +1544,7 @@ class ChatDictionaryService:
                 cursor = conn.execute("SELECT dictionary_id FROM dictionary_entries WHERE id = ?", (entry_id,))
                 row = cursor.fetchone()
                 return row["dictionary_id"] if row else None
-        except Exception:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
             return None
 
     def get_entry_dictionary_id(self, entry_id: int) -> Optional[int]:
@@ -1634,7 +1663,7 @@ class ChatDictionaryService:
                         "regex_entries": regex_entries,
                         "probabilistic_entries": probabilistic_entries,
                     }
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error getting statistics: {e}")
             raise CharactersRAGDBError(f"Error getting statistics: {e}")
 
@@ -1721,7 +1750,7 @@ class ChatDictionaryService:
 
             return _BulkAddResult(added_count)
 
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error adding bulk entries: {e}")
             raise CharactersRAGDBError(f"Error adding bulk entries: {e}")
 
@@ -1766,7 +1795,7 @@ class ChatDictionaryService:
                     results.append(d)
                 return results
 
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error searching entries: {e}")
             raise CharactersRAGDBError(f"Error searching entries: {e}")
 
@@ -1803,7 +1832,7 @@ class ChatDictionaryService:
                     self._invalidate_cache()
                     return True
                 return False
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error toggling entry active: {e}")
             raise CharactersRAGDBError(f"Error toggling entry active: {e}")
 
@@ -1836,7 +1865,7 @@ class ChatDictionaryService:
                     case_sensitive=e.get("case_sensitive", True),
                 )
             return dict_id
-        except Exception:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
             self.delete_dictionary(dict_id, hard_delete=True)
             raise
 
@@ -1935,7 +1964,7 @@ class ChatDictionaryService:
 
         except ConflictError:
             raise
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error cloning dictionary: {e}")
             raise CharactersRAGDBError(f"Error cloning dictionary: {e}")
 

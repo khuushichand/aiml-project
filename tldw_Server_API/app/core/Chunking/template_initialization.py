@@ -7,12 +7,24 @@ This module loads templates from JSON files and seeds them into the database.
 import importlib.resources as ires
 import json
 from pathlib import Path
+from sqlite3 import Error as SQLiteError
 from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+
+_TEMPLATE_IO_EXCEPTIONS = (AttributeError, OSError, TypeError, ValueError)
+_TEMPLATE_INIT_EXCEPTIONS = (
+    LookupError,
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def load_builtin_templates() -> list[dict[str, Any]]:
@@ -55,9 +67,9 @@ def load_builtin_templates() -> list[dict[str, Any]]:
                     _append_template(data, f"pkg:{entry.name}")
                 except json.JSONDecodeError as e:
                     logger.error(f"Invalid JSON in template resource {entry}: {e}")
-                except Exception as e:
+                except _TEMPLATE_IO_EXCEPTIONS as e:
                     logger.error(f"Error loading template resource {entry}: {e}")
-    except Exception as e:
+    except _TEMPLATE_IO_EXCEPTIONS as e:
         logger.debug(f"importlib.resources scan failed for chunking templates: {e}")
 
     # Strategy 2: filesystem path relative to this file
@@ -71,11 +83,11 @@ def load_builtin_templates() -> list[dict[str, Any]]:
                     _append_template(template_data, f"fs:{template_file.name}")
                 except json.JSONDecodeError as e:
                     logger.error(f"Invalid JSON in template file {template_file}: {e}")
-                except Exception as e:
+                except _TEMPLATE_IO_EXCEPTIONS as e:
                     logger.error(f"Error loading template file {template_file}: {e}")
         else:
             logger.warning(f"Template library directory not found: {template_dir}")
-    except Exception as e:
+    except _TEMPLATE_IO_EXCEPTIONS as e:
         logger.debug(f"Filesystem scan failed for chunking templates: {e}")
 
     # Strategy 3: minimal, safe built-ins as last resort
@@ -207,7 +219,7 @@ def initialize_chunking_templates(db_path: str = None, client_id: str = 'system'
         logger.info(f"Successfully seeded {count} built-in templates into database")
         return count
 
-    except Exception as e:
+    except _TEMPLATE_INIT_EXCEPTIONS as e:
         logger.error(f"Error initializing chunking templates: {e}")
         return 0
 
@@ -262,7 +274,7 @@ def update_builtin_templates(db_path: str = None, client_id: str = 'system', for
 
         return updated_count
 
-    except Exception as e:
+    except _TEMPLATE_INIT_EXCEPTIONS as e:
         logger.error(f"Error updating built-in templates: {e}")
         return 0
 
@@ -300,7 +312,7 @@ def ensure_templates_initialized(db_path: str = None, db: MediaDatabase = None) 
 
         return True
 
-    except Exception as e:
+    except _TEMPLATE_INIT_EXCEPTIONS as e:
         logger.error(f"Failed to ensure templates initialized: {e}")
         return False
 

@@ -60,6 +60,8 @@ import { useVoiceChatSettings } from "@/hooks/useVoiceChatSettings"
 import { useVoiceChatStream } from "@/hooks/useVoiceChatStream"
 import { useVoiceChatMessages } from "@/hooks/useVoiceChatMessages"
 import { MentionsDropdown } from "./MentionsDropdown"
+import { ComposerTextarea } from "./ComposerTextarea"
+import { ComposerToolbar } from "./ComposerToolbar"
 import { otherUnsupportedTypes } from "../Knowledge/utils/unsupported-types"
 import { PASTED_TEXT_CHAR_LIMIT } from "@/utils/constant"
 import { isFireFoxPrivateMode } from "@/utils/is-private-mode"
@@ -218,6 +220,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     serverChatSource,
     setServerChatSource,
     setServerChatVersion,
+    messageSteeringMode,
+    setMessageSteeringMode,
+    messageSteeringForceNarrate,
+    setMessageSteeringForceNarrate,
+    clearMessageSteering,
     replyTarget,
     clearReplyTarget,
     ragPinnedResults
@@ -2072,6 +2079,150 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }
 
+  // --- ComposerTextarea callback handlers (extracted from inline JSX) ---
+  const handleCompositionStart = React.useCallback(() => {
+    if (!isFirefoxTarget) {
+      setTyping(true)
+    }
+  }, [])
+
+  const handleCompositionEnd = React.useCallback(() => {
+    if (!isFirefoxTarget) {
+      setTyping(false)
+    }
+  }, [])
+
+  const handleTextareaMouseDown = React.useCallback(() => {
+    if (isMessageCollapsed) {
+      pointerDownRef.current = true
+      selectionFromPointerRef.current = true
+    }
+  }, [isMessageCollapsed])
+
+  const handleTextareaMouseUp = React.useCallback(() => {
+    pointerDownRef.current = false
+    if (selectionFromPointerRef.current) {
+      requestAnimationFrame(() => {
+        selectionFromPointerRef.current = false
+      })
+    }
+  }, [])
+
+  const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (handleCollapsedKeyDown(e)) return
+    handleKeyDown(e)
+  }
+
+  const handleTextareaFocus = React.useCallback(() => {
+    handleDisconnectedFocus()
+    if (!isMessageCollapsed) return
+    const wasPointer = pointerDownRef.current
+    pointerDownRef.current = false
+    if (wasPointer) return
+    const textarea = textareaRef.current
+    if (pendingCaretRef.current === null && textarea) {
+      lastDisplaySelectionRef.current = {
+        start: textarea.selectionStart ?? 0,
+        end: textarea.selectionEnd ?? textarea.selectionStart ?? 0
+      }
+    }
+    syncCollapsedCaret()
+  }, [handleDisconnectedFocus, isMessageCollapsed, syncCollapsedCaret, textareaRef])
+
+  const handleTextareaChange = React.useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      if (isMessageCollapsed) return
+      form.getInputProps("message").onChange(e)
+      if (tabMentionsEnabled && textareaRef.current) {
+        handleTextChange(
+          e.target.value,
+          textareaRef.current.selectionStart || 0
+        )
+      }
+    },
+    [isMessageCollapsed, form, tabMentionsEnabled, textareaRef, handleTextChange]
+  )
+
+  const handleTextareaSelect = React.useCallback(() => {
+    const textarea = textareaRef.current
+    if (textarea) {
+      lastDisplaySelectionRef.current = {
+        start: textarea.selectionStart ?? 0,
+        end: textarea.selectionEnd ?? textarea.selectionStart ?? 0
+      }
+    }
+    if (isMessageCollapsed && collapsedRange) {
+      const message = form.values.message || ""
+      if (!message || !textarea) return
+      const meta =
+        collapsedDisplayMeta ??
+        getCollapsedDisplayMeta(message, collapsedRange)
+      const selectionStart = textarea.selectionStart ?? meta.labelStart
+      const selectionEnd = textarea.selectionEnd ?? selectionStart
+      const displayStart = Math.min(selectionStart, selectionEnd)
+      const displayEnd = Math.max(selectionStart, selectionEnd)
+      const hasSelection = displayStart !== displayEnd
+      const selectionTouchesLabel =
+        displayStart < meta.labelEnd && displayEnd > meta.labelStart
+      const fromPointer = selectionFromPointerRef.current
+      selectionFromPointerRef.current = false
+      if (hasSelection) {
+        pendingCaretRef.current = null
+        return
+      }
+      const caretInsideLabel =
+        displayStart > meta.labelStart && displayStart < meta.labelEnd
+      if (selectionTouchesLabel && fromPointer && caretInsideLabel) {
+        pendingCaretRef.current = meta.rangeEnd
+        expandLargeMessage({ force: true })
+        return
+      }
+      const prefer =
+        caretInsideLabel &&
+        (pendingCaretRef.current ?? meta.rangeEnd) <= meta.rangeStart
+          ? "before"
+          : "after"
+      const caret = getMessageCaretFromDisplay(displayStart, meta, {
+        prefer: caretInsideLabel ? prefer : undefined
+      })
+      pendingCaretRef.current = caret
+      if (caretInsideLabel) {
+        syncCollapsedCaret({ caret })
+      }
+      return
+    }
+    if (tabMentionsEnabled && textareaRef.current) {
+      handleTextChange(
+        textareaRef.current.value,
+        textareaRef.current.selectionStart || 0
+      )
+    }
+  }, [
+    textareaRef,
+    isMessageCollapsed,
+    collapsedRange,
+    form.values.message,
+    collapsedDisplayMeta,
+    getCollapsedDisplayMeta,
+    expandLargeMessage,
+    getMessageCaretFromDisplay,
+    syncCollapsedCaret,
+    tabMentionsEnabled,
+    handleTextChange
+  ])
+
+  const handleMentionSelect = React.useCallback(
+    (tab: any) =>
+      insertMention(tab, form.values.message, (value: string) =>
+        form.setFieldValue("message", value)
+      ),
+    [insertMention, form]
+  )
+
+  const handleMentionRefetch = React.useCallback(async () => {
+    await reloadTabs()
+  }, [reloadTabs])
+
   // Match sidepanel textarea sizing: Pro mode gets more space
   const textareaMaxHeight = isProMode ? 160 : 120
   useDynamicTextareaSize(textareaRef, messageDisplayValue, textareaMaxHeight)
@@ -2096,6 +2247,35 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const speechAvailable =
     browserSupportsSpeechRecognition || canUseServerAudio
   const speechUsesServer = canUseServerAudio
+
+  const speechTooltipText = React.useMemo(() => {
+    if (!speechAvailable) {
+      return t(
+        "playground:actions.speechUnavailableBody",
+        "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
+      ) as string
+    }
+    if (speechUsesServer) {
+      return (
+        (t("playground:tooltip.speechToTextServer", "Dictation via your tldw server") as string) +
+        " " +
+        (t("playground:tooltip.speechToTextDetails", "Uses {{model}} · {{task}} · {{format}}. Configure in Settings → General → Speech-to-Text.", {
+          model: sttModel || "whisper-1",
+          task: sttTask === "translate" ? "translate" : "transcribe",
+          format: (sttResponseFormat || "json").toUpperCase()
+        } as any) as string)
+      )
+    }
+    return t("playground:tooltip.speechToTextBrowser", "Dictation via browser speech recognition") as string
+  }, [speechAvailable, speechUsesServer, sttModel, sttTask, sttResponseFormat, t])
+
+  const handleTemplateSelect = React.useCallback(
+    (template: { content: string }) => {
+      setSystemPrompt(template.content)
+      setSelectedSystemPrompt(undefined)
+    },
+    [setSystemPrompt, setSelectedSystemPrompt]
+  )
 
   React.useEffect(() => {
     if (isListening) {
@@ -4566,7 +4746,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             onMouseLeave={handleComposerMouseLeave}
             onFocusCapture={handleComposerFocusCapture}
             onBlurCapture={handleComposerBlurCapture}
-            className={`relative w-full rounded-3xl border border-border/80 bg-surface/95 p-3 text-text shadow-card backdrop-blur-lg transition-all duration-200 data-[istemporary-chat='true']:border-t-4 data-[istemporary-chat='true']:border-t-purple-500 data-[istemporary-chat='true']:border-dashed data-[istemporary-chat='true']:opacity-90 ${
+            className={`relative w-full rounded-3xl border border-transparent bg-surface/95 p-3 text-text shadow-card backdrop-blur-lg transition-all duration-200 data-[istemporary-chat='true']:border-t-4 data-[istemporary-chat='true']:border-t-purple-500 data-[istemporary-chat='true']:border-dashed data-[istemporary-chat='true']:opacity-90 ${
               !isConnectionReady ? "opacity-80" : ""
             }`}>
             {/* Attachments summary (collapsed context management) */}
@@ -4710,7 +4890,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                       className={contextToolsOpen ? "mb-2" : "hidden"}
                       aria-hidden={!contextToolsOpen}
                     >
-                      <div className="rounded-md border border-border bg-surface p-3">
+                      <div className="rounded-md bg-surface2/50 p-3">
                         <div className="flex flex-col gap-4">
                           <div>
                             <div className="mb-2 text-xs font-semibold text-text">
@@ -4788,202 +4968,51 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           </button>
                         </div>
                       )}
-                      <div className="relative rounded-2xl border border-border/70 bg-surface/80 px-1 py-1.5 transition focus-within:border-focus/60 focus-within:ring-2 focus-within:ring-focus/30">
-                        <SlashCommandMenu
-                          open={showSlashMenu}
-                          commands={filteredSlashCommands}
-                          activeIndex={slashActiveIndex}
-                          onActiveIndexChange={setSlashActiveIndex}
-                          onSelect={handleSlashCommandSelect}
-                          emptyLabel={t(
-                            "common:commandPalette.noResults",
-                            "No results found"
-                          )}
-                          className="absolute bottom-full left-3 right-3 mb-2"
-                        />
-                        <textarea
-                          id="textarea-message"
-                          data-testid="chat-input"
-                          onCompositionStart={() => {
-                            if (!isFirefoxTarget) {
-                              setTyping(true)
-                            }
-                          }}
-                          onCompositionEnd={() => {
-                            if (!isFirefoxTarget) {
-                              setTyping(false)
-                            }
-                          }}
-                          onMouseDown={() => {
-                            if (isMessageCollapsed) {
-                              pointerDownRef.current = true
-                              selectionFromPointerRef.current = true
-                            }
-                          }}
-                          onMouseUp={() => {
-                            pointerDownRef.current = false
-                            if (selectionFromPointerRef.current) {
-                              requestAnimationFrame(() => {
-                                selectionFromPointerRef.current = false
-                              })
-                            }
-                          }}
-                          onKeyDown={(e) => {
-                            if (handleCollapsedKeyDown(e)) return
-                            handleKeyDown(e)
-                          }}
-                          onFocus={() => {
-                            handleDisconnectedFocus()
-                            if (!isMessageCollapsed) return
-                            const wasPointer = pointerDownRef.current
-                            pointerDownRef.current = false
-                            if (wasPointer) return
-                            const textarea = textareaRef.current
-                            if (pendingCaretRef.current === null && textarea) {
-                              lastDisplaySelectionRef.current = {
-                                start: textarea.selectionStart ?? 0,
-                                end: textarea.selectionEnd ?? textarea.selectionStart ?? 0
-                              }
-                            }
-                            syncCollapsedCaret()
-                          }}
-                          ref={textareaRef}
-                          className={`w-full resize-none bg-transparent text-base leading-6 text-text placeholder:text-text-muted/80 focus-within:outline-none focus:ring-0 focus-visible:ring-0 ring-0 border-0 ${
-                            !isConnectionReady
-                              ? "cursor-not-allowed text-text-muted placeholder:text-text-subtle"
-                              : ""
-                          } ${isProMode ? "px-3 py-2.5" : "px-3 py-2"}`}
-                          onPaste={handlePaste}
-                          aria-expanded={!isMessageCollapsed}
-                          rows={1}
-                          style={{ minHeight: isProMode ? "60px" : "44px" }}
-                          tabIndex={0}
-                          placeholder={
-                            isConnectionReady
-                              ? t("playground:composer.placeholderWithSlash", "Type a message... (/ for commands)")
-                              : t(
-                                  "playground:composer.connectionPlaceholder",
-                                  "Connect to tldw to start chatting."
-                                )
-                          }
-                          {...form.getInputProps("message")}
-                          value={messageDisplayValue}
-                          onChange={(e) => {
-                            if (isMessageCollapsed) return
-                            form.getInputProps("message").onChange(e)
-                            if (tabMentionsEnabled && textareaRef.current) {
-                              handleTextChange(
-                                e.target.value,
-                                textareaRef.current.selectionStart || 0
+                      <ComposerTextarea
+                        textareaRef={textareaRef}
+                        value={form.values.message}
+                        displayValue={messageDisplayValue}
+                        onChange={handleTextareaChange}
+                        onKeyDown={handleTextareaKeyDown}
+                        onPaste={handlePaste}
+                        onFocus={handleTextareaFocus}
+                        onSelect={handleTextareaSelect}
+                        onCompositionStart={handleCompositionStart}
+                        onCompositionEnd={handleCompositionEnd}
+                        onMouseDown={handleTextareaMouseDown}
+                        onMouseUp={handleTextareaMouseUp}
+                        placeholder={
+                          isConnectionReady
+                            ? t("playground:composer.placeholderWithSlash", "Type a message... (/ for commands)")
+                            : t(
+                                "playground:composer.connectionPlaceholder",
+                                "Connect to tldw to start chatting."
                               )
-                            }
-                          }}
-                          onSelect={() => {
-                            const textarea = textareaRef.current
-                            if (textarea) {
-                              lastDisplaySelectionRef.current = {
-                                start: textarea.selectionStart ?? 0,
-                                end: textarea.selectionEnd ?? textarea.selectionStart ?? 0
-                              }
-                            }
-                            if (isMessageCollapsed && collapsedRange) {
-                              const message = form.values.message || ""
-                              if (!message || !textarea) return
-                              const meta =
-                                collapsedDisplayMeta ??
-                                getCollapsedDisplayMeta(
-                                  message,
-                                  collapsedRange
-                                )
-                              const selectionStart =
-                                textarea.selectionStart ?? meta.labelStart
-                              const selectionEnd =
-                                textarea.selectionEnd ?? selectionStart
-                              const displayStart = Math.min(
-                                selectionStart,
-                                selectionEnd
-                              )
-                              const displayEnd = Math.max(
-                                selectionStart,
-                                selectionEnd
-                              )
-                              const hasSelection = displayStart !== displayEnd
-                              const selectionTouchesLabel =
-                                displayStart < meta.labelEnd &&
-                                displayEnd > meta.labelStart
-                              const fromPointer = selectionFromPointerRef.current
-                              selectionFromPointerRef.current = false
-                              if (hasSelection) {
-                                pendingCaretRef.current = null
-                                return
-                              }
-                              const caretInsideLabel =
-                                displayStart > meta.labelStart &&
-                                displayStart < meta.labelEnd
-                              if (
-                                selectionTouchesLabel &&
-                                fromPointer &&
-                                caretInsideLabel
-                              ) {
-                                pendingCaretRef.current = meta.rangeEnd
-                                expandLargeMessage({ force: true })
-                                return
-                              }
-                              const prefer =
-                                caretInsideLabel &&
-                                (pendingCaretRef.current ?? meta.rangeEnd) <=
-                                  meta.rangeStart
-                                  ? "before"
-                                  : "after"
-                              const caret = getMessageCaretFromDisplay(
-                                displayStart,
-                                meta,
-                                {
-                                  prefer: caretInsideLabel ? prefer : undefined
-                                }
-                              )
-                              pendingCaretRef.current = caret
-                              if (caretInsideLabel) {
-                                syncCollapsedCaret({ caret })
-                              }
-                              return
-                            }
-                            if (tabMentionsEnabled && textareaRef.current) {
-                              handleTextChange(
-                                textareaRef.current.value,
-                                textareaRef.current.selectionStart || 0
-                              )
-                            }
-                          }}
-                        />
-
-                        <MentionsDropdown
-                          show={showMentions}
-                          tabs={filteredTabs}
-                          mentionPosition={mentionPosition}
-                          onSelectTab={(tab) =>
-                            insertMention(tab, form.values.message, (value) =>
-                              form.setFieldValue("message", value)
-                            )
-                          }
-                          onClose={closeMentions}
-                          textareaRef={textareaRef}
-                          refetchTabs={async () => {
-                            await reloadTabs()
-                          }}
-                          onMentionsOpen={handleMentionsOpen}
-                        />
-                        {/* Draft saved indicator */}
-                        {draftSaved && (
-                          <span
-                            className="absolute bottom-1 right-2 text-label text-text-subtle transition-opacity pointer-events-none"
-                            role="status"
-                            aria-live="polite"
-                          >
-                            {t("sidepanel:composer.draftSaved", "Draft saved")}
-                          </span>
+                        }
+                        isProMode={isProMode}
+                        isMobile={isMobileViewport}
+                        isConnectionReady={isConnectionReady}
+                        isCollapsed={isMessageCollapsed}
+                        ariaExpanded={!isMessageCollapsed}
+                        formInputProps={form.getInputProps("message")}
+                        showSlashMenu={showSlashMenu}
+                        slashCommands={filteredSlashCommands}
+                        slashActiveIndex={slashActiveIndex}
+                        onSlashSelect={handleSlashCommandSelect}
+                        onSlashActiveIndexChange={setSlashActiveIndex}
+                        slashEmptyLabel={t(
+                          "common:commandPalette.noResults",
+                          "No results found"
                         )}
-                      </div>
+                        showMentions={showMentions}
+                        filteredTabs={filteredTabs}
+                        mentionPosition={mentionPosition}
+                        onMentionSelect={handleMentionSelect}
+                        onMentionsClose={closeMentions}
+                        onMentionRefetch={handleMentionRefetch}
+                        onMentionsOpen={handleMentionsOpen}
+                        draftSaved={draftSaved}
+                      />
                     </div>
                     {/* Inline error message with shake animation */}
                     {form.errors.message && (
@@ -5033,614 +5062,63 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                       <div
                         className={`transition-all duration-200 overflow-hidden ${actionBarVisibilityClass}`}
                       >
-                        {isProMode ? (
-                          <div className="mt-2 flex flex-col gap-1">
-                            <div className="mt-1 flex flex-col gap-2">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <PromptSelect
-                                  selectedSystemPrompt={selectedSystemPrompt}
-                                  setSelectedSystemPrompt={setSelectedSystemPrompt}
-                                  setSelectedQuickPrompt={setSelectedQuickPrompt}
-                                  iconClassName="h-4 w-4"
-                                  className="text-text-muted hover:text-text"
-                                />
-                                {modelSelectButton}
-                                <CharacterSelect
-                                  iconClassName="h-4 w-4"
-                                  className="text-text-muted hover:text-text"
-                                />
-                                {mcpControl}
-                              </div>
-                              {/* Enhanced Playground Features Row */}
-                              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/50 pt-2">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <ParameterPresets compact />
-                                </div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <SystemPromptTemplatesButton
-                                    onSelect={(template: PromptTemplate) => {
-                                      setSystemPrompt(template.content)
-                                      setSelectedSystemPrompt(undefined)
-                                    }}
-                                  />
-                                  {messages.length > 0 && (
-                                    <SessionCostEstimation
-                                      modelId={selectedModel}
-                                      provider={resolvedProviderKey}
-                                      messages={messages}
-                                    />
-                                  )}
-                                </div>
-                              </div>
-                              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                                <div className="flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
-                                  <Tooltip title={persistenceTooltip}>
-                                    <span>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          handleToggleTemporaryChat(!temporaryChat)
-                                        }
-                                        disabled={privateChatLocked || isFireFoxPrivateMode}
-                                        aria-pressed={temporaryChat}
-                                        aria-label={
-                                          temporaryChat
-                                            ? (t(
-                                                "playground:composer.ephemeralLabel",
-                                                "Ephemeral"
-                                              ) as string)
-                                            : (t(
-                                                "playground:composer.savedLabel",
-                                                "Saved"
-                                              ) as string)
-                                        }
-                                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition ${
-                                          temporaryChat
-                                            ? "border-accent bg-surface2 text-accent hover:bg-surface"
-                                            : "border-border text-text-muted hover:bg-surface2 hover:text-text"
-                                        } ${privateChatLocked || isFireFoxPrivateMode ? "cursor-not-allowed opacity-50" : ""}`}
-                                      >
-                                        {temporaryChat
-                                          ? t(
-                                              "playground:composer.ephemeralLabel",
-                                              "Ephemeral"
-                                            )
-                                          : t(
-                                              "playground:composer.savedLabel",
-                                              "Saved"
-                                            )}
-                                      </button>
-                                    </span>
-                                  </Tooltip>
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleKnowledgePanel("search")}
-                                    title={
-                                      contextToolsOpen
-                                        ? (t(
-                                            "playground:composer.contextKnowledgeClose",
-                                            "Close Search & Context"
-                                          ) as string)
-                                        : (t(
-                                            "playground:composer.contextKnowledge",
-                                            "Search & Context"
-                                          ) as string)
-                                    }
-                                    aria-pressed={contextToolsOpen}
-                                    aria-expanded={contextToolsOpen}
-                                    aria-label={
-                                      contextToolsOpen
-                                        ? (t(
-                                            "playground:composer.contextKnowledgeClose",
-                                            "Close Search & Context"
-                                          ) as string)
-                                        : (t(
-                                            "playground:composer.contextKnowledge",
-                                            "Search & Context"
-                                          ) as string)
-                                    }
-                                    className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition ${
-                                      contextToolsOpen
-                                        ? "border-accent bg-surface2 text-accent hover:bg-surface"
-                                        : "border-border text-text-muted hover:bg-surface2 hover:text-text"
-                                    }`}
-                                  >
-                                    <Search className="h-3 w-3" />
-                                    <span>
-                                      {contextToolsOpen
-                                        ? t(
-                                            "playground:composer.contextKnowledgeClose",
-                                            "Close Search & Context"
-                                          )
-                                        : t(
-                                            "playground:composer.contextKnowledge",
-                                            "Search & Context"
-                                          )}
-                                    </span>
-                                  </button>
-                                  {capabilities?.hasWebSearch && (
-                                    <button
-                                      type="button"
-                                      onClick={() => setWebSearch(!webSearch)}
-                                      aria-pressed={webSearch}
-                                      aria-label={
-                                        webSearch
-                                          ? (t("playground:actions.webSearchOn", "Web search on") as string)
-                                          : (t("playground:actions.webSearchOff", "Web search off") as string)
-                                      }
-                                      title={t("playground:actions.webSearchOff", "Web search") as string}
-                                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition ${
-                                        webSearch
-                                          ? "border-primary/50 bg-primary/10 text-primaryStrong hover:bg-primary/15"
-                                          : "border-border text-text-muted hover:bg-surface2 hover:text-text"
-                                      }`}
-                                    >
-                                      <Globe className="h-3 w-3" />
-                                      <span>
-                                        {t("playground:actions.webSearchOff", "Web")}
-                                      </span>
-                                    </button>
-                                  )}
-                                  {selectedDocuments.length > 0 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const chips =
-                                          document.querySelector<HTMLElement>(
-                                            "[data-playground-tabs='true']"
-                                          )
-                                        if (chips) {
-                                          chips.focus()
-                                          chips.scrollIntoView({ block: "nearest" })
-                                        }
-                                      }}
-                                      title={
-                                        t(
-                                          "playground:composer.contextTabsHint",
-                                          "Review or remove referenced tabs, or add more from your open browser tabs."
-                                        ) as string
-                                      }
-                                      className="inline-flex items-center gap-1 rounded-full border border-transparent px-2 py-0.5 hover:border-border hover:bg-surface2">
-                                      <FileText className="h-3 w-3 text-text-subtle" />
-                                      <span>
-                                        {t("playground:composer.contextTabs", {
-                                          defaultValue: "{{count}} tabs",
-                                          count: selectedDocuments.length
-                                        } as any) as string}
-                                      </span>
-                                    </button>
-                                  )}
-                                  {uploadedFiles.length > 0 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const files =
-                                          document.querySelector<HTMLElement>(
-                                            "[data-playground-uploads='true']"
-                                          )
-                                        if (files) {
-                                          files.focus()
-                                          files.scrollIntoView({ block: "nearest" })
-                                        }
-                                      }}
-                                      title={
-                                        t(
-                                          "playground:composer.contextFilesHint",
-                                          "Review attached files, remove them, or add more."
-                                        ) as string
-                                      }
-                                      className="inline-flex items-center gap-1 rounded-full border border-transparent px-2 py-0.5 hover:border-border hover:bg-surface2">
-                                      <FileIcon className="h-3 w-3 text-text-subtle" />
-                                      <span>
-                                        {t("playground:composer.contextFiles", {
-                                          defaultValue: "{{count}} files",
-                                          count: uploadedFiles.length
-                                        } as any) as string}
-                                      </span>
-                                    </button>
-                                  )}
-                                </div>
-                                <div className="flex items-center justify-end gap-3 flex-wrap">
-                                  <Tooltip
-                                    title={
-                                      t(
-                                        "option:promptInsert.useInChat",
-                                        "Insert prompt"
-                                      ) as string
-                                    }>
-                                    <button
-                                      type="button"
-                                      onClick={() => setPromptInsertOpen(true)}
-                                      aria-label={
-                                        t(
-                                          "option:promptInsert.useInChat",
-                                          "Insert prompt"
-                                        ) as string
-                                      }
-                                      className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-xs text-text-muted transition hover:bg-surface2 hover:text-text"
-                                    >
-                                      <BookPlus className="h-4 w-4" />
-                                      <span className="hidden text-xs font-medium sm:inline">
-                                        {t(
-                                          "option:promptInsert.useInChat",
-                                          "Insert prompt"
-                                        )}
-                                      </span>
-                                    </button>
-                                  </Tooltip>
-                                  {(browserSupportsSpeechRecognition || hasServerAudio) && (
-                                    <Tooltip
-                                      title={
-                                        !speechAvailable
-                                          ? t(
-                                              "playground:actions.speechUnavailableBody",
-                                              "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
-                                            )
-                                          : speechUsesServer
-                                            ? t(
-                                                "playground:tooltip.speechToTextServer",
-                                                "Dictation via your tldw server"
-                                              ) +
-                                              " " +
-                                              t(
-                                                "playground:tooltip.speechToTextDetails",
-                                                "Uses {{model}} · {{task}} · {{format}}. Configure in Settings → General → Speech-to-Text.",
-                                                {
-                                                  model: sttModel || "whisper-1",
-                                                  task:
-                                                    sttTask === "translate"
-                                                      ? "translate"
-                                                      : "transcribe",
-                                                  format: (sttResponseFormat || "json").toUpperCase()
-                                                } as any
-                                              )
-                                            : t(
-                                                "playground:tooltip.speechToTextBrowser",
-                                                "Dictation via browser speech recognition"
-                                              )
-                                      }
-                                    >
-                                      <button
-                                        type="button"
-                                        onClick={speechUsesServer ? handleServerDictationToggle : handleSpeechToggle}
-                                        disabled={!speechAvailable || voiceChatEnabled}
-                                        className={`inline-flex items-center justify-center rounded-full border text-xs transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${
-                                          speechAvailable &&
-                                          ((speechUsesServer && isServerDictating) ||
-                                            (!speechUsesServer && isListening))
-                                            ? "border-primary text-primaryStrong"
-                                            : "border-border text-text-muted"
-                                        } ${isProMode ? "px-2 py-1" : "h-9 w-9 p-0"}`}
-                                        aria-label={
-                                          !speechAvailable
-                                            ? (t(
-                                                "playground:actions.speechUnavailableTitle",
-                                                "Dictation unavailable"
-                                              ) as string)
-                                            : speechUsesServer
-                                              ? (isServerDictating
-                                                  ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                                  : (t("playground:actions.speechStart", "Start dictation") as string))
-                                              : (isListening
-                                                  ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                                  : (t("playground:actions.speechStart", "Start dictation") as string))
-                                        }
-                                      >
-                                        <MicIcon className="h-4 w-4" />
-                                      </button>
-                                    </Tooltip>
-                                  )}
-                                  {modelUsageBadge}
-                                  <Tooltip
-                                    title={
-                                      t(
-                                        "common:currentChatModelSettings"
-                                      ) as string
-                                    }>
-                                    <button
-                                      type="button"
-                                      onClick={() => setOpenModelSettings(true)}
-                                      aria-label={
-                                        t(
-                                          "common:currentChatModelSettings"
-                                        ) as string
-                                      }
-                                      className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs text-text transition hover:bg-surface2">
-                                      <Gauge
-                                        className="h-4 w-4"
-                                        aria-hidden="true"
-                                      />
-                                      <span className="flex flex-col items-start text-left">
-                                        <span className="font-medium">
-                                          {t("playground:composer.chatSettings", "Chat Settings")}
-                                        </span>
-                                        <span className="text-[11px] text-text-muted">
-                                          {modelSummaryLabel} • {promptSummaryLabel}
-                                        </span>
-                                      </span>
-                                    </button>
-                                  </Tooltip>
-                                  {voiceChatButton}
-                                  {attachmentButton}
-                                  {toolsButton}
-                                  {sendControl}
-                                </div>
-                              </div>
-                              {!temporaryChat && !isConnectionReady && (
-                                <button
-                                  type="button"
-                                  onClick={focusConnectionCard}
-                                  title={
-                                    t(
-                                      "playground:composer.persistence.connectToSave",
-                                      "Connect your server to sync chats."
-                                    ) as string
-                                  }
-                                  className="inline-flex w-fit items-center gap-1 text-[11px] font-medium text-primary hover:text-primaryStrong"
-                                >
-                                  {t(
-                                    "playground:composer.persistence.connectToSave",
-                                    "Connect your server to sync chats."
-                                  )}
-                                </button>
-                              )}
-                              {!temporaryChat && serverChatId && showServerPersistenceHint && (
-                                <p className="max-w-md text-[11px] text-text-muted">
-                                  <span className="font-semibold">
-                                    {t(
-                                      "playground:composer.persistence.serverInlineTitle",
-                                      "Saved locally + on your server"
-                                    )}
-                                    {": "}
-                                  </span>
-                                  {t(
-                                    "playground:composer.persistence.serverInlineBody",
-                                    "This chat is stored both in this browser and on your tldw server, so you can reopen it from server history, keep a long-term record, and analyze it alongside other conversations."
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => setShowServerPersistenceHint(false)}
-                                    title={t("common:dismiss", "Dismiss") as string}
-                                    className="ml-1 text-[11px] font-medium text-primary hover:text-primaryStrong"
-                                  >
-                                    {t("common:dismiss", "Dismiss")}
-                                  </button>
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="mt-2 flex flex-col gap-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <PromptSelect
-                                selectedSystemPrompt={selectedSystemPrompt}
-                                setSelectedSystemPrompt={setSelectedSystemPrompt}
-                                setSelectedQuickPrompt={setSelectedQuickPrompt}
-                                iconClassName="h-4 w-4"
-                                className="text-text-muted hover:text-text"
-                              />
-                              {modelSelectButton}
-                              <CharacterSelect
-                                showLabel={false}
-                                className="text-text-muted hover:text-text"
-                                iconClassName="h-4 w-4"
-                              />
-                              {mcpControl}
-                            </div>
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="flex items-center gap-2 flex-nowrap">
-                                <Tooltip title={persistenceTooltip}>
-                                  <span>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleToggleTemporaryChat(!temporaryChat)
-                                      }
-                                      disabled={privateChatLocked || isFireFoxPrivateMode}
-                                      aria-pressed={temporaryChat}
-                                      aria-label={
-                                        temporaryChat
-                                          ? (t(
-                                              "playground:composer.ephemeralLabel",
-                                              "Ephemeral"
-                                            ) as string)
-                                          : (t(
-                                              "playground:composer.savedLabel",
-                                              "Saved"
-                                            ) as string)
-                                      }
-                                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium transition ${
-                                        temporaryChat
-                                          ? "border-accent bg-surface2 text-accent hover:bg-surface"
-                                          : "border-border text-text-muted hover:bg-surface2 hover:text-text"
-                                      } ${privateChatLocked || isFireFoxPrivateMode ? "cursor-not-allowed opacity-50" : ""}`}
-                                    >
-                                      {temporaryChat
-                                        ? t(
-                                            "playground:composer.ephemeralLabel",
-                                            "Ephemeral"
-                                          )
-                                        : t(
-                                            "playground:composer.savedLabel",
-                                            "Saved"
-                                          )}
-                                    </button>
-                                  </span>
-                                </Tooltip>
-                                <button
-                                  type="button"
-                                  onClick={() => toggleKnowledgePanel("search")}
-                                  title={
-                                    contextToolsOpen
-                                      ? (t(
-                                          "playground:composer.contextKnowledgeClose",
-                                          "Close Search & Context"
-                                        ) as string)
-                                      : (t(
-                                          "playground:composer.contextKnowledge",
-                                          "Search & Context"
-                                        ) as string)
-                                  }
-                                  aria-pressed={contextToolsOpen}
-                                  aria-expanded={contextToolsOpen}
-                                  aria-label={
-                                    contextToolsOpen
-                                      ? (t(
-                                          "playground:composer.contextKnowledgeClose",
-                                          "Close Search & Context"
-                                        ) as string)
-                                      : (t(
-                                          "playground:composer.contextKnowledge",
-                                          "Search & Context"
-                                        ) as string)
-                                  }
-                                  className={`inline-flex min-w-0 max-w-[140px] items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium transition ${
-                                    contextToolsOpen
-                                      ? "border-accent bg-surface2 text-accent hover:bg-surface"
-                                      : "border-border text-text-muted hover:bg-surface2 hover:text-text"
-                                  }`}
-                                >
-                                  <Search className="h-3 w-3" />
-                                  <span className="truncate">
-                                    {contextToolsOpen
-                                      ? t(
-                                          "playground:composer.contextKnowledgeClose",
-                                          "Close Search & Context"
-                                        )
-                                      : t(
-                                          "playground:composer.contextKnowledge",
-                                          "Search & Context"
-                                        )}
-                                  </span>
-                                </button>
-                                {capabilities?.hasWebSearch && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setWebSearch(!webSearch)}
-                                    aria-pressed={webSearch}
-                                    aria-label={
-                                      webSearch
-                                        ? (t("playground:actions.webSearchOn", "Web search on") as string)
-                                        : (t("playground:actions.webSearchOff", "Web search off") as string)
-                                    }
-                                    title={t("playground:actions.webSearchOff", "Web search") as string}
-                                    className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium transition ${
-                                      webSearch
-                                        ? "border-primary/50 bg-primary/10 text-primaryStrong hover:bg-primary/15"
-                                        : "border-border text-text-muted hover:bg-surface2 hover:text-text"
-                                    }`}
-                                  >
-                                    <Globe className="h-3 w-3" />
-                                    <span className="truncate">
-                                      {t("playground:actions.webSearchOff", "Web")}
-                                    </span>
-                                  </button>
-                                )}
-                              </div>
-                              <div className="flex items-center gap-2 flex-nowrap">
-                                <Tooltip
-                                  title={
-                                    t(
-                                      "option:promptInsert.useInChat",
-                                      "Insert prompt"
-                                    ) as string
-                                  }>
-                                  <button
-                                    type="button"
-                                    onClick={() => setPromptInsertOpen(true)}
-                                    aria-label={
-                                      t(
-                                        "option:promptInsert.useInChat",
-                                        "Insert prompt"
-                                      ) as string
-                                    }
-                                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border text-text-muted transition hover:bg-surface2 hover:text-text"
-                                  >
-                                    <BookPlus className="h-4 w-4" />
-                                  </button>
-                                </Tooltip>
-                                {(browserSupportsSpeechRecognition || hasServerAudio) && (
-                                  <Tooltip
-                                    title={
-                                      !speechAvailable
-                                        ? t(
-                                            "playground:actions.speechUnavailableBody",
-                                            "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
-                                          )
-                                        : speechUsesServer
-                                          ? t(
-                                              "playground:tooltip.speechToTextServer",
-                                              "Dictation via your tldw server"
-                                            )
-                                          : t(
-                                              "playground:tooltip.speechToTextBrowser",
-                                              "Dictation via browser speech recognition"
-                                            )
-                                    }>
-                                    <button
-                                      type="button"
-                                      onClick={speechUsesServer ? handleServerDictationToggle : handleSpeechToggle}
-                                      disabled={!speechAvailable || voiceChatEnabled}
-                                      className={`inline-flex items-center justify-center rounded-full border px-2 py-1 text-xs transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${
-                                        speechAvailable &&
-                                        ((speechUsesServer && isServerDictating) ||
-                                          (!speechUsesServer && isListening))
-                                          ? "border-primary text-primaryStrong"
-                                          : "border-border text-text-muted"
-                                      }`}
-                                      aria-label={
-                                        !speechAvailable
-                                          ? (t(
-                                              "playground:actions.speechUnavailableTitle",
-                                              "Dictation unavailable"
-                                            ) as string)
-                                          : speechUsesServer
-                                            ? (isServerDictating
-                                                ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                                : (t("playground:actions.speechStart", "Start dictation") as string))
-                                            : (isListening
-                                                ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                                : (t("playground:actions.speechStart", "Start dictation") as string))
-                                      }>
-                                      <MicIcon className="h-4 w-4" />
-                                    </button>
-                                  </Tooltip>
-                                )}
-                                {modelUsageBadge}
-                                <Tooltip
-                                  title={
-                                    t(
-                                      "common:currentChatModelSettings"
-                                    ) as string
-                                  }>
-                                  <TldwButton
-                                    variant="outline"
-                                    shape="pill"
-                                    iconOnly
-                                    onClick={() => setOpenModelSettings(true)}
-                                    ariaLabel={
-                                      t(
-                                        "common:currentChatModelSettings"
-                                      ) as string
-                                    }
-                                    className="text-text-muted">
-                                    <Gauge className="h-4 w-4" aria-hidden="true" />
-                                    <span className="sr-only">
-                                      {t(
-                                        "playground:composer.chatSettings",
-                                        "Chat Settings"
-                                      )}
-                                    </span>
-                                  </TldwButton>
-                                </Tooltip>
-                                {voiceChatButton}
-                                {attachmentButton}
-                                {toolsButton}
-                                {sendControl}
-                              </div>
-                            </div>
-                          </div>
-                        )}
+                        <ComposerToolbar
+                          isProMode={isProMode}
+                          isMobile={isMobileViewport}
+                          isConnectionReady={isConnectionReady}
+                          isSending={isSending}
+                          modelSelectButton={modelSelectButton}
+                          mcpControl={mcpControl}
+                          sendControl={sendControl}
+                          attachmentButton={attachmentButton}
+                          toolsButton={toolsButton}
+                          voiceChatButton={voiceChatButton}
+                          modelUsageBadge={modelUsageBadge}
+                          selectedSystemPrompt={selectedSystemPrompt}
+                          setSelectedSystemPrompt={setSelectedSystemPrompt}
+                          setSelectedQuickPrompt={setSelectedQuickPrompt}
+                          temporaryChat={temporaryChat}
+                          onToggleTemporaryChat={handleToggleTemporaryChat}
+                          privateChatLocked={privateChatLocked}
+                          isFireFoxPrivateMode={isFireFoxPrivateMode}
+                          persistenceTooltip={persistenceTooltip}
+                          contextToolsOpen={contextToolsOpen}
+                          onToggleKnowledgePanel={toggleKnowledgePanel}
+                          webSearch={webSearch}
+                          onToggleWebSearch={() => setWebSearch(!webSearch)}
+                          hasWebSearch={!!capabilities?.hasWebSearch}
+                          onOpenPromptInsert={() => setPromptInsertOpen(true)}
+                          onOpenModelSettings={() => setOpenModelSettings(true)}
+                          modelSummaryLabel={modelSummaryLabel}
+                          promptSummaryLabel={promptSummaryLabel}
+                          messageSteeringMode={messageSteeringMode}
+                          onMessageSteeringModeChange={setMessageSteeringMode}
+                          messageSteeringForceNarrate={
+                            messageSteeringForceNarrate
+                          }
+                          onMessageSteeringForceNarrateChange={
+                            setMessageSteeringForceNarrate
+                          }
+                          onClearMessageSteering={clearMessageSteering}
+                          hasDictation={!!(browserSupportsSpeechRecognition || hasServerAudio)}
+                          speechAvailable={speechAvailable}
+                          speechUsesServer={speechUsesServer}
+                          isListening={isListening}
+                          isServerDictating={isServerDictating}
+                          voiceChatEnabled={voiceChatEnabled}
+                          speechTooltip={speechTooltipText}
+                          onDictationToggle={speechUsesServer ? handleServerDictationToggle : handleSpeechToggle}
+                          onTemplateSelect={handleTemplateSelect}
+                          selectedModel={selectedModel}
+                          resolvedProviderKey={resolvedProviderKey}
+                          messages={messages}
+                          selectedDocumentsCount={selectedDocuments.length}
+                          uploadedFilesCount={uploadedFiles.length}
+                          serverChatId={serverChatId}
+                          showServerPersistenceHint={showServerPersistenceHint}
+                          onDismissServerPersistenceHint={() => setShowServerPersistenceHint(false)}
+                          onFocusConnectionCard={focusConnectionCard}
+                        />
                       </div>
                     ) : null}
                     {showConnectBanner && !isConnectionReady && (

@@ -657,6 +657,50 @@ class TestCharacterAPIIntegration:
         assert db_char is not None
         assert db_char["description"] == "Imported from PNG."
 
+    def test_export_character_v2_format_integration(self, client: TestClient):
+        create_payload = create_sample_character_payload(
+            "ExportV2",
+            description="V2 export description",
+            personality="V2 export personality",
+            scenario="V2 export scenario",
+            first_message="V2 first message",
+            message_example="User: Hi\nCharacter: Hello",
+            creator_notes="V2 notes",
+            system_prompt="V2 system prompt",
+            post_history_instructions="V2 post-history",
+            alternate_greetings=["Alt 1", "Alt 2"],
+            tags=["v2", "export"],
+            creator="QA",
+            character_version="2.4",
+        )
+        create_response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/", json=create_payload)
+        assert create_response.status_code == 201, create_response.text
+        character_id = create_response.json()["id"]
+
+        export_response = client.get(f"{CHARACTERS_ENDPOINT_PREFIX}/{character_id}/export?format=v2")
+        assert export_response.status_code == 200, export_response.text
+        data = export_response.json()
+
+        assert data["spec"] == "chara_card_v2"
+        assert data["spec_version"] == "2.0"
+        assert "data" in data and isinstance(data["data"], dict)
+        assert data["data"]["name"] == create_payload["name"]
+        assert data["data"]["description"] == create_payload["description"]
+        assert data["data"]["personality"] == create_payload["personality"]
+        assert data["data"]["scenario"] == create_payload["scenario"]
+        assert data["data"]["first_mes"] == create_payload["first_message"]
+        assert data["data"]["mes_example"] == create_payload["message_example"]
+        assert data["data"]["creator_notes"] == create_payload["creator_notes"]
+        assert data["data"]["system_prompt"] == create_payload["system_prompt"]
+        assert data["data"]["post_history_instructions"] == create_payload["post_history_instructions"]
+        assert data["data"]["alternate_greetings"] == create_payload["alternate_greetings"]
+        assert data["data"]["tags"] == create_payload["tags"]
+        assert data["data"]["creator"] == create_payload["creator"]
+        assert data["data"]["character_version"] == create_payload["character_version"]
+        assert isinstance(data["data"]["extensions"], dict)
+        assert data["data"]["char_image"]
+        assert data["character_image"] == data["data"]["char_image"]
+
 
 # ======================= PROPERTY-BASED TESTS (API) =========================
 

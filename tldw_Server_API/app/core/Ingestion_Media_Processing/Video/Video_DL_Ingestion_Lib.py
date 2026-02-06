@@ -148,6 +148,25 @@ _KEEP_VIDEO_MAX_BYTES = _KEEP_VIDEO_MAX_STORAGE_MB * 1024 * 1024
 _KEEP_VIDEO_RETENTION_SECONDS = max(0, int(media_config.get('kept_video_retention_hours', 2))) * 3600
 _VIDEO_STORAGE_ROOT = Path(tempfile.gettempdir()) / "tldw_kept_videos"
 
+_VIDEO_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 def _safe_remove_file(file_path: Path) -> None:
     """Attempt to remove a file while swallowing non-critical errors."""
@@ -155,7 +174,7 @@ def _safe_remove_file(file_path: Path) -> None:
         if file_path.exists():
             file_path.unlink()
             logging.debug(f"Removed stored video: {file_path}")
-    except Exception as exc:
+    except _VIDEO_NONCRITICAL_EXCEPTIONS as exc:
         logging.warning(f"Failed to remove stored video '{file_path}': {exc}")
 
 
@@ -271,7 +290,7 @@ def _store_video_file(source_path: Path, user_id: Optional[int]) -> Optional[Pat
     try:
         shutil.copy2(source_path, destination)
         logging.info(f"Stored kept video copy at {destination}")
-    except Exception as exc:  # noqa: BLE001
+    except _VIDEO_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
         logging.error(f"Failed to copy video '{source_path}' into kept storage: {exc}", exc_info=True)
         return None
 
@@ -301,7 +320,7 @@ def _resolve_eval_api_key(api_name: Optional[str]) -> Optional[str]:
         provider_section = loaded_config_data.get(section_key, {}) if loaded_config_data else {}
         if isinstance(provider_section, dict):
             api_key = provider_section.get("api_key")
-    except Exception:
+    except _VIDEO_NONCRITICAL_EXCEPTIONS:
         api_key = None
 
     if not api_key:
@@ -362,13 +381,13 @@ def get_video_info(url: str, *, use_cookies: bool = False, cookies: Optional[dic
             cookie_header = _cookies_to_header_value(cookies)
             if cookie_header:
                 ydl_opts.setdefault('http_headers', {})['Cookie'] = cookie_header
-        except Exception:
+        except _VIDEO_NONCRITICAL_EXCEPTIONS:
             pass
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
             info_dict = ydl.extract_info(url, download=False)
             return info_dict
-        except Exception as e:
+        except _VIDEO_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Error extracting video info: {e}")
             return None
 
@@ -385,7 +404,7 @@ def get_youtube(video_url: str, *, use_cookies: bool = False, cookies: Optional[
             cookie_header = _cookies_to_header_value(cookies)
             if cookie_header:
                 ydl_opts.setdefault('http_headers', {})['Cookie'] = cookie_header
-        except Exception:
+        except _VIDEO_NONCRITICAL_EXCEPTIONS:
             pass
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         logging.debug("About to extract youtube info")
@@ -405,7 +424,7 @@ def get_playlist_videos(playlist_url: str, *, use_cookies: bool = False, cookies
             cookie_header = _cookies_to_header_value(cookies)
             if cookie_header:
                 ydl_opts.setdefault('http_headers', {})['Cookie'] = cookie_header
-        except Exception:
+        except _VIDEO_NONCRITICAL_EXCEPTIONS:
             pass
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -535,7 +554,7 @@ def download_video(
         logging.info(f"Downloaded media for transcription: {downloaded_path}")
         return str(downloaded_path)
 
-    except Exception as exc:
+    except _VIDEO_NONCRITICAL_EXCEPTIONS as exc:
         logging.error(f"Failed to download media from {video_url}: {exc}", exc_info=True)
         raise
 
@@ -553,7 +572,7 @@ def extract_video_info(url):
             logging.debug(f"Extracted info for {url}: {log_info}")
 
             return info
-    except Exception as e:
+    except _VIDEO_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error extracting video info for {url}: {str(e)}", exc_info=True)
         return None
 
@@ -591,10 +610,10 @@ def parse_and_expand_urls(urls):
                 "youtube-nocookie.com",
             )
 
-            def _matches_youtube_host(hostname: str) -> bool:
+            def _matches_youtube_host(hostname: str, _hwp=host_without_port) -> bool:
                 return (
-                    host_without_port == hostname
-                    or host_without_port.endswith(f".{hostname}")
+                    _hwp == hostname
+                    or _hwp.endswith(f".{hostname}")
                 )
 
             if any(_matches_youtube_host(host) for host in youtube_playlist_hosts):
@@ -648,7 +667,7 @@ def parse_and_expand_urls(urls):
                 logging.info(f"URL not recognized as special case, adding as-is: {url}")
                 expanded_urls.append(url)
 
-        except Exception as e:
+        except _VIDEO_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Error processing URL {url}: {str(e)}", exc_info=True)
             expanded_urls.append(url)
 
@@ -711,7 +730,7 @@ def _cookies_to_header_value(cookies) -> Optional[str]:
                 parts.append(f"{k}={v}")
             return "; ".join(parts) if parts else None
         return None
-    except Exception:
+    except _VIDEO_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -754,7 +773,7 @@ def extract_metadata(url, use_cookies=False, cookies=None):
 
             logging.info(f"Successfully extracted metadata for {url}: {safe_metadata}")
             return metadata
-        except Exception as e:
+        except _VIDEO_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Error extracting metadata for {url}: {str(e)}", exc_info=True)
             return None
 
@@ -870,7 +889,7 @@ def process_videos(
             return False
         try:
             return bool(cancel_check())
-        except Exception as exc:
+        except _VIDEO_NONCRITICAL_EXCEPTIONS as exc:
             logging.warning(f"cancel_check raised an error: {exc}")
             return False
 
@@ -1071,7 +1090,7 @@ def process_videos(
             for remaining_input in inputs[idx + 1:]:
                 results.append(_cancelled_result(remaining_input))
             break
-        except Exception as exc:
+        except _VIDEO_NONCRITICAL_EXCEPTIONS as exc:
             msg = f"Exception processing '{video_input}': {exc}"
             logging.error(msg, exc_info=True)
             errors.append(msg)
@@ -1134,7 +1153,7 @@ def process_videos(
                             user_identifier=user_identifier,
                         )
                         confab_results.append(f"URL: {url} - {pair_result}")
-                    except Exception as confab_err:
+                    except _VIDEO_NONCRITICAL_EXCEPTIONS as confab_err:
                         logging.error(f"Confabulation check failed for {url}: {confab_err}", exc_info=True)
                         confab_results.append(f"URL: {url} - Confabulation error: {confab_err}")
 
@@ -1229,7 +1248,7 @@ def process_single_video(
             return False
         try:
             return bool(cancel_check())
-        except Exception as exc:
+        except _VIDEO_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"cancel_check raised an error: {exc}")
             return False
 
@@ -1407,7 +1426,7 @@ def process_single_video(
                 derived_text = intermediate_wav_path
             else:
                 derived_text = extract_text_from_segments(segments, include_timestamps=timestamp_option)
-        except Exception:
+        except _VIDEO_NONCRITICAL_EXCEPTIONS:
             derived_text = extract_text_from_segments(segments, include_timestamps=timestamp_option)
         processing_result["content"] = derived_text
         processing_result["analysis_details"]["whisper_model"] = transcription_model
@@ -1419,7 +1438,7 @@ def process_single_video(
              try:
                  os.remove(intermediate_wav_path)
                  logger.debug(f"Removed intermediate transcription audio file: {intermediate_wav_path}")
-             except Exception as e:
+             except _VIDEO_NONCRITICAL_EXCEPTIONS as e:
                  warn_msg = f"Failed to remove intermediate audio file: {intermediate_wav_path} ({e})"
                  logging.warning(warn_msg)
                  processing_result["warnings"].append(warn_msg)
@@ -1498,7 +1517,7 @@ def process_single_video(
                                          chunk_summaries.append(csum)
                                          # Optionally store chunk summary in chunk metadata if needed later
                                          chunk_block.setdefault("metadata", {})["summary"] = csum
-                                 except Exception as chunk_summ_err:
+                                 except _VIDEO_NONCRITICAL_EXCEPTIONS as chunk_summ_err:
                                       warn_msg = f"Summarization failed for chunk {i}: {chunk_summ_err}"
                                       logging.warning(warn_msg)
                                       processing_result["warnings"].append(warn_msg)
@@ -1512,7 +1531,7 @@ def process_single_video(
                                  combined_chunk_summaries = "\n\n---\n\n".join(chunk_summaries) # Use separator
                                  try:
                                      analysis_text = analyze(api_name, combined_chunk_summaries, custom_prompt or "Summarize the key points from the preceding text sections.", None, system_message=system_prompt)  # Pass None for api_key
-                                 except Exception as rec_summ_err:
+                                 except _VIDEO_NONCRITICAL_EXCEPTIONS as rec_summ_err:
                                      warn_msg = f"Recursive summarization failed: {rec_summ_err}"
                                      logging.warning(warn_msg)
                                      processing_result["warnings"].append(warn_msg)
@@ -1524,14 +1543,14 @@ def process_single_video(
                               logging.warning(warn_msg)
                               processing_result["warnings"].append(warn_msg)
 
-                except Exception as chunk_err:
+                except _VIDEO_NONCRITICAL_EXCEPTIONS as chunk_err:
                     warn_msg = f"Chunking process failed: {chunk_err}. Analysis will use full text."
                     logging.warning(warn_msg, exc_info=True)
                     processing_result["warnings"].append(warn_msg)
                     # Fallback: Summarize original text if chunking fails
                     try:
                         analysis_text = analyze(api_name, text_to_analyze, custom_prompt, None, system_message=system_prompt)  # Pass None for api_key
-                    except Exception as summ_err:
+                    except _VIDEO_NONCRITICAL_EXCEPTIONS as summ_err:
                          warn_msg = f"Summarization failed after chunking error: {summ_err}"
                          logging.error(warn_msg, exc_info=True)
                          processing_result["warnings"].append(warn_msg)
@@ -1540,7 +1559,7 @@ def process_single_video(
                  logger.info(f"Performing single-pass analysis for {local_file_path_for_transcription}")
                  try:
                      analysis_text = analyze(api_name, text_to_analyze, custom_prompt, None, system_message=system_prompt)  # Pass None for api_key
-                 except Exception as summ_err:
+                 except _VIDEO_NONCRITICAL_EXCEPTIONS as summ_err:
                      warn_msg = f"Summarization failed: {summ_err}"
                      logging.error(warn_msg, exc_info=True)
                      processing_result["warnings"].append(warn_msg)
@@ -1594,7 +1613,7 @@ def process_single_video(
         # *** Ensure input_ref is original on error ***
         processing_result["input_ref"] = video_input
         return processing_result
-    except Exception as e:
+    except _VIDEO_NONCRITICAL_EXCEPTIONS as e:
         # Catch-all for unexpected errors during the process
         logger.error(f"Unexpected exception processing {video_input}: {e}", exc_info=True)
         processing_result["status"] = "Error"

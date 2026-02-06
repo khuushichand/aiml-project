@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import configparser
 import hashlib
+import json
 import os
 import re
 import threading
@@ -16,7 +17,7 @@ import time
 import weakref
 from functools import wraps
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 #
 # Third-party Libraries
@@ -25,26 +26,13 @@ from loguru import logger
 from prometheus_client import REGISTRY, Counter, Gauge  # Assuming these are defined elsewhere or used directly
 from pydantic import BaseModel, Field
 
+if TYPE_CHECKING:
+    from transformers import AutoModel, AutoTokenizer
+
 # NOTE: Avoid importing heavy deps (torch, transformers) at module import time.
 # Import them lazily inside functions/methods when needed to keep app import light.
 
 _EMBEDDINGS_IMPORT_EXCEPTIONS = (ImportError, OSError, RuntimeError)
-_EMBEDDINGS_NONCRITICAL_EXCEPTIONS = (
-    OSError,
-    ValueError,
-    TypeError,
-    KeyError,
-    RuntimeError,
-    AttributeError,
-    ConnectionError,
-    TimeoutError,
-    asyncio.TimeoutError,
-    json.JSONDecodeError,
-    re.error,
-    InvalidStoragePathError,
-    NetworkError,
-    RetryExhaustedError,
-)
 
 def _import_torch():
     """Lazily import torch only when actually needed."""
@@ -102,6 +90,23 @@ from tldw_Server_API.app.core.LLM_Calls.chat_calls import get_openai_embeddings_
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram  # Keep your existing metrics
 from tldw_Server_API.app.core.Utils.path_utils import safe_join
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+
+_EMBEDDINGS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    asyncio.TimeoutError,
+    json.JSONDecodeError,
+    re.error,
+    InvalidStoragePathError,
+    NetworkError,
+    RetryExhaustedError,
+)
 
 #
 ########################################################################################################################

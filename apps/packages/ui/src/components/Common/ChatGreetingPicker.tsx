@@ -119,7 +119,9 @@ export const ChatGreetingPicker: React.FC<Props> = ({
     const defaultId = greetingOptions[0]?.id ?? null
     await updateSettings({
       useCharacterDefault: checked,
-      greetingSelectionId: checked ? defaultId : storedSelectionId,
+      greetingSelectionId: checked
+        ? defaultId
+        : storedSelectionId ?? selectedOption?.id ?? null,
       greetingsChecksum: checksum
     })
   }

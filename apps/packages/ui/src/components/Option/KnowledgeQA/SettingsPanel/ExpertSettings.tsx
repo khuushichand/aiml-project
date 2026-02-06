@@ -2,7 +2,7 @@
  * ExpertSettings - Full 150+ RAG options organized into sections
  */
 
-import React, { useState } from "react"
+import React, { useMemo, useState } from "react"
 import {
   ChevronDown,
   ChevronRight,
@@ -16,8 +16,10 @@ import {
   CheckCircle2,
   Quote,
   Gauge,
+  SlidersHorizontal,
 } from "lucide-react"
 import { useKnowledgeQA } from "../KnowledgeQAProvider"
+import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { cn } from "@/lib/utils"
 import type { RagSettings } from "@/services/rag/unified-rag"
 
@@ -98,7 +100,69 @@ const SECTIONS: SectionConfig[] = [
     icon: Zap,
     description: "Timeout, caching, resilience",
   },
+  {
+    id: "all_options",
+    title: "All Options",
+    icon: SlidersHorizontal,
+    description: "Complete key-level access for every RAG option",
+  },
 ]
+
+type RagKey = keyof RagSettings
+
+const NULLABLE_STRING_KEYS = new Set<RagKey>([
+  "generation_model",
+  "generation_prompt",
+  "user_id",
+  "session_id",
+  "vlm_backend",
+  "agentic_vlm_backend",
+  "grading_model",
+  "grading_provider",
+  "fast_hallucination_provider",
+  "fast_hallucination_model",
+  "utility_grading_provider",
+  "utility_grading_model",
+])
+
+const NULLABLE_NUMBER_KEYS = new Set<RagKey>([
+  "accumulation_time_budget_sec",
+  "subquery_time_budget_sec",
+  "subquery_doc_budget",
+])
+
+const SETTING_ENUM_OPTIONS: Partial<Record<RagKey, string[]>> = {
+  strategy: ["standard", "agentic"],
+  search_mode: ["fts", "vector", "hybrid"],
+  fts_level: ["media", "chunk"],
+  table_method: ["markdown", "html", "hybrid"],
+  claim_extractor: ["aps", "claimify", "ner", "auto"],
+  claim_verifier: ["nli", "llm", "hybrid"],
+  reranking_strategy: [
+    "flashrank",
+    "cross_encoder",
+    "hybrid",
+    "llama_cpp",
+    "llm_scoring",
+    "two_tier",
+    "none",
+  ],
+  citation_style: ["apa", "mla", "chicago", "harvard", "ieee"],
+  abstention_behavior: ["continue", "ask", "decline"],
+  content_policy_mode: ["redact", "drop", "annotate"],
+  low_confidence_behavior: ["continue", "ask", "decline"],
+  numeric_fidelity_behavior: ["continue", "ask", "decline", "retry"],
+  numeric_precision_mode: ["standard", "strict", "academic"],
+  web_fallback_merge_strategy: ["prepend", "append", "interleave"],
+  sensitivity_level: ["public", "internal", "confidential", "restricted"],
+}
+
+const AUTO_OPTION_EXCLUDED_KEYS = new Set<RagKey>(["query"])
+
+const AUTO_OPTION_KEYS = (settings: RagSettings): RagKey[] =>
+  (Object.keys(settings) as RagKey[])
+    .filter((key) => !AUTO_OPTION_EXCLUDED_KEYS.has(key))
+    .sort((a, b) => a.localeCompare(b))
 
 export function ExpertSettings() {
   const { settings, updateSetting } = useKnowledgeQA()
@@ -215,6 +279,8 @@ function SectionContent({ sectionId, settings, updateSetting }: SectionContentPr
       return <SecuritySection settings={settings} updateSetting={updateSetting} />
     case "performance":
       return <PerformanceSection settings={settings} updateSetting={updateSetting} />
+    case "all_options":
+      return <AllOptionsSection settings={settings} updateSetting={updateSetting} />
     default:
       return <div className="text-sm text-text-muted">Section not found</div>
   }
@@ -331,8 +397,273 @@ function SettingSelect({
   )
 }
 
+const ARRAY_VALUE_KIND_BY_KEY: Partial<Record<RagKey, "string" | "number">> = {
+  include_media_ids: "number",
+  include_note_ids: "number",
+  expansion_strategies: "string",
+  chunk_type_filter: "string",
+  content_policy_types: "string",
+  html_allowed_tags: "string",
+  html_allowed_attrs: "string",
+  batch_queries: "string",
+  ground_truth_doc_ids: "string",
+}
+
+function formatArrayDraft(values: unknown[]): string {
+  return values.map((entry) => String(entry)).join(", ")
+}
+
+function parseArrayDraft(
+  key: RagKey,
+  draft: string
+): { parsed: unknown[]; error?: string } {
+  const normalized = draft.trim()
+  if (!normalized) {
+    return { parsed: [] }
+  }
+  const chunks = normalized
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+
+  const kind = ARRAY_VALUE_KIND_BY_KEY[key]
+  if (kind === "number") {
+    const numbers = chunks.map((part) => Number(part))
+    if (numbers.some((value) => !Number.isFinite(value))) {
+      return { parsed: [], error: "Use comma-separated numbers only." }
+    }
+    return { parsed: numbers }
+  }
+
+  return { parsed: chunks }
+}
+
+function AutoArrayInput({
+  fieldKey,
+  values,
+  onChange,
+}: {
+  fieldKey: RagKey
+  values: unknown[]
+  onChange: (next: unknown[]) => void
+}) {
+  const [draft, setDraft] = useState(() => formatArrayDraft(values))
+  const [error, setError] = useState<string | null>(null)
+
+  React.useEffect(() => {
+    setDraft(formatArrayDraft(values))
+  }, [values])
+
+  const commitDraft = () => {
+    const parsed = parseArrayDraft(fieldKey, draft)
+    if (parsed.error) {
+      setError(parsed.error)
+      return
+    }
+    setError(null)
+    onChange(parsed.parsed)
+  }
+
+  return (
+    <div className="space-y-1">
+      <input
+        type="text"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commitDraft}
+        className={cn(
+          "w-full px-2.5 py-1.5 text-sm rounded-md border bg-surface focus:outline-none focus:ring-2 focus:ring-primary",
+          error ? "border-danger" : "border-border"
+        )}
+      />
+      <p className="text-[11px] text-text-muted">Comma-separated values</p>
+      {error ? <p className="text-[11px] text-danger">{error}</p> : null}
+    </div>
+  )
+}
+
+function AutoOptionRow({
+  fieldKey,
+  settings,
+  updateSetting,
+}: {
+  fieldKey: RagKey
+  settings: RagSettings
+  updateSetting: <K extends keyof RagSettings>(key: K, value: RagSettings[K]) => void
+}) {
+  const value = settings[fieldKey]
+  const setValue = (next: unknown) =>
+    updateSetting(fieldKey, next as RagSettings[typeof fieldKey])
+  const enumValues = SETTING_ENUM_OPTIONS[fieldKey]
+
+  let control: React.ReactNode = (
+    <div className="text-xs text-text-muted">Unsupported value type</div>
+  )
+
+  if (typeof value === "boolean") {
+    const labelId = `auto-setting-${fieldKey}`
+    control = (
+      <button
+        role="switch"
+        aria-checked={value}
+        aria-labelledby={labelId}
+        onClick={() => setValue(!value)}
+        className={cn(
+          "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
+          value ? "bg-primary" : "bg-muted"
+        )}
+      >
+        <span
+          className={cn(
+            "inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform",
+            value ? "translate-x-5" : "translate-x-1"
+          )}
+        />
+      </button>
+    )
+    return (
+      <div className="p-3 flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div id={labelId} className="text-sm font-medium font-mono break-all">
+            {fieldKey}
+          </div>
+          <div className="text-[11px] text-text-muted">boolean</div>
+        </div>
+        {control}
+      </div>
+    )
+  }
+
+  if (typeof value === "number" || (value === null && NULLABLE_NUMBER_KEYS.has(fieldKey))) {
+    const step = typeof value === "number" && Number.isInteger(value) ? 1 : 0.01
+    control = (
+      <input
+        type="number"
+        value={typeof value === "number" && Number.isFinite(value) ? value : ""}
+        placeholder={NULLABLE_NUMBER_KEYS.has(fieldKey) ? "null" : undefined}
+        step={step}
+        onChange={(event) => {
+          const raw = event.target.value
+          if (NULLABLE_NUMBER_KEYS.has(fieldKey) && raw.trim() === "") {
+            setValue(null)
+            return
+          }
+          const next = Number(raw)
+          if (Number.isFinite(next)) {
+            setValue(next)
+          }
+        }}
+        className="w-44 px-2.5 py-1.5 text-sm rounded-md border border-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+      />
+    )
+  } else if (Array.isArray(value)) {
+    control = (
+      <div className="w-60">
+        <AutoArrayInput
+          fieldKey={fieldKey}
+          values={value}
+          onChange={(next) => setValue(next)}
+        />
+      </div>
+    )
+  } else if (typeof value === "string" || value === null) {
+    if (enumValues && enumValues.length > 0) {
+      control = (
+        <select
+          value={value ?? ""}
+          onChange={(event) => setValue(event.target.value)}
+          className="w-60 px-2.5 py-1.5 text-sm rounded-md border border-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+        >
+          {enumValues.map((enumValue) => (
+            <option key={enumValue} value={enumValue}>
+              {enumValue}
+            </option>
+          ))}
+        </select>
+      )
+    } else {
+      const acceptsNull = NULLABLE_STRING_KEYS.has(fieldKey)
+      control = (
+        <input
+          type="text"
+          value={value ?? ""}
+          placeholder={acceptsNull ? "null" : ""}
+          onChange={(event) => {
+            const next = event.target.value
+            setValue(acceptsNull && next.trim() === "" ? null : next)
+          }}
+          className="w-60 px-2.5 py-1.5 text-sm rounded-md border border-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+      )
+    }
+  }
+
+  const valueType = Array.isArray(value)
+    ? "array"
+    : value === null
+      ? "null|string"
+      : typeof value
+
+  return (
+    <div className="p-3 flex items-start justify-between gap-4">
+      <div className="min-w-0">
+        <div className="text-sm font-medium font-mono break-all">{fieldKey}</div>
+        <div className="text-[11px] text-text-muted">{valueType}</div>
+      </div>
+      {control}
+    </div>
+  )
+}
+
+function AllOptionsSection({ settings, updateSetting }: SectionSettingsProps) {
+  const [keyFilter, setKeyFilter] = useState("")
+  const normalizedFilter = keyFilter.trim().toLowerCase()
+  const allKeys = useMemo(() => AUTO_OPTION_KEYS(settings), [settings])
+  const filteredKeys = useMemo(
+    () =>
+      normalizedFilter
+        ? allKeys.filter((key) => key.toLowerCase().includes(normalizedFilter))
+        : allKeys,
+    [allKeys, normalizedFilter]
+  )
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1">
+        <label htmlFor="all-options-filter" className="text-xs font-medium text-text-muted">
+          Filter option keys ({filteredKeys.length}/{allKeys.length})
+        </label>
+        <input
+          id="all-options-filter"
+          type="text"
+          value={keyFilter}
+          onChange={(event) => setKeyFilter(event.target.value)}
+          placeholder="Type part of an option key (e.g. adaptive_, table_, agentic_)"
+          className="w-full px-3 py-2 text-sm rounded-md border border-border bg-surface focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+      </div>
+      <div className="border border-border rounded-md divide-y divide-border max-h-[30rem] overflow-y-auto">
+        {filteredKeys.length === 0 ? (
+          <div className="p-4 text-sm text-text-muted">No option keys match this filter.</div>
+        ) : (
+          filteredKeys.map((fieldKey) => (
+            <AutoOptionRow
+              key={fieldKey}
+              fieldKey={fieldKey}
+              settings={settings}
+              updateSetting={updateSetting}
+            />
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
 // Section implementations
 function SearchSection({ settings, updateSetting }: SectionSettingsProps) {
+  const { capabilities, loading: capsLoading } = useServerCapabilities()
+
   return (
     <div className="space-y-4">
       <SettingSelect
@@ -432,6 +763,14 @@ function SearchSection({ settings, updateSetting }: SectionSettingsProps) {
           />
         </div>
       )}
+      {settings.enable_web_fallback &&
+        !capsLoading &&
+        capabilities &&
+        !capabilities.hasWebSearch && (
+          <div className="text-xs text-warn">
+            Web search isn’t configured on this server, so fallback may not return results.
+          </div>
+        )}
       <SettingToggle
         label="Intent Routing"
         description="Analyze query intent to adjust retrieval"
@@ -497,15 +836,15 @@ function RetrievalSection({ settings, updateSetting }: SectionSettingsProps) {
             label="Span Characters"
             value={settings.mv_span_chars}
             onChange={(v) => updateSetting("mv_span_chars", v)}
-            min={50}
-            max={500}
+            min={100}
+            max={2000}
           />
           <SettingSlider
             label="Stride"
             value={settings.mv_stride}
             onChange={(v) => updateSetting("mv_stride", v)}
-            min={10}
-            max={200}
+            min={50}
+            max={1000}
           />
           <SettingSlider
             label="Max Spans"
@@ -882,8 +1221,8 @@ function PerformanceSection({ settings, updateSetting }: SectionSettingsProps) {
         label="Timeout (seconds)"
         value={settings.timeout_seconds}
         onChange={(v) => updateSetting("timeout_seconds", v)}
-        min={5}
-        max={120}
+        min={1}
+        max={60}
       />
       <SettingToggle
         label="Enable Cache"

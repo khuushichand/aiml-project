@@ -34,6 +34,11 @@ export const createCoreSlice: StoreSlice<
     | "setSelectedSystemPrompt"
     | "selectedQuickPrompt"
     | "setSelectedQuickPrompt"
+    | "messageSteeringMode"
+    | "setMessageSteeringMode"
+    | "messageSteeringForceNarrate"
+    | "setMessageSteeringForceNarrate"
+    | "clearMessageSteering"
     | "queuedMessages"
     | "addQueuedMessage"
     | "setQueuedMessages"
@@ -123,6 +128,16 @@ export const createCoreSlice: StoreSlice<
     set({ selectedSystemPrompt }),
   selectedQuickPrompt: null,
   setSelectedQuickPrompt: (selectedQuickPrompt) => set({ selectedQuickPrompt }),
+  messageSteeringMode: "none",
+  setMessageSteeringMode: (mode) => set({ messageSteeringMode: mode }),
+  messageSteeringForceNarrate: false,
+  setMessageSteeringForceNarrate: (enabled) =>
+    set({ messageSteeringForceNarrate: enabled }),
+  clearMessageSteering: () =>
+    set({
+      messageSteeringMode: "none",
+      messageSteeringForceNarrate: false
+    }),
   queuedMessages: [],
   addQueuedMessage: (payload) =>
     set((state) => ({

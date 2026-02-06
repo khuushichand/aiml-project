@@ -16,12 +16,36 @@ from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
+from tldw_Server_API.app.core.AuthNZ.exceptions import UserRegistrationException
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
 
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.config import settings as global_settings
+
+_CSRF_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    BackendDatabaseError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    UserRegistrationException,
+    ValueError,
+)
 
 #######################################################################################################################
 #
@@ -75,7 +99,7 @@ class CSRFTokenManager:
         base = secrets.token_urlsafe(self.token_length)
         try:
             uid = getattr(request.state, 'user_id', None)
-        except Exception:
+        except AttributeError:
             uid = None
         suffix = self._bind_suffix(uid)
         if suffix:
@@ -235,7 +259,7 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
             existing = getattr(request.state, "user_id", None)
             if isinstance(existing, int):
                 return existing
-        except Exception:
+        except AttributeError:
             existing = None
         # Attempt to decode Authorization bearer token
         auth_header = request.headers.get("authorization")
@@ -252,7 +276,7 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
                         if await session_manager.is_token_blacklisted(token, payload.get("jti")):
                             logger.debug("CSRF binding: bearer token revoked; skipping user binding")
                             return None
-                    except Exception as bl_exc:
+                    except _CSRF_NONCRITICAL_EXCEPTIONS as bl_exc:
                         logger.debug(f"CSRF binding: token blacklist check failed: {bl_exc}")
                         return None
                     user_id = payload.get("user_id") or payload.get("sub")
@@ -261,10 +285,10 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
                     if isinstance(user_id, int):
                         try:
                             request.state.user_id = user_id
-                        except Exception:
+                        except AttributeError:
                             pass
                         return user_id
-                except Exception as exc:
+                except _CSRF_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"CSRF binding: bearer token decode failed: {exc}")
         # Attempt API key lookup
         api_key = request.headers.get("X-API-KEY")
@@ -281,10 +305,10 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
                 if isinstance(user_id, int):
                     try:
                         request.state.user_id = user_id
-                    except Exception:
+                    except AttributeError:
                         pass
                     return user_id
-            except Exception as exc:
+            except _CSRF_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"CSRF binding: API key resolution failed: {exc}")
         return None
 
@@ -315,7 +339,7 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
             else:
                 try:
                     user_id = getattr(request.state, 'user_id', None)
-                except Exception:
+                except AttributeError:
                     user_id = None
             # Get tokens
             cookie_token = request.cookies.get(self.token_manager.token_cookie_name)
@@ -336,7 +360,7 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
                     ):
                         valid = True
                         force_rotate = True
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     valid = False
 
             if not valid:
@@ -360,14 +384,14 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         if get_settings().CSRF_BIND_TO_USER:
             try:
                 bound_user_id = getattr(request.state, "user_id", None)
-            except Exception:
+            except AttributeError:
                 bound_user_id = None
             if bound_user_id is not None:
                 try:
                     token_valid = self.token_manager.validate_token(
                         cookie_token or "", cookie_token or "", bound_user_id
                     )
-                except Exception:
+                except _CSRF_NONCRITICAL_EXCEPTIONS:
                     token_valid = False
                 if not token_valid:
                     should_set_token = True
@@ -419,7 +443,7 @@ def validate_csrf_token(request: Request) -> bool:
         user_id = None
         try:
             user_id = getattr(request.state, 'user_id', None)
-        except Exception:
+        except AttributeError:
             user_id = None
 
         # Lightweight bearer decode path (sync) to enrich user_id when possible
@@ -435,11 +459,11 @@ def validate_csrf_token(request: Request) -> bool:
                         if isinstance(uid, str):
                             try:
                                 uid = int(uid)
-                            except Exception:
+                            except (TypeError, ValueError):
                                 uid = None
                         if isinstance(uid, int):
                             user_id = uid
-        except Exception:
+        except _CSRF_NONCRITICAL_EXCEPTIONS:
             # Best-effort enrichment; fall back to no user binding if unavailable
             pass
 
@@ -482,7 +506,7 @@ def add_csrf_protection(app):
         except (AttributeError, TypeError, ValueError) as _e:
             # Invalid value provided; keep existing default and log for visibility
             logger.debug(f"Invalid CSRF_ENABLED value {repr(_env_ce)}: {_e}; using default/fallback")
-        except Exception as _e:  # pragma: no cover - defensive
+        except _CSRF_NONCRITICAL_EXCEPTIONS as _e:  # pragma: no cover - defensive
             # Unexpected error; log with traceback to aid debugging, keep fallback
             logger.exception(f"Unexpected error parsing CSRF_ENABLED: {_e}")
     # In test mode, default to disabled unless explicitly enabled in settings
@@ -494,7 +518,7 @@ def add_csrf_protection(app):
             or "pytest" in _sys.modules
         ):
             csrf_enabled = False
-    except Exception:
+    except _CSRF_NONCRITICAL_EXCEPTIONS:
         pass
 
     if csrf_enabled is False:

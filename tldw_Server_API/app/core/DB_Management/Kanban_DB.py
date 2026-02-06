@@ -39,6 +39,25 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths, 
 from tldw_Server_API.app.core.DB_Management.kanban_vector_search import create_kanban_vector_search
 from tldw_Server_API.app.core.exceptions import StorageUnavailableError
 
+_KANBAN_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 # --- Helper Functions ---
 def _utcnow_iso() -> str:
@@ -131,12 +150,12 @@ def _kanban_card_indexable(
         finally:
             try:
                 db.close()
-            except Exception as exc:
+            except _KANBAN_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(
                     "Error closing db in _kanban_card_indexable during db.close(): "
                     f"user_id={user_id}, card_id={card_id}, error={exc}"
                 )
-    except Exception as exc:
+    except _KANBAN_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Kanban card indexability check failed: {exc}")
         return False
 
@@ -346,7 +365,7 @@ class KanbanDB:
                     )
                     try:
                         self._configure_connection(conn, enable_wal=False)
-                    except Exception:
+                    except _KANBAN_NONCRITICAL_EXCEPTIONS:
                         try:
                             conn.force_close()
                         finally:
@@ -357,7 +376,7 @@ class KanbanDB:
             conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
             try:
                 self._configure_connection(conn)
-            except Exception:
+            except _KANBAN_NONCRITICAL_EXCEPTIONS:
                 conn.close()
                 raise
             return conn
@@ -370,7 +389,7 @@ class KanbanDB:
                 conn.executescript(self._get_schema_sql())
                 conn.commit()
                 logger.debug("Kanban schema ensured")
-            except Exception as e:
+            except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to ensure schema: {e}")
                 raise KanbanDBError(f"Schema creation failed: {e}") from e
             finally:
@@ -388,7 +407,7 @@ class KanbanDB:
             if self._vector_search is not None:
                 try:
                     self._vector_search.close()
-                except Exception as e:
+                except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Error closing Kanban vector search: {e}")
                 finally:
                     self._vector_search = None
@@ -406,7 +425,7 @@ class KanbanDB:
         """Cleanup on garbage collection."""
         try:
             self.close()
-        except Exception as e:
+        except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
             # Ignore errors during cleanup - object is being destroyed anyway.
             logger.debug(f"KanbanDB __del__ cleanup failed: {e}")
 
@@ -2243,7 +2262,7 @@ END;
                         "remove",
                         retry_attempt=retry_attempt,
                     )
-            except Exception as exc:
+            except _KANBAN_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(
                     f"Vector index op=remove failed for card {card_id} (attempt {attempt}): {exc}"
                 )
@@ -2266,7 +2285,7 @@ END;
                         "remove",
                         retry_attempt=retry_attempt,
                     )
-            except Exception as exc:
+            except _KANBAN_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(
                     f"Vector index op=remove failed for card {card_id} (attempt {attempt}): {exc}"
                 )
@@ -2288,7 +2307,7 @@ END;
                     "index",
                     retry_attempt=retry_attempt,
                 )
-        except Exception as exc:
+        except _KANBAN_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(
                 f"Vector index op=index failed for card {card_id} (attempt {attempt}): {exc}"
             )
@@ -5172,7 +5191,7 @@ END;
 
         try:
             self.optimize_fts()
-        except Exception as exc:
+        except _KANBAN_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Kanban FTS optimize after import failed: {exc}")
         return result
 
@@ -5189,7 +5208,7 @@ END;
                     (action_norm,),
                 )
                 conn.commit()
-            except Exception as e:
+            except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Kanban FTS {action_norm} failed: {e}")
                 raise KanbanDBError(f"FTS {action_norm} failed: {e}") from e
             finally:
@@ -5280,7 +5299,7 @@ END;
                             if label_uuid in label_uuid_to_id:
                                 try:
                                     self.assign_label_to_card(new_card["id"], label_uuid_to_id[label_uuid])
-                                except Exception:
+                                except _KANBAN_NONCRITICAL_EXCEPTIONS:
                                     pass
 
                         # Import checklists
@@ -5303,9 +5322,9 @@ END;
                                             checked=item_data.get("checked", False)
                                         )
                                         import_stats["checklist_items_imported"] += 1
-                                    except Exception as e:
+                                    except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
                                         logger.warning(f"Failed to import checklist item: {e}")
-                            except Exception as e:
+                            except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
                                 logger.warning(f"Failed to import checklist: {e}")
 
                         # Import comments
@@ -5316,13 +5335,13 @@ END;
                                     content=comment_data.get("content", "")
                                 )
                                 import_stats["comments_imported"] += 1
-                            except Exception as e:
+                            except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
                                 logger.warning(f"Failed to import comment: {e}")
 
-                    except Exception as e:
+                    except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Failed to import card: {e}")
 
-            except Exception as e:
+            except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to import list: {e}")
 
         # Log activity
@@ -5395,7 +5414,7 @@ END;
                 )
                 label_id_map[label_data.get("id", "")] = label["id"]
                 import_stats["labels_imported"] += 1
-            except Exception as e:
+            except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to import Trello label: {e}")
 
         # Build list ID map (Trello ID -> our ID)
@@ -5418,7 +5437,7 @@ END;
                 )
                 list_id_map[list_data.get("id", "")] = new_list["id"]
                 import_stats["lists_imported"] += 1
-            except Exception as e:
+            except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to import Trello list: {e}")
 
         # Build checklist map (Trello ID -> checklist data)
@@ -5465,7 +5484,7 @@ END;
                     if label_id in label_id_map:
                         try:
                             self.assign_label_to_card(new_card["id"], label_id_map[label_id])
-                        except Exception:
+                        except _KANBAN_NONCRITICAL_EXCEPTIONS:
                             pass
 
                 # Import checklists
@@ -5492,12 +5511,12 @@ END;
                                         checked=item_data.get("state") == "complete"
                                     )
                                     import_stats["checklist_items_imported"] += 1
-                                except Exception as e:
+                                except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
                                     logger.warning(f"Failed to import Trello checklist item: {e}")
-                        except Exception as e:
+                        except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Failed to import Trello checklist: {e}")
 
-            except Exception as e:
+            except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to import Trello card: {e}")
 
         # Log activity

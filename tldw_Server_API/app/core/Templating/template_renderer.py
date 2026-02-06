@@ -16,8 +16,26 @@ from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogra
 
 try:  # Python 3.9+
     from zoneinfo import ZoneInfo
-except Exception:  # pragma: no cover - fallback for older environments
+except ImportError:  # pragma: no cover - fallback for older environments
     ZoneInfo = None  # type: ignore
+
+_TEMPLATE_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
 
 
 # -----------------------------
@@ -65,7 +83,7 @@ def options_from_env() -> TemplateOptions:
             return default
         try:
             return int(str(raw))
-        except Exception:
+        except (TypeError, ValueError):
             return default
 
     seed_env = os.getenv("TEMPLATES_RANDOM_SEED")
@@ -73,14 +91,14 @@ def options_from_env() -> TemplateOptions:
     try:
         if seed_env is not None and str(seed_env).strip() != "":
             seed = int(str(seed_env))
-    except Exception:
+    except (TypeError, ValueError):
         seed = None
 
     # Fallback to config.txt when env not set
     cp = None
     try:
         cp = load_comprehensive_config()
-    except Exception:
+    except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
         cp = None
 
     def _cfg_bool(section: str, key: str, default: bool) -> bool:
@@ -88,7 +106,7 @@ def options_from_env() -> TemplateOptions:
             try:
                 raw = cp.get(section, key, fallback=str(default))
                 return str(raw).strip().lower() in {"1", "true", "yes", "on"}
-            except Exception:
+            except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
                 return default
         return default
 
@@ -96,7 +114,7 @@ def options_from_env() -> TemplateOptions:
         if cp and cp.has_section(section):
             try:
                 return int(str(cp.get(section, key, fallback=str(default))))
-            except Exception:
+            except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
                 return default
         return default
 
@@ -146,7 +164,7 @@ def _tzinfo(tz_name: str | None) -> Any:
         return timezone.utc
     try:
         return ZoneInfo(tz_name)
-    except Exception:
+    except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
         return timezone.utc
 
 
@@ -181,7 +199,7 @@ class _RandomFacade:
         if seed is not None:
             try:
                 self._random.seed(seed)
-            except Exception:
+            except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def randint(self, a: int, b: int) -> int:
@@ -220,11 +238,7 @@ _DISALLOWED_NODE_TYPES = {
 
 
 def _validate_expression_only(template_src: str) -> None:
-    try:
-        ast = _ENV.parse(template_src)
-    except Exception as e:
-        # Parsing errors propagate to caller (handled as template_parse_error)
-        raise e
+    ast = _ENV.parse(template_src)
 
     def _walk(n: nodes.Node) -> None:
         if isinstance(n, tuple(_DISALLOWED_NODE_TYPES)):
@@ -258,17 +272,17 @@ def render(text: str, ctx: TemplateContext, options: TemplateOptions | None = No
     metrics_source = "unknown"
     try:
         metrics_source = str((ctx.extra or {}).get("_metrics_source", "unknown"))
-    except Exception:
+    except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
         metrics_source = "unknown"
 
     # Validate expression-only template
     try:
         _validate_expression_only(text)
-    except Exception as e:
+    except _TEMPLATE_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"template_parse_error/expression_only: {e}")
         try:
             increment_counter("template_render_failure_total", labels={"source": metrics_source, "reason": "parse"})
-        except Exception:
+        except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
             pass
         return text
 
@@ -316,11 +330,11 @@ def render(text: str, ctx: TemplateContext, options: TemplateOptions | None = No
     try:
         tmpl = _ENV.from_string(text)
         output = tmpl.render(render_vars)
-    except Exception as e:
+    except _TEMPLATE_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"template_render_failure: {e}")
         try:
             increment_counter("template_render_failure_total", labels={"source": metrics_source, "reason": "exception"})
-        except Exception:
+        except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
             pass
         return text
     finally:
@@ -331,17 +345,17 @@ def render(text: str, ctx: TemplateContext, options: TemplateOptions | None = No
             )
             try:
                 increment_counter("template_render_timeout_total", labels={"source": metrics_source})
-            except Exception:
+            except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
                 pass
         try:
             observe_histogram("template_render_duration_seconds", value=float(elapsed_ms) / 1000.0, labels={"source": metrics_source})
-        except Exception:
+        except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
             pass
 
     if not isinstance(output, str):
         try:
             output = str(output)
-        except Exception:
+        except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
             return text
 
     if len(output) > opts.max_output_chars:
@@ -350,12 +364,12 @@ def render(text: str, ctx: TemplateContext, options: TemplateOptions | None = No
         )
         try:
             increment_counter("template_output_truncated_total", labels={"source": metrics_source})
-        except Exception:
+        except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
             pass
         return output[: opts.max_output_chars]
 
     try:
         increment_counter("template_render_success_total", labels={"source": metrics_source})
-    except Exception:
+    except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
         pass
     return output

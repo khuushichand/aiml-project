@@ -271,15 +271,23 @@ export const VoiceCloningManager: React.FC<VoiceCloningManagerProps> = ({
   }
 
   const handleAddVoiceCard = () => {
-    if (voiceCards.length >= 4) return
-    setVoiceCards((prev) => [
-      ...prev,
-      {
-        id: `voice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        role: VOICE_ROLE_OPTIONS[Math.min(prev.length, VOICE_ROLE_OPTIONS.length - 1)].value,
-        voiceId: ""
-      }
-    ])
+    setVoiceCards((prev) => {
+      if (prev.length >= 4) return prev
+
+      const usedRoles = new Set(prev.map((card) => card.role))
+      const nextRole =
+        VOICE_ROLE_OPTIONS.find((option) => !usedRoles.has(option.value))?.value ??
+        VOICE_ROLE_OPTIONS[0].value
+
+      return [
+        ...prev,
+        {
+          id: `voice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          role: nextRole,
+          voiceId: ""
+        }
+      ]
+    })
   }
 
   const handleRemoveVoiceCard = (id: string) => {
@@ -496,14 +504,10 @@ export const VoiceCloningManager: React.FC<VoiceCloningManagerProps> = ({
                     <Button
                       size="small"
                       icon={<Play className="h-3 w-3" />}
-                      loading={
-                        previewingId === card.id ||
-                        previewingId === card.voiceId.replace("custom:", "")
-                      }
+                      loading={previewingId === card.voiceId.replace("custom:", "")}
                       onClick={() => {
                         const voice = resolveVoiceForId(card.voiceId)
                         if (voice) {
-                          setPreviewingId(card.id)
                           handlePreview(voice)
                         }
                       }}

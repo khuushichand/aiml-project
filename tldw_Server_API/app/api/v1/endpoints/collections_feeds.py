@@ -22,6 +22,25 @@ _FEED_JOB_KEYS = ("collections_feed_job_id", "collections_job_id")
 _DEFAULT_HOURLY_CRON = "0 * * * *"
 _DEFAULT_DAILY_CRON = "0 0 * * *"
 
+_COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 router = APIRouter(prefix="/collections/feeds", tags=["collections-feeds"])
 
 
@@ -31,7 +50,7 @@ def _parse_settings(raw: str | None) -> dict[str, Any]:
     try:
         parsed = json.loads(raw)
         return parsed if isinstance(parsed, dict) else {}
-    except Exception:
+    except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
         return {}
 
 
@@ -49,13 +68,13 @@ def _extract_job_id(settings: dict[str, Any]) -> int | None:
             continue
         try:
             return int(val)
-        except Exception:
+        except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
             continue
     nested = settings.get("collections")
     if isinstance(nested, dict) and nested.get("job_id") is not None:
         try:
             return int(nested.get("job_id"))
-        except Exception:
+        except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
             return None
     return None
 
@@ -82,7 +101,7 @@ def _sanitize_settings(settings: dict[str, Any]) -> dict[str, Any] | None:
 def _default_name(url: str) -> str:
     try:
         host = urlparse(url).hostname
-    except Exception:
+    except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
         host = None
     return host or url or "Feed"
 
@@ -97,7 +116,7 @@ def _normalize_tz(tz: str | None) -> str:
             hours = int(t[4:])
             etc_offset = -sign * hours
             return f"Etc/GMT{('+' if etc_offset > 0 else '')}{etc_offset}" if etc_offset != 0 else "Etc/GMT"
-        except Exception:
+        except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
             return "UTC"
     return tz
 
@@ -113,7 +132,7 @@ def _compute_next_run(cron: str | None, timezone: str | None) -> str | None:
         now = datetime.now(trigger.timezone)
         nxt = trigger.get_next_fire_time(None, now)
         return nxt.isoformat() if nxt else None
-    except Exception:
+    except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -140,7 +159,7 @@ def _register_schedule(db: WatchlistsDatabase, job_row, *, current_user: User) -
         )
         db.set_job_schedule_id(job_row.id, sid)
         return
-    except Exception as exc:
+    except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"Collections feeds schedule registration failed: {exc}")
     try:
         if job_row.schedule_expr:
@@ -166,7 +185,7 @@ def _register_schedule(db: WatchlistsDatabase, job_row, *, current_user: User) -
                 coalesce=True,
             )
             db.set_job_schedule_id(job_row.id, sid)
-    except Exception as exc:
+    except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"Collections feeds schedule DB fallback failed: {exc}")
 
 
@@ -205,7 +224,7 @@ def _load_job(db: WatchlistsDatabase, settings: dict[str, Any]):
         return None
     try:
         return db.get_job(int(job_id))
-    except Exception:
+    except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -264,13 +283,13 @@ def _sync_job_schedule(db: WatchlistsDatabase, job_row, *, current_user: User) -
                 },
             )
             return
-    except Exception as exc:
+    except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"Collections feeds schedule update failed: {exc}")
     if not job_row.wf_schedule_id and job_row.schedule_expr:
         _register_schedule(db, job_row, current_user=current_user)
     try:
-        return db.get_job(job_id)
-    except Exception:
+        return db.get_job(job_row.id)
+    except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -297,7 +316,7 @@ async def create_feed_subscription(
             tags=tags,
             group_ids=None,
         )
-    except Exception as exc:
+    except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"collections_feeds_create_source_failed: {exc}")
         raise HTTPException(status_code=400, detail="feed_create_failed")
 
@@ -323,11 +342,11 @@ async def create_feed_subscription(
             output_prefs_json=json.dumps(output_prefs),
             job_filters_json=None,
         )
-    except Exception as exc:
+    except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"collections_feeds_create_job_failed: {exc}")
         try:
             db.delete_source(int(source.id))
-        except Exception:
+        except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
             pass
         raise HTTPException(status_code=400, detail="feed_create_failed")
 
@@ -335,7 +354,7 @@ async def create_feed_subscription(
     try:
         db.update_source(int(source.id), {"settings_json": json.dumps(settings)})
         source = db.get_source(int(source.id))
-    except Exception:
+    except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
         pass
     next_run = _compute_next_run(job.schedule_expr, job.schedule_timezone)
     if next_run:
@@ -428,14 +447,14 @@ async def update_feed_subscription(
         patch["active"] = payload.active
     try:
         source = db.update_source(feed_id, patch)
-    except Exception as exc:
+    except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"collections_feeds_update_source_failed: {exc}")
         raise HTTPException(status_code=400, detail="feed_update_failed")
     if payload.tags is not None:
         try:
             db.set_source_tags(feed_id, [t for t in payload.tags if t])
             source = db.get_source(feed_id)
-        except Exception as exc:
+        except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"collections_feeds_update_tags_failed: {exc}")
 
     job = _load_job(db, settings)
@@ -458,7 +477,7 @@ async def update_feed_subscription(
                     promote_after_hours=24,
                 )
                 job_patch["output_prefs_json"] = json.dumps(output_prefs)
-            except Exception:
+            except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
                 pass
 
         try:
@@ -468,7 +487,7 @@ async def update_feed_subscription(
                 db.set_job_history(int(job.id), next_run_at=next_run)
                 job = db.get_job(int(job.id))
             _sync_job_schedule(db, job, current_user=current_user)
-        except Exception as exc:
+        except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"collections_feeds_update_job_failed: {exc}")
 
     return _to_feed_response(source, job_row=job, settings=settings)
@@ -494,11 +513,11 @@ async def delete_feed_subscription(
             if getattr(job, "wf_schedule_id", None):
                 from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler
                 get_workflows_scheduler().delete(job.wf_schedule_id)  # type: ignore[arg-type]
-        except Exception:
+        except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             db.delete_job(job_id)
-        except Exception:
+        except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS:
             pass
     deleted = db.delete_source(feed_id)
     if not deleted:

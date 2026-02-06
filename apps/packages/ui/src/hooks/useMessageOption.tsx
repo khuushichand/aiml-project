@@ -140,6 +140,11 @@ export const useMessageOption = (
     setServerChatSource,
     serverChatExternalRef,
     setServerChatExternalRef,
+    messageSteeringMode,
+    setMessageSteeringMode,
+    messageSteeringForceNarrate,
+    setMessageSteeringForceNarrate,
+    clearMessageSteering,
     replyTarget,
     clearReplyTarget
   } = useStoreMessageOption()
@@ -393,6 +398,7 @@ export const useMessageOption = (
     stopStreamingRequest,
     editMessage,
     deleteMessage,
+    toggleMessagePinned,
     createChatBranch,
     createCompareBranch
   } = useChatActions({
@@ -455,6 +461,9 @@ export const useMessageOption = (
     compareMaxModels,
     compareFeatureEnabled,
     markCompareHistoryCreated,
+    messageSteeringMode,
+    messageSteeringForceNarrate,
+    clearMessageSteering,
     replyTarget,
     clearReplyTarget,
     setSelectedSystemPrompt,
@@ -465,6 +474,7 @@ export const useMessageOption = (
   return {
     editMessage,
     deleteMessage,
+    toggleMessagePinned,
     messages,
     setMessages,
     onSubmit,
@@ -500,6 +510,11 @@ export const useMessageOption = (
     setSelectedQuickPrompt,
     selectedSystemPrompt,
     setSelectedSystemPrompt,
+    messageSteeringMode,
+    setMessageSteeringMode,
+    messageSteeringForceNarrate,
+    setMessageSteeringForceNarrate,
+    clearMessageSteering,
     textareaRef,
     selectedKnowledge,
     setSelectedKnowledge,

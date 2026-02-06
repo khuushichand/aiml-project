@@ -63,6 +63,18 @@ def _find_project_root(start: Path) -> Path | None:
     return None
 
 
+_TOPIC_MONITOR_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
+
 class TopicMonitoringService:
     _ALLOWED_SEVERITIES = {"info", "warning", "critical"}
     _ALLOWED_SCOPE_TYPES = {"global", "all", "user", "team", "org"}
@@ -112,10 +124,10 @@ class TopicMonitoringService:
         default = 200000
         mod_cfg = self._config.get("moderation") if isinstance(self._config, dict) else None
         if isinstance(mod_cfg, dict) and "max_scan_chars" in mod_cfg:
-            try:
-                return int(mod_cfg.get("max_scan_chars", default))
-            except Exception:
-                pass
+                try:
+                    return int(mod_cfg.get("max_scan_chars", default))
+                except (TypeError, ValueError):
+                    pass
         raw = os.getenv("MODERATION_MAX_SCAN_CHARS")
         if raw is None:
             raw = os.getenv("TOPIC_MONITOR_MAX_SCAN_CHARS", str(default))
@@ -136,11 +148,11 @@ class TopicMonitoringService:
         # Anchor relative paths to project root to avoid creating dirs from CWD
         try:
             wl_p = Path(str(raw_watchlists))
-        except Exception:
+        except (TypeError, ValueError):
             wl_p = Path("tldw_Server_API/Config_Files/monitoring_watchlists.json")
         try:
             db_p = Path(str(raw_db_path))
-        except Exception:
+        except (TypeError, ValueError):
             db_p = Path("Databases/monitoring_alerts.db")
 
         if not wl_p.is_absolute() and wl_p.parent == Path("."):
@@ -207,10 +219,10 @@ class TopicMonitoringService:
                 try:
                     wl = Watchlist(**it)
                     watchlists.append(wl)
-                except Exception as e:
+                except _TOPIC_MONITOR_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Skipping invalid watchlist entry: {e}")
             return watchlists
-        except Exception as e:
+        except _TOPIC_MONITOR_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to load watchlists: {e}")
             return None
 
@@ -338,7 +350,7 @@ class TopicMonitoringService:
                 rules = self._coerce_rule_records(record.id, wl.rules or [])
                 self._db.replace_watchlist_rules(record.id, rules)
                 active_ids.add(record.id)
-            except Exception as e:
+            except _TOPIC_MONITOR_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Topic monitoring: failed to seed watchlist {getattr(wl, 'name', '')}: {e}")
         if delete_missing or disable_missing:
             existing_rows = self._db.list_watchlists(include_rules=False)
@@ -379,14 +391,14 @@ class TopicMonitoringService:
                     rule_data = {k: rule.get(k) for k in rule_fields}
                     rule_data["tags"] = rule_data.get("tags") or []
                     rules.append(WatchlistRule(**rule_data))
-                except Exception as e:
+                except _TOPIC_MONITOR_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Topic monitoring: skipped invalid rule in DB: {e}")
             try:
                 wl_data["rules"] = rules
                 wl = Watchlist(**wl_data)
                 if wl.id:
                     watchlists[str(wl.id)] = wl
-            except Exception as e:
+            except _TOPIC_MONITOR_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Topic monitoring: skipped invalid watchlist in DB: {e}")
         self._watchlists = watchlists
         self._recompile_all()
@@ -402,13 +414,13 @@ class TopicMonitoringService:
         try:
             if re.search(r"\((?:[^)(]|\([^)(]*\))*[+*][^)]*\)\s*[+*]", expr):
                 return True
-        except Exception:
+        except (re.error, TypeError, ValueError):
             return True
         # Too many groups
         try:
             if expr.count("(") - expr.count("\\(") > 100:
                 return True
-        except Exception:
+        except (TypeError, ValueError):
             return True
         return False
 
@@ -608,13 +620,13 @@ class TopicMonitoringService:
                 try:
                     if str(scope_id) in {str(t) for t in team_ids}:
                         out_scoped.append((wid, wl))
-                except Exception:
+                except _TOPIC_MONITOR_NONCRITICAL_EXCEPTIONS:
                     pass
             elif scope_type == "org" and org_ids:
                 try:
                     if str(scope_id) in {str(o) for o in org_ids}:
                         out_scoped.append((wid, wl))
-                except Exception:
+                except _TOPIC_MONITOR_NONCRITICAL_EXCEPTIONS:
                     pass
         return out_global + out_scoped
 
@@ -802,7 +814,7 @@ class TopicMonitoringService:
                 try:
                     notifier = get_notification_service()
                     notifier.notify(alert)
-                except Exception as _ne:
+                except _TOPIC_MONITOR_NONCRITICAL_EXCEPTIONS as _ne:
                     logger.debug(f"Topic monitoring notify skipped: {_ne}")
                 total_created += 1
         return total_created
@@ -845,7 +857,7 @@ class TopicMonitoringService:
                     chunk_seq=chunk_seq,
                     metadata=metadata,
                 )
-            except Exception as exc:
+            except _TOPIC_MONITOR_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Topic monitoring background evaluation failed: {exc}")
 
         try:
@@ -857,7 +869,7 @@ class TopicMonitoringService:
         async def _runner() -> None:
             try:
                 await asyncio.to_thread(_run_sync)
-            except Exception as exc:
+            except _TOPIC_MONITOR_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Topic monitoring background evaluation failed: {exc}")
 
         loop.create_task(_runner())

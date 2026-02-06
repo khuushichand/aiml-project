@@ -27,8 +27,16 @@ from tldw_Server_API.app.core.Security.request_id_middleware import _clean_reque
 try:
     # Optional import for FastAPI Request type annotation
     from fastapi import Request  # type: ignore
-except Exception:  # pragma: no cover - typing aid only
+except ImportError:  # pragma: no cover - typing aid only
     Request = None  # type: ignore
+
+_LOG_CONTEXT_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def new_request_id() -> str:
@@ -65,10 +73,10 @@ def ensure_request_id(request: Any) -> str:
             req_id = _clean_request_id(header_value)
             try:
                 request.state.request_id = req_id  # type: ignore[attr-defined]
-            except Exception:
+            except _LOG_CONTEXT_NONCRITICAL_EXCEPTIONS:
                 pass
         return str(req_id)
-    except Exception:
+    except _LOG_CONTEXT_NONCRITICAL_EXCEPTIONS:
         return new_request_id()
 
 
@@ -90,10 +98,10 @@ def ensure_traceparent(request: Any) -> str:
         if tp:
             try:
                 request.state.traceparent = tp  # type: ignore[attr-defined]
-            except Exception:
+            except _LOG_CONTEXT_NONCRITICAL_EXCEPTIONS:
                 pass
         return tp
-    except Exception:
+    except _LOG_CONTEXT_NONCRITICAL_EXCEPTIONS:
         return ""
 
 

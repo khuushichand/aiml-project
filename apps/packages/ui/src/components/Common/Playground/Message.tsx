@@ -141,6 +141,8 @@ type Props = {
   historyId?: string
   conversationInstanceId: string
   onDeleteMessage?: () => void
+  onTogglePinned?: () => void
+  pinned?: boolean
   characterIdentity?: Character | null
   characterIdentityEnabled?: boolean
 }
@@ -202,6 +204,21 @@ export const PlaygroundMessage = (props: Props) => {
 
   const isLastMessage: boolean =
     props.currentMessageIndex === props.totalMessages - 1
+
+  // Track streaming completion for aria-live announcement
+  const wasStreamingRef = useRef(false)
+  const [streamingComplete, setStreamingComplete] = useState(false)
+  useEffect(() => {
+    if (props.isBot && isLastMessage) {
+      if (wasStreamingRef.current && !props.isStreaming && !props.isProcessing) {
+        setStreamingComplete(true)
+        const timer = setTimeout(() => setStreamingComplete(false), 2000)
+        return () => clearTimeout(timer)
+      }
+      wasStreamingRef.current = props.isStreaming || props.isProcessing
+    }
+  }, [props.isBot, isLastMessage, props.isStreaming, props.isProcessing])
+
   const errorPayload = decodeChatErrorPayload(props.message)
   const errorFriendlyText = React.useMemo(() => {
     if (!errorPayload) return null
@@ -841,18 +858,20 @@ export const PlaygroundMessage = (props: Props) => {
   const messageCardClass = isSystemMessage
     ? `flex flex-col rounded-2xl border border-dashed border-warn/30 bg-warn/10 shadow-sm ${messageSpacing}`
     : props.isBot
-      ? `flex flex-col rounded-2xl border border-border bg-surface/70 shadow-sm ${messageSpacing}`
-      : `flex flex-col rounded-2xl border border-border bg-surface2/70 shadow-sm ${messageSpacing}`
+      ? `flex flex-col rounded-2xl border border-border/50 bg-surface/60 shadow-sm border-l-2 border-l-primary/20 ${messageSpacing}`
+      : `flex flex-col rounded-2xl border border-border/50 bg-surface2/60 shadow-sm ${messageSpacing}`
   return (
-    <div
+    <article
       data-testid="chat-message"
       data-role={isSystemMessage ? "system" : props.isBot ? "assistant" : "user"}
       data-message-type={props.message_type}
       data-index={props.currentMessageIndex}
       data-message-id={props.messageId}
       data-server-message-id={props.serverMessageId}
+      aria-label={`${isSystemMessage ? "System" : props.isBot ? "Assistant" : "User"} message ${props.currentMessageIndex + 1} of ${props.totalMessages}`}
+      aria-busy={props.isStreaming && isLastMessage ? true : undefined}
       className={`group relative flex w-full max-w-3xl flex-col items-end justify-center text-text ${
-        isProMode ? "pb-2 md:px-4" : "pb-1 md:px-3"
+        isProMode ? "pb-3 md:px-5" : "pb-2 md:px-4"
       } ${checkWideMode ? "max-w-none" : ""}`}>
       {/* Inline stop button while streaming on the latest assistant message */}
       {props.isBot && (props.isStreaming || props.isProcessing) && isLastMessage && props.onStopStreaming && (
@@ -937,7 +956,7 @@ export const PlaygroundMessage = (props: Props) => {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 {isSystemMessage ? (
-                  <span className="inline-flex items-center rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-[10px] font-medium text-warn">
+                  <span className="inline-flex items-center rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-xs font-medium text-warn">
                     {systemLabel}
                   </span>
                 ) : (
@@ -953,7 +972,7 @@ export const PlaygroundMessage = (props: Props) => {
                   </span>
                 )}
                 {messageTimestamp && (
-                  <span className="text-[11px] text-text-muted">
+                  <span className="text-xs text-text-muted">
                     • {messageTimestamp}
                   </span>
                 )}
@@ -973,7 +992,7 @@ export const PlaygroundMessage = (props: Props) => {
                         aria-label={compareLabel}
                         aria-pressed={props.compareSelected}
                         title={compareLabel}
-                        className={`rounded-full px-2 py-1 text-[10px] font-medium border transition ${
+                        className={`rounded-full px-2 py-1 text-xs font-medium border transition ${
                           props.compareSelected
                             ? "bg-blue-600 text-white border-blue-600"
                             : "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-700"
@@ -982,17 +1001,17 @@ export const PlaygroundMessage = (props: Props) => {
                         {compareLabel}
                       </button>
                     ) : (
-                      <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                      <span className="rounded-full bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
                         {compareLabel}
                       </span>
                     )}
                     {props.compareError && (
-                      <span className="rounded-full bg-red-50 px-2 py-1 text-[10px] font-medium text-red-700 dark:bg-red-900/40 dark:text-red-200">
+                      <span className="rounded-full bg-red-50 px-2 py-1 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-200">
                         {t("error.label", "Error")}
                       </span>
                     )}
                     {props.compareChosen && (
-                      <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200">
+                      <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200">
                         {t(
                           "playground:composer.compareChosenLabel",
                           "Chosen"
@@ -1015,7 +1034,7 @@ export const PlaygroundMessage = (props: Props) => {
             />
           )}
           {isProMode && props.isBot && props.generationInfo?.usage && (
-            <div className="text-[11px] text-text-muted tabular-nums">
+            <div className="text-xs text-text-muted tabular-nums">
               {props.generationInfo.usage.prompt_tokens ?? 0}{" "}
               {t("playground:tokens.prompt", "prompt")} +{" "}
               {props.generationInfo.usage.completion_tokens ?? 0}{" "}
@@ -1176,6 +1195,9 @@ export const PlaygroundMessage = (props: Props) => {
               onThumbDown={handleThumbDown}
               onOpenDetails={handleOpenDetails}
               onDelete={props.onDeleteMessage ? handleDelete : undefined}
+              canPin={Boolean(props.serverMessageId)}
+              isPinned={Boolean(props.pinned)}
+              onTogglePinned={props.onTogglePinned}
             />
           )}
 
@@ -1290,6 +1312,11 @@ export const PlaygroundMessage = (props: Props) => {
           initialNotes={detail?.notes ?? ""}
         />
       )}
-    </div>
+      {streamingComplete && (
+        <span aria-live="polite" className="sr-only">
+          {t("playground:message.responseComplete", { defaultValue: "Response complete" })}
+        </span>
+      )}
+    </article>
   )
 }

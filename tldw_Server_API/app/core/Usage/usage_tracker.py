@@ -11,6 +11,7 @@ import asyncio
 import os
 import time
 from datetime import date, datetime, timezone
+from sqlite3 import Error as SQLiteError
 
 from loguru import logger
 
@@ -26,9 +27,18 @@ try:  # pragma: no cover - ledger optional during upgrades/tests
         LedgerEntry,
         ResourceDailyLedger,
     )
-except Exception:  # pragma: no cover - safe fallback
+except ImportError:  # pragma: no cover - safe fallback
     LedgerEntry = None  # type: ignore
     ResourceDailyLedger = None  # type: ignore
+
+_USAGE_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 _tokens_daily_ledger: ResourceDailyLedger | None = None  # type: ignore[name-defined]
 _tokens_daily_ledger_lock = asyncio.Lock()
@@ -49,7 +59,7 @@ async def _get_tokens_daily_ledger() -> ResourceDailyLedger | None:
             await ledger.initialize()
             _tokens_daily_ledger = ledger
             return ledger
-        except Exception as exc:  # pragma: no cover - defensive
+        except _USAGE_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
             logger.debug(f"LLM usage: ResourceDailyLedger init failed; tokens/day caps disabled: {exc}")
             _tokens_daily_ledger = None
             return None
@@ -82,7 +92,7 @@ async def backfill_legacy_tokens_to_ledger(
     if scope == "api_key":
         try:
             int(value)
-        except Exception:
+        except (TypeError, ValueError):
             return
 
     day = day_utc or datetime.now(timezone.utc).date().isoformat()
@@ -106,7 +116,7 @@ async def backfill_legacy_tokens_to_ledger(
 
         try:
             day_val = date.fromisoformat(day)
-        except Exception:
+        except (TypeError, ValueError):
             day_val = datetime.now(timezone.utc).date()
 
         pool: DatabasePool = await get_db_pool()
@@ -128,7 +138,7 @@ async def backfill_legacy_tokens_to_ledger(
                 occurred_at=datetime.now(timezone.utc),
             )
             await ledger.add(entry)
-    except Exception:
+    except _USAGE_NONCRITICAL_EXCEPTIONS:
         return
     finally:
         _tokens_legacy_backfill_done.add(key)
@@ -143,7 +153,7 @@ def _enabled() -> bool:
         if env_val is not None:
             return str(env_val).strip().lower() in {"true", "1", "yes", "y", "on"}
         return bool(val)
-    except Exception:
+    except _USAGE_NONCRITICAL_EXCEPTIONS:
         return True
 
 
@@ -278,7 +288,7 @@ async def log_llm_usage(
                             "operation": str(operation or ""),
                         },
                     )
-        except Exception:
+        except _USAGE_NONCRITICAL_EXCEPTIONS:
             # Metrics must never impact request flow
             pass
 
@@ -319,7 +329,7 @@ async def log_llm_usage(
                         elif key_id is not None:
                             entity_scope = "api_key"
                             entity_value = str(int(key_id))
-                    except Exception:
+                    except (TypeError, ValueError):
                         entity_scope = None
                         entity_value = None
 
@@ -338,9 +348,9 @@ async def log_llm_usage(
                             occurred_at=datetime.now(timezone.utc),
                         )
                         await ledger.add(entry)
-        except Exception:
+        except _USAGE_NONCRITICAL_EXCEPTIONS:
             # Ledger writes must never affect request flow
             pass
-    except Exception as e:
+    except _USAGE_NONCRITICAL_EXCEPTIONS as e:
         # Never break request processing due to logging errors
         logger.debug(f"LLM usage logging skipped/failed: {e}")

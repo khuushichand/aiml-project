@@ -13,6 +13,7 @@ All functions fail open when the ledger or AuthNZ DB is unavailable.
 import asyncio
 from datetime import date, datetime, timezone
 from datetime import time as dtime
+from sqlite3 import Error as SQLiteError
 from typing import Any
 
 from loguru import logger
@@ -22,9 +23,18 @@ try:  # pragma: no cover - DAL optional during early startup/tests
         LedgerEntry,
         ResourceDailyLedger,
     )
-except Exception:  # pragma: no cover - safe fallback
+except ImportError:  # pragma: no cover - safe fallback
     LedgerEntry = None  # type: ignore
     ResourceDailyLedger = None  # type: ignore
+
+_WORKFLOWS_LEDGER_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 _WORKFLOWS_CATEGORY = "workflows_runs"
@@ -49,7 +59,7 @@ async def get_workflows_daily_ledger() -> ResourceDailyLedger | None:
             await ledger.initialize()
             _workflows_daily_ledger = ledger
             return ledger
-        except Exception as exc:  # pragma: no cover - defensive
+        except _WORKFLOWS_LEDGER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
             logger.debug(f"Workflows: ResourceDailyLedger init failed: {exc}")
             _workflows_daily_ledger = None
             return None
@@ -90,7 +100,7 @@ async def backfill_legacy_runs_to_ledger(
             dtime(0, 0, 0, tzinfo=timezone.utc),
         )
         midnight_iso = midnight_dt.isoformat()
-    except Exception:
+    except (TypeError, ValueError):
         midnight_iso = datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0
         ).isoformat()
@@ -105,7 +115,7 @@ async def backfill_legacy_runs_to_ledger(
             )
             or 0
         )
-    except Exception as exc:  # pragma: no cover - defensive
+    except _WORKFLOWS_LEDGER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
         logger.debug(f"Workflows: legacy run-count backfill query failed: {exc}")
         _workflows_backfill_done.add(key)
         return
@@ -136,7 +146,7 @@ async def backfill_legacy_runs_to_ledger(
             occurred_at=ts,
         )
         await ledger.add(entry)
-    except Exception as exc:  # pragma: no cover - defensive
+    except _WORKFLOWS_LEDGER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
         logger.debug(f"Workflows: legacy backfill insert skipped: {exc}")
     finally:
         _workflows_backfill_done.add(key)
@@ -172,6 +182,6 @@ async def record_workflow_run(
             occurred_at=ts,
         )
         return bool(await ledger.add(entry))
-    except Exception as exc:  # pragma: no cover - defensive
+    except _WORKFLOWS_LEDGER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
         logger.debug(f"Workflows: ledger.add failed for run_id={run_id}: {exc}")
         return False

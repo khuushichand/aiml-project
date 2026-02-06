@@ -56,27 +56,6 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_his
 from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 from tldw_Server_API.app.core.Utils.Utils import downloaded_files, get_project_root, logging, sanitize_filename
 
-_AUDIO_FILES_NONCRITICAL_EXCEPTIONS = (
-    OSError,
-    ValueError,
-    TypeError,
-    KeyError,
-    RuntimeError,
-    AttributeError,
-    ConnectionError,
-    TimeoutError,
-    json.JSONDecodeError,
-    TranscriptionCancelled,
-    TranscriptionConversionError,
-    AudioDownloadError,
-    AudioFileSizeError,
-    AudioCookieError,
-    AudioProcessingError,
-    AudioTranscriptionError,
-    AudioConversionError,
-)
-
-
 def speech_to_text(*args, **kwargs):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
         speech_to_text as _speech_to_text,
@@ -129,6 +108,27 @@ class AudioTranscriptionError(AudioProcessingError):
 class AudioConversionError(AudioProcessingError):
     """Raised when audio format conversion fails."""
     pass
+
+
+_AUDIO_FILES_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    json.JSONDecodeError,
+    TranscriptionCancelled,
+    TranscriptionConversionError,
+    AudioDownloadError,
+    AudioFileSizeError,
+    AudioCookieError,
+    AudioProcessingError,
+    AudioTranscriptionError,
+    AudioConversionError,
+)
 
 #######################################################################################################################
 # Function Definitions

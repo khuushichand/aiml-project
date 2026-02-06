@@ -23,7 +23,7 @@ from ..base import BaseModule, create_tool_definition
 def _ensure_positive_int(value: Any, field: str) -> int:
     try:
         parsed = int(value)
-    except Exception:
+    except (TypeError, ValueError):
         raise ValueError(f"{field} must be a positive integer")
     if parsed <= 0:
         raise ValueError(f"{field} must be a positive integer")
@@ -44,7 +44,7 @@ class KanbanModule(BaseModule):
         try:
             _ = KanbanDB  # noqa: F401
             checks["driver_available"] = True
-        except Exception:
+        except NameError:
             checks["driver_available"] = False
         try:
             import os
@@ -52,12 +52,12 @@ class KanbanModule(BaseModule):
             try:
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root
                 base = Path(get_project_root())
-            except Exception:
+            except (ImportError, OSError, RuntimeError, TypeError, ValueError):
                 base = Path(__file__).resolve().parents[5]
             stat = os.statvfs(str(base))
             free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
             checks["disk_space"] = free_gb > 1
-        except Exception:
+        except (AttributeError, OSError, TypeError, ValueError):
             checks["disk_space"] = False
         return checks
 
@@ -427,7 +427,7 @@ class KanbanModule(BaseModule):
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
-        except Exception as ve:
+        except (TypeError, ValueError) as ve:
             raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
         try:
             if tool_name == "kanban.boards.list":

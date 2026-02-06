@@ -11,14 +11,25 @@ from loguru import logger
 try:
     # Local HTTP client used across the project; enforces egress policy internally
     from tldw_Server_API.app.core.http_client import fetch as http_fetch
-except Exception:  # pragma: no cover - defensive import to avoid runtime breakage
+except ImportError:  # pragma: no cover - defensive import to avoid runtime breakage
     http_fetch = None  # type: ignore[assignment]
 
 try:
     # Centralized egress policy evaluator
     from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-except Exception:  # pragma: no cover - defensive import
+except ImportError:  # pragma: no cover - defensive import
     evaluate_url_policy = None  # type: ignore[assignment]
+
+_WEB_FILTER_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 class URLFilter:
@@ -56,7 +67,7 @@ class DomainFilter(URLFilter):
     def _host(self, url: str) -> str:
         try:
             return urlparse(url).netloc.lower()
-        except Exception:
+        except (TypeError, ValueError):
             return ""
 
     def _is_sub(self, host: str, root: str) -> bool:
@@ -122,7 +133,7 @@ class ContentTypeFilter(URLFilter):
                     end = i
                     break
             return path[dot + 1:end].lower()
-        except Exception:
+        except (TypeError, ValueError):
             return ""
 
     def apply(self, url: str) -> bool:
@@ -194,7 +205,7 @@ class RobotsFilter:
     def _host(self, url: str) -> str:
         try:
             return urlparse(url).netloc.lower()
-        except Exception:
+        except (TypeError, ValueError):
             return ""
 
     async def _fetch_parser(self, url: str) -> RobotFileParser | None:
@@ -249,7 +260,7 @@ class RobotsFilter:
                 rp.parse(text.splitlines())
                 self._cache[host] = (rp, time.time())
                 return rp
-            except Exception as e:  # pragma: no cover - network/parse errors fail open
+            except _WEB_FILTER_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover - network/parse errors fail open
                 logger.debug(f"Robots fetch failed for host={host}: {e}")
                 self._cache[host] = (None, time.time())
                 return None
@@ -265,14 +276,14 @@ class RobotsFilter:
         try:
             from tldw_Server_API.app.core.Security import egress as _egress  # local import to honor monkeypatch
             eval_fn = getattr(_egress, "evaluate_url_policy", None)
-        except Exception:
+        except ImportError:
             eval_fn = evaluate_url_policy
         try:
             if eval_fn is not None:
                 pol = eval_fn(url)
                 if not getattr(pol, "allowed", False):
                     return False
-        except Exception:
+        except _WEB_FILTER_NONCRITICAL_EXCEPTIONS:
             # On egress evaluation error, fail closed for safety at enqueue time
             return False
 
@@ -284,10 +295,10 @@ class RobotsFilter:
                     is_allowed_by_robots_async as _robots_check_async,
                 )
                 return await _robots_check_async(url, self.user_agent, timeout=self.timeout)
-            except Exception:
+            except _WEB_FILTER_NONCRITICAL_EXCEPTIONS:
                 # Fail open: treat as allowed when robots is missing/unreadable
                 return True
         try:
             return bool(parser.can_fetch(self.user_agent, url))
-        except Exception:
+        except _WEB_FILTER_NONCRITICAL_EXCEPTIONS:
             return True

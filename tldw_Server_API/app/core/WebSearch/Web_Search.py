@@ -38,6 +38,30 @@ from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
     pick_ua_profile,
 )
 
+_WEBSEARCH_PARSE_EXCEPTIONS = (
+    AttributeError,
+    IndexError,
+    KeyError,
+    LookupError,
+    TypeError,
+    ValueError,
+)
+
+_WEBSEARCH_RUNTIME_EXCEPTIONS = (
+    ChatConfigurationError,
+    ConnectionError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    json.JSONDecodeError,
+    AttributeError,
+    IndexError,
+    KeyError,
+    LookupError,
+    TypeError,
+    ValueError,
+)
+
 
 def _websearch_browser_headers(
         *,
@@ -370,10 +394,6 @@ def analyze_question(question: str, api_endpoint) -> dict:
             """
 
     input_data = "Follow the above instructions."
-    messages_payload = _build_messages(
-        system_prompt=analyze_search_results_prompt_2,
-        user_prompt=input_data,
-    )
 
     sub_questions: list[str] = []
     for attempt in range(3):
@@ -407,7 +427,7 @@ def analyze_question(question: str, api_endpoint) -> dict:
                         logging.info("Successfully extracted sub-questions using regex")
                         break
 
-        except Exception as e:
+        except _WEBSEARCH_RUNTIME_EXCEPTIONS as e:
             logging.error(f"Error generating sub-questions: {str(e)}")
 
     if not sub_questions:
@@ -572,7 +592,7 @@ async def search_result_relevance(
 
                 else:
                     logging.warning("Failed to parse the API response for relevance analysis.")
-        except Exception as e:
+        except _WEBSEARCH_RUNTIME_EXCEPTIONS as e:
             logging.error(f"Error during relevance evaluation/summarization for result idx={idx}: {e}")
 
     return relevant_results
@@ -773,7 +793,7 @@ def aggregate_results(
                 streaming=False
             )
             generated = True
-        except Exception as chunk_error:
+        except _WEBSEARCH_RUNTIME_EXCEPTIONS as chunk_error:
             failed_chunks += 1
             logging.warning(f"Chunk summarization failed for chunk {info['index']}: {chunk_error}")
             chunk_summary = info["text"][:1500]
@@ -943,7 +963,7 @@ def aggregate_results(
                 "chunks": chunk_metadata,
             }
             return success_answer
-    except Exception as e:
+    except _WEBSEARCH_RUNTIME_EXCEPTIONS as e:
         logging.error(f"Error aggregating results: {e}")
 
     logging.error("Could not create the report due to an error.")
@@ -1093,7 +1113,7 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
         web_search_results_dict = process_web_search_results(web_search_results, search_engine)
         return web_search_results_dict
 
-    except Exception as e:
+    except _WEBSEARCH_RUNTIME_EXCEPTIONS as e:
         return {"processing_error": f"Error performing web search: {str(e)}"}
 
 #
@@ -1199,7 +1219,7 @@ def process_web_search_results(search_results: dict, search_engine: str) -> dict
         else:
             raise ValueError(f"Error: Invalid Search Engine Name {search_engine}")
 
-    except Exception as e:
+    except _WEBSEARCH_PARSE_EXCEPTIONS as e:
         web_search_results_dict["processing_error"] = f"Error processing search results: {str(e)}"
         logging.error(f"Error in process_web_search_results: {str(e)}")
 
@@ -1361,7 +1381,7 @@ def parse_bing_results(raw_results: dict, output_dict: dict) -> None:
                 for item in raw_results["relatedSearches"].get("value", [])
             ]
 
-    except Exception as e:
+    except _WEBSEARCH_PARSE_EXCEPTIONS as e:
         logging.error(f"Error processing Bing results: {str(e)}")
         output_dict["processing_error"] = f"Error processing Bing results: {str(e)}"
 
@@ -1487,7 +1507,7 @@ def parse_brave_results(raw_results: dict, output_dict: dict) -> None:
         if "mixed" in raw_results:
             output_dict["family_friendly"] = raw_results.get("family_friendly", True)
 
-    except Exception as e:
+    except _WEBSEARCH_PARSE_EXCEPTIONS as e:
         logging.error(f"Error processing Brave results: {str(e)}")
         output_dict["processing_error"] = f"Error processing Brave results: {str(e)}"
 
@@ -1637,7 +1657,7 @@ def parse_duckduckgo_results(raw_results: dict, output_dict: dict) -> None:
         # Update total results count
         output_dict["total_results_found"] = len(output_dict["results"])
 
-    except Exception as e:
+    except _WEBSEARCH_PARSE_EXCEPTIONS as e:
         logging.error(f"Error processing DuckDuckGo results: {str(e)}")
         output_dict["processing_error"] = f"Error processing DuckDuckGo results: {str(e)}"
 
@@ -1657,7 +1677,7 @@ def extract_domain(url: str) -> str:
         parsed_uri = urlparse(url)
         domain = parsed_uri.netloc
         return domain.replace('www.', '')
-    except Exception as e:
+    except (AttributeError, TypeError, ValueError) as e:
         logging.warning(f"Failed to extract domain from URL {url}: {str(e)}")
         return url
 
@@ -1888,7 +1908,7 @@ def parse_google_results(raw_results: dict, output_dict: dict) -> None:
             .get("startIndex", 1)
         }
 
-    except Exception as e:
+    except _WEBSEARCH_PARSE_EXCEPTIONS as e:
         logging.error(f"Error processing Google results: {str(e)}")
         output_dict["processing_error"] = f"Error processing Google results: {str(e)}"
 
@@ -1974,7 +1994,7 @@ def parse_kagi_results(raw_results: dict, output_dict: dict) -> None:
                 if item.get("t") == 0
             ])
 
-    except Exception as e:
+    except _WEBSEARCH_PARSE_EXCEPTIONS as e:
         output_dict["processing_error"] = f"Error processing Kagi results: {str(e)}"
 
 
@@ -2026,7 +2046,7 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
         }
         search_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}?{urlencode(params)}"
         logging.info(f"Search URL: {search_url}")
-    except Exception as e:
+    except _WEBSEARCH_PARSE_EXCEPTIONS as e:
         return json.dumps({"error": f"Invalid URL configuration: {str(e)}"})
 
     # Perform the search request
@@ -2064,7 +2084,7 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
 
         return json.dumps(data)
 
-    except Exception as e:
+    except _WEBSEARCH_RUNTIME_EXCEPTIONS as e:
         logging.error(f"Error searching for content: {str(e)}")
         return json.dumps({"error": f"There was an error searching for content. {str(e)}"})
 
@@ -2122,7 +2142,7 @@ def search_web_tavily(search_query, result_count=10, site_whitelist=None, site_b
 
         response = fetch(method="POST", url=tavily_api_url, headers=headers, data=json.dumps(payload))
         return response.json()
-    except Exception as e:
+    except _WEBSEARCH_RUNTIME_EXCEPTIONS as e:
         return f"There was an error searching for content. {str(e)}"
 
 

@@ -121,7 +121,12 @@ const LeftSidebarContent: React.FC = () => {
           key: tab.key,
           label: (
             <Tooltip title={tab.label}>
-              <span className="flex items-center">{tab.icon}</span>
+              <span
+                className="flex items-center"
+                aria-label={typeof tab.label === "string" ? tab.label : undefined}
+              >
+                {tab.icon}
+              </span>
             </Tooltip>
           ),
           children: (
@@ -189,7 +194,12 @@ const RightPanelContent: React.FC = () => {
           key: tab.key,
           label: (
             <Tooltip title={tab.label}>
-              <span className="flex items-center">{tab.icon}</span>
+              <span
+                className="flex items-center"
+                aria-label={typeof tab.label === "string" ? tab.label : undefined}
+              >
+                {tab.icon}
+              </span>
             </Tooltip>
           ),
           children: tab.children

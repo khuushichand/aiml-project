@@ -232,10 +232,10 @@ async def save_uploaded_files(
                 extension=file_extension,
             )
 
-            def _build_filename(base: str, ext: str, suffix: str | None = None) -> str:
+            def _build_filename(base: str, ext: str, suffix: str | None = None, _max_len=max_total_filename_len) -> str:
                 suffix_txt = f"_{suffix}" if suffix else ""
                 reserved = len(suffix_txt) + len(ext)
-                available = max_total_filename_len - reserved
+                available = _max_len - reserved
                 trunc_base = base if len(base) <= available else base[: max(1, available)]
                 return f"{trunc_base}{suffix_txt}{ext}"
 

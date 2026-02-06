@@ -32,6 +32,33 @@ from tldw_Server_API.app.core.Workflows.adapters.media._config import (
     PDFExtractConfig,
 )
 
+_DOCUMENT_PATH_RESOLUTION_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    RuntimeError,
+    AttributeError,
+    KeyError,
+)
+
+_DOCUMENT_FILE_IO_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+)
+
+_DOCUMENT_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ImportError,
+    ConnectionError,
+    TimeoutError,
+)
+
 
 @registry.register(
     "pdf_extract",
@@ -158,7 +185,7 @@ async def run_pdf_extract_adapter(config: dict[str, Any], context: dict[str, Any
             local_path = resolve_workflow_file_path(pdf_uri, context, config)
     except AdapterError as e:
         return {"error": str(e), "status": "Error", "content": "", "text": ""}
-    except Exception as e:
+    except _DOCUMENT_PATH_RESOLUTION_EXCEPTIONS as e:
         logger.debug(f"PDF extract adapter: failed to resolve path: {e}")
         return {"error": f"invalid_pdf_path:{e}", "status": "Error", "content": "", "text": ""}
 
@@ -168,7 +195,7 @@ async def run_pdf_extract_adapter(config: dict[str, Any], context: dict[str, Any
     # Read PDF bytes
     try:
         pdf_bytes = local_path.read_bytes()
-    except Exception as e:
+    except _DOCUMENT_FILE_IO_EXCEPTIONS as e:
         logger.exception(f"PDF extract adapter: failed to read PDF: {e}")
         return {"error": f"pdf_read_error:{e}", "status": "Error", "content": "", "text": ""}
 
@@ -231,7 +258,7 @@ async def run_pdf_extract_adapter(config: dict[str, Any], context: dict[str, Any
                     mime_type="text/plain",
                     metadata={"parser": parser, "page_count": page_count},
                 )
-        except Exception as e:
+        except _DOCUMENT_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"PDF extract adapter: failed to persist artifact: {e}")
 
         return {
@@ -245,7 +272,7 @@ async def run_pdf_extract_adapter(config: dict[str, Any], context: dict[str, Any
             "warnings": result.get("warnings") or [],
         }
 
-    except Exception as e:
+    except _DOCUMENT_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"PDF extract adapter error: {e}")
         return {"error": f"pdf_extract_error:{e}", "status": "Error", "content": "", "text": ""}
 
@@ -315,7 +342,7 @@ async def run_ocr_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
             local_path = resolve_workflow_file_path(image_uri, context, config)
     except AdapterError as e:
         return {"error": str(e), "text": ""}
-    except Exception as e:
+    except _DOCUMENT_PATH_RESOLUTION_EXCEPTIONS as e:
         logger.debug(f"OCR adapter: failed to resolve image path: {e}")
         return {"error": f"invalid_image_path:{e}", "text": ""}
 
@@ -325,7 +352,7 @@ async def run_ocr_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
     # Read image bytes
     try:
         image_bytes = local_path.read_bytes()
-    except Exception as e:
+    except _DOCUMENT_FILE_IO_EXCEPTIONS as e:
         logger.exception(f"OCR adapter: failed to read image: {e}")
         return {"error": f"image_read_error:{e}", "text": ""}
 
@@ -372,12 +399,12 @@ async def run_ocr_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
                     mime_type="text/plain",
                     metadata={"backend": output.get("meta", {}).get("backend"), "format": output_format},
                 )
-        except Exception as e:
+        except _DOCUMENT_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"OCR adapter: failed to persist artifact: {e}")
 
         return output
 
-    except Exception as e:
+    except _DOCUMENT_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"OCR adapter error: {e}")
         return {"error": f"ocr_error:{e}", "text": ""}
 
@@ -415,14 +442,18 @@ async def run_document_table_extract_adapter(config: dict[str, Any], context: di
     if file_uri:
         try:
             file_path = resolve_workflow_file_uri(file_uri, context, config)
-        except Exception as e:
+        except AdapterError as e:
+            return {"error": f"invalid_file_uri:{e}", "tables": [], "count": 0}
+        except _DOCUMENT_PATH_RESOLUTION_EXCEPTIONS as e:
             return {"error": f"invalid_file_uri:{e}", "tables": [], "count": 0}
     elif file_path:
         if isinstance(file_path, str):
             file_path = _tmpl(file_path, context) or file_path
         try:
             file_path = resolve_workflow_file_path(file_path, context, config)
-        except Exception as e:
+        except AdapterError as e:
+            return {"error": f"file_access_denied:{e}", "tables": [], "count": 0}
+        except _DOCUMENT_PATH_RESOLUTION_EXCEPTIONS as e:
             return {"error": f"file_access_denied:{e}", "tables": [], "count": 0}
     else:
         return {"error": "missing_file_path", "tables": [], "count": 0}
@@ -477,12 +508,12 @@ async def run_document_table_extract_adapter(config: dict[str, Any], context: di
                     for page in doc:
                         content += page.get_text()
                     doc.close()
-                except Exception as e:
+                except _DOCUMENT_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"PDF read error: {e}")
             else:
                 try:
                     content = Path(file_path).read_text(encoding="utf-8", errors="ignore")
-                except Exception:
+                except _DOCUMENT_FILE_IO_EXCEPTIONS:
                     pass
 
             if content:
@@ -505,7 +536,7 @@ Example: [{"headers": ["Name", "Value"], "rows": [["A", "1"], ["B", "2"]]}]"""
                     json_match = re.search(r'\[[\s\S]*\]', text)
                     if json_match:
                         tables = json.loads(json_match.group())
-                except Exception:
+                except (ValueError, TypeError):
                     pass
 
         # Convert to CSV if requested
@@ -526,6 +557,6 @@ Example: [{"headers": ["Name", "Value"], "rows": [["A", "1"], ["B", "2"]]}]"""
             "format": output_format,
         }
 
-    except Exception as e:
+    except _DOCUMENT_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Document table extract error: {e}")
         return {"error": f"table_extract_error:{e}", "tables": [], "count": 0}

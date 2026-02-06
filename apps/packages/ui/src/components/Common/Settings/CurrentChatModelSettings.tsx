@@ -599,6 +599,7 @@ export const CurrentChatModelSettings = ({
         children: (
           <ConversationTab
             useDrawer={useDrawer}
+            historyId={historyId}
             selectedSystemPrompt={selectedSystemPrompt}
             onSystemPromptChange={savePrompt}
             uploadedFiles={uploadedFiles}

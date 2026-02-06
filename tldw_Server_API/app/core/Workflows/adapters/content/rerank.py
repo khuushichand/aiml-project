@@ -15,6 +15,17 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.content._config import RerankConfig
 
+_RERANK_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
 
 @registry.register(
     "rerank",
@@ -53,7 +64,7 @@ async def run_rerank_adapter(config: dict[str, Any], context: dict[str, Any]) ->
             last = context.get("prev") or context.get("last") or {}
             if isinstance(last, dict):
                 query = str(last.get("query") or last.get("combined") or last.get("text") or "")
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
     query = query or ""
 
@@ -70,7 +81,7 @@ async def run_rerank_adapter(config: dict[str, Any], context: dict[str, Any]) ->
             rendered = apply_template_to_string(documents_raw, context)
             try:
                 documents = json.loads(rendered) if rendered else []
-            except Exception:
+            except (TypeError, ValueError, json.JSONDecodeError):
                 documents = []
         elif isinstance(documents_raw, list):
             documents = documents_raw
@@ -82,7 +93,7 @@ async def run_rerank_adapter(config: dict[str, Any], context: dict[str, Any]) ->
                 docs = last.get("documents") or last.get("results") or []
                 if isinstance(docs, list):
                     documents = docs
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
 
     if not documents:
@@ -182,6 +193,6 @@ async def run_rerank_adapter(config: dict[str, Any], context: dict[str, Any]) ->
             "query": query,
         }
 
-    except Exception as e:
+    except _RERANK_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Rerank adapter error: {e}")
         return {"error": f"rerank_error:{e}"}

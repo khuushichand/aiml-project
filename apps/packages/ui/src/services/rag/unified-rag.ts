@@ -1,4 +1,4 @@
-export type RagSource = "media_db" | "notes" | "characters" | "chats"
+export type RagSource = "media_db" | "notes" | "characters" | "chats" | "kanban"
 export type RagStrategy = "standard" | "agentic"
 export type RagSearchMode = "fts" | "vector" | "hybrid"
 export type RagFtsLevel = "media" | "chunk"
@@ -36,6 +36,7 @@ export type RagContentPolicyType = "pii" | "phi"
 export type RagContentPolicyMode = "redact" | "drop" | "annotate"
 export type RagLowConfidenceBehavior = "continue" | "ask" | "decline"
 export type RagNumericFidelityBehavior = "continue" | "ask" | "decline" | "retry"
+export type RagNumericPrecisionMode = "standard" | "strict" | "academic"
 export type RagPresetName = "fast" | "balanced" | "thorough" | "custom"
 
 export type RagSettings = {
@@ -53,6 +54,7 @@ export type RagSettings = {
   expand_query: boolean
   expansion_strategies: RagExpansionStrategy[]
   spell_check: boolean
+  max_query_variations: number
   enable_cache: boolean
   cache_threshold: number
   adaptive_cache: boolean
@@ -121,6 +123,25 @@ export type RagSettings = {
   claims_max: number
   claims_concurrency: number
   nli_model: string
+  numeric_precision_mode: RagNumericPrecisionMode
+  doc_only_verification: boolean
+  generate_verification_report: boolean
+  enable_dynamic_granularity: boolean
+  enable_evidence_accumulation: boolean
+  accumulation_max_rounds: number
+  accumulation_time_budget_sec: number | null
+  enable_evidence_chains: boolean
+  enable_document_grading: boolean
+  grading_threshold: number
+  grading_model: string | null
+  grading_provider: string | null
+  grading_batch_size: number
+  grading_timeout_sec: number
+  grading_fallback_to_score: boolean
+  grading_fallback_min_score: number
+  enable_query_rewriting_loop: boolean
+  max_rewrite_attempts: number
+  rewrite_relevance_threshold: number
   enable_reranking: boolean
   reranking_strategy: RagRerankStrategy
   rerank_top_k: number
@@ -155,6 +176,18 @@ export type RagSettings = {
   web_search_engine: string
   web_fallback_result_count: number
   web_fallback_merge_strategy: "prepend" | "append" | "interleave"
+  enable_knowledge_strips: boolean
+  strip_size_tokens: number
+  strip_min_relevance: number
+  max_strips: number
+  enable_fast_hallucination_check: boolean
+  fast_hallucination_timeout_sec: number
+  fast_hallucination_provider: string | null
+  fast_hallucination_model: string | null
+  enable_utility_grading: boolean
+  utility_grading_timeout_sec: number
+  utility_grading_provider: string | null
+  utility_grading_model: string | null
   adaptive_max_retries: number
   adaptive_unsupported_threshold: number
   adaptive_max_claims: number
@@ -166,6 +199,11 @@ export type RagSettings = {
   adaptive_rerun_bypass_cache: boolean
   adaptive_rerun_time_budget_sec: number
   adaptive_rerun_doc_budget: number
+  enable_query_decomposition: boolean
+  max_subqueries: number
+  subquery_time_budget_sec: number | null
+  subquery_doc_budget: number | null
+  subquery_max_concurrency: number
   collect_feedback: boolean
   feedback_user_id: string
   apply_feedback_boost: boolean
@@ -193,6 +231,9 @@ export type RagSettings = {
   enable_resilience: boolean
   retry_attempts: number
   circuit_breaker: boolean
+  ground_truth_doc_ids: string[]
+  metrics_k: number
+  enable_faithfulness_eval: boolean
   user_id: string | null
   session_id: string | null
 }
@@ -212,6 +253,7 @@ export const DEFAULT_RAG_SETTINGS: RagSettings = {
   expand_query: false,
   expansion_strategies: ["acronym", "synonym", "semantic", "domain", "entity"],
   spell_check: true,
+  max_query_variations: 3,
   enable_cache: true,
   cache_threshold: 0.8,
   adaptive_cache: true,
@@ -232,7 +274,7 @@ export const DEFAULT_RAG_SETTINGS: RagSettings = {
   vlm_late_chunk_top_k_docs: 5,
   chunk_type_filter: ["text", "code", "table", "list"],
   enable_parent_expansion: true,
-  parent_context_size: 2,
+  parent_context_size: 500,
   include_sibling_chunks: true,
   sibling_window: 1,
   include_parent_document: false,
@@ -246,7 +288,7 @@ export const DEFAULT_RAG_SETTINGS: RagSettings = {
   agentic_debug_trace: false,
   agentic_enable_tools: true,
   agentic_use_llm_planner: true,
-  agentic_time_budget_sec: 60,
+  agentic_time_budget_sec: 30,
   agentic_cache_ttl_sec: 600,
   agentic_enable_query_decomposition: true,
   agentic_subgoal_max: 5,
@@ -264,7 +306,7 @@ export const DEFAULT_RAG_SETTINGS: RagSettings = {
   agentic_adaptive_budgets: true,
   agentic_coverage_target: 0.8,
   agentic_min_corroborating_docs: 2,
-  agentic_max_redundancy: 3,
+  agentic_max_redundancy: 0.9,
   agentic_enable_metrics: false,
   enable_multi_vector_passages: false,
   mv_span_chars: 1200,
@@ -280,6 +322,25 @@ export const DEFAULT_RAG_SETTINGS: RagSettings = {
   claims_max: 20,
   claims_concurrency: 4,
   nli_model: "default",
+  numeric_precision_mode: "standard",
+  doc_only_verification: false,
+  generate_verification_report: false,
+  enable_dynamic_granularity: false,
+  enable_evidence_accumulation: false,
+  accumulation_max_rounds: 3,
+  accumulation_time_budget_sec: null,
+  enable_evidence_chains: false,
+  enable_document_grading: false,
+  grading_threshold: 0.5,
+  grading_model: null,
+  grading_provider: null,
+  grading_batch_size: 5,
+  grading_timeout_sec: 30,
+  grading_fallback_to_score: true,
+  grading_fallback_min_score: 0.3,
+  enable_query_rewriting_loop: false,
+  max_rewrite_attempts: 2,
+  rewrite_relevance_threshold: 0.3,
   enable_reranking: true,
   reranking_strategy: "flashrank",
   rerank_top_k: 20,
@@ -328,6 +389,18 @@ export const DEFAULT_RAG_SETTINGS: RagSettings = {
   web_search_engine: "duckduckgo",
   web_fallback_result_count: 5,
   web_fallback_merge_strategy: "prepend",
+  enable_knowledge_strips: false,
+  strip_size_tokens: 100,
+  strip_min_relevance: 0.3,
+  max_strips: 20,
+  enable_fast_hallucination_check: false,
+  fast_hallucination_timeout_sec: 5,
+  fast_hallucination_provider: null,
+  fast_hallucination_model: null,
+  enable_utility_grading: false,
+  utility_grading_timeout_sec: 5,
+  utility_grading_provider: null,
+  utility_grading_model: null,
   adaptive_max_retries: 1,
   adaptive_unsupported_threshold: 0.4,
   adaptive_max_claims: 20,
@@ -339,6 +412,11 @@ export const DEFAULT_RAG_SETTINGS: RagSettings = {
   adaptive_rerun_bypass_cache: false,
   adaptive_rerun_time_budget_sec: 30,
   adaptive_rerun_doc_budget: 12,
+  enable_query_decomposition: false,
+  max_subqueries: 4,
+  subquery_time_budget_sec: null,
+  subquery_doc_budget: null,
+  subquery_max_concurrency: 3,
   collect_feedback: false,
   feedback_user_id: "",
   apply_feedback_boost: false,
@@ -366,6 +444,9 @@ export const DEFAULT_RAG_SETTINGS: RagSettings = {
   enable_resilience: true,
   retry_attempts: 2,
   circuit_breaker: true,
+  ground_truth_doc_ids: [],
+  metrics_k: 10,
+  enable_faithfulness_eval: false,
   user_id: null,
   session_id: null
 }
@@ -406,6 +487,27 @@ export const applyRagPreset = (
 })
 
 export const buildRagSearchRequest = (settings: RagSettings) => {
+  const clampNumber = (
+    value: number,
+    min: number,
+    max: number,
+    fallback: number
+  ): number => {
+    if (!Number.isFinite(value)) return fallback
+    if (value < min) return min
+    if (value > max) return max
+    return value
+  }
+
+  const normalizedSettings: RagSettings = {
+    ...settings,
+    // Guard against stale persisted values from earlier builds that violate
+    // current backend validation constraints.
+    parent_context_size: clampNumber(settings.parent_context_size, 100, 2000, 100),
+    agentic_time_budget_sec: clampNumber(settings.agentic_time_budget_sec, 0.1, 30, 30),
+    agentic_max_redundancy: clampNumber(settings.agentic_max_redundancy, 0, 1, 1),
+  }
+
   const {
     query,
     timeout_seconds,
@@ -414,7 +516,7 @@ export const buildRagSearchRequest = (settings: RagSettings) => {
     user_id,
     session_id,
     ...rest
-  } = settings
+  } = normalizedSettings
   const options: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(rest)) {
     if (value === undefined || value === null) continue

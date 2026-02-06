@@ -6,6 +6,7 @@
 # - Generate embeddings for uploaded media
 # - Delete embeddings for a media item
 
+import json
 import os
 from typing import Annotated, Any, Optional
 
@@ -37,6 +38,21 @@ router = APIRouter(prefix="/media", tags=["media-embeddings"])
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_EMBEDDING_PROVIDER = "huggingface"
 FALLBACK_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+_MEDIA_EMBEDDINGS_PARSE_EXCEPTIONS = (TypeError, ValueError, UnicodeError, json.JSONDecodeError)
+_MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeError,
+    json.JSONDecodeError,
+)
 
 
 def _user_embedding_config() -> dict[str, Any]:
@@ -97,7 +113,7 @@ def _resolve_model_provider(
         )
 
         return _resolve_model_and_provider(embedding_model, embedding_provider)
-    except Exception:
+    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
         default_model = embedding_model or settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
         resolved_provider = embedding_provider or settings.get("embedding_provider", DEFAULT_EMBEDDING_PROVIDER)
         if isinstance(default_model, str) and ":" in default_model and not embedding_provider:
@@ -221,7 +237,7 @@ async def get_media_content(media_id: int, db: MediaDatabase) -> dict[str, Any]:
                 if latest and latest.get("content"):
                     media_item = dict(media_item)
                     media_item["content"] = latest["content"]
-        except Exception as exc:
+        except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Failed to load fallback document content for media {media_id}: {exc}")
 
         # Get content
@@ -239,7 +255,7 @@ async def get_media_content(media_id: int, db: MediaDatabase) -> dict[str, Any]:
     except HTTPException:
         # Propagate explicit HTTP errors (e.g., 404 Not Found)
         raise
-    except Exception as e:
+    except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error retrieving media content: {e}")
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -420,7 +436,7 @@ async def generate_embeddings_for_media(
                 media_item_meta = media_content.get("media_item", {})
                 if isinstance(media_item_meta, dict):
                     extra_metadata = media_item_meta.get("metadata") or {}
-            except Exception:
+            except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 extra_metadata = {}
             metadatas = []
             for i, chunk in enumerate(chunks):
@@ -495,7 +511,7 @@ async def generate_embeddings_for_media(
                     media_item_meta = media_content.get("media_item", {})
                     if isinstance(media_item_meta, dict):
                         extra_metadata = media_item_meta.get("metadata") or {}
-                except Exception:
+                except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     extra_metadata = {}
                 for i, chunk in enumerate(chunks):
                     metadata = {
@@ -537,7 +553,7 @@ async def generate_embeddings_for_media(
             else:
                 raise e
 
-    except Exception as e:
+    except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error generating embeddings: {e}")
         return {
             "status": "error",
@@ -594,7 +610,7 @@ async def get_embeddings_status(
                 if md_list:
                     first_md = md_list[0]
                     embedding_model = first_md.get("embedding_model") if isinstance(first_md, dict) else None
-        except Exception as e:
+        except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"ChromaDB status check failed for media {media_id}: {e}")
 
         return EmbeddingsStatusResponse(
@@ -607,7 +623,7 @@ async def get_embeddings_status(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error checking embeddings status: {e}")
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -669,7 +685,7 @@ async def generate_embeddings(
                 embedding_priority=request.priority,
             )
             job_id = str(job_row.get("uuid") or job_row.get("id"))
-        except Exception as e:
+        except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to persist media embedding job: {e}")
         return GenerateEmbeddingsResponse(
             media_id=media_id,
@@ -683,7 +699,7 @@ async def generate_embeddings(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error generating embeddings: {e}")
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -748,7 +764,7 @@ async def generate_embeddings_batch(
             )
             job_id = str(job_row.get("uuid") or job_row.get("id"))
             job_ids.append(job_id)
-        except Exception as exc:
+        except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Failed to persist batch job {job_id} for media {media_id}: {exc}")
     return BatchMediaEmbeddingsResponse(
         status="accepted",
@@ -806,7 +822,7 @@ async def search_embeddings(
 
     try:
         collection = manager.client.get_collection(name=collection_name)
-    except Exception:
+    except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
             detail=f"Collection '{collection_name}' not found",
@@ -881,7 +897,7 @@ async def delete_embeddings(
         try:
             # Use where-based delete if supported
             collection.delete(where={"media_id": str(media_id)})
-        except Exception as e:
+        except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
             # Fall back to fetching IDs then deleting by ids
             logger.warning(f"Where-delete failed, falling back to id-based delete: {e}")
             data = collection.get(where={"media_id": str(media_id)}, include=["metadatas"], limit=100000)
@@ -893,7 +909,7 @@ async def delete_embeddings(
             remaining_ids = (remaining or {}).get("ids") or []
             if remaining_ids:
                 collection.delete(ids=remaining_ids)
-        except Exception as e:
+        except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to verify embeddings delete for media {media_id}: {e}")
 
         invalidate_rag_caches(current_user, media_id=media_id)
@@ -904,7 +920,7 @@ async def delete_embeddings(
         }
     except HTTPException:
         raise
-    except Exception as e:
+    except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error deleting embeddings: {e}")
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,

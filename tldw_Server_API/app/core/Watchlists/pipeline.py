@@ -439,23 +439,24 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                     media_id: int | None,
                     media_uuid: str | None,
                     published_at: str | None = None,
+                    _src=src,
                 ) -> None:
                     try:
                         db.record_scraped_item(
                             run_id=run.id,
                             job_id=job_id,
-                            source_id=int(src.id),
+                            source_id=int(_src.id),
                             media_id=media_id,
                             media_uuid=media_uuid,
                             url=url,
                             title=title,
                             summary=_truncate(summary),
                             published_at=published_at,
-                            tags=_keywords_for_source(src),
+                            tags=_keywords_for_source(_src),
                             status=status,
                         )
                     except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as rec_err:
-                        logger.debug(f"record_scraped_item failed (source_id={getattr(src, 'id', '?')}): {rec_err}")
+                        logger.debug(f"record_scraped_item failed (source_id={getattr(_src, 'id', '?')}): {rec_err}")
 
                 if src_type == "rss":
                     urls = [src.url]

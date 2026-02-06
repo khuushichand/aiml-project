@@ -96,14 +96,16 @@ const ReferenceCard: React.FC<{
         <div className="min-w-0 flex-1">
           {onEnrich && !isEnriched && (
             <div className="mb-1 flex items-center justify-end">
-              <Tooltip title="Enrich reference">
+              <Tooltip
+                title={t("option:documentWorkspace.enrichReference", "Enrich reference")}
+              >
                 <Button
                   size="small"
                   type="text"
                   onClick={onEnrich}
                   loading={isEnriching}
                 >
-                  Enrich
+                  {t("option:documentWorkspace.enrichReferenceButton", "Enrich")}
                 </Button>
               </Tooltip>
             </div>
@@ -431,6 +433,7 @@ export const ReferencesTab: React.FC = () => {
   React.useEffect(() => {
     setEnrich(false)
     setEnrichingRefs({})
+    setSearchQuery("")
   }, [activeDocumentId])
 
   // Fetch references with enrichment enabled
@@ -599,17 +602,18 @@ export const ReferencesTab: React.FC = () => {
           <NoFilteredReferencesState />
         ) : (
           <div className="space-y-2">
-            {filteredReferences.map(({ ref, index }) => (
-              <ReferenceCard
-                key={getReferenceKey(ref, index)}
-                reference={ref}
-                index={index}
-                isEnriching={Boolean(enrichingRefs[getReferenceKey(ref, index)])}
-                onEnrich={() =>
-                  handleEnrichReference(index, getReferenceKey(ref, index))
-                }
-              />
-            ))}
+            {filteredReferences.map(({ ref, index }) => {
+              const key = getReferenceKey(ref, index)
+              return (
+                <ReferenceCard
+                  key={key}
+                  reference={ref}
+                  index={index}
+                  isEnriching={Boolean(enrichingRefs[key])}
+                  onEnrich={() => handleEnrichReference(index, key)}
+                />
+              )
+            })}
           </div>
         )}
       </div>

@@ -444,6 +444,38 @@ Document sanitation
   - `ocr_confidence_threshold` (float)
 - Metrics: `rag_sanitized_docs_total`, `rag_ocr_dropped_docs_total`
 
+### Profile presets (production, research, cheap)
+
+Use profile helpers when you want stable defaults without hand-tuning many
+pipeline flags:
+
+```python
+from tldw_Server_API.app.core.RAG import (
+    get_profile_kwargs,
+    unified_rag_pipeline,
+)
+
+kwargs = get_profile_kwargs(
+    "production",
+    overrides={"top_k": 8},  # optional per-call overrides
+)
+result = await unified_rag_pipeline(query="What changed in release v0.1.0?", **kwargs)
+```
+
+Built-in profiles and tradeoffs:
+
+- `production`: Hybrid retrieval, reranking, semantic cache, stricter
+  safety/verification guardrails. Balanced quality and latency for
+  production traffic.
+- `research`: Enables advanced retrieval and verification features
+  (decomposition, PRF, HyDE, multi-vector, richer observability). Highest
+  quality exploration mode with higher latency/cost.
+- `cheap`: FTS-first retrieval with reduced extras and lighter
+  verification. Lowest latency/cost, but less recall and fewer deep checks.
+
+Each profile is a normal kwargs dict for `unified_rag_pipeline`; explicit
+overrides always win over profile defaults.
+
 ### Multi-tenant-safe pipeline usage
 
 For multi-tenant deployments, prefer a per-tenant namespace and a “safe default” profile that keeps guardrails on but avoids leaking payloads via shared sinks or OTEL spans:

@@ -24,6 +24,24 @@ from tldw_Server_API.app.services import admin_scope_service
 from tldw_Server_API.app.services.llm_usage_aggregator import aggregate_llm_usage_daily
 from tldw_Server_API.app.services.usage_aggregator import aggregate_usage_daily
 
+_ADMIN_USAGE_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 def _fmt_csv_value(x: Any) -> str:
     if x is None:
@@ -87,14 +105,14 @@ async def fetch_usage_daily(
                 f"FROM usage_daily{join_clause}{where_clause} ORDER BY day DESC, user_id ASC LIMIT ${len(params)+1} OFFSET ${len(params)+2}"
             )
             rows = await db.fetch(sql, *params, limit, offset)
-        except Exception as e:
+        except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"usage_daily: falling back without bytes_in_total (pg): {e}")
             try:
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "admin_usage", "event": "daily_bytes_in_missing_fallback"},
                 )
-            except Exception:
+            except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for daily_bytes_in_missing_fallback")
             has_in = False
             sql = (
@@ -109,7 +127,7 @@ async def fetch_usage_daily(
             # build a name-keyed dict defensively.
             try:
                 d = dict(r)
-            except Exception:
+            except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
                 d = {k: r[k] for k in r.keys()} if hasattr(r, "keys") else {}
             if not has_in:
                 d.setdefault("bytes_in_total", None)
@@ -137,14 +155,14 @@ async def fetch_usage_daily(
         else:
             cur = await db.execute(sql, params + [limit, offset])
             rows = await cur.fetchall()
-    except Exception as e:
+    except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"usage_daily: falling back without bytes_in_total (sqlite): {e}")
         try:
             get_metrics_registry().increment(
                 "app_warning_events_total",
                 labels={"component": "admin_usage", "event": "daily_bytes_in_missing_fallback"},
             )
-        except Exception:
+        except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
             logger.debug("metrics increment failed for daily_bytes_in_missing_fallback")
         has_in = False
         sql = (
@@ -264,14 +282,14 @@ async def fetch_usage_top(
                 f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, COALESCE(SUM(bytes_in_total),0) AS bytes_in_total, AVG(latency_avg_ms)::float AS latency_avg_ms FROM usage_daily{join_clause}{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
             ).replace('$ ', '$')
             rows = await db.fetch(sql, *params, limit)
-        except Exception as e:
+        except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"usage_top: falling back without bytes_in_total (pg): {e}")
             try:
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "admin_usage", "event": "top_bytes_in_missing_fallback"},
                 )
-            except Exception:
+            except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for top_bytes_in_missing_fallback")
             sql = (
                 f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms)::float AS latency_avg_ms FROM usage_daily{join_clause}{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT $ {len(params) + 1}"
@@ -310,14 +328,14 @@ async def fetch_usage_top(
                     "latency_avg_ms": r[5],
                 })
         return out_rows
-    except Exception as e:
+    except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"usage_top: falling back without bytes_in_total (sqlite): {e}")
         try:
             get_metrics_registry().increment(
                 "app_warning_events_total",
                 labels={"component": "admin_usage", "event": "top_bytes_in_missing_fallback"},
             )
-        except Exception:
+        except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
             logger.debug("metrics increment failed for top_bytes_in_missing_fallback")
         sql = (
             f"SELECT user_id, SUM(requests) AS requests, SUM(errors) AS errors, SUM(bytes_total) AS bytes_total, AVG(latency_avg_ms) AS latency_avg_ms FROM usage_daily{join_clause}{where_clause} GROUP BY user_id ORDER BY {order_by} LIMIT ?"
@@ -518,7 +536,7 @@ async def fetch_llm_usage_summary(
             d = dict(r)
             try:
                 d["group_value"] = str(d.get("group_value", ""))
-            except Exception:
+            except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
                 d["group_value"] = str(d.get("group_value"))
             out.append(d)
         return out
@@ -537,7 +555,7 @@ async def fetch_llm_usage_summary(
         gv = r[0]
         try:
             gv_str = str(gv)
-        except Exception:
+        except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
             gv_str = f"{gv}"
         out_rows.append({
             'group_value': gv_str,
@@ -640,7 +658,7 @@ async def get_usage_daily(
         )
         items = [UsageDailyRow(**r) for r in rows]
         return UsageDailyResponse(items=items, total=int(total or 0), page=page, limit=limit)
-    except Exception:
+    except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
         logger.exception("Failed to query usage_daily")
         raise HTTPException(status_code=500, detail="Failed to load usage daily data")
 
@@ -673,7 +691,7 @@ async def get_usage_top(
         for r in rows:
             r.setdefault("bytes_in_total", None)
         return UsageTopResponse(items=[UsageTopRow(**r) for r in rows])
-    except Exception as exc:
+    except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to query usage top: {exc}")
         raise HTTPException(status_code=500, detail="Failed to load usage top data")
 
@@ -682,7 +700,7 @@ async def run_usage_aggregate(day: str | None) -> dict:
     try:
         await aggregate_usage_daily(day=day)
         return {"status": "ok", "day": day}
-    except Exception:
+    except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
         logger.exception("Manual usage aggregation failed/skipped")
         return {"status": "skipped", "reason": "aggregation failed or was skipped", "day": day}
 
@@ -718,7 +736,7 @@ async def export_usage_daily_csv(
         _end = end or "all"
         filename = f"usage_daily_{_start}_{_end}.csv"
         return content, filename
-    except Exception as exc:
+    except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to export usage daily CSV: {exc}")
         raise HTTPException(status_code=500, detail="Failed to export usage daily CSV")
 
@@ -752,7 +770,7 @@ async def export_usage_top_csv(
         _end = end or "all"
         filename = f"usage_top_{metric}_{_start}_{_end}.csv"
         return content, filename
-    except Exception as exc:
+    except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to export usage top CSV: {exc}")
         raise HTTPException(status_code=500, detail="Failed to export usage top CSV")
 
@@ -761,7 +779,7 @@ async def run_llm_usage_aggregate(day: str | None) -> dict:
     try:
         await aggregate_llm_usage_daily(day=day)
         return {"status": "ok", "day": day}
-    except Exception as exc:
+    except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Manual LLM usage aggregation failed/skipped: {exc}")
         return {
             "status": "skipped",
@@ -809,7 +827,7 @@ async def get_llm_usage(
         )
         items = [LLMUsageLogRow(**r) for r in rows]
         return LLMUsageLogResponse(items=items, total=int(total or 0), page=page, limit=limit)
-    except Exception:
+    except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
         logger.exception("Failed to query llm_usage_log")
         raise HTTPException(status_code=500, detail="Failed to load LLM usage data")
 
@@ -839,7 +857,7 @@ async def get_llm_usage_summary(
             org_ids=org_ids,
         )
         return LLMUsageSummaryResponse(items=[LLMUsageSummaryRow(**r) for r in rows])
-    except Exception as exc:
+    except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to summarize llm_usage_log: {exc}")
         raise HTTPException(status_code=500, detail="Failed to load LLM usage summary")
 
@@ -862,7 +880,7 @@ async def get_llm_top_spenders(
                 org_ids = [org_id] if org_id in org_ids else []
         rows = await fetch_llm_top_spenders(db, start=start, end=end, limit=limit, org_ids=org_ids)
         return LLMTopSpendersResponse(items=[LLMTopSpenderRow(**r) for r in rows])
-    except Exception as exc:
+    except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to load llm top spenders: {exc}")
         raise HTTPException(status_code=500, detail="Failed to load LLM top spenders")
 
@@ -962,6 +980,6 @@ async def export_llm_usage_csv(
         for row in data:
             lines.append(",".join(_fmt(c) for c in row))
         return "\n".join(lines) + "\n"
-    except Exception as exc:
+    except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to export llm usage CSV: {exc}")
         raise HTTPException(status_code=500, detail="Failed to export CSV")

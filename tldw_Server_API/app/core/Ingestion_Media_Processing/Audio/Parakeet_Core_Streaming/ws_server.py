@@ -37,13 +37,32 @@ from ..model_utils import normalize_model_and_variant
 from .config import StreamingConfig
 from .transcriber import DecodeFn, ParakeetCoreTranscriber
 
+_PARAKEET_WS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
+
 # Optional enhancements: live insights and diarization
 try:  # pragma: no cover - optional, heavy dependency surface
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Insights import (
         LiveInsightSettings,
         LiveMeetingInsights,
     )
-except Exception:  # pragma: no cover - tests may not load insights deps
+except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - tests may not load insights deps
     LiveInsightSettings = None  # type: ignore
     LiveMeetingInsights = None  # type: ignore
 
@@ -52,7 +71,7 @@ try:  # pragma: no cover - optional
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
         StreamingDiarizer,
     )
-except Exception:  # pragma: no cover
+except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
     StreamingDiarizer = None  # type: ignore
 
 
@@ -86,7 +105,7 @@ async def websocket_parakeet_core(
             msg = await websocket.receive_text()
             try:
                 data = json.loads(msg)
-            except Exception:
+            except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS:
                 await websocket.send_json({"type": "error", "message": "Invalid JSON"})
                 continue
 
@@ -112,7 +131,7 @@ async def websocket_parakeet_core(
                     # store language hint; Parakeet core does not enforce it but downstream tools may use it
                     try:
                         config.language = str(cfg.get("language") or "") or None
-                    except Exception:
+                    except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS:
                         config.language = None
                 # Normalize model + variant, supporting forms like "parakeet-onnx"
                 variant_override = cfg.get("variant") or cfg.get("model_variant")
@@ -154,7 +173,7 @@ async def websocket_parakeet_core(
                         if insights_payload is not None:
                             try:
                                 insights_settings = LiveInsightSettings.from_client_payload(insights_payload)  # type: ignore[attr-defined]
-                            except Exception as insight_err:
+                            except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS as insight_err:
                                 logger.error(f"Failed to parse live insights config: {insight_err}")
                                 insights_settings = LiveInsightSettings(enabled=False)  # type: ignore[call-arg]
                         elif cfg.get("insights_enabled") is True and insights_settings is None:
@@ -171,7 +190,7 @@ async def websocket_parakeet_core(
                                     "state": "insights_enabled",
                                     "insights": insights_engine.describe(),  # type: ignore[union-attr]
                                 })
-                            except Exception as insight_err:
+                            except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS as insight_err:
                                 logger.error(f"Live insights init failed: {insight_err}")
                                 insights_engine = None
                                 await websocket.send_json({
@@ -181,7 +200,7 @@ async def websocket_parakeet_core(
                                 })
                         elif insights_settings and not insights_settings.enabled:
                             await websocket.send_json({"type": "status", "state": "insights_disabled"})
-                except Exception as _insights_cfg_err:
+                except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS as _insights_cfg_err:
                     logger.debug(f"Insights config handling skipped: {_insights_cfg_err}")
 
                 # Optional diarization configuration
@@ -200,9 +219,9 @@ async def websocket_parakeet_core(
                                 await websocket.send_json({"type": "status", "state": "diarization_enabled"})
                             else:
                                 await websocket.send_json({"type": "status", "state": "diarization_unavailable"})
-                        except Exception:
+                        except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS:
                             await websocket.send_json({"type": "status", "state": "diarization_unavailable"})
-                except Exception as _diar_cfg_err:
+                except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS as _diar_cfg_err:
                     logger.debug(f"Diarization config handling skipped: {_diar_cfg_err}")
 
                 await websocket.send_json({"type": "status", "state": "configured"})
@@ -237,13 +256,13 @@ async def websocket_parakeet_core(
                                 if speaker_info:
                                     frame["speaker_id"] = speaker_info.get("speaker_id")
                                     frame["speaker_label"] = speaker_info.get("speaker_label")
-                    except Exception as _diar_err:
+                    except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS as _diar_err:
                         logger.debug(f"Diarization label_segment failed: {_diar_err}")
                     # Live insights: send segment to engine
                     try:
                         if insights_engine and frame.get("is_final"):
                             await insights_engine.on_transcript(frame)
-                    except Exception as _insight_err:
+                    except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS as _insight_err:
                         logger.debug(f"Insights on_transcript failed: {_insight_err}")
                     # strip internal fields if present
                     frame.pop("_audio_chunk", None)
@@ -261,12 +280,12 @@ async def websocket_parakeet_core(
                             if speaker_info:
                                 frame["speaker_id"] = speaker_info.get("speaker_id")
                                 frame["speaker_label"] = speaker_info.get("speaker_label")
-                    except Exception as _diar_err:
+                    except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS as _diar_err:
                         logger.debug(f"Diarization label_segment (flush) failed: {_diar_err}")
                     try:
                         if insights_engine:
                             await insights_engine.on_transcript(frame)
-                    except Exception as _insight_err:
+                    except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS as _insight_err:
                         logger.debug(f"Insights on_transcript (flush) failed: {_insight_err}")
                     frame.pop("_audio_chunk", None)
                     await websocket.send_json(frame)
@@ -278,7 +297,7 @@ async def websocket_parakeet_core(
                 try:
                     if insights_engine:
                         await insights_engine.on_commit(transcriber.get_full_transcript())
-                except Exception as _insight_err:
+                except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS as _insight_err:
                     logger.debug(f"Insights on_commit failed: {_insight_err}")
                 try:
                     if diarizer:
@@ -314,9 +333,9 @@ async def websocket_parakeet_core(
                                         "state": "diarization_persist_disabled",
                                         "persistence_method": method,
                                     })
-                        except Exception:
+                        except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS:
                             pass
-                except Exception as _diar_err:
+                except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS as _diar_err:
                     logger.debug(f"Diarization finalize failed: {_diar_err}")
                 transcriber.reset()
 
@@ -325,12 +344,12 @@ async def websocket_parakeet_core(
                 try:
                     if insights_engine:
                         await insights_engine.reset()
-                except Exception as _insight_err:
+                except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS as _insight_err:
                     logger.debug(f"Insights reset failed: {_insight_err}")
                 try:
                     if diarizer:
                         await diarizer.reset()
-                except Exception as _diar_err:
+                except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS as _diar_err:
                     logger.debug(f"Diarizer reset failed: {_diar_err}")
                 await websocket.send_json({"type": "status", "state": "reset"})
 
@@ -343,26 +362,26 @@ async def websocket_parakeet_core(
             else:
                 await websocket.send_json({"type": "error", "message": "Unknown message type"})
 
-    except Exception as e:
+    except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Parakeet core WS error: {e}")
         try:
             await websocket.send_json({"type": "error", "message": str(e)})
-        except Exception:
+        except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS:
             pass
     finally:
         try:
             if insights_engine:
                 try:
                     await insights_engine.close()
-                except Exception:
+                except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS:
                     pass
             if diarizer:
                 try:
                     await diarizer.close()
-                except Exception:
+                except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS:
                     pass
             await websocket.close()
-        except Exception:
+        except _PARAKEET_WS_NONCRITICAL_EXCEPTIONS:
             pass
 
 

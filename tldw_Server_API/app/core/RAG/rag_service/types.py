@@ -67,6 +67,7 @@ class VerificationStatus(Enum):
     UNVERIFIED = "unverified"                # Insufficient evidence (NEI)
     NUMERICAL_ERROR = "numerical_error"      # Numbers don't match source
     REFUTED = "refuted"                      # Evidence contradicts claim
+    CONTESTED = "contested"                  # Evidence exists both for and against
 
 
 class MatchLevel(Enum):

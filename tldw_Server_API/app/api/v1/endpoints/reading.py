@@ -13,7 +13,7 @@ from loguru import logger
 
 try:
     import bleach  # type: ignore
-except Exception:  # pragma: no cover - optional dependency fallback
+except ImportError:  # pragma: no cover - optional dependency fallback
     bleach = None
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
@@ -113,6 +113,25 @@ _ARCHIVE_ALLOWED_PROTOCOLS = ["http", "https", "mailto"]
 
 
 router = APIRouter(prefix="/reading", tags=["reading"])
+
+_READING_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
 
 
 def _service_for_user(user: User) -> ReadingService:
@@ -276,13 +295,13 @@ def _parse_digest_filters(raw: str | None) -> ReadingDigestScheduleFilters | Non
         return None
     try:
         payload = json.loads(raw) if isinstance(raw, str) else raw
-    except Exception:
+    except json.JSONDecodeError:
         return None
     if not isinstance(payload, dict) or not payload:
         return None
     try:
         return ReadingDigestScheduleFilters(**payload)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -290,7 +309,7 @@ def _validate_cron_or_422(cron: str, timezone_str: str | None) -> None:
     try:
         from apscheduler.triggers.cron import CronTrigger
         CronTrigger.from_crontab(cron, timezone=timezone_str or "UTC")
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         raise HTTPException(
             status_code=422,
             detail=(
@@ -417,7 +436,7 @@ async def save_reading_item(
             notes=payload.notes,
         )
         return _to_reading_item(result.item)
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_save_failed: {exc}")
         raise HTTPException(status_code=400, detail="reading_save_failed")
 
@@ -456,7 +475,7 @@ async def list_reading_items(
             date_from_iso = start_dt.isoformat()
         if end_dt:
             date_to_iso = end_dt.isoformat()
-    except Exception:
+    except (TypeError, ValueError):
         raise HTTPException(status_code=422, detail="invalid_date_range")
     resolved_limit = limit if limit is not None else size
     resolved_offset = offset if offset is not None else max(0, (page - 1) * size)
@@ -516,7 +535,7 @@ async def import_reading_items(
 ) -> ReadingImportJobResponse:
     try:
         raw = await file.read()
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_import_read_failed: {exc}")
         raise HTTPException(status_code=400, detail="reading_import_failed") from exc
     if not raw:
@@ -546,7 +565,7 @@ async def import_reading_items(
             priority=5,
             max_retries=3,
         )
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_import_job_create_failed: {exc}")
         if staged_path is not None:
             try:
@@ -631,7 +650,7 @@ async def get_reading_item(
         row = service.get_item(item_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="reading_item_not_found")
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_get_failed: {exc}")
         raise HTTPException(status_code=400, detail="reading_get_failed")
     return _to_reading_detail(row)
@@ -665,7 +684,7 @@ async def summarize_reading_item(
         row = service.get_item(item_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="reading_item_not_found")
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_summary_get_failed: {exc}")
         raise HTTPException(status_code=400, detail="reading_item_fetch_failed")
 
@@ -698,7 +717,7 @@ async def summarize_reading_item(
                 model_override=payload.model,
             ),
         )
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_summarize_failed: {exc}")
         raise HTTPException(status_code=503, detail="reading_summarize_failed")
 
@@ -750,7 +769,7 @@ async def tts_reading_item(
         row = service.get_item(item_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="reading_item_not_found")
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_tts_get_failed: {exc}")
         raise HTTPException(status_code=400, detail="reading_item_fetch_failed")
 
@@ -795,7 +814,7 @@ async def tts_reading_item(
             fallback=True,
             user_id=current_user.id,
         )
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         _raise_for_tts_error(exc)
 
     headers = {
@@ -810,7 +829,7 @@ async def tts_reading_item(
             async for chunk in speech_iter:
                 if chunk:
                     yield chunk
-        except Exception as exc:
+        except _READING_NONCRITICAL_EXCEPTIONS as exc:
             _raise_for_tts_error(exc)
 
     if payload.stream:
@@ -821,7 +840,7 @@ async def tts_reading_item(
         async for chunk in speech_iter:
             if chunk:
                 audio_bytes += chunk
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         _raise_for_tts_error(exc)
 
     audio_bytes = audio_bytes.replace(b"--final_boundary_for_non_streamed--", b"")
@@ -862,7 +881,7 @@ async def update_reading_item(
         return _to_reading_item(row)
     except KeyError:
         raise HTTPException(status_code=404, detail="reading_item_not_found")
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_update_failed: {exc}")
         raise HTTPException(status_code=400, detail="reading_update_failed")
 
@@ -887,7 +906,7 @@ async def delete_reading_item(
         return ReadingDeleteResponse(status=row.status or "archived", item_id=item_id, hard=False)
     except KeyError:
         raise HTTPException(status_code=404, detail="reading_item_not_found")
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_delete_failed: {exc}")
         raise HTTPException(status_code=400, detail="reading_delete_failed")
 
@@ -971,7 +990,7 @@ async def create_reading_archive(
     out_dir = _outputs_dir_for_user(user_id)
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_archive: failed to create outputs dir: {exc}")
         raise HTTPException(status_code=500, detail="storage_unavailable") from exc
 
@@ -983,7 +1002,7 @@ async def create_reading_archive(
 
     try:
         path.write_text(content, encoding="utf-8")
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_archive: failed to write archive file: {exc}")
         raise HTTPException(status_code=500, detail="reading_archive_write_failed") from exc
 
@@ -1006,7 +1025,7 @@ async def create_reading_archive(
             media_item_id=row.media_id,
             retention_until=retention_until,
         )
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_archive: failed to insert output record: {exc}")
         try:
             path.unlink(missing_ok=True)
@@ -1063,7 +1082,7 @@ async def export_reading_items(
             if getattr(row, "metadata_json", None):
                 try:
                     metadata = json.loads(row.metadata_json) if row.metadata_json else {}
-                except Exception:
+                except (json.JSONDecodeError, TypeError, ValueError):
                     metadata = {}
         if not isinstance(metadata, dict):
             metadata = {}
@@ -1093,7 +1112,7 @@ async def export_reading_items(
         if include_highlights:
             try:
                 highlights = service.collections.list_highlights_by_item(item_id=row.id)
-            except Exception as exc:
+            except _READING_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to fetch highlights for item {row.id}: {exc}")
                 highlights = []
             payload["highlights"] = [_serialize_highlight_row(h) for h in highlights]
@@ -1294,7 +1313,7 @@ async def list_reading_digest_outputs(
             try:
                 if row.metadata_json:
                     meta = json.loads(row.metadata_json)
-            except Exception:
+            except (json.JSONDecodeError, TypeError, ValueError):
                 meta = {}
             if schedule_id and str(meta.get("schedule_id")) != str(schedule_id):
                 continue

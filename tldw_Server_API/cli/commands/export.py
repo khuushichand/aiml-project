@@ -14,6 +14,16 @@ from loguru import logger
 
 from tldw_Server_API.cli.utils.output import print_error, print_info, print_success
 
+_EXPORT_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    csv.Error,
+    json.JSONDecodeError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
 
 @click.group()
 def export_group():
@@ -49,7 +59,7 @@ def export_evaluations(ctx, output_file, output_format, limit, days):
                 try:
                     # Support datetime object or numeric timestamp
                     return val.timestamp() if hasattr(val, 'timestamp') else float(val)
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     return 0.0
             evaluations = [e for e in evaluations if _to_ts(e.get('created_at', 0)) > cutoff_dt]
 
@@ -59,7 +69,7 @@ def export_evaluations(ctx, output_file, output_format, limit, days):
                 if key in e and hasattr(e[key], 'isoformat'):
                     try:
                         e[key] = e[key].isoformat()
-                    except Exception:
+                    except (AttributeError, TypeError, ValueError):
                         e[key] = str(e[key])
 
         # Ensure output directory exists
@@ -82,7 +92,7 @@ def export_evaluations(ctx, output_file, output_format, limit, days):
 
         print_success(f"Exported {len(evaluations)} evaluations to {output_file}")
 
-    except Exception as e:
+    except _EXPORT_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Evaluation export failed")
         print_error(f"Evaluation export failed: {e}")
         sys.exit(1)
@@ -107,7 +117,7 @@ def export_config(ctx, output_file):
 
         print_success(f"Configuration exported to {output_file}")
 
-    except Exception as e:
+    except _EXPORT_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Configuration export failed")
         print_error(f"Configuration export failed: {e}")
         sys.exit(1)
@@ -142,7 +152,7 @@ def export_metrics(ctx, output_file):
             print_error("Metrics collection is not enabled")
             sys.exit(1)
 
-    except Exception as e:
+    except _EXPORT_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Metrics export failed")
         print_error(f"Metrics export failed: {e}")
         sys.exit(1)
@@ -179,7 +189,7 @@ def import_data(ctx, input_file, import_type, dry_run):
                     # This would need proper implementation
                     # eval_manager.import_evaluation(eval_data)
                     imported_count += 1
-                except Exception as e:
+                except _EXPORT_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Failed to import evaluation: {e}")
 
             print_success(f"Imported {imported_count} evaluations")
@@ -193,7 +203,7 @@ def import_data(ctx, input_file, import_type, dry_run):
 
             print_success("Configuration imported and saved")
 
-    except Exception as e:
+    except _EXPORT_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Data import failed")
         print_error(f"Data import failed: {e}")
         sys.exit(1)

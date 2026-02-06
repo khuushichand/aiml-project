@@ -19,6 +19,25 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
+_CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 def _build_chacha_db_for_user(user_id: str) -> CharactersRAGDB:
     # Use the same logic as the dependency util to locate per-user DB
@@ -32,7 +51,7 @@ def _build_chacha_db_for_user(user_id: str) -> CharactersRAGDB:
                 "app_warning_events_total",
                 labels={"component": "core_jobs_worker", "event": "invalid_user_id"},
             )
-        except Exception:
+        except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
             logger.debug("metrics increment failed for invalid_user_id")
         raise
 
@@ -89,38 +108,38 @@ async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None
             payload: dict = job.get("payload") or {}
             action = payload.get("action")
             chatbooks_job_id = payload.get("chatbooks_job_id")
-            async def _start_renewal(job_id: int):
+            async def _start_renewal(job_id: int, _lease_seconds=lease_seconds, _lease_id=lease_id, _renew_interval=renew_interval, _renew_jitter=renew_jitter):
                 async def _loop():
                     while True:
                         try:
                             if stop_event and stop_event.is_set():
                                 return
-                            jm.renew_job_lease(int(job_id), seconds=lease_seconds, worker_id=worker_id, lease_id=str(lease_id))
-                        except Exception as e:
+                            jm.renew_job_lease(int(job_id), seconds=_lease_seconds, worker_id=worker_id, lease_id=str(_lease_id))
+                        except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(f"Core Jobs Worker: lease renew failed for job {job_id}: {e}")
                             try:
                                 get_metrics_registry().increment(
                                     "app_warning_events_total",
                                     labels={"component": "core_jobs_worker", "event": "lease_renew_failed"},
                                 )
-                            except Exception:
+                            except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
                                 logger.debug("metrics increment failed for lease_renew_failed")
                         # Apply jitter to renewal interval to avoid thundering herd
-                        slp = renew_interval + random.uniform(-float(renew_jitter), float(renew_jitter))
+                        slp = _renew_interval + random.uniform(-float(_renew_jitter), float(_renew_jitter))
                         await asyncio.sleep(max(1.0, slp))
                 return asyncio.create_task(_loop())
 
             if action == "export":
                 try:
                     ej = svc._get_export_job(chatbooks_job_id)
-                except Exception as e:
+                except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"Core Jobs Worker: get export job failed {chatbooks_job_id}: {e}")
                     try:
                         get_metrics_registry().increment(
                             "app_warning_events_total",
                             labels={"component": "core_jobs_worker", "event": "get_export_job_failed"},
                         )
-                    except Exception:
+                    except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
                         logger.debug("metrics increment failed for get_export_job_failed")
                     ej = None
                 if ej:
@@ -141,7 +160,7 @@ async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None
                 for k, v in (payload.get("content_selections") or {}).items():
                     try:
                         cs[ContentType(k)] = v
-                    except Exception:
+                    except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
                         pass
                 # Start periodic lease renewal during heavy processing
                 _renew_task = await _start_renewal(int(job["id"]))
@@ -169,7 +188,7 @@ async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None
                         continue
                     try:
                         ej = svc._get_export_job(chatbooks_job_id)
-                    except Exception:
+                    except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
                         ej = None
                     if ej and ej.status != ExportStatus.CANCELLED:
                         ej.status = ExportStatus.COMPLETED
@@ -177,14 +196,14 @@ async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None
                         ej.output_path = file_path
                         try:
                             ej.file_size_bytes = Path(file_path).stat().st_size if file_path else None
-                        except Exception as e:
+                        except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(f"Core Jobs Worker: stat exported file failed: {e}")
                             try:
                                 get_metrics_registry().increment(
                                     "app_warning_events_total",
                                     labels={"component": "core_jobs_worker", "event": "export_stat_failed"},
                                 )
-                            except Exception:
+                            except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
                                 logger.debug("metrics increment failed for export_stat_failed")
                         now_utc = datetime.now(timezone.utc)
                         ej.expires_at = svc._get_export_expiry(now_utc)
@@ -195,7 +214,7 @@ async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None
                 else:
                     try:
                         ej = svc._get_export_job(chatbooks_job_id)
-                    except Exception as e:
+                    except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"Core Jobs Worker: get export job (post-fail) failed {chatbooks_job_id}: {e}")
                         ej = None
                     if ej:
@@ -207,14 +226,14 @@ async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None
                 # Stop renewal
                 try:
                     _renew_task.cancel()
-                except Exception as e:
+                except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"Core Jobs Worker: failed to cancel renew task: {e}")
                     try:
                         get_metrics_registry().increment(
                             "app_warning_events_total",
                             labels={"component": "core_jobs_worker", "event": "renew_task_cancel_failed"},
                         )
-                    except Exception:
+                    except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
                         logger.debug("metrics increment failed for renew_task_cancel_failed")
             elif action == "import":
                 file_ref = payload.get("file_token") or payload.get("file_path")
@@ -238,19 +257,19 @@ async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None
                     for k, v in (payload.get("content_selections") or {}).items():
                         try:
                             cs[ContentType(k)] = v
-                        except Exception as e:
+                        except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(f"Core Jobs Worker: invalid content type {k}: {e}")
                             try:
                                 get_metrics_registry().increment(
                                     "app_warning_events_total",
                                     labels={"component": "core_jobs_worker", "event": "invalid_content_type"},
                                 )
-                            except Exception:
+                            except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
                                 logger.debug("metrics increment failed for invalid_content_type")
                     conf_val = payload.get("conflict_resolution", "skip")
                     try:
                         conf = ConflictResolution(conf_val)
-                    except Exception as e:
+                    except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"Core Jobs Worker: invalid conflict_resolution {conf_val}: {e}; defaulting to SKIP")
                         conf = ConflictResolution.SKIP
                     import_media = bool(payload.get("import_media", False))
@@ -305,32 +324,32 @@ async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None
                     if _renew_task is not None:
                         try:
                             _renew_task.cancel()
-                        except Exception as e:
+                        except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(f"Core Jobs Worker: failed to cancel renew task (import): {e}")
                             try:
                                 get_metrics_registry().increment(
                                     "app_warning_events_total",
                                     labels={"component": "core_jobs_worker", "event": "renew_task_cancel_failed"},
                                 )
-                            except Exception:
+                            except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
                                 logger.debug("metrics increment failed for renew_task_cancel_failed")
                     if file_ref:
                         try:
                             cleanup_path = svc._resolve_import_archive_path(file_ref)
                             if cleanup_path.exists() and cleanup_path.is_file():
                                 cleanup_path.unlink()
-                        except Exception as cleanup_err:
+                        except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as cleanup_err:
                             logger.debug(f"Core Jobs Worker: failed to remove import archive {file_ref}: {cleanup_err}")
             else:
                 jm.fail_job(int(job["id"]), error="unknown action", retryable=False, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
-        except Exception:
+        except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
             logger.exception("Core Jobs worker loop error")
             try:
                 get_metrics_registry().increment(
                     "app_exception_events_total",
                     labels={"component": "core_jobs_worker", "event": "worker_loop_error"},
                 )
-            except Exception:
+            except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for worker_loop_error")
             await asyncio.sleep(poll_sleep)
 

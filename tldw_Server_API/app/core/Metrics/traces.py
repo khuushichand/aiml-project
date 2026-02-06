@@ -91,7 +91,7 @@ class TracingManager:
         self.tracer = self.telemetry.get_tracer("tldw_server.tracing")
         self.active_spans = {}
         # Local baggage store when OpenTelemetry baggage is unavailable
-        self._local_baggage = contextvars.ContextVar("tldw_local_baggage", default={})
+        self._local_baggage = contextvars.ContextVar("tldw_local_baggage", default=None)
 
     @contextmanager
     def span(

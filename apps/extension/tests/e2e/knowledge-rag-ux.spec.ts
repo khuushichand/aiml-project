@@ -5,7 +5,60 @@ import {
   forceConnected
 } from './utils/connection'
 
+async function dismissWelcomeOverlay(page: import('@playwright/test').Page) {
+  const welcomeHeading = page.getByText(/Welcome to tldw Assistant/i).first()
+  const appeared = await welcomeHeading
+    .waitFor({ state: 'visible', timeout: 3_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!appeared) return
+
+  const dialog = page.locator('[role="dialog"]').filter({ has: welcomeHeading }).first()
+  const closeButton = dialog.getByRole('button', { name: /close/i }).first()
+  if (await closeButton.isVisible().catch(() => false)) {
+    await closeButton.click()
+  } else {
+    await page.keyboard.press('Escape').catch(() => undefined)
+  }
+  await welcomeHeading.waitFor({ state: 'hidden', timeout: 8_000 }).catch(() => undefined)
+}
+
 test.describe('Knowledge RAG workspace UX', () => {
+  test('workflow hub "Do Research" opens Knowledge QA route', async () => {
+    const { context, page, optionsUrl } = await launchWithBuiltExtension()
+
+    await waitForConnectionStore(page, 'knowledge-rag-workflow-entry')
+    await forceConnected(
+      page,
+      { serverUrl: 'http://dummy-tldw' },
+      'knowledge-rag-workflow-entry'
+    )
+
+    await page.goto(optionsUrl + '#/settings/manageKnowledge')
+    await page.waitForLoadState('networkidle')
+
+    const workflowDialog = page
+      .locator('[role="dialog"]')
+      .filter({ has: page.getByText(/What would you like to do/i).first() })
+      .first()
+    const dialogAlreadyOpen = await workflowDialog.isVisible().catch(() => false)
+    if (!dialogAlreadyOpen) {
+      const workflowButton = page.getByTestId('workflow-button').first()
+      await expect(workflowButton).toBeVisible()
+      await workflowButton.click()
+    }
+
+    await expect(workflowDialog).toBeVisible()
+    await workflowDialog.getByRole('button', { name: /Do Research/i }).click()
+
+    await expect
+      .poll(() => page.url(), { timeout: 15_000 })
+      .toContain('#/knowledge')
+    await expect(page.getByText(/Knowledge QA|Knowledge search & chat/i)).toBeVisible()
+
+    await context.close()
+  })
+
   test('shows RAG workspace and (when available) allows toggling per-reply RAG', async () => {
     const { context, page, optionsUrl } = await launchWithBuiltExtension()
 
@@ -19,6 +72,7 @@ test.describe('Knowledge RAG workspace UX', () => {
 
     await page.goto(optionsUrl + '#/settings/knowledge')
     await page.waitForLoadState('networkidle')
+    await dismissWelcomeOverlay(page)
 
     // Knowledge workspace header should be present with de-jargoned title
     await expect(

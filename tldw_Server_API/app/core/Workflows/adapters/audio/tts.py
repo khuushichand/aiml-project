@@ -17,6 +17,18 @@ from tldw_Server_API.app.core.Workflows.adapters._common import (
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.audio._config import TTSConfig
 
+_WORKFLOW_TTS_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 @registry.register(
     "tts",
@@ -43,7 +55,7 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
     try:
         from tldw_Server_API.app.api.v1.schemas.audio_schemas import NormalizationOptions, OpenAISpeechRequest
         from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
-    except Exception:
+    except ImportError:
         return {"error": "tts_unavailable"}
 
     # Resolve input text
@@ -58,7 +70,7 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
             # Prefer last.text, then inputs.summary, then inputs.text
             last = context.get("prev") or context.get("last") or {}
             text = str(last.get("text")) if isinstance(last, dict) and last.get("text") else None
-        except Exception:
+        except _WORKFLOW_TTS_NONCRITICAL_EXCEPTIONS:
             text = None
         if not text and isinstance(context.get("inputs"), dict):
             text = str(context["inputs"].get("summary") or context["inputs"].get("text") or "")
@@ -71,7 +83,7 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
     fmt = str(config.get("response_format") or "mp3").lower()
     try:
         speed = float(config.get("speed", 1.0))
-    except Exception:
+    except (TypeError, ValueError):
         speed = 1.0
     provider = str(config.get("provider") or "").strip() or None
 
@@ -82,14 +94,14 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
         norm_cfg = config.get("normalization_options") or config.get("normalization")
         if isinstance(norm_cfg, dict):
             normalization = NormalizationOptions(**norm_cfg)
-    except Exception:
+    except _WORKFLOW_TTS_NONCRITICAL_EXCEPTIONS:
         normalization = None
     voice_reference = str(config.get("voice_reference") or "").strip() or None
     reference_duration_min = None
     try:
         if config.get("reference_duration_min") is not None:
             reference_duration_min = float(config.get("reference_duration_min"))
-    except Exception:
+    except (TypeError, ValueError):
         reference_duration_min = None
     # Merge provider-specific options into extra_params
     extra_params = config.get("extra_params") if isinstance(config.get("extra_params"), dict) else {}
@@ -97,7 +109,7 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
     try:
         if provider_opts:
             extra_params = {**(extra_params or {}), **provider_opts}
-    except Exception:
+    except (TypeError, ValueError):
         pass
 
     req = OpenAISpeechRequest(
@@ -124,7 +136,7 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
     # Optional file naming template
     try:
         tmpl = str(config.get("output_filename_template") or "").strip()
-    except Exception:
+    except (TypeError, ValueError):
         tmpl = ""
     if tmpl:
         try:
@@ -143,7 +155,7 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
                 fname = f"speech.{ext}"
             if not fname.lower().endswith(f".{ext}"):
                 fname = f"{fname}.{ext}"
-        except Exception:
+        except _WORKFLOW_TTS_NONCRITICAL_EXCEPTIONS:
             fname = f"speech.{ext}"
     else:
         fname = f"speech.{ext}"
@@ -159,7 +171,7 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
                 try:
                     if callable(context.get("is_cancelled")) and context["is_cancelled"]():
                         return {"__status__": "cancelled"}
-                except Exception:
+                except _WORKFLOW_TTS_NONCRITICAL_EXCEPTIONS:
                     pass
                 if isinstance(chunk, (bytes, bytearray)):
                     await writer.write(chunk)
@@ -169,7 +181,7 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
                     data = bytes(chunk)
                     await writer.write(data)
                     size_bytes += len(data)
-    except Exception as e:
+    except _WORKFLOW_TTS_NONCRITICAL_EXCEPTIONS as e:
         return {"error": f"tts_error:{e}"}
 
     # Optional post-process normalization via ffmpeg (best-effort)
@@ -210,7 +222,7 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
                         proc.kill()
                         try:
                             await proc.communicate()
-                        except Exception:
+                        except _WORKFLOW_TTS_NONCRITICAL_EXCEPTIONS:
                             pass
                     else:
                         if proc.returncode == 0:
@@ -218,11 +230,11 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
                             normalized_path = norm_out
                         else:
                             normalized = False
-                except Exception:
+                except _WORKFLOW_TTS_NONCRITICAL_EXCEPTIONS:
                     normalized = False
             else:
                 normalized = False
-    except Exception:
+    except _WORKFLOW_TTS_NONCRITICAL_EXCEPTIONS:
         normalized = False
 
     # Prepare outputs and optional artifacts
@@ -253,7 +265,7 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
                 metadata={"model": model, "voice": voice, "format": ext},
                 artifact_id=audio_artifact_id,
             )
-    except Exception:
+    except _WORKFLOW_TTS_NONCRITICAL_EXCEPTIONS:
         audio_artifact_id = None
 
     if attach_download and audio_artifact_id:
@@ -273,7 +285,7 @@ async def run_tts_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
                     metadata={"model": model, "voice": voice},
                 )
             outputs["transcript"] = text
-        except Exception:
+        except _WORKFLOW_TTS_NONCRITICAL_EXCEPTIONS:
             pass
 
     return outputs

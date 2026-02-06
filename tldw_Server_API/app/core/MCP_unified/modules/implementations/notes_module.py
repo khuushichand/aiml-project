@@ -14,6 +14,25 @@ from loguru import logger
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from ..base import BaseModule, create_tool_definition
 
+_NOTES_MODULE_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 def _normalize_scores(results: list[dict[str, Any]], score_key: Optional[str] = None) -> list[float]:
     if not results:
@@ -52,7 +71,7 @@ def _make_snippet(text: Optional[str], query: Optional[str], length: int = 300) 
         start = max(0, idx - half)
         end = min(len(t), start + length)
         return t[start:end]
-    except Exception:
+    except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS:
         return t[:length]
 
 
@@ -71,7 +90,7 @@ class NotesModule(BaseModule):
             # Verify DB driver class is importable
             _ = CharactersRAGDB  # noqa: F401
             checks["driver_available"] = True
-        except Exception:
+        except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS:
             checks["driver_available"] = False
         # Check Databases directory has free space
         try:
@@ -80,13 +99,13 @@ class NotesModule(BaseModule):
             try:
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root
                 base = Path(get_project_root())
-            except Exception:
+            except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS:
                 # Anchor to package root if project root resolution fails
                 base = Path(__file__).resolve().parents[5]
             stat = os.statvfs(str(base))
             free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
             checks["disk_space"] = free_gb > 1
-        except Exception:
+        except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS:
             checks["disk_space"] = False
         # Optional ephemeral DB write test (heavy) for deeper validation
         try:
@@ -98,7 +117,7 @@ class NotesModule(BaseModule):
                     # A trivial read to confirm
                     _ = db.get_note_by_id("nonexistent")
                 checks["ephemeral_db_ok"] = True
-        except Exception:
+        except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS:
             checks["ephemeral_db_ok"] = False
 
         return checks
@@ -236,7 +255,7 @@ class NotesModule(BaseModule):
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
-        except Exception as ve:
+        except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS as ve:
             raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
         if tool_name == "notes.search":
             return await self._search_notes(args, context)
@@ -277,7 +296,7 @@ class NotesModule(BaseModule):
                 sc = context.metadata.get("safe_config") or {}
                 if isinstance(sc, dict):
                     snippet_len = int(sc.get("snippet_length", snippet_len))
-        except Exception:
+        except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS:
             pass
         snippet_len = max(50, min(2000, snippet_len))
 
@@ -391,7 +410,7 @@ class NotesModule(BaseModule):
                 sc = context.metadata.get("safe_config") or {}
                 if isinstance(sc, dict):
                     snippet_len = int(sc.get("snippet_length", snippet_len))
-        except Exception:
+        except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS:
             pass
         snippet_len = max(50, min(2000, snippet_len))
 
@@ -481,7 +500,7 @@ class NotesModule(BaseModule):
                     idx = content.lower().find(query.lower()) if query else -1
                     if idx >= 0:
                         approx_offset = idx
-                except Exception:
+                except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS:
                     approx_offset = None
                 results.append({
                     "id": note_id,
@@ -500,7 +519,7 @@ class NotesModule(BaseModule):
 
             try:
                 total_estimated = db.count_notes_matching(query)
-            except Exception:
+            except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS:
                 total_estimated = offset + len(rows) + (1 if has_more else 0)
 
             return {
@@ -512,7 +531,7 @@ class NotesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after search: {}", exc)
 
     def _get_note_sync(
@@ -556,7 +575,7 @@ class NotesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after note fetch: {}", exc)
 
     def _create_note_sync(
@@ -582,7 +601,7 @@ class NotesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after create: {}", exc)
 
     def _update_note_sync(
@@ -605,7 +624,7 @@ class NotesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after update: {}", exc)
 
     def _delete_note_sync(
@@ -635,7 +654,7 @@ class NotesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after delete: {}", exc)
 
     def _tags_add_sync(self, context: Any | None, note_id: str, tags: Iterable[str]) -> dict[str, Any]:
@@ -656,7 +675,7 @@ class NotesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after tags add: {}", exc)
 
     def _tags_remove_sync(self, context: Any | None, note_id: str, tags: Iterable[str]) -> dict[str, Any]:
@@ -673,7 +692,7 @@ class NotesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after tags remove: {}", exc)
 
     def _tags_set_sync(self, context: Any | None, note_id: str, tags: Iterable[str]) -> dict[str, Any]:
@@ -702,7 +721,7 @@ class NotesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after tags set: {}", exc)
 
     def _tags_list_sync(self, context: Any | None, note_id: Optional[str], limit: int, offset: int) -> dict[str, Any]:
@@ -733,7 +752,7 @@ class NotesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after tags list: {}", exc)
 
     def _build_note_meta(self, row: dict[str, Any], snippet_len: int = 300) -> dict[str, Any]:
@@ -757,7 +776,7 @@ class NotesModule(BaseModule):
         try:
             roles = (getattr(context, "metadata", {}) or {}).get("roles")
             return isinstance(roles, list) and any(str(r).lower() == "admin" for r in roles)
-        except Exception:
+        except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS:
             return False
 
     def _validate_tags(self, tags: Any, *, allow_empty: bool) -> None:
@@ -799,7 +818,7 @@ class NotesModule(BaseModule):
                 return int(existing["id"])
             kid = db.add_keyword(tag)
             return int(kid) if kid is not None else None
-        except Exception:
+        except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS:
             return None
 
     def _apply_tags(self, db: CharactersRAGDB, note_id: str, tags: list[str]) -> None:

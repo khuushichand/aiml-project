@@ -7,9 +7,12 @@ import time
 from contextlib import nullcontext
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    import torch
 
 from tldw_Server_API.app.core.config import get_stt_config
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib import DiarizationError

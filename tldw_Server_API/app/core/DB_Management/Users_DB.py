@@ -16,10 +16,10 @@ try:  # pragma: no cover - presence depends on environment
     _ASYNC_PG_AVAILABLE = True
     try:
         _PG_UniqueViolationError = asyncpg.exceptions.UniqueViolationError  # type: ignore[attr-defined]
-    except Exception:  # pragma: no cover
+    except AttributeError:  # pragma: no cover
         class _PG_UniqueViolationError(Exception):  # type: ignore
             pass
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     _ASYNC_PG_AVAILABLE = False
     class _PG_UniqueViolationError(Exception):  # type: ignore
         pass
@@ -29,7 +29,7 @@ try:  # pragma: no cover - optional in SQLite-only deployments
     _AIOSQLITE_AVAILABLE = True
     # Provide a safe alias for IntegrityError so except clauses don't NameError
     _AIOSQLITE_IntegrityError = aiosqlite.IntegrityError  # type: ignore[attr-defined]
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     _AIOSQLITE_AVAILABLE = False
     # Fallback placeholder so tuple excepts remain valid even when aiosqlite is absent
     class _AIOSQLITE_IntegrityError(Exception):  # type: ignore
@@ -44,6 +44,26 @@ from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+_USERS_DB_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    DatabaseError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    sqlite3.Error,
+)
 
 #######################################################################################################################
 #
@@ -106,11 +126,11 @@ class UsersDB:
                         # Prefer pgcrypto (gen_random_uuid); gracefully fall back to uuid-ossp if unavailable.
                         try:
                             await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-                        except Exception as ext_err:  # pragma: no cover - env dependent
+                        except _USERS_DB_NONCRITICAL_EXCEPTIONS as ext_err:  # pragma: no cover - env dependent
                             logger.warning(f"pgcrypto extension not available: {ext_err}. Trying uuid-ossp as fallback.")
                             try:
                                 await conn.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
-                            except Exception as ext2_err:
+                            except _USERS_DB_NONCRITICAL_EXCEPTIONS as ext2_err:
                                 logger.warning(
                                     f"uuid-ossp extension also unavailable: {ext2_err}. Proceeding without extension; "
                                     "UUID defaults may be set separately if functions exist."
@@ -151,10 +171,10 @@ class UsersDB:
                         # Populate missing UUIDs using available function
                         try:
                             await conn.execute("UPDATE users SET uuid = gen_random_uuid() WHERE uuid IS NULL")
-                        except Exception:
+                        except _USERS_DB_NONCRITICAL_EXCEPTIONS:
                             try:
                                 await conn.execute("UPDATE users SET uuid = uuid_generate_v4() WHERE uuid IS NULL")
-                            except Exception as uuid_err:
+                            except _USERS_DB_NONCRITICAL_EXCEPTIONS as uuid_err:
                                 logger.warning(
                                     "Unable to populate UUIDs with gen_random_uuid or uuid_generate_v4: "
                                     f"{uuid_err}"
@@ -162,12 +182,12 @@ class UsersDB:
                         await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET NOT NULL")
                         try:
                             await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT gen_random_uuid()")
-                        except Exception:
+                        except _USERS_DB_NONCRITICAL_EXCEPTIONS:
                             try:
                                 await conn.execute(
                                     "ALTER TABLE users ALTER COLUMN uuid SET DEFAULT uuid_generate_v4()"
                                 )
-                            except Exception as def_err:
+                            except _USERS_DB_NONCRITICAL_EXCEPTIONS as def_err:
                                 logger.warning(f"Could not set UUID default via pgcrypto/uuid-ossp: {def_err}")
 
                     else:
@@ -215,14 +235,14 @@ class UsersDB:
                             await conn.execute(
                                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid)"
                             )
-                        except Exception as idx_err:
+                        except _USERS_DB_NONCRITICAL_EXCEPTIONS as idx_err:
                             logger.warning(f"Could not create unique index on users.uuid: {idx_err}")
 
                         await conn.commit()
 
                     logger.debug("Users table and indexes created/verified")
                 return
-            except Exception as e:
+            except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
                 if attempt < attempts - 1 and "locked" in str(e).lower():
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 1.0)
@@ -269,7 +289,7 @@ class UsersDB:
 
         except UserNotFoundError:
             raise
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get user by ID {user_id}: {e}")
             raise DatabaseError(f"Failed to get user: {e}")
 
@@ -307,7 +327,7 @@ class UsersDB:
 
             return user_dict
 
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get user by username {username}: {e}")
             raise DatabaseError(f"Failed to get user: {e}")
 
@@ -346,7 +366,7 @@ class UsersDB:
 
             return user_dict
 
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get user by uuid {user_uuid}: {e}")
             raise DatabaseError(f"Failed to get user: {e}")
 
@@ -384,7 +404,7 @@ class UsersDB:
 
             return user_dict
 
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get user by email {email}: {e}")
             raise DatabaseError(f"Failed to get user: {e}")
 
@@ -481,15 +501,15 @@ class UsersDB:
                                 await conn.execute(
                                     "UPDATE users SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL OR uuid = ''"
                                 )
-                            except Exception:
+                            except _USERS_DB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             try:
                                 await conn.execute(
                                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid)"
                                 )
-                            except Exception:
+                            except _USERS_DB_NONCRITICAL_EXCEPTIONS:
                                 pass
-                    except Exception:
+                    except _USERS_DB_NONCRITICAL_EXCEPTIONS:
                         # Best-effort; insertion may still succeed if columns already present
                         pass
                     cursor = await conn.execute(
@@ -535,7 +555,7 @@ class UsersDB:
                 raise DuplicateUserError("Username or email already exists") from e
             logger.error(f"Failed to create user {username}: {e}")
             raise DatabaseError(f"Failed to create user: {e}") from e
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             msg = str(e)
             if "UNIQUE constraint failed" in msg and "users" in msg:
                 logger.warning(f"Duplicate user detected during create_user for '{username}': {e}")
@@ -618,7 +638,7 @@ class UsersDB:
                 # Return updated user
                 return await self.get_user_by_id(user_id)
 
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to update user {user_id}: {e}")
             raise DatabaseError(f"Failed to update user: {e}")
 
@@ -641,7 +661,7 @@ class UsersDB:
             logger.info(f"Soft deleted user {user_id}")
             return True
 
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to delete user {user_id}: {e}")
             raise DatabaseError(f"Failed to delete user: {e}")
 
@@ -704,7 +724,7 @@ class UsersDB:
 
             return users
 
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to list users: {e}")
             raise DatabaseError(f"Failed to list users: {e}")
 

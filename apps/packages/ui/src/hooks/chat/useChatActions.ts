@@ -47,6 +47,10 @@ import { consumeStreamingChunk } from "@/utils/streaming-chunks"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { normalizeConversationState } from "@/utils/conversation-state"
 import {
+  hasActiveMessageSteering,
+  resolveMessageSteering
+} from "@/utils/message-steering"
+import {
   SELECTED_CHARACTER_STORAGE_KEY,
   selectedCharacterStorage,
   selectedCharacterSyncStorage,
@@ -59,6 +63,7 @@ import { trackCompareMetric } from "@/utils/compare-metrics"
 import { MAX_COMPARE_MODELS } from "@/hooks/chat/compare-constants"
 import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
 import type { Character } from "@/types/character"
+import type { MessageSteeringMode } from "@/types/message-steering"
 import type {
   Knowledge,
   ReplyTarget,
@@ -178,6 +183,9 @@ type UseChatActionsOptions = {
   setSelectedSystemPrompt: (prompt: string) => void
   invalidateServerChatHistory: () => void
   selectedCharacter: Character | null
+  messageSteeringMode: MessageSteeringMode
+  messageSteeringForceNarrate: boolean
+  clearMessageSteering: () => void
 }
 
 export const useChatActions = ({
@@ -244,13 +252,30 @@ export const useChatActions = ({
   clearReplyTarget,
   setSelectedSystemPrompt,
   invalidateServerChatHistory,
-  selectedCharacter
+  selectedCharacter,
+  messageSteeringMode,
+  messageSteeringForceNarrate,
+  clearMessageSteering
 }: UseChatActionsOptions) => {
   const { settings: chatSettings } = useChatSettingsRecord({
     historyId,
     serverChatId
   })
   const greetingEnabled = chatSettings?.greetingEnabled ?? true
+  const directedCharacterId = React.useMemo(() => {
+    const raw = chatSettings?.directedCharacterId
+    const parsed = Number.parseInt(String(raw ?? ""), 10)
+    if (!Number.isFinite(parsed) || parsed <= 0) return null
+    return parsed
+  }, [chatSettings?.directedCharacterId])
+  const resolvedMessageSteering = React.useMemo(
+    () =>
+      resolveMessageSteering({
+        mode: messageSteeringMode,
+        forceNarrate: messageSteeringForceNarrate
+      }),
+    [messageSteeringForceNarrate, messageSteeringMode]
+  )
   const messagesRef = React.useRef(messages)
 
   React.useEffect(() => {
@@ -455,7 +480,8 @@ export const useChatActions = ({
     signal,
     model,
     regenerateFromMessage,
-    character
+    character,
+    messageSteering
   }: {
     message: string
     image: string
@@ -466,6 +492,11 @@ export const useChatActions = ({
     model: string
     regenerateFromMessage?: Message
     character?: Character | null
+    messageSteering: {
+      continueAsUser: boolean
+      impersonateUser: boolean
+      forceNarrate: boolean
+    }
   }) => {
     const activeCharacter = character ?? selectedCharacter
     if (!activeCharacter?.id) {
@@ -698,7 +729,11 @@ export const useChatActions = ({
           include_character_context: true,
           model: streamModel,
           provider: resolvedApiProvider,
-          save_to_db: shouldPersistToServer
+          save_to_db: shouldPersistToServer,
+          directed_character_id: directedCharacterId ?? undefined,
+          continue_as_user: messageSteering.continueAsUser,
+          impersonate_user: messageSteering.impersonateUser,
+          force_narrate: messageSteering.forceNarrate
         },
         { signal }
       )) {
@@ -1097,7 +1132,29 @@ export const useChatActions = ({
       signal = controller.signal
     }
 
-    const chatModeParams = await buildChatModeParams()
+    const messageSteeringForTurn = resolvedMessageSteering
+    if (messageSteeringForTurn.hadConflict) {
+      notification.warning({
+        message: t("warning", { defaultValue: "Warning" }),
+        description: t(
+          "playground:composer.steering.conflictResolved",
+          "Impersonate user overrides Continue as user for this response."
+        )
+      })
+    }
+    const shouldConsumeSteering = hasActiveMessageSteering(
+      messageSteeringForTurn
+    )
+    let steeringApplied = false
+    const markSteeringApplied = () => {
+      if (shouldConsumeSteering) {
+        steeringApplied = true
+      }
+    }
+
+    const chatModeParams = await buildChatModeParams({
+      messageSteering: messageSteeringForTurn
+    })
     const baseMessages = chatHistory || messages
     const baseHistory = memory || history
     const replyActive =
@@ -1128,6 +1185,7 @@ export const useChatActions = ({
 
     try {
       if (isContinue) {
+        markSteeringApplied()
         await continueChatMode(
           chatHistory || messages,
           memory || history,
@@ -1174,6 +1232,7 @@ export const useChatActions = ({
       }
       // console.log("contextFiles", contextFiles)
       if (contextFiles.length > 0) {
+        markSteeringApplied()
         await documentChatMode(
           message,
           image,
@@ -1196,6 +1255,7 @@ export const useChatActions = ({
             Array.from(new Set([...(documentContext || []), ...docs]))
           )
         }
+        markSteeringApplied()
         await tabChatMode(
           message,
           image,
@@ -1210,6 +1270,7 @@ export const useChatActions = ({
       }
 
       if (selectedKnowledge) {
+        markSteeringApplied()
         await ragMode(
           message,
           image,
@@ -1242,6 +1303,7 @@ export const useChatActions = ({
               setAbortController(null)
               return
             }
+            markSteeringApplied()
             await characterChatMode({
               message,
               image,
@@ -1251,13 +1313,15 @@ export const useChatActions = ({
               signal,
               model: resolvedModel,
               regenerateFromMessage,
-              character: resolvedSelectedCharacter
+              character: resolvedSelectedCharacter,
+              messageSteering: messageSteeringForTurn
             })
             return
           }
         }
 
         if (!compareModeActive) {
+          markSteeringApplied()
           await normalChatMode(
             message,
             image,
@@ -1377,7 +1441,8 @@ export const useChatActions = ({
             setHistory: () => {},
             setStreaming: () => {},
             setIsProcessing: () => {},
-            setAbortController: () => {}
+            setAbortController: () => {},
+            messageSteering: messageSteeringForTurn
           })
           const compareEnhancedParams = {
             ...compareChatModeParams,
@@ -1414,6 +1479,7 @@ export const useChatActions = ({
             })
           })
 
+          markSteeringApplied()
           await Promise.allSettled(comparePromises)
           refreshHistoryFromMessages()
           setIsProcessing(false)
@@ -1433,6 +1499,9 @@ export const useChatActions = ({
     } finally {
       if (replyActive) {
         clearReplyTarget()
+      }
+      if (steeringApplied) {
+        clearMessageSteering()
       }
     }
   }
@@ -1462,6 +1531,11 @@ export const useChatActions = ({
       return
     }
 
+    const messageSteeringForTurn = resolvedMessageSteering
+    const shouldConsumeSteering = hasActiveMessageSteering(
+      messageSteeringForTurn
+    )
+
     setStreaming(true)
     const newController = new AbortController()
     setAbortController(newController)
@@ -1478,7 +1552,9 @@ export const useChatActions = ({
     )
 
     try {
-      const chatModeParams = await buildChatModeParams()
+      const chatModeParams = await buildChatModeParams({
+        messageSteering: messageSteeringForTurn
+      })
       const enhancedChatModeParams = {
         ...chatModeParams,
         uploadedFiles: uploadedFiles
@@ -1568,6 +1644,10 @@ export const useChatActions = ({
       })
       setIsProcessing(false)
       setStreaming(false)
+    } finally {
+      if (shouldConsumeSteering) {
+        clearMessageSteering()
+      }
     }
   }
 
@@ -1641,6 +1721,42 @@ export const useChatActions = ({
       setHistory,
       setMessages
     ]
+  )
+
+  const toggleMessagePinned = React.useCallback(
+    async (index: number) => {
+      const target = messages[index]
+      if (!target) return
+
+      const nextPinned = !Boolean(target.pinned)
+
+      if (target.serverMessageId) {
+        await tldwClient.initialize().catch(() => null)
+        let expectedVersion = target.serverMessageVersion
+        if (expectedVersion == null) {
+          const serverMessage = await tldwClient.getMessage(target.serverMessageId)
+          expectedVersion = serverMessage?.version
+        }
+        if (expectedVersion == null) {
+          throw new Error("Missing server message version")
+        }
+        await tldwClient.editMessage(
+          target.serverMessageId,
+          String(target.message || ""),
+          Number(expectedVersion),
+          serverChatId ?? undefined,
+          { pinned: nextPinned }
+        )
+        invalidateServerChatHistory()
+      }
+
+      setMessages(
+        messages.map((message, messageIndex) =>
+          messageIndex === index ? { ...message, pinned: nextPinned } : message
+        )
+      )
+    },
+    [invalidateServerChatHistory, messages, serverChatId, setMessages]
   )
 
   const createChatBranch = createBranchMessage({
@@ -1744,6 +1860,7 @@ export const useChatActions = ({
     stopStreamingRequest,
     editMessage,
     deleteMessage,
+    toggleMessagePinned,
     createChatBranch,
     createCompareBranch
   }

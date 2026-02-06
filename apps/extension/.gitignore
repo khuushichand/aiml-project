@@ -51,6 +51,7 @@ keys.json
 package-lock.json
 bun.lockb
 /playwright-mcp-artifacts
+/cdp-extension-artifacts
 /test-results
 /.playwright-home
 

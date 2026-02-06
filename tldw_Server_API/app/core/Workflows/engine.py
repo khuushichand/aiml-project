@@ -11,6 +11,23 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
+from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+from tldw_Server_API.app.core.Workflows.adapters import get_adapter
+
+_WF_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    asyncio.CancelledError,
+)
+
 # Telemetry/metrics (graceful fallbacks if missing)
 try:
     from tldw_Server_API.app.core.Metrics import (
@@ -39,23 +56,6 @@ except _WF_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - safety
         return None
     def record_span_exception(*args, **kwargs):
         return None
-
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
-from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
-from tldw_Server_API.app.core.Workflows.adapters import get_adapter
-
-_WF_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
-    AttributeError,
-    ConnectionError,
-    KeyError,
-    OSError,
-    RuntimeError,
-    TimeoutError,
-    TypeError,
-    UnicodeDecodeError,
-    ValueError,
-    asyncio.CancelledError,
-)
 
 
 class RunMode(str, Enum):

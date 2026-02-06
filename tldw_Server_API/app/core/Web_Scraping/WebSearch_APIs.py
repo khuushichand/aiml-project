@@ -632,11 +632,11 @@ async def search_result_relevance(
                 logging.warning("LLM circuit breaker open; skipping relevance evaluation")
                 continue
 
-            async def _llm_call():
+            async def _llm_call(_messages_payload=messages_payload):
                 return await asyncio.to_thread(
-                    lambda: chat_api_call(
+                    lambda _mp=_messages_payload: chat_api_call(
                         api_endpoint=api_endpoint,
-                        messages_payload=messages_payload,
+                        messages_payload=_mp,
                         temperature=0.7,
                         app_config=get_loaded_config(),
                         timeout=timeouts["llm"],
@@ -684,11 +684,11 @@ async def search_result_relevance(
 
                         # Generate summary using the summarize function with timeout
                         logging.info(f"Summarizing relevant result: ID={result_id}")
-                        async def _summ_call():
+                        async def _summ_call(_scraped_content=scraped_content, _summary_prompt=summary_prompt):
                             return await asyncio.to_thread(
-                                lambda: summarize(
-                                    input_data=scraped_content['content'],
-                                    custom_prompt_arg=summary_prompt,
+                                lambda _sc=_scraped_content, _sp=_summary_prompt: summarize(
+                                    input_data=_sc['content'],
+                                    custom_prompt_arg=_sp,
                                     api_name=api_endpoint,
                                     api_key=None,
                                     temp=0.7,
@@ -1121,7 +1121,7 @@ def aggregate_results(
 
 # FIXME
 def perform_websearch(search_engine, search_query, content_country, search_lang, output_lang, result_count, date_range=None,
-                      safesearch=None, site_blacklist=None, exactTerms=None, excludeTerms=None, filter=None, geolocation=None, search_result_language=None, sort_results_by=None):
+                      safesearch=None, site_blacklist=None, exactTerms=None, excludeTerms=None, filter=None, geolocation=None, search_result_language=None, sort_results_by=None, search_params=None):
     try:
         if search_engine.lower() == "baidu":
             web_search_results = search_web_baidu(search_query, None, None)
@@ -1247,8 +1247,8 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
                 safesearch=0,
                 pageno=1,
                 categories='general',
-                searx_url=search_params.get('searx_url'),
-                json_mode=search_params.get('searx_json_mode', False),
+                searx_url=(search_params or {}).get('searx_url'),
+                json_mode=(search_params or {}).get('searx_json_mode', False),
             )
 
         elif search_engine.lower() == "yandex":

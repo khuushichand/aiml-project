@@ -29,6 +29,7 @@ except Exception:
     class VerificationStatus(Enum):  # type: ignore
         VERIFIED = "verified"
         UNVERIFIED = "unverified"
+        CONTESTED = "contested"
 
     class MatchLevel(Enum):  # type: ignore
         EXACT = "exact"
@@ -108,6 +109,7 @@ class VerificationReport:
     numerical_error_count: int
     misquoted_count: int
     citation_not_found_count: int
+    contested_count: int  # Claims with evidence both for and against
     verification_rate: float
     precision: float
     coverage: float
@@ -145,6 +147,7 @@ class VerificationReport:
         numerical_error = 0
         misquoted = 0
         citation_not_found = 0
+        contested = 0
         claim_reports: list[ClaimReport] = []
 
         for v in verifications:
@@ -174,6 +177,8 @@ class VerificationReport:
                     misquoted += 1
                 elif status == VerificationStatus.CITATION_NOT_FOUND:
                     citation_not_found += 1
+                elif status == VerificationStatus.CONTESTED:
+                    contested += 1
                 else:
                     unverified += 1
 
@@ -225,6 +230,7 @@ class VerificationReport:
             numerical_error_count=numerical_error,
             misquoted_count=misquoted,
             citation_not_found_count=citation_not_found,
+            contested_count=contested,
             verification_rate=verification_rate,
             precision=precision,
             coverage=coverage,
@@ -247,6 +253,7 @@ class VerificationReport:
             "numerical_error_count": self.numerical_error_count,
             "misquoted_count": self.misquoted_count,
             "citation_not_found_count": self.citation_not_found_count,
+            "contested_count": self.contested_count,
             "verification_rate": self.verification_rate,
             "precision": self.precision,
             "coverage": self.coverage,
@@ -269,17 +276,29 @@ class VerificationReport:
             "unverified_count": self.unverified_count,
             "hallucination_count": self.hallucination_count,
             "citation_not_found_count": self.citation_not_found_count,
+            "contested_count": self.contested_count,
             "verification_rate": self.verification_rate,
             "precision": self.precision,
             "coverage": self.coverage,
         }
 
-    def get_problematic_claims(self) -> list[ClaimReport]:
-        """Get claims that have issues (not verified)."""
+    def get_problematic_claims(self, include_contested: bool = False) -> list[ClaimReport]:
+        """Get claims that have issues (not verified).
+
+        Args:
+            include_contested: If True, also include contested claims which have
+                               evidence both for and against. Defaults to False.
+        """
         problematic_statuses = {
             "refuted", "hallucination", "numerical_error", "misquoted", "citation_not_found"
         }
+        if include_contested:
+            problematic_statuses.add("contested")
         return [c for c in self.claims if c.status in problematic_statuses]
+
+    def get_contested_claims(self) -> list[ClaimReport]:
+        """Get claims that have conflicting evidence (both supporting and contradicting)."""
+        return [c for c in self.claims if c.status == "contested"]
 
     def get_claims_by_status(self, status: str) -> list[ClaimReport]:
         """Get claims filtered by status."""

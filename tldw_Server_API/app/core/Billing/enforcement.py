@@ -13,9 +13,12 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 
 # Environment variable for cache TTL (default 60 seconds)
 BILLING_CACHE_TTL_SECONDS = float(os.environ.get("BILLING_CACHE_TTL_SECONDS", "60.0"))

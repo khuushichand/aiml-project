@@ -593,3 +593,130 @@ class ClaimsAnalyticsDashboardResponse(BaseModel):
     unsupported_ratios: ClaimsAnalyticsUnsupportedRatios
     provider_usage: list[ClaimsAnalyticsProviderUsage] = Field(default_factory=list)
     rebuild_health: ClaimsAnalyticsRebuildHealth | None = None
+
+
+# =============================================================================
+# FVA (Falsification-Verification Alignment) Schemas
+# =============================================================================
+
+
+class FVAConfigRequest(BaseModel):
+    """Configuration options for FVA pipeline."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=True, description="Enable FVA falsification checking.")
+    confidence_threshold: float = Field(
+        default=0.7, ge=0.0, le=1.0, description="Confidence threshold for triggering falsification."
+    )
+    contested_threshold: float = Field(
+        default=0.4, ge=0.0, le=1.0, description="Threshold ratio for CONTESTED status."
+    )
+    max_concurrent_falsifications: int = Field(
+        default=5, ge=1, le=20, description="Maximum concurrent falsification operations."
+    )
+    timeout_seconds: float = Field(
+        default=30.0, ge=1.0, le=120.0, description="Timeout for falsification operations."
+    )
+    force_claim_types: list[str] | None = Field(
+        default=None, description="Claim types that always trigger falsification."
+    )
+    max_budget_usd: float | None = Field(
+        default=None, ge=0.0, description="Optional maximum budget in USD for this request."
+    )
+
+
+class FVAClaimInput(BaseModel):
+    """A claim to verify through the FVA pipeline."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(..., min_length=1, description="The claim text to verify.")
+    claim_type: str | None = Field(default=None, description="Optional claim type classification.")
+    span_start: int | None = Field(default=None, ge=0, description="Start position in source text.")
+    span_end: int | None = Field(default=None, ge=0, description="End position in source text.")
+
+
+class FVAVerifyRequest(BaseModel):
+    """Request for FVA-enhanced claim verification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    claims: list[FVAClaimInput] = Field(..., min_length=1, max_length=50, description="Claims to verify.")
+    query: str = Field(..., min_length=1, description="Original query context for retrieval.")
+    sources: list[str] | None = Field(
+        default=None, description="Data sources to search (media_db, notes_db, etc.)."
+    )
+    top_k: int = Field(default=10, ge=1, le=100, description="Number of documents to retrieve.")
+    fva_config: FVAConfigRequest | None = Field(default=None, description="FVA pipeline configuration.")
+
+
+class FVAEvidenceItem(BaseModel):
+    """Evidence item for FVA verification results."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    doc_id: str = Field(..., description="Document ID.")
+    snippet: str = Field(..., description="Evidence snippet text.")
+    score: float = Field(..., description="Evidence relevance score.")
+    stance: str | None = Field(default=None, description="Evidence stance: supports, contradicts, neutral.")
+    confidence: float | None = Field(default=None, description="Stance assessment confidence.")
+
+
+class FVAAdjudicationResult(BaseModel):
+    """Adjudication details from FVA pipeline."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    support_score: float = Field(..., description="Aggregate supporting evidence score.")
+    contradict_score: float = Field(..., description="Aggregate contradicting evidence score.")
+    contestation_score: float = Field(..., description="Evidence balance (0=one-sided, 1=balanced).")
+    rationale: str = Field(..., description="Adjudication rationale explaining the verdict.")
+
+
+class FVAClaimResult(BaseModel):
+    """Verification result for a single claim from FVA pipeline."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    claim_text: str = Field(..., description="Original claim text.")
+    claim_type: str | None = Field(default=None, description="Claim type classification.")
+    original_status: str = Field(..., description="Status from initial verification.")
+    final_status: str = Field(..., description="Status after FVA adjudication.")
+    confidence: float = Field(..., description="Final verification confidence.")
+    falsification_triggered: bool = Field(..., description="Whether falsification was triggered.")
+    anti_context_found: int = Field(..., description="Number of anti-context documents found.")
+    supporting_evidence: list[FVAEvidenceItem] = Field(default_factory=list)
+    contradicting_evidence: list[FVAEvidenceItem] = Field(default_factory=list)
+    adjudication: FVAAdjudicationResult | None = Field(default=None)
+    rationale: str | None = Field(default=None, description="Verification rationale.")
+    processing_time_ms: float = Field(..., description="Processing time in milliseconds.")
+
+
+class FVAVerifyResponse(BaseModel):
+    """Response from FVA claim verification endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    results: list[FVAClaimResult] = Field(default_factory=list)
+    total_claims: int = Field(..., description="Total number of claims processed.")
+    falsification_triggered_count: int = Field(..., description="Claims that triggered falsification.")
+    status_changes: dict[str, int] = Field(
+        default_factory=dict, description="Count of status transitions (e.g., 'verified->contested': 2)."
+    )
+    total_time_ms: float = Field(..., description="Total processing time in milliseconds.")
+    budget_exhausted: bool = Field(default=False, description="Whether budget was exhausted.")
+
+
+class FVASettingsResponse(BaseModel):
+    """Current FVA pipeline settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(..., description="Whether FVA is enabled globally.")
+    confidence_threshold: float = Field(..., description="Default confidence threshold.")
+    contested_threshold: float = Field(..., description="Default contested threshold.")
+    max_concurrent_falsifications: int = Field(..., description="Default max concurrent ops.")
+    timeout_seconds: float = Field(..., description="Default timeout.")
+    force_claim_types: list[str] = Field(default_factory=list)
+    anti_context_cache_size: int = Field(default=0, description="Current anti-context cache size.")

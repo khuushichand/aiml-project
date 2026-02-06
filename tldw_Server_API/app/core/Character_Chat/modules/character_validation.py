@@ -9,6 +9,24 @@ from typing import Any, Optional, Union
 
 from loguru import logger
 
+MAX_V2_TEXT_FIELD_LENGTHS: dict[str, int] = {
+    "name": 500,
+    "description": 50_000,
+    "personality": 50_000,
+    "scenario": 50_000,
+    "first_mes": 50_000,
+    "mes_example": 100_000,
+    "creator_notes": 50_000,
+    "system_prompt": 100_000,
+    "post_history_instructions": 100_000,
+    "creator": 500,
+    "character_version": 100,
+}
+
+MAX_V2_ALTERNATE_GREETINGS = 200
+MAX_V2_TAGS = 500
+MAX_V2_TAG_LENGTH = 500
+
 
 def parse_character_book(book_data: dict[str, Any]) -> dict[str, Any]:
     """Parses character book data from a V2 character card structure.
@@ -627,6 +645,9 @@ def validate_v2_card(
             validation_messages.append(
                 f"Field '{field}' must be of type '{expected_type.__name__}'.")
 
+    if isinstance(data_node.get("name"), str) and not data_node["name"].strip():
+        validation_messages.append("Field 'name' cannot be blank.")
+
     # Optional fields with expected types
     optional_fields = {
         'creator_notes': str,
@@ -649,6 +670,49 @@ def validate_v2_card(
         logger.warning("V2 card validation: 'mes_example' field missing; proceeding with empty fallback.")
     elif not isinstance(mes_example_value, str):
         validation_messages.append("Field 'mes_example' must be of type 'str'.")
+
+    # Enforce bounded field lengths for deterministic storage behavior
+    for field_name, max_len in MAX_V2_TEXT_FIELD_LENGTHS.items():
+        field_value = data_node.get(field_name)
+        if isinstance(field_value, str) and len(field_value) > max_len:
+            validation_messages.append(
+                f"Field '{field_name}' exceeds max length of {max_len} characters."
+            )
+
+    alternate_greetings = data_node.get("alternate_greetings")
+    if isinstance(alternate_greetings, list):
+        if len(alternate_greetings) > MAX_V2_ALTERNATE_GREETINGS:
+            validation_messages.append(
+                f"Field 'alternate_greetings' exceeds max entries of {MAX_V2_ALTERNATE_GREETINGS}."
+            )
+        for idx, greeting in enumerate(alternate_greetings):
+            if not isinstance(greeting, str):
+                validation_messages.append(
+                    f"Field 'alternate_greetings[{idx}]' must be of type 'str'."
+                )
+                continue
+            if len(greeting) > MAX_V2_TEXT_FIELD_LENGTHS["first_mes"]:
+                validation_messages.append(
+                    f"Field 'alternate_greetings[{idx}]' exceeds max length of "
+                    f"{MAX_V2_TEXT_FIELD_LENGTHS['first_mes']} characters."
+                )
+
+    tags_value = data_node.get("tags")
+    if isinstance(tags_value, list):
+        if len(tags_value) > MAX_V2_TAGS:
+            validation_messages.append(
+                f"Field 'tags' exceeds max entries of {MAX_V2_TAGS}."
+            )
+        for idx, tag in enumerate(tags_value):
+            if not isinstance(tag, str):
+                validation_messages.append(
+                    f"Field 'tags[{idx}]' must be of type 'str'."
+                )
+                continue
+            if len(tag) > MAX_V2_TAG_LENGTH:
+                validation_messages.append(
+                    f"Field 'tags[{idx}]' exceeds max length of {MAX_V2_TAG_LENGTH} characters."
+                )
 
     # Validate character_book if present
     if 'character_book' in data_node:

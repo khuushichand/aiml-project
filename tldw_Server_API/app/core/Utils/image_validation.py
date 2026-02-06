@@ -9,6 +9,15 @@ from typing import Optional
 
 from loguru import logger
 
+_IMAGE_VALIDATION_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    KeyError,
+    OSError,
+    TypeError,
+    ValueError,
+)
+
 #######################################################################################################################
 #
 # Constants:
@@ -21,7 +30,7 @@ def get_max_base64_bytes() -> int:
         if env_mb is not None:
             mb = max(1, int(env_mb))
             return mb * 1024 * 1024
-    except Exception:
+    except (TypeError, ValueError):
         pass
     try:
         from tldw_Server_API.app.core.config import load_comprehensive_config
@@ -31,7 +40,7 @@ def get_max_base64_bytes() -> int:
             if raw is not None:
                 mb = max(1, int(raw))
                 return mb * 1024 * 1024
-    except Exception:
+    except _IMAGE_VALIDATION_NONCRITICAL_EXCEPTIONS:
         pass
     return 3 * 1024 * 1024
 
@@ -43,7 +52,7 @@ def get_allowed_image_mime_types() -> set[str]:
         env_val = os.getenv("CHAT_ALLOWED_IMAGE_MIME_TYPES")
         if env_val:
             return {m.strip().lower() for m in env_val.split(',') if m.strip()}
-    except Exception:
+    except (TypeError, ValueError):
         pass
     return {"image/png", "image/jpeg", "image/webp"}
 
@@ -171,7 +180,7 @@ def safe_decode_base64_image(base64_data: str, mime_type: str) -> Optional[bytes
     except base64.binascii.Error as e:
         logger.warning(f"Invalid base64 data: {e}")
         return None
-    except Exception as e:
+    except (MemoryError, OSError, TypeError, ValueError) as e:
         logger.error(f"Error decoding base64 image: {e}")
         return None
 

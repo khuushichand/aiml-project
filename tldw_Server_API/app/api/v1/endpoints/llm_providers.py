@@ -1,5 +1,6 @@
 # llm_providers.py
 import asyncio
+import json
 import os
 import time
 from functools import partial
@@ -30,6 +31,26 @@ from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
 # Functions:
 
 router = APIRouter()
+
+_LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
 
 # ----------------------------------------------------------------------------------
 # Model metadata registry
@@ -1000,7 +1021,7 @@ async def llm_health():
                     "per_user_tokens_per_minute": cfg.per_user_tokens_per_minute
                 }
             }
-    except Exception as e:
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"LLM health check error: {e}")
         health["status"] = "unhealthy"
         health["error"] = str(e)
@@ -1070,7 +1091,7 @@ def _candidate_model_urls_for_openai_endpoint(endpoint_url: str) -> list[str]:
                     candidates.append(urljoin(base, f"{prefix}/v1/models"))
 
         return _dedupe_preserve_order([c.rstrip("/") for c in candidates if c])
-    except Exception:
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
         return []
 
 
@@ -1092,7 +1113,7 @@ def _candidate_model_urls_for_ollama_endpoint(endpoint_url: str) -> list[str]:
             candidates.append(urljoin(base, f"{path}/models"))
 
         return _dedupe_preserve_order([c.rstrip("/") for c in candidates if c])
-    except Exception:
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
         return []
 
 
@@ -1177,7 +1198,7 @@ def discover_models_from_endpoint(
                 close = getattr(resp, "close", None)
                 if callable(close):
                     close()
-        except Exception as exc:
+        except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"[Model discovery] {provider}: error querying {url}: {exc}")
             continue
 
@@ -1207,7 +1228,7 @@ def get_configured_providers(include_deprecated: bool = False) -> dict[str, Any]
 
         try:
             api_keys_by_provider = get_api_keys()
-        except Exception:
+        except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
             api_keys_by_provider = {}
 
         def _valid_api_key(value: Optional[str]) -> Optional[str]:
@@ -1395,7 +1416,7 @@ def get_configured_providers(include_deprecated: bool = False) -> dict[str, Any]
             pm = get_provider_manager()
             if pm:
                 health_report = pm.get_health_report()
-        except Exception:
+        except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
             health_report = {}
 
         # Process each provider
@@ -1465,7 +1486,7 @@ def get_configured_providers(include_deprecated: bool = False) -> dict[str, Any]
                     pricing_models = list_provider_models(provider_name)
                     # Heuristic: exclude obvious embedding model ids from chat model lists
                     pricing_models = [m for m in pricing_models if 'embed' not in m.lower() and 'embedding' not in m.lower()]
-                except Exception:
+                except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
                     pricing_models = []
                 if pricing_models:
                     # Preserve order: config models first, then pricing extras
@@ -1539,20 +1560,20 @@ def get_configured_providers(include_deprecated: bool = False) -> dict[str, Any]
                     reg_caps = reg.get_all_capabilities()
                     if provider_name in reg_caps:
                         capabilities.update(reg_caps[provider_name])
-                except Exception:
+                except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
                     pass
                 # Merge config-indicated streaming support as an override if provided
                 if 'supports_streaming' not in capabilities and 'supports_streaming' in provider_data:
                     capabilities['supports_streaming'] = provider_data['supports_streaming']
                 provider_data['capabilities'] = capabilities
-            except Exception:
+            except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
                 provider_data['requires_api_key'] = provider_info['type'] == 'commercial'
 
             # Attach live health if available
             try:
                 if provider_name in health_report:
                     provider_data['health'] = health_report[provider_name]
-            except Exception:
+            except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
                 pass
 
             providers.append(provider_data)
@@ -1570,7 +1591,7 @@ def get_configured_providers(include_deprecated: bool = False) -> dict[str, Any]
             'total_configured': len(providers)
         }
 
-    except Exception as e:
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting configured providers: {e}", exc_info=True)
         return {
             'providers': [],
@@ -1699,7 +1720,7 @@ async def get_llm_providers(include_deprecated: bool = False):
             def _getint(key: str, fallback: int) -> int:
                 try:
                     return cfg.getint(section, key, fallback=fallback)
-                except Exception:
+                except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
                     return fallback
 
             qs_min = _getint('queue_status_auto_min_secs', 1)
@@ -1715,7 +1736,7 @@ async def get_llm_providers(include_deprecated: bool = False):
                 'queue_status_auto': {'min': int(max(1, qs_min)), 'max': int(max(1, qs_max))},
                 'queue_activity_auto': {'min': int(max(1, qa_min)), 'max': int(max(1, qa_max))},
             }
-        except Exception:
+        except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS:
             # Best-effort; omit diagnostics_ui on failure
             pass
 
@@ -1733,7 +1754,7 @@ async def get_llm_providers(include_deprecated: bool = False):
         logger.info(f"Found {result['total_configured']} configured LLM providers")
         return result
 
-    except Exception as e:
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error in get_llm_providers endpoint: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
@@ -1788,7 +1809,7 @@ async def get_models_metadata(
         # Append image generation backends to the catalog
         try:
             image_models = list_image_models_for_catalog()
-        except Exception as exc:
+        except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Failed to list image generation models: {exc}")
             image_models = []
         for entry in image_models:
@@ -1804,7 +1825,7 @@ async def get_models_metadata(
             'models': flattened,
             'total': len(flattened)
         }
-    except Exception as e:
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting models metadata: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
@@ -1842,7 +1863,7 @@ async def get_provider_details(provider_name: str, include_deprecated: bool = Fa
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting provider details for {provider_name}: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
@@ -1902,7 +1923,7 @@ async def get_all_models(
         # Append image generation backends to the flat list
         try:
             image_models = list_image_models_for_catalog()
-        except Exception as exc:
+        except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Failed to list image generation models: {exc}")
             image_models = []
         for entry in image_models:
@@ -1918,7 +1939,7 @@ async def get_all_models(
                 models.append(str(model_id))
         logger.info(f"Found {len(models)} total models across all providers")
         return models
-    except Exception as e:
+    except _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting all models: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,

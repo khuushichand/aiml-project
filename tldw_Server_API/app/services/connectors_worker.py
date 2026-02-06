@@ -9,8 +9,22 @@ from loguru import logger
 
 try:
     from tldw_Server_API.app.core.Jobs.manager import JobManager
-except Exception:  # pragma: no cover - optional
+except ImportError:  # pragma: no cover - optional
     JobManager = None  # type: ignore
+
+_CONNECTOR_NONCRITICAL_EXCEPTIONS = (
+    ArithmeticError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 DOMAIN = "connectors"
@@ -48,9 +62,9 @@ async def run_connectors_worker(stop_event: asyncio.Event | None = None) -> None
                 if not source_id or not user_id:
                     raise ValueError("invalid job payload")
                 await _process_import_job(jm, jid, lease_id, worker_id, source_id, user_id)
-            except Exception as _e:
+            except _CONNECTOR_NONCRITICAL_EXCEPTIONS as _e:
                 jm.fail_job(jid, error=str(_e), retryable=False, worker_id=worker_id, lease_id=lease_id, completion_token=lease_id)
-        except Exception:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
             await asyncio.sleep(poll_sleep)
 
 
@@ -99,7 +113,7 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
             policy = await get_org_policy(db, org_id)
             if not policy:
                 policy = get_default_policy_from_env(org_id)
-        except Exception:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
             from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
             policy = get_default_policy_from_env(1)
 
@@ -120,7 +134,7 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
                 status = getattr(err, "status", None)
             if status is not None and int(status) == 401:
                 return True
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
         # Fallback: inspect message
         msg = str(err).lower()
@@ -130,7 +144,7 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
         nonlocal acct
         try:
             return await call_coro(*args, **kwargs)
-        except Exception as e:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
             if not _is_unauthorized(e):
                 raise
             # Try refresh if possible
@@ -149,7 +163,7 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
                 acct['tokens'].update(new_toks)
                 # Retry once
                 return await call_coro(*args, **kwargs)
-            except Exception:
+            except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
                 raise
     # Determine listing function
     async def _enumerate_items() -> list[dict[str, Any]]:
@@ -221,7 +235,7 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
             # Renew lease with progress
             pct = int((idx / total) * 100)
             jm.renew_job_lease(jid, seconds=120, worker_id=worker_id, lease_id=lease_id, progress_percent=pct)
-        except Exception:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
             pass
         # Skip folders
         if (it.get("is_folder") is True) or (str(it.get("mimeType") or "").startswith("application/vnd.google-apps.folder")):
@@ -241,7 +255,7 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
                 ext = name.lower().rsplit(".", 1)[-1] if "." in name else ""
                 if ext not in include_types:
                     continue
-        except Exception:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Enforce policy: file type and size
@@ -251,7 +265,7 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
             try:
                 if int(size) > max_bytes:
                     continue
-            except Exception:
+            except (TypeError, ValueError):
                 pass
 
         # Determine desired export for Drive Google types according to policy/overrides
@@ -275,7 +289,7 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
                 raw = await _attempt_with_refresh(conn.download_file, acct, fid, mime_type=mime, export_mime=export_mime)
             else:
                 raw = await _attempt_with_refresh(conn.download_file, acct, fid) if provider == "notion" else await _attempt_with_refresh(conn.download_file, acct, fid, mime_type=mime)
-        except Exception as e:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"download failed for {provider}:{fid}: {e}")
             raw = b""
 
@@ -288,7 +302,7 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
                 try:
                     from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf
                     res = process_pdf(file_input=raw, filename=name, parser="docling")
-                except Exception:
+                except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
                     from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf
                     res = process_pdf(file_input=raw, filename=name, parser="pymupdf4llm")
                 if isinstance(res, dict):
@@ -296,7 +310,7 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
             else:
                 if raw:
                     content_text = raw.decode("utf-8", errors="replace")
-        except Exception as _e:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS as _e:
             logger.warning(f"content conversion failed for {provider}:{fid}: {_e}")
         # Hash for dedup
         content_hash = hashlib.sha256(content_text.encode()).hexdigest() if content_text else None
@@ -320,7 +334,7 @@ async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str
             )
             processed += 1
             ingested = True
-        except Exception as e:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"add_media_with_keywords failed: {e}")
         if ingested:
             # Record ingestion cache

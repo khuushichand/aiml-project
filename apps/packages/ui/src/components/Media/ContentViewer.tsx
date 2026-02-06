@@ -529,64 +529,88 @@ export function ContentViewer({
   // Check if viewing a note vs media
   const isNote = selectedMedia?.kind === 'note'
 
-  // Actions dropdown menu items
+  // Actions dropdown menu items — grouped by purpose
   const actionMenuItems: MenuProps['items'] = [
-    // Chat actions - only for media
-    ...(!isNote && onChatWithMedia ? [{
-      key: 'chat-with',
-      label: t('review:reviewPage.chatWithMedia', {
-        defaultValue: 'Chat with this media'
-      }),
-      icon: <Send className="w-4 h-4" />,
-      onClick: onChatWithMedia
+    // Use group: Chat actions
+    ...(!isNote && (onChatWithMedia || onChatAboutMedia) ? [{
+      key: 'group-use',
+      type: 'group' as const,
+      label: t('review:mediaPage.menuGroupUse', { defaultValue: 'Use' }),
+      children: [
+        ...(onChatWithMedia ? [{
+          key: 'chat-with',
+          label: t('review:reviewPage.chatWithMedia', {
+            defaultValue: 'Chat with this media'
+          }),
+          icon: <Send className="w-4 h-4" />,
+          onClick: onChatWithMedia
+        }] : []),
+        ...(onChatAboutMedia ? [{
+          key: 'chat-about',
+          label: t('review:reviewPage.chatAboutMedia', {
+            defaultValue: 'Chat about this media'
+          }),
+          icon: <MessageSquare className="w-4 h-4" />,
+          onClick: onChatAboutMedia
+        }] : [])
+      ]
     }] : []),
-    ...(!isNote && onChatAboutMedia ? [{
-      key: 'chat-about',
-      label: t('review:reviewPage.chatAboutMedia', {
-        defaultValue: 'Chat about this media'
-      }),
-      icon: <MessageSquare className="w-4 h-4" />,
-      onClick: onChatAboutMedia
-    }] : []),
-    ...(!isNote && (onChatWithMedia || onChatAboutMedia) ? [{ type: 'divider' as const }] : []),
-    // Create note actions - only for media
-    ...(!isNote && onCreateNoteWithContent ? [{
-      key: 'create-note-content',
-      label: t('review:mediaPage.createNoteWithContent', {
-        defaultValue: 'Create note with content'
-      }),
-      icon: <StickyNote className="w-4 h-4" />,
-      onClick: () => {
-        const title = selectedMedia?.title || t('review:mediaPage.untitled', { defaultValue: 'Untitled' })
-        onCreateNoteWithContent(content, title)
+    // Create group: Note actions
+    ...(!isNote && onCreateNoteWithContent ? [
+      { type: 'divider' as const },
+      {
+        key: 'group-create',
+        type: 'group' as const,
+        label: t('review:mediaPage.menuGroupCreate', { defaultValue: 'Create' }),
+        children: [
+          {
+            key: 'create-note-content',
+            label: t('review:mediaPage.createNoteWithContent', {
+              defaultValue: 'Create note with content'
+            }),
+            icon: <StickyNote className="w-4 h-4" />,
+            onClick: () => {
+              const title = selectedMedia?.title || t('review:mediaPage.untitled', { defaultValue: 'Untitled' })
+              onCreateNoteWithContent(content, title)
+            }
+          },
+          ...(selectedAnalysis ? [{
+            key: 'create-note-content-analysis',
+            label: t('review:mediaPage.createNoteWithContentAnalysis', {
+              defaultValue: 'Create note with content + analysis'
+            }),
+            icon: <StickyNote className="w-4 h-4" />,
+            onClick: () => {
+              const title = selectedMedia?.title || t('review:mediaPage.untitled', { defaultValue: 'Untitled' })
+              const noteContent = `${content}\n\n---\n\n## Analysis\n\n${selectedAnalysis.text}`
+              onCreateNoteWithContent(noteContent, title)
+            }
+          }] : [])
+        ]
       }
-    }] : []),
-    ...(!isNote && onCreateNoteWithContent && selectedAnalysis ? [{
-      key: 'create-note-content-analysis',
-      label: t('review:mediaPage.createNoteWithContentAnalysis', {
-        defaultValue: 'Create note with content + analysis'
-      }),
-      icon: <StickyNote className="w-4 h-4" />,
-      onClick: () => {
-        const title = selectedMedia?.title || t('review:mediaPage.untitled', { defaultValue: 'Untitled' })
-        const noteContent = `${content}\n\n---\n\n## Analysis\n\n${selectedAnalysis.text}`
-        onCreateNoteWithContent(noteContent, title)
-      }
-    }] : []),
-    ...(!isNote && onCreateNoteWithContent ? [{ type: 'divider' as const }] : []),
+    ] : []),
+    // Copy group
+    { type: 'divider' as const },
     {
-      key: 'copy-content',
-      label: t('review:mediaPage.copyContent', { defaultValue: 'Copy content' }),
-      icon: <Copy className="w-4 h-4" />,
-      onClick: handleCopyContent
+      key: 'group-copy',
+      type: 'group' as const,
+      label: t('review:mediaPage.menuGroupCopy', { defaultValue: 'Copy' }),
+      children: [
+        {
+          key: 'copy-content',
+          label: t('review:mediaPage.copyContent', { defaultValue: 'Copy content' }),
+          icon: <Copy className="w-4 h-4" />,
+          onClick: handleCopyContent
+        },
+        {
+          key: 'copy-metadata',
+          label: t('review:mediaPage.copyMetadata', { defaultValue: 'Copy metadata' }),
+          icon: <Copy className="w-4 h-4" />,
+          onClick: handleCopyMetadata
+        }
+      ]
     },
-    {
-      key: 'copy-metadata',
-      label: t('review:mediaPage.copyMetadata', { defaultValue: 'Copy metadata' }),
-      icon: <Copy className="w-4 h-4" />,
-      onClick: handleCopyMetadata
-    },
-    // Multi-item review - only for media
+    // Advanced group
     ...(!isNote && onOpenInMultiReview ? [
       { type: 'divider' as const },
       {

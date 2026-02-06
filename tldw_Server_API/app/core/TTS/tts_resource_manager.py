@@ -27,6 +27,26 @@ from .tts_exceptions import (
     TTSResourceError,
 )
 
+_TTS_RESOURCE_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EOFError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    ZeroDivisionError,
+)
+
 #
 # Conditional imports for type checking
 if TYPE_CHECKING:
@@ -157,7 +177,7 @@ class StreamingSession:
                 f"duration={time.time() - self.created_at:.2f}s"
             )
 
-        except Exception as e:
+        except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error closing streaming session {self.session_id}: {e}")
 
     def is_expired(self, timeout: float = 300) -> bool:
@@ -228,7 +248,7 @@ class HTTPConnectionPool:
                         base_url=base_url,
                         limits=limits,
                     )
-                except Exception as e:
+                except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                     # If central factory is unavailable, surface an error instead of constructing directly
                     raise TTSNetworkError(f"Failed to create HTTP client via factory: {e}")
 
@@ -388,7 +408,7 @@ class MemoryMonitor:
         if percent_raw is None and total_raw:
             try:
                 percent_raw = (used_raw / total_raw) * 100
-            except Exception:
+            except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS:
                 percent_raw = 0
 
         total = _as_int(total_raw)
@@ -453,7 +473,7 @@ class MemoryMonitor:
                     await callback()
                 else:
                     callback()
-            except Exception as e:
+            except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in cleanup callback: {e}")
 
         # Clean up dead references
@@ -502,7 +522,7 @@ class MemoryMonitor:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in memory monitoring: {e}")
                 await asyncio.sleep(self.check_interval)
 
@@ -758,7 +778,7 @@ class TTSResourceManager:
                 torch.cuda.empty_cache()
             if hasattr(torch, "mps") and torch.backends.mps.is_available():
                 torch.mps.empty_cache()
-        except Exception:
+        except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS:
             pass
 
     async def initialize(self):
@@ -803,7 +823,7 @@ class TTSResourceManager:
                         await handler()
                     else:
                         handler()
-                except Exception as e:
+                except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Error in {resource_type} cleanup handler: {e}")
 
         logger.info("TTS Resource Manager shutdown complete")
@@ -945,7 +965,7 @@ class TTSResourceManager:
             async def _wrapped():
                 try:
                     await cleanup_cb()
-                except Exception as e:
+                except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Error cleaning model for {cache_key}: {e}")
                 finally:
                     self._cleanup_device_cache()
@@ -953,7 +973,7 @@ class TTSResourceManager:
 
         try:
             cleanup_cb()
-        except Exception as e:
+        except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error cleaning model for {cache_key}: {e}")
         self._cleanup_device_cache()
         return None
@@ -986,7 +1006,7 @@ class TTSResourceManager:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in session cleanup: {e}")
                 await asyncio.sleep(60)
 
@@ -1001,7 +1021,7 @@ class TTSResourceManager:
                         await cleanup_cb()
                     else:
                         cleanup_cb()
-                except Exception as e:
+                except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Error in model cleanup for {provider}: {e}")
             logger.debug(f"Unregistered model for provider: {provider}")
         # Drop any cached entries for this provider
@@ -1056,14 +1076,14 @@ class TTSResourceManager:
         for provider in list(self._registered_models.keys()):
             try:
                 await self.unregister_model(provider)
-            except Exception as e:
+            except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error cleaning model {provider}: {e}")
 
         # Close all sessions managed by the session manager
         for sid in list(self.session_manager._sessions.keys()):
             try:
                 await self.session_manager.close_session(sid)
-            except Exception as e:
+            except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error closing session {sid}: {e}")
 
         # Close all HTTP clients
@@ -1115,12 +1135,12 @@ async def get_resource_manager(config: Optional[dict[str, Any]] = None) -> TTSRe
         """Best-effort default cache size for mixed hardware deployments."""
         try:
             import torch
-        except Exception:
+        except ImportError:
             return 1
         try:
             if hasattr(torch, "backends") and torch.backends.mps.is_available():
                 return 1
-        except Exception:
+        except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             if torch.cuda.is_available():
@@ -1128,9 +1148,9 @@ async def get_resource_manager(config: Optional[dict[str, Any]] = None) -> TTSRe
                     props = torch.cuda.get_device_properties(0)
                     total_gb = float(getattr(props, "total_memory", 0)) / (1024 ** 3)
                     return 2 if total_gb >= 16.0 else 1
-                except Exception:
+                except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS:
                     return 1
-        except Exception:
+        except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS:
             return 1
         return 1
 
@@ -1149,7 +1169,7 @@ async def get_resource_manager(config: Optional[dict[str, Any]] = None) -> TTSRe
                 "connection_timeout": perf.connection_timeout,
                 "model_cache_max_entries": cache_limit,
             }
-        except Exception:
+        except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS:
             config = None
 
     if _resource_manager is None:

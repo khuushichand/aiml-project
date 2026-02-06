@@ -26,6 +26,26 @@ from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.Sandbox.models import RunSpec, RuntimeType, SessionSpec
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
 
+_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS = (
+    ACPResponseError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 @dataclass
 class SandboxSessionHandle:
@@ -94,7 +114,7 @@ class ACPSandboxRunnerManager:
                 background = str(env_bg).strip().lower() in {"1", "true", "yes", "on", "y"}
             else:
                 background = bool(getattr(app_settings, "SANDBOX_BACKGROUND_EXECUTION", False))
-        except Exception:
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             background = False
         if not background:
             raise ACPResponseError("SANDBOX_BACKGROUND_EXECUTION must be enabled for ACP sandbox sessions")
@@ -104,7 +124,7 @@ class ACPSandboxRunnerManager:
                 execute_enabled = str(env_exec).strip().lower() in {"1", "true", "yes", "on", "y"}
             else:
                 execute_enabled = bool(getattr(app_settings, "SANDBOX_ENABLE_EXECUTION", False))
-        except Exception:
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             execute_enabled = False
         if not execute_enabled:
             raise ACPResponseError("SANDBOX_ENABLE_EXECUTION must be enabled for ACP sandbox sessions")
@@ -174,16 +194,16 @@ class ACPSandboxRunnerManager:
                 idem_key=None,
                 raw_body={"runtime": self.config.runtime, "base_image": self.config.base_image},
             )
-        except Exception:
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             if status is not None:
                 try:
                     sandbox_service.cancel_run(status.id)
-                except Exception:
+                except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
                     pass
             if sandbox_session is not None:
                 try:
                     sandbox_service.destroy_session(sandbox_session.id)
-                except Exception:
+                except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
                     pass
             if ssh_port is not None:
                 await self._release_ssh_port(ssh_port)
@@ -195,7 +215,7 @@ class ACPSandboxRunnerManager:
         async def _send_bytes(data: bytes) -> None:
             try:
                 hub.push_stdin(status.id, data)
-            except Exception as e:
+            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"ACP sandbox stdin push failed: {e}")
 
         client = ACPStreamClient(send_bytes=_send_bytes)
@@ -254,22 +274,22 @@ class ACPSandboxRunnerManager:
                 self._sessions[session_id] = handle
 
             return session_id
-        except Exception:
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             try:
                 reader_task.cancel()
-            except Exception:
+            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 await client.close()
-            except Exception:
+            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 sandbox_service.cancel_run(status.id)
-            except Exception:
+            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 sandbox_service.destroy_session(sandbox_session.id)
-            except Exception:
+            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
             if ssh_port is not None:
                 await self._release_ssh_port(ssh_port)
@@ -296,24 +316,24 @@ class ACPSandboxRunnerManager:
             return
         try:
             await sess.client.call("_tldw/session/close", {"sessionId": session_id})
-        except Exception:
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             if sess.reader_task:
                 sess.reader_task.cancel()
-        except Exception:
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             await sess.client.close()
-        except Exception:
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             sandbox_ep._service.cancel_run(sess.run_id)  # type: ignore[attr-defined]
-        except Exception:
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             sandbox_ep._service.destroy_session(sess.sandbox_session_id)  # type: ignore[attr-defined]
-        except Exception:
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
         if sess.ssh_port:
             await self._release_ssh_port(sess.ssh_port)
@@ -392,7 +412,7 @@ class ACPSandboxRunnerManager:
         for callback in list(registry.websockets):
             try:
                 await callback(message)
-            except Exception as e:
+            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning("Failed to send to WebSocket for session {}: {}", session_id, e)
                 failed_callbacks.append(callback)
 
@@ -570,7 +590,7 @@ class ACPSandboxRunnerManager:
                             raw = base64.b64decode(data_field)
                         else:
                             raw = data_field.encode("utf-8")
-                    except Exception:
+                    except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
                         raw = b""
                     if not raw:
                         continue
@@ -583,7 +603,7 @@ class ACPSandboxRunnerManager:
                     return
         except asyncio.CancelledError:
             return
-        except Exception as e:
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"ACP sandbox reader loop error: {e}")
 
     async def _get_session(self, session_id: str, required: bool = True) -> SandboxSessionHandle | None:
@@ -601,7 +621,7 @@ class ACPSandboxRunnerManager:
             priv = key.export_private_key().decode("utf-8")
             pub = key.export_public_key().decode("utf-8")
             return priv, pub
-        except Exception as e:
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as e:
             raise ACPResponseError(f"Failed to generate SSH key: {e}")
 
     async def _allocate_ssh_port(self) -> int:
@@ -625,5 +645,5 @@ class ACPSandboxRunnerManager:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 s.bind((host, port))
                 return True
-        except Exception:
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             return False

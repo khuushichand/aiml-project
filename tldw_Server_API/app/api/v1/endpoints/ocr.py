@@ -10,6 +10,17 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import (
 
 router = APIRouter(prefix="/ocr", tags=["ocr"])
 
+_OCR_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 
 @router.get("/backends")
 def list_ocr_backends() -> dict[str, Any]:
@@ -31,9 +42,9 @@ def list_ocr_backends() -> dict[str, Any]:
                 with _create_client(timeout=1.5) as _c:
                     r = _c.get(url.rsplit("/v1", 1)[0] + "/v1/models")
                     out["points"]["sglang_reachable"] = r.status_code in (200, 401)
-            except Exception:
+            except _OCR_NONCRITICAL_EXCEPTIONS:
                 out["points"]["sglang_reachable"] = False
-    except Exception:
+    except _OCR_NONCRITICAL_EXCEPTIONS:
         pass
 
     try:
@@ -49,9 +60,9 @@ def list_ocr_backends() -> dict[str, Any]:
                 with _create_client(timeout=1.5) as _c:
                     r = _c.get(vllm.rsplit("/v1", 1)[0] + "/v1/models")
                     out["dots"]["vllm_reachable"] = r.status_code in (200, 401)
-            except Exception:
+            except _OCR_NONCRITICAL_EXCEPTIONS:
                 out["dots"]["vllm_reachable"] = False
-    except Exception:
+    except _OCR_NONCRITICAL_EXCEPTIONS:
         pass
 
     try:
@@ -72,9 +83,9 @@ def list_ocr_backends() -> dict[str, Any]:
                 with _create_client(timeout=1.5) as _c:
                     r = _c.get(vllm.rsplit("/v1", 1)[0] + "/v1/models")
                     out["hunyuan"]["vllm_reachable"] = r.status_code in (200, 401)
-            except Exception:
+            except _OCR_NONCRITICAL_EXCEPTIONS:
                 out["hunyuan"]["vllm_reachable"] = False
-    except Exception:
+    except _OCR_NONCRITICAL_EXCEPTIONS:
         pass
 
     try:
@@ -97,9 +108,9 @@ def list_ocr_backends() -> dict[str, Any]:
                 with _create_client(timeout=1.5) as _c:
                     r = _c.get(vllm.rsplit("/v1", 1)[0] + "/v1/models")
                     out["nemotron_parse"]["vllm_reachable"] = r.status_code in (200, 401)
-            except Exception:
+            except _OCR_NONCRITICAL_EXCEPTIONS:
                 out["nemotron_parse"]["vllm_reachable"] = False
-    except Exception:
+    except _OCR_NONCRITICAL_EXCEPTIONS:
         pass
 
     try:
@@ -114,7 +125,7 @@ def list_ocr_backends() -> dict[str, Any]:
                 "prompt_preset": dolph_desc.get("prompt_preset"),
             }
         )
-    except Exception:
+    except _OCR_NONCRITICAL_EXCEPTIONS:
         pass
 
     try:
@@ -135,7 +146,7 @@ def list_ocr_backends() -> dict[str, Any]:
                 "attn_impl": deepseek_desc.get("attn_impl"),
             }
         )
-    except Exception:
+    except _OCR_NONCRITICAL_EXCEPTIONS:
         pass
 
     return out
@@ -150,5 +161,5 @@ def preload_points_transformers() -> dict[str, Any]:
         )
         _load_transformers()
         return {"status": "ok", "mode": "transformers"}
-    except Exception as e:
+    except _OCR_NONCRITICAL_EXCEPTIONS as e:
         return {"status": "error", "error": str(e)}

@@ -24,7 +24,11 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     TeamResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
-from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError, DuplicateTeamError
+from tldw_Server_API.app.core.AuthNZ.exceptions import (
+    DuplicateOrganizationError,
+    DuplicateTeamError,
+    UserRegistrationException,
+)
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     add_org_member as core_add_org_member,
 )
@@ -59,7 +63,31 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     update_org_member_role as core_update_org_member_role,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
 from tldw_Server_API.app.services import admin_scope_service
+
+_ADMIN_ORGS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    BackendDatabaseError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    UserRegistrationException,
+    ValueError,
+)
 
 
 async def _list_teams_by_org_conn(db, org_id: int, limit: int, offset: int) -> list[dict[str, Any]]:
@@ -158,7 +186,7 @@ async def _emit_membership_audit_event(
             action=action,
             metadata=metadata,
         )
-    except Exception as exc:
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"Audit ({action}) skipped/failed: {exc}")
 
 
@@ -179,7 +207,7 @@ async def create_org(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Organization with {dup.field} '{dup.value}' already exists",
         )
-    except Exception as exc:
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to create organization: {exc}")
         raise HTTPException(status_code=500, detail="Failed to create organization")
 
@@ -235,7 +263,7 @@ async def list_orgs(
         return items
     except HTTPException:
         raise
-    except Exception as exc:
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to list organizations: {exc}")
         raise HTTPException(status_code=500, detail="Failed to list organizations")
 
@@ -259,7 +287,7 @@ async def create_team(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Team with {dup.field} '{dup.value}' already exists in org {org_id}",
         )
-    except Exception as exc:
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to create team: {exc}")
         raise HTTPException(status_code=500, detail="Failed to create team")
 
@@ -276,7 +304,7 @@ async def list_teams(
         await admin_scope_service.enforce_admin_org_access(principal, org_id, require_admin=True)
         rows = await list_teams_by_org(org_id, limit=limit, offset=offset, db=db)
         return [TeamResponse(**r) for r in rows]
-    except Exception as exc:
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to list teams: {exc}")
         raise HTTPException(status_code=500, detail="Failed to list teams")
 
@@ -318,7 +346,7 @@ async def update_org_watchlists_settings(
             meta = json.loads(meta_raw) if meta_raw else {}
             if not isinstance(meta, dict):
                 meta = {}
-        except Exception:
+        except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS:
             meta = {}
 
         wl = meta.get("watchlists") if isinstance(meta.get("watchlists"), dict) else {}
@@ -344,7 +372,7 @@ async def update_org_watchlists_settings(
         )
     except HTTPException:
         raise
-    except Exception as exc:
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to update org watchlists settings for org {org_id}: {exc}")
         raise HTTPException(status_code=500, detail="failed_to_update_org_watchlists_settings")
 
@@ -376,12 +404,12 @@ async def get_org_watchlists_settings(
                         require_include_default = bool(wl.get("require_include_default"))
                     elif isinstance(meta.get("watchlists_require_include_default"), bool):
                         require_include_default = bool(meta.get("watchlists_require_include_default"))
-            except Exception:
+            except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS:
                 pass
         return OrganizationWatchlistsSettingsResponse(org_id=org_id, require_include_default=require_include_default)
     except HTTPException:
         raise
-    except Exception as exc:
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to fetch org watchlists settings for org {org_id}: {exc}")
         raise HTTPException(status_code=500, detail="failed_to_fetch_org_watchlists_settings")
 
@@ -410,7 +438,7 @@ async def add_team_member(
         return TeamMemberResponse(**row)
     except HTTPException:
         raise
-    except Exception as exc:
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to add team member: {exc}")
         raise HTTPException(status_code=500, detail="Failed to add team member")
 
@@ -472,7 +500,7 @@ async def remove_team_member(
         )
     except HTTPException:
         raise
-    except Exception as exc:
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to remove team member user_id={user_id} from team_id={team_id}: {exc}")
         raise HTTPException(status_code=500, detail="Failed to remove team member")
 
@@ -501,7 +529,7 @@ async def add_org_member(
         return OrgMemberResponse(**row)
     except HTTPException:
         raise
-    except Exception as exc:
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to add org member: {exc}")
         raise HTTPException(status_code=500, detail="Failed to add org member")
 
@@ -525,13 +553,13 @@ async def list_org_members(
                 from datetime import datetime as _dt
                 if isinstance(d.get("added_at"), _dt):
                     d["added_at"] = d["added_at"].isoformat()
-            except Exception:
+            except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS:
                 pass
             out.append(OrgMemberListItem(**d))
         return out
     except HTTPException:
         raise
-    except Exception as exc:
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to list org members: {exc}")
         raise HTTPException(status_code=500, detail="Failed to list org members")
 
@@ -574,7 +602,7 @@ async def remove_org_member(
         )
     except HTTPException:
         raise
-    except Exception as exc:
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to remove org member user_id={user_id} from org_id={org_id}: {exc}")
         raise HTTPException(status_code=500, detail="Failed to remove org member")
 
@@ -607,7 +635,7 @@ async def update_org_member_role(
         return OrgMemberResponse(**row)
     except HTTPException:
         raise
-    except Exception as exc:
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to update org member role user_id={user_id} org_id={org_id}: {exc}")
         raise HTTPException(status_code=500, detail="Failed to update org member role")
 
@@ -620,6 +648,6 @@ async def list_user_org_memberships(
         await admin_scope_service.enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         rows = await core_list_org_memberships_for_user(user_id)
         return [OrgMembershipItem(**r) for r in rows]
-    except Exception as exc:
+    except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to list org memberships for user {user_id}: {exc}")
         raise HTTPException(status_code=500, detail="Failed to list org memberships")

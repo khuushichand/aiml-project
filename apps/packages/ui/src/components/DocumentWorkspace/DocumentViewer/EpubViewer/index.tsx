@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useCallback, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Spin, Alert } from "antd"
-import type { Book, Rendition, NavItem, Location } from "epubjs"
+import type { Book, Rendition, NavItem } from "epubjs"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import { TextSelectionPopover } from "../TextSelectionPopover"
 import { EpubSearch } from "./EpubSearch"
@@ -15,6 +15,36 @@ const HIGHLIGHT_COLORS: Record<AnnotationColor, string> = {
   green: "rgba(187, 247, 208, 0.4)",
   blue: "rgba(191, 219, 254, 0.4)",
   pink: "rgba(251, 207, 232, 0.4)"
+}
+
+type RelocatedLocation = {
+  start?: {
+    cfi?: string
+  }
+}
+
+type RelocatedSetters = {
+  setCurrentCfi: (cfi: string) => void
+  setCurrentPercentage: (percentage: number) => void
+  setCurrentPage: (page: number) => void
+}
+
+const applyRelocatedLocation = (
+  book: Book,
+  location: RelocatedLocation | null | undefined,
+  setters: RelocatedSetters
+): { cfi: string; percentage: number; locationIndex: number } | null => {
+  const cfi = location?.start?.cfi
+  if (!cfi) return null
+
+  const percentage = book.locations.percentageFromCfi(cfi) || 0
+  const locationIndex = Number(book.locations.locationFromCfi(cfi) ?? 0)
+
+  setters.setCurrentCfi(cfi)
+  setters.setCurrentPercentage(percentage * 100)
+  setters.setCurrentPage(locationIndex + 1) // 1-indexed for UI consistency
+
+  return { cfi, percentage, locationIndex }
 }
 
 /**
@@ -173,14 +203,13 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
         rendition.on("relocated", (location: any) => {
           if (!mounted) return
 
-          const cfi = location?.start?.cfi
-          if (!cfi) return
-          const percentage = book.locations.percentageFromCfi(cfi) || 0
-          const locationIndex = Number(book.locations.locationFromCfi(cfi) ?? 0)
-
-          setCurrentCfi(cfi)
-          setCurrentPercentage(percentage * 100)
-          setCurrentPage(locationIndex + 1) // 1-indexed for UI consistency
+          const relocated = applyRelocatedLocation(book, location, {
+            setCurrentCfi,
+            setCurrentPercentage,
+            setCurrentPage
+          })
+          if (!relocated) return
+          const { cfi, percentage } = relocated
 
           // Find chapter info
           let chapterTitle: string | undefined
@@ -486,14 +515,12 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
 
     // Re-setup event handlers
     newRendition.on("relocated", (location: any) => {
-      const cfi = location?.start?.cfi
-      if (!cfi) return
-      const percentage = book.locations.percentageFromCfi(cfi) || 0
-      const locationIndex = Number(book.locations.locationFromCfi(cfi) ?? 0)
-
-      useDocumentWorkspaceStore.getState().setCurrentCfi(cfi)
-      useDocumentWorkspaceStore.getState().setCurrentPercentage(percentage * 100)
-      useDocumentWorkspaceStore.getState().setCurrentPage(locationIndex + 1)
+      const store = useDocumentWorkspaceStore.getState()
+      applyRelocatedLocation(book, location, {
+        setCurrentCfi: store.setCurrentCfi,
+        setCurrentPercentage: store.setCurrentPercentage,
+        setCurrentPage: store.setCurrentPage
+      })
     })
 
     newRendition.on("selected", (cfiRange: string) => {

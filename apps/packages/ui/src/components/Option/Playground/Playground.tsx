@@ -556,12 +556,12 @@ export const Playground = () => {
             }`}
           >
             {!isAutoScrollToBottom && (
-              <div className="pointer-events-none absolute -top-10 left-0 right-0 flex justify-center">
+              <div className="pointer-events-none absolute -top-12 left-0 right-0 flex justify-center">
                 <button
                   onClick={() => autoScrollToBottom()}
                   aria-label={t("playground:composer.scrollToLatest", "Scroll to latest messages")}
                   title={t("playground:composer.scrollToLatest", "Scroll to latest messages") as string}
-                  className="pointer-events-auto rounded-full border border-border bg-surface p-2 text-text-subtle shadow-card transition-colors hover:bg-surface2 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus">
+                  className="pointer-events-auto rounded-full border border-border bg-surface p-2.5 text-text-subtle shadow-md transition-all duration-200 animate-in fade-in zoom-in-95 hover:bg-surface2 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus">
                   <ChevronDown className="size-4 text-text-subtle" aria-hidden="true" />
                 </button>
               </div>

@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 try:
     # Pydantic v2
     from pydantic import model_validator  # type: ignore
-except Exception:  # pragma: no cover - fallback for older environments
+except ImportError:  # pragma: no cover - fallback for older environments
     model_validator = None  # type: ignore
 from loguru import logger
 
@@ -28,6 +28,9 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_MAINTENANCE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
     _get_allowed_media_base_dirs,
 )
@@ -54,6 +57,28 @@ _ADMIN_DEPS = [
     Depends(require_roles("admin")),
     Depends(require_permissions(SYSTEM_MAINTENANCE)),
 ]
+
+_AUDIO_JOBS_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    BackendDatabaseError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
 
 
 def _path_is_within(path: Path, base_dir: Path) -> bool:
@@ -228,7 +253,7 @@ async def submit_audio_job(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS as e:
         get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio", traceparent=tp).error(
             "Failed to submit audio job: %s", e
         )
@@ -277,7 +302,7 @@ async def get_audio_job(
         return AudioJob(**{k: d.get(k) for k in _AUDIO_JOB_FIELD_MAP.keys()})
     except HTTPException:
         raise
-    except Exception:
+    except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS:
         logger.exception(
             f"Failed to fetch job: job_id={job_id}, user_id={getattr(current_user, 'id', None)}"
         )
@@ -315,14 +340,14 @@ async def stream_audio_job_progress(
                 "progress_message": job.get("progress_message"),
             }
             await stream.send_event("job", {"event": "job.snapshot", "attrs": snapshot})
-        except Exception:
+        except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS:
             pass
 
         while True:
             try:
                 if getattr(stream, "_closed", False):
                     break
-            except Exception:
+            except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS:
                 pass
 
             conn = jm._connect()
@@ -340,12 +365,12 @@ async def stream_audio_job_progress(
                         "SELECT id, event_type, attrs_json FROM job_events WHERE job_id = ? AND id > ? ORDER BY id ASC LIMIT 200",
                         (int(job_id), int(after_id)),
                     ).fetchall() or []
-            except Exception:
+            except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS:
                 rows = []
             finally:
                 try:
                     conn.close()
-                except Exception:
+                except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS:
                     pass
 
             if rows:
@@ -360,7 +385,7 @@ async def stream_audio_job_progress(
                         attrs = r[2]
                     try:
                         attrs_obj = json.loads(attrs) if isinstance(attrs, str) else (attrs or {})
-                    except Exception:
+                    except (TypeError, ValueError):
                         attrs_obj = {}
                     await stream.send_event("job", {"event": et, "attrs": attrs_obj}, event_id=str(eid))
                     after_id = eid
@@ -381,11 +406,11 @@ async def stream_audio_job_progress(
             if not prod_task.done():
                 try:
                     prod_task.cancel()
-                except Exception:
+                except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     await prod_task
-                except Exception:
+                except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS:
                     pass
 
     sse_headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
@@ -428,7 +453,7 @@ async def list_audio_jobs_admin(
         return ListAudioJobsResponse(jobs=out)
     except HTTPException:
         raise
-    except Exception as e:
+    except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list jobs: {e}")
         raise HTTPException(status_code=500, detail="Failed to list jobs")
 
@@ -462,7 +487,7 @@ async def summarize_audio_jobs_admin(
         return AudioJobsSummary(counts_by_status=by_status, total=total, owner_user_id=owner_user_id)
     except HTTPException:
         raise
-    except Exception as e:
+    except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to summarize jobs: {e}")
         raise HTTPException(status_code=500, detail="Failed to summarize jobs")
 
@@ -501,7 +526,7 @@ async def summary_by_owner_admin(
         return AudioJobsSummaryByOwner(items=items)
     except HTTPException:
         raise
-    except Exception as e:
+    except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to summarize by owner: {e}")
         raise HTTPException(status_code=500, detail="Failed to summarize by owner")
 
@@ -569,7 +594,7 @@ async def owner_processing_summary(
         return OwnerProcessingSummary(owner_user_id=str(owner_user_id), processing=processing, limit=limit)
     except HTTPException:
         raise
-    except Exception as e:
+    except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to get owner processing summary: {e}")
         raise HTTPException(status_code=500, detail="Failed to get owner processing summary")
 
@@ -597,7 +622,7 @@ async def get_user_tier_admin(user_id: int):
         return UserTierResponse(user_id=int(user_id), tier=tier)
     except HTTPException:
         raise
-    except Exception as e:
+    except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to get user tier: {e}")
         raise HTTPException(status_code=500, detail="Failed to get user tier")
 
@@ -618,6 +643,6 @@ async def set_user_tier_admin(user_id: int, req: SetUserTierRequest):
         return UserTierResponse(user_id=int(user_id), tier=tier)
     except HTTPException:
         raise
-    except Exception as e:
+    except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to set user tier: {e}")
         raise HTTPException(status_code=500, detail="Failed to set user tier")

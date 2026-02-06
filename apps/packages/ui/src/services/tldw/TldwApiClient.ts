@@ -156,15 +156,42 @@ export type ConversationState =
 export interface ServerChatMessage {
   id: string
   role: "system" | "user" | "assistant"
+  sender?: string
   content: string
   created_at: string
   version?: number
+  metadata_extra?: Record<string, unknown>
+  pinned?: boolean
 }
 
 export type ChatSettingsResponse = {
   conversation_id: string
   settings: Record<string, unknown>
   last_modified: string
+}
+
+export type WorldBookProcessDiagnostic = {
+  entry_id: number | null
+  world_book_id: number | null
+  activation_reason: "keyword_match" | "regex_match" | "depth" | string
+  keyword?: string | null
+  token_cost: number
+  priority: number
+  regex_match: boolean
+  content_preview: string
+  depth_level?: number | null
+}
+
+export type WorldBookProcessResponse = {
+  injected_content: string
+  entries_matched: number
+  tokens_used: number
+  books_used: number
+  entry_ids: number[]
+  token_budget?: number | null
+  budget_exhausted?: boolean | null
+  skipped_entries_due_to_budget?: number | null
+  diagnostics: WorldBookProcessDiagnostic[]
 }
 
 type PromptPayload = {
@@ -2271,33 +2298,78 @@ export class TldwApiClient {
       }
 
       const normalized = list.map((m) => {
+        const senderCandidate =
+          typeof m.sender === "string"
+            ? m.sender
+            : typeof m.author === "string"
+              ? m.author
+              : typeof (m as any)?.message?.sender === "string"
+                ? (m as any).message.sender
+                : typeof (m as any)?.message?.author === "string"
+                  ? (m as any).message.author
+                  : undefined
         const roleCandidate =
           typeof m.role === "string"
             ? m.role
-            : typeof m.sender === "string"
-              ? m.sender
-              : typeof m.author === "string"
-                ? m.author
+            : typeof senderCandidate === "string"
+              ? senderCandidate
                 : typeof (m as any)?.message?.role === "string"
                   ? (m as any).message.role
-                  : typeof (m as any)?.message?.sender === "string"
-                    ? (m as any).message.sender
-                    : typeof (m as any)?.message?.author === "string"
-                      ? (m as any).message.author
-                      : undefined
+                  : undefined
+        const senderLower =
+          typeof senderCandidate === "string"
+            ? senderCandidate.trim().toLowerCase()
+            : ""
+        const senderLooksLikeUser =
+          senderLower === "user" ||
+          senderLower === "human" ||
+          senderLower.startsWith("user")
+        const senderLooksLikeSystem =
+          senderLower === "system" || senderLower.startsWith("system")
+        const senderLooksLikeTool =
+          senderLower === "tool" ||
+          senderLower.startsWith("tool") ||
+          senderLower === "function"
+        const fallbackRole =
+          senderLower &&
+          !senderLooksLikeUser &&
+          !senderLooksLikeSystem &&
+          !senderLooksLikeTool
+            ? "assistant"
+            : "user"
         const role =
           typeof (m as any)?.is_bot === "boolean" ||
           typeof (m as any)?.isBot === "boolean"
             ? (m as any).is_bot || (m as any).isBot
               ? "assistant"
               : "user"
-            : normalizeChatRole(roleCandidate)
+            : normalizeChatRole(roleCandidate, fallbackRole)
         const created_at = String(
           m.created_at || m.createdAt || m.timestamp || ""
         )
+        const metadataExtraCandidate =
+          (m as any).metadata_extra ?? (m as any).metadataExtra
+        const metadataExtra =
+          metadataExtraCandidate &&
+          typeof metadataExtraCandidate === "object" &&
+          !Array.isArray(metadataExtraCandidate)
+            ? (metadataExtraCandidate as Record<string, unknown>)
+            : undefined
+        const rawPinned =
+          (metadataExtra?.pinned as unknown) ?? (m as any).pinned
+        const pinned =
+          typeof rawPinned === "boolean"
+            ? rawPinned
+            : typeof rawPinned === "string"
+              ? ["1", "true", "yes", "on"].includes(rawPinned.trim().toLowerCase())
+              : undefined
         return {
           id: String(m.id),
           role,
+          sender:
+            typeof senderCandidate === "string" && senderCandidate.trim().length > 0
+              ? senderCandidate
+              : undefined,
           content: String(m.content ?? ""),
           created_at,
           version:
@@ -2305,7 +2377,9 @@ export class TldwApiClient {
               ? m.version
               : typeof m.expected_version === "number"
                 ? m.expected_version
-                : undefined
+                : undefined,
+          metadata_extra: metadataExtra,
+          pinned
         } as ServerChatMessage
       })
       this.chatMessagesCache.set(cacheKey, {
@@ -2419,15 +2493,20 @@ export class TldwApiClient {
     message_id: string | number,
     content: string,
     expectedVersion: number,
-    chatId?: string | number
+    chatId?: string | number,
+    options?: { pinned?: boolean }
   ): Promise<any> {
     const mid = String(message_id)
     const qp = `?expected_version=${encodeURIComponent(String(expectedVersion))}`
+    const body: Record<string, unknown> = { content }
+    if (typeof options?.pinned === "boolean") {
+      body.pinned = options.pinned
+    }
     const res = await bgRequest<any>({
       path: `/api/v1/messages/${mid}${qp}`,
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: { content }
+      body
     })
     if (chatId != null) {
       this.invalidateChatMessagesCache(chatId)
@@ -2535,6 +2614,22 @@ export class TldwApiClient {
   async listCharacterWorldBooks(character_id: number | string): Promise<any> {
     const cid = String(character_id)
     return await bgRequest<any>({ path: `/api/v1/characters/${cid}/world-books`, method: 'GET' })
+  }
+
+  async processWorldBookContext(payload: {
+    text: string
+    world_book_ids?: number[]
+    character_id?: number
+    scan_depth?: number
+    token_budget?: number
+    recursive_scanning?: boolean
+  }): Promise<WorldBookProcessResponse> {
+    return await bgRequest<WorldBookProcessResponse>({
+      path: "/api/v1/characters/world-books/process",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
   }
 
   async exportWorldBook(world_book_id: number | string): Promise<any> {

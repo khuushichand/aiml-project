@@ -10,13 +10,23 @@ from loguru import logger
 from tldw_Server_API.app.core.Image_Generation.adapter_registry import get_registry
 from tldw_Server_API.app.core.Image_Generation.config import get_image_generation_config
 
+_IMAGE_LISTING_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
 
 def _path_exists(raw: str | None) -> bool:
     if not raw:
         return False
     try:
         return Path(str(raw)).expanduser().exists()
-    except Exception:
+    except (OSError, RuntimeError, TypeError, ValueError):
         return False
 
 
@@ -40,13 +50,13 @@ def _resolve_supported_formats(name: str) -> list[str] | None:
     registry = get_registry()
     try:
         adapter_cls = registry.get_adapter_class(name)
-    except Exception:
+    except _IMAGE_LISTING_NONCRITICAL_EXCEPTIONS:
         adapter_cls = None
     if adapter_cls is None:
         return None
     try:
         formats = getattr(adapter_cls, "supported_formats", None)
-    except Exception:
+    except _IMAGE_LISTING_NONCRITICAL_EXCEPTIONS:
         formats = None
     if not isinstance(formats, (list, set, tuple)):
         return None
@@ -69,13 +79,13 @@ def list_image_models_for_catalog() -> list[dict[str, Any]]:
         if name == "stable_diffusion_cpp":
             try:
                 is_configured = _is_sd_cpp_configured(cfg, enabled)
-            except Exception as exc:
+            except _IMAGE_LISTING_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Image backend config check failed for %s: %s", name, exc)
                 is_configured = False
         if name == "swarmui":
             try:
                 is_configured = _is_swarmui_configured(cfg, enabled)
-            except Exception as exc:
+            except _IMAGE_LISTING_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Image backend config check failed for %s: %s", name, exc)
                 is_configured = False
 

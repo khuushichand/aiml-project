@@ -46,6 +46,26 @@ from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
 from tldw_Server_API.app.core.TTS.tts_validation import TTSInputValidator
 from tldw_Server_API.app.core.Usage.audio_quota import can_start_job, finish_job, increment_jobs_started
 
+_AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EOFError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 DOMAIN = "audiobooks"
 JOB_TYPE = "audiobook_generate"
 
@@ -245,7 +265,7 @@ def _merge_metadata_with_bytes(metadata_json: str | None, size_bytes: int | None
     if metadata_json:
         try:
             raw = json.loads(metadata_json)
-        except Exception:
+        except json.JSONDecodeError:
             raw = None
         if isinstance(raw, dict):
             payload = raw
@@ -451,7 +471,7 @@ async def _resolve_segment_duration_ms(
                 end_ms = int(words[-1].get("end_ms") or 0)
                 if end_ms > 0:
                     return end_ms
-            except Exception:
+            except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS:
                 pass
     if audio_path is not None:
         duration = await AudioConverter.get_duration(audio_path)
@@ -566,7 +586,7 @@ def _load_source_text(source: dict[str, Any], user_id: int) -> tuple[str, dict[s
                     text = extract_text_and_format_from_pdf(str(upload_path))
                 else:
                     text = upload_path.read_text(encoding="utf-8", errors="ignore")
-            except Exception as exc:
+            except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS as exc:
                 raise AudiobookJobError("parse_failed", retryable=False) from exc
 
     if text is None:
@@ -755,7 +775,7 @@ def _load_voice_profile(
     if row.chapter_overrides_json:
         try:
             raw_overrides = json.loads(row.chapter_overrides_json) or []
-        except Exception:
+        except json.JSONDecodeError:
             raw_overrides = []
     for entry in raw_overrides:
         if not isinstance(entry, dict):
@@ -826,7 +846,7 @@ def _create_output_and_link(
     if size_bytes is not None and output_type.startswith("audiobook_"):
         try:
             collections_db.update_audiobook_output_usage(size_bytes)
-        except Exception as exc:
+        except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning("audiobook_quota: failed to increment usage: %s", exc)
     if project_db_id is None:
         return row
@@ -1027,7 +1047,7 @@ async def process_audiobook_job(
     try:
         await increment_jobs_started(user_id)
         acquired_slot = True
-    except Exception:
+    except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS:
         acquired_slot = False
 
     collections_db = CollectionsDatabase(user_id)
@@ -1046,7 +1066,7 @@ async def process_audiobook_job(
             job_priority = job.get("priority")
             if job_priority is not None:
                 queue_settings["priority"] = int(job_priority)
-        except Exception:
+        except (TypeError, ValueError):
             pass
         batch_group = job.get("batch_group")
         if batch_group:
@@ -1255,7 +1275,7 @@ async def process_audiobook_job(
                             continue
                         try:
                             path.unlink(missing_ok=True)
-                        except Exception:
+                        except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS:
                             pass
 
                 if segment_alignments and all(segment_alignments):
@@ -1298,12 +1318,12 @@ async def process_audiobook_job(
                         replaced = False
                         try:
                             base_path.unlink(missing_ok=True)
-                        except Exception:
+                        except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             stretched_path.replace(base_path)
                             replaced = True
-                        except Exception:
+                        except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS:
                             replaced = False
                         if not replaced:
                             logger.warning(
@@ -1312,7 +1332,7 @@ async def process_audiobook_job(
                             )
                             try:
                                 stretched_path.unlink(missing_ok=True)
-                            except Exception:
+                            except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS:
                                 pass
                         if replaced and alignment_payload:
                             alignment_model = AlignmentPayload(**alignment_payload)
@@ -1395,7 +1415,7 @@ async def process_audiobook_job(
                         try:
                             size_bytes = target_path.stat().st_size
                             log_histogram("audiobook_audio_convert_bytes", size_bytes, labels=conv_labels)
-                        except Exception:
+                        except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS:
                             pass
                         meta = {
                             "project_id": project_id,
@@ -1734,13 +1754,13 @@ async def process_audiobook_job(
                         try:
                             if path.exists():
                                 path.unlink()
-                        except Exception:
+                        except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS:
                             pass
 
         if project_db_id is not None:
             try:
                 collections_db.update_audiobook_project_status(project_db_id, status="completed")
-            except Exception as exc:
+            except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning("audiobook worker: failed to update project status: %s", exc)
         jm.complete_job(
             job_id,
@@ -1753,7 +1773,7 @@ async def process_audiobook_job(
         if project_db_id is not None:
             try:
                 collections_db.update_audiobook_project_status(project_db_id, status="failed")
-            except Exception as status_exc:
+            except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS as status_exc:
                 logger.warning("audiobook worker: failed to update project status: %s", status_exc)
         jm.fail_job(
             job_id,
@@ -1763,11 +1783,11 @@ async def process_audiobook_job(
             lease_id=lease_id,
             completion_token=lease_id,
         )
-    except Exception as exc:
+    except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS as exc:
         if project_db_id is not None:
             try:
                 collections_db.update_audiobook_project_status(project_db_id, status="failed")
-            except Exception as status_exc:
+            except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS as status_exc:
                 logger.warning("audiobook worker: failed to update project status: %s", status_exc)
         jm.fail_job(
             job_id,
@@ -1781,7 +1801,7 @@ async def process_audiobook_job(
         if acquired_slot:
             try:
                 await finish_job(user_id)
-            except Exception as exc:
+            except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Failed to release audiobook job slot: {exc}")
 
 
@@ -1812,7 +1832,7 @@ async def run_audiobook_jobs_worker(stop_event: asyncio.Event | None = None) -> 
                 )
                 continue
             await process_audiobook_job(job, job_manager=jm, worker_id=worker_id)
-        except Exception as exc:
+        except _AUDIOBOOK_JOBS_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"Audiobook worker loop error: {exc}")
 
 

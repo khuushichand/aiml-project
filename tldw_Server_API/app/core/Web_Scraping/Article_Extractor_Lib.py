@@ -2657,7 +2657,7 @@ def extract_article_with_pipeline(
             extractor = fallback_extractor or _extract_with_trafilatura
             with _strategy_throttle(strategy):
                 result, exc, _attempts = _run_with_retries(
-                    lambda: extractor(html, url),
+                    lambda _extractor=extractor: _extractor(html, url),
                     strategy=strategy,
                 )
             if exc or result is None:

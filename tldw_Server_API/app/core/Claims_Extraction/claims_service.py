@@ -3826,3 +3826,248 @@ def rebuild_claims_fts(
             except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                 pass
     return {"status": "ok", "indexed": count}
+
+
+# =============================================================================
+# FVA (Falsification-Verification Alignment) Service Functions
+# =============================================================================
+
+
+async def verify_claims_with_fva(
+    *,
+    claims: list[dict[str, Any]],
+    query: str,
+    sources: list[str] | None = None,
+    top_k: int = 10,
+    fva_config: dict[str, Any] | None = None,
+    user_id: str | None = None,
+    current_user: User | None = None,
+    db: MediaDatabase | None = None,
+) -> dict[str, Any]:
+    """
+    Verify claims using the FVA (Falsification-Verification Alignment) pipeline.
+
+    This function orchestrates:
+    1. Document retrieval for evidence
+    2. Standard claim verification
+    3. Falsification trigger decision
+    4. Anti-context retrieval for counter-evidence
+    5. Adjudication between supporting and contradicting evidence
+
+    Args:
+        claims: List of claim dicts with text and optional claim_type
+        query: Original query context for retrieval
+        sources: Data sources to search (defaults to media_db)
+        top_k: Number of documents to retrieve
+        fva_config: FVA pipeline configuration options
+        user_id: User ID for scoped retrieval
+        current_user: Current authenticated user
+        db: MediaDatabase instance
+
+    Returns:
+        FVA verification results with status changes and timing
+    """
+    from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
+        ClaimsJobBudget,
+        ClaimsJobContext,
+    )
+    from tldw_Server_API.app.core.Claims_Extraction.claims_engine import (
+        Claim,
+        ClaimType,
+        ClaimsEngine,
+        create_claims_engine,
+    )
+    from tldw_Server_API.app.core.Claims_Extraction.fva_pipeline import (
+        FVAConfig,
+        FVAPipeline,
+    )
+    from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import (
+        MultiDatabaseRetriever,
+        RetrievalConfig,
+    )
+    from tldw_Server_API.app.core.RAG.rag_service.types import DataSource
+
+    import time
+    from uuid import uuid4
+
+    start_time = time.time()
+
+    # Parse FVA configuration
+    config_dict = fva_config or {}
+    fva_cfg = FVAConfig(
+        enabled=config_dict.get("enabled", True),
+        confidence_threshold=config_dict.get("confidence_threshold", 0.7),
+        contested_threshold=config_dict.get("contested_threshold", 0.4),
+        max_concurrent_falsifications=config_dict.get("max_concurrent_falsifications", 5),
+        falsification_timeout_seconds=config_dict.get("timeout_seconds", 30.0),
+        force_falsification_claim_types=config_dict.get("force_claim_types") or [],
+    )
+
+    # Set up budget if specified
+    budget: ClaimsJobBudget | None = None
+    job_context: ClaimsJobContext | None = None
+    max_budget_usd = config_dict.get("max_budget_usd")
+    if max_budget_usd is not None:
+        budget = ClaimsJobBudget(max_cost_usd=float(max_budget_usd))
+        job_context = ClaimsJobContext(
+            job_id=str(uuid4()),
+            user_id=user_id or (current_user.username if current_user else None),
+        )
+
+    # Resolve user_id for retrieval
+    resolved_user_id = user_id
+    if resolved_user_id is None and current_user is not None:
+        resolved_user_id = str(current_user.username) if hasattr(current_user, "username") else None
+
+    # Build retriever
+    retriever = MultiDatabaseRetriever(media_db=db)
+
+    # Build data sources
+    data_sources: list[DataSource] = []
+    if sources:
+        for src in sources:
+            try:
+                data_sources.append(DataSource(src))
+            except (ValueError, TypeError):
+                pass
+    if not data_sources:
+        data_sources = [DataSource.MEDIA_DB]
+
+    # Retrieve base documents
+    retrieval_config = RetrievalConfig(
+        top_k=top_k,
+        search_mode="hybrid",
+    )
+    base_documents = await retriever.retrieve(
+        query=query,
+        sources=data_sources,
+        config=retrieval_config,
+    )
+
+    # Create claims engine
+    claims_engine = create_claims_engine()
+
+    # Create FVA pipeline
+    pipeline = FVAPipeline(
+        claims_engine=claims_engine,
+        retriever=retriever,
+        config=fva_cfg,
+    )
+
+    # Convert input claims to Claim objects
+    claim_objects: list[Claim] = []
+    for i, c in enumerate(claims):
+        claim_type = ClaimType.GENERAL
+        if c.get("claim_type"):
+            try:
+                claim_type = ClaimType(c["claim_type"])
+            except (ValueError, TypeError):
+                claim_type = ClaimType.GENERAL
+
+        span = None
+        if c.get("span_start") is not None and c.get("span_end") is not None:
+            span = (c["span_start"], c["span_end"])
+
+        claim_objects.append(
+            Claim(
+                id=str(uuid4()),
+                text=c["text"],
+                claim_type=claim_type,
+                span=span,
+            )
+        )
+
+    # Process claims through FVA pipeline
+    batch_result = await pipeline.process_batch(
+        claims=claim_objects,
+        query=query,
+        documents=base_documents,
+        user_id=resolved_user_id,
+        budget=budget,
+        job_context=job_context,
+    )
+
+    # Convert results to response format
+    results: list[dict[str, Any]] = []
+    for fva_result in batch_result.results:
+        # Build supporting evidence items
+        supporting_evidence: list[dict[str, Any]] = []
+        if fva_result.adjudication:
+            for ea in fva_result.adjudication.supporting_evidence:
+                supporting_evidence.append({
+                    "doc_id": ea.document.id,
+                    "snippet": ea.document.content[:500] if ea.document.content else "",
+                    "score": ea.confidence,
+                    "stance": ea.stance.value if ea.stance else None,
+                    "confidence": ea.confidence,
+                })
+
+        # Build contradicting evidence items
+        contradicting_evidence: list[dict[str, Any]] = []
+        if fva_result.adjudication:
+            for ea in fva_result.adjudication.contradicting_evidence:
+                contradicting_evidence.append({
+                    "doc_id": ea.document.id,
+                    "snippet": ea.document.content[:500] if ea.document.content else "",
+                    "score": ea.confidence,
+                    "stance": ea.stance.value if ea.stance else None,
+                    "confidence": ea.confidence,
+                })
+
+        # Build adjudication result
+        adjudication_dict: dict[str, Any] | None = None
+        if fva_result.adjudication:
+            adjudication_dict = {
+                "support_score": fva_result.adjudication.support_score,
+                "contradict_score": fva_result.adjudication.contradict_score,
+                "contestation_score": fva_result.adjudication.contestation_score,
+                "rationale": fva_result.adjudication.adjudication_rationale,
+            }
+
+        results.append({
+            "claim_text": fva_result.original_verification.claim.text,
+            "claim_type": (
+                fva_result.original_verification.claim.claim_type.value
+                if fva_result.original_verification.claim.claim_type
+                else None
+            ),
+            "original_status": fva_result.original_verification.status.value,
+            "final_status": fva_result.final_verification.status.value,
+            "confidence": fva_result.final_verification.confidence,
+            "falsification_triggered": fva_result.falsification_triggered,
+            "anti_context_found": fva_result.anti_context_found,
+            "supporting_evidence": supporting_evidence,
+            "contradicting_evidence": contradicting_evidence,
+            "adjudication": adjudication_dict,
+            "rationale": fva_result.final_verification.rationale,
+            "processing_time_ms": fva_result.processing_time_ms,
+        })
+
+    elapsed_ms = (time.time() - start_time) * 1000
+
+    return {
+        "results": results,
+        "total_claims": batch_result.total_claims,
+        "falsification_triggered_count": batch_result.falsification_triggered_count,
+        "status_changes": batch_result.status_changes,
+        "total_time_ms": elapsed_ms,
+        "budget_exhausted": batch_result.budget_exhausted,
+    }
+
+
+def get_fva_settings() -> dict[str, Any]:
+    """Return current FVA pipeline settings."""
+    from tldw_Server_API.app.core.Claims_Extraction.fva_pipeline import FVAConfig
+
+    # Get default config
+    default_config = FVAConfig()
+
+    return {
+        "enabled": default_config.enabled,
+        "confidence_threshold": default_config.confidence_threshold,
+        "contested_threshold": default_config.contested_threshold,
+        "max_concurrent_falsifications": default_config.max_concurrent_falsifications,
+        "timeout_seconds": default_config.falsification_timeout_seconds,
+        "force_claim_types": default_config.force_falsification_claim_types,
+        "anti_context_cache_size": 0,  # Cache size would come from active pipeline
+    }

@@ -52,6 +52,25 @@ from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
 
 abtest_router = APIRouter()
 
+_EMB_ABTEST_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 @abtest_router.post(
     "/embeddings/abtest",
@@ -77,17 +96,17 @@ async def create_embeddings_abtest(
                     try:
                         response.headers["X-Idempotent-Replay"] = "true"
                         response.headers["Idempotency-Key"] = idempotency_key
-                    except Exception:
+                    except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
                         pass
                 return EmbeddingsABTestCreateResponse(test_id=existing_id, status='created')
-        except Exception:
+        except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
             pass
     cfg = payload.config
     if getattr(cfg, 'chunking', None) is None:
         try:
             from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import ABTestChunking
             cfg.chunking = ABTestChunking(method='sentences', size=200, overlap=20, language=None)
-        except Exception:
+        except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
             pass
     try:
         validate_abtest_policy(cfg, user=current_user)
@@ -114,7 +133,7 @@ async def create_embeddings_abtest(
     try:
         if idempotency_key:
             db.record_idempotency("emb_abtest", idempotency_key, test_id, user_ctx)
-    except Exception:
+    except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
         pass
     return EmbeddingsABTestCreateResponse(test_id=test_id, status='created')
 
@@ -149,17 +168,17 @@ async def run_embeddings_abtest(
                     try:
                         response.headers["X-Idempotent-Replay"] = "true"
                         response.headers["Idempotency-Key"] = idempotency_key
-                    except Exception:
+                    except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
                         pass
                 return EmbeddingsABTestStatusResponse(test_id=test_id, status='running', progress={"phase": 0.05})
-        except Exception:
+        except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
             pass
     from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import ABTestChunking
     cfg = payload.config
     if getattr(cfg, 'chunking', None) is None:
         try:
             cfg.chunking = ABTestChunking(method='sentences', size=200, overlap=20, language=None)
-        except Exception:
+        except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
             pass
     try:
         validate_abtest_policy(cfg, user=current_user)
@@ -171,7 +190,7 @@ async def run_embeddings_abtest(
                 stats_json={"error": str(exc), "policy": exc.details, "status_code": exc.status_code},
                 created_by=user_ctx,
             )
-        except Exception:
+        except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
             pass
         raise HTTPException(status_code=exc.status_code, detail=str(exc))
 
@@ -179,14 +198,14 @@ async def run_embeddings_abtest(
     testing = False
     try:
         testing = os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
-    except Exception:
+    except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
         testing = False
 
     if testing:
         logger.info(f"A/B test running synchronously in TESTING mode: {test_id}")
         try:
             db.set_abtest_status(test_id, 'running', stats_json={"progress": {"phase": 0.01}}, created_by=user_ctx)
-        except Exception:
+        except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
             pass
         log_run_started(
             user_id=str(current_user.id),
@@ -197,21 +216,21 @@ async def run_embeddings_abtest(
         run_error: Optional[Exception] = None
         try:
             await run_abtest_full(db, cfg, test_id, str(current_user.id), media_db)
-        except Exception as _e:
+        except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS as _e:
             run_error = _e
             try:
                 logger.warning(f"A/B test synchronous run failed: {_e}")
-            except Exception:
+            except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
                 pass
         try:
             if idempotency_key:
                 db.record_idempotency("emb_abtest_run", idempotency_key, test_id, user_ctx)
-        except Exception:
+        except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
             pass
         if run_error is not None:
             try:
                 db.set_abtest_status(test_id, 'failed', stats_json={"error": str(run_error)}, created_by=user_ctx)
-            except Exception:
+            except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
                 pass
             return EmbeddingsABTestStatusResponse(test_id=test_id, status='failed', progress={"phase": 0.0})
         return EmbeddingsABTestStatusResponse(test_id=test_id, status='completed', progress={"phase": 1.0})
@@ -241,7 +260,7 @@ async def run_embeddings_abtest(
                 stats_json={"progress": {"phase": 0.01}, "job_id": job_ref},
                 created_by=user_ctx,
             )
-        except Exception:
+        except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
             pass
         log_run_started(
             user_id=str(current_user.id),
@@ -249,7 +268,7 @@ async def run_embeddings_abtest(
             eval_id=test_id,
             target_model="embeddings_abtest",
         )
-    except Exception as exc:
+    except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to enqueue A/B test job {test_id}: {exc}")
         raise HTTPException(status_code=500, detail="Failed to enqueue A/B test job")
 
@@ -257,7 +276,7 @@ async def run_embeddings_abtest(
     try:
         if idempotency_key:
             db.record_idempotency("emb_abtest_run", idempotency_key, test_id, user_ctx)
-    except Exception:
+    except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
         pass
     return EmbeddingsABTestStatusResponse(test_id=test_id, status='running', progress={"phase": 0.05})
 
@@ -278,7 +297,7 @@ async def get_embeddings_abtest_status(
     try:
         stats_json = json.loads(row.get('stats_json') or '{}')
         aggregates = stats_json.get('aggregates') or {}
-    except Exception:
+    except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
         aggregates = {}
     arms_rows = svc.db.get_abtest_arms(test_id, created_by=user_ctx)
     arms = []
@@ -294,7 +313,7 @@ async def get_embeddings_abtest_status(
                         doc_counts['docs'] = int(sj.get('doc_count') or 0)
                     if 'chunk_count' in sj:
                         doc_counts['chunks'] = int(sj.get('chunk_count') or 0)
-        except Exception:
+        except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
             doc_counts = {}
         arms.append(ArmSummary(
             arm_id=ar['arm_id'],
@@ -328,7 +347,7 @@ async def get_embeddings_abtest_results(
             return value
         try:
             parsed = json.loads(value)
-        except Exception:
+        except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
             return default
         return parsed if isinstance(parsed, (list, dict)) else default
 
@@ -354,7 +373,7 @@ async def get_embeddings_abtest_results(
     try:
         stats_json = json.loads(row.get('stats_json') or '{}')
         aggregates = stats_json.get('aggregates') or {}
-    except Exception:
+    except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS:
         aggregates = {}
     arms_rows = svc.db.get_abtest_arms(test_id, created_by=user_ctx)
     arms = []

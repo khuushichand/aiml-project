@@ -17,6 +17,23 @@ from loguru import logger
 # Local Imports
 from .tts_exceptions import TTSError
 
+_AUDIO_CLEANUP_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+)
+
+_AUDIO_CONVERSION_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    RuntimeError,
+    AttributeError,
+    KeyError,
+    ImportError,
+    subprocess.SubprocessError,
+)
+
 #
 #######################################################################################################################
 #
@@ -92,7 +109,7 @@ class AudioConverter:
         finally:
             try:
                 os.unlink(list_path)
-            except Exception:
+            except _AUDIO_CLEANUP_EXCEPTIONS:
                 pass
 
     @staticmethod
@@ -144,11 +161,11 @@ class AudioConverter:
         finally:
             try:
                 os.unlink(list_path)
-            except Exception:
+            except _AUDIO_CLEANUP_EXCEPTIONS:
                 pass
             try:
                 os.unlink(meta_file.name)
-            except Exception:
+            except _AUDIO_CLEANUP_EXCEPTIONS:
                 pass
 
     @staticmethod
@@ -250,7 +267,7 @@ class AudioConverter:
         except FileNotFoundError:
             logger.error("FFmpeg not found. Please install FFmpeg.")
             raise AudioConversionError("FFmpeg is required for audio conversion")
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Audio conversion error: {e}")
             return False
 
@@ -314,7 +331,7 @@ class AudioConverter:
             logger.info(f"Converted {input_path.name} to {target_format}")
             return True
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Format conversion error: {e}")
             return False
 
@@ -348,7 +365,7 @@ class AudioConverter:
 
             return is_valid, duration
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Duration validation error: {e}")
             return False, 0.0
 
@@ -385,7 +402,7 @@ class AudioConverter:
                 logger.error(f"Could not get duration: {stderr.decode()}")
                 return 0.0
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Error getting duration: {e}")
             return 0.0
 
@@ -442,7 +459,7 @@ class AudioConverter:
 
             return info
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Error getting audio info: {e}")
             return info
 
@@ -515,7 +532,7 @@ class AudioConverter:
             logger.info(f"Normalized audio to {target_level} LUFS")
             return True
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Audio normalization error: {e}")
             return False
 
@@ -559,7 +576,7 @@ class AudioConverter:
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 output_path.write_bytes(input_path.read_bytes())
                 return True
-            except Exception as exc:
+            except _AUDIO_CONVERSION_EXCEPTIONS as exc:
                 logger.error(f"Time-stretch noop copy failed: {exc}")
                 return False
         try:
@@ -581,7 +598,7 @@ class AudioConverter:
                 return False
             logger.info(f"Time-stretch applied (ratio: {speed_ratio})")
             return True
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Time-stretch error: {e}")
             return False
 
@@ -630,7 +647,7 @@ class AudioConverter:
             logger.info(f"Trimmed silence from audio (threshold: {threshold}dB)")
             return True
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Silence trimming error: {e}")
             return False
 
@@ -680,7 +697,7 @@ class AudioConverter:
             logger.info(f"Extracted {duration}s segment starting at {start_time}s")
             return True
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Segment extraction error: {e}")
             return False
 
@@ -726,7 +743,7 @@ class AudioConverter:
             logger.info(f"Resampled audio to {target_sample_rate}Hz")
             return True
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Resampling error: {e}")
             return False
 

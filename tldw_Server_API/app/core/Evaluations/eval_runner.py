@@ -866,9 +866,9 @@ class EvaluationRunner:
                 mean_overall = 0.0
             mean_latency = statistics.mean(agg_latency) if agg_latency else 0.0
             # Compute aggregated retrieval stats across samples if present
-            def _mean_score(key: str) -> float:
+            def _mean_score(key: str, _per_sample=per_sample) -> float:
                 vals = []
-                for r in per_sample:
+                for r in _per_sample:
                     v = r.get("scores", {}).get(key)
                     if isinstance(v, (int, float)):
                         vals.append(float(v))

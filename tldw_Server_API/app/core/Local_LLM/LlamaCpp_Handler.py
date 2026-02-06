@@ -17,11 +17,45 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
 )
 from tldw_Server_API.app.core.Local_LLM import handler_utils, http_utils
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 
 # Local imports
 from .LLM_Base_Handler import BaseLLMHandler
 from .LLM_Inference_Exceptions import InferenceError, ModelNotFoundError, ServerError
 from .LLM_Inference_Schemas import LlamaCppConfig
+
+try:
+    import httpx as _httpx
+except ImportError:  # pragma: no cover - optional dependency in some test setups
+    _httpx = None  # type: ignore[assignment]
+
+_LLAMACPP_HTTP_EXCEPTIONS: tuple[type[BaseException], ...] = ()
+if _httpx is not None:
+    _LLAMACPP_HTTP_EXCEPTIONS = (
+        _httpx.HTTPError,
+        _httpx.TimeoutException,
+    )
+
+_LLAMACPP_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    NetworkError,
+    OSError,
+    PermissionError,
+    RetryExhaustedError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    subprocess.SubprocessError,
+) + _LLAMACPP_HTTP_EXCEPTIONS
 
 
 def create_async_client(*args, **kwargs):
@@ -129,7 +163,7 @@ class LlamaCppHandler(BaseLLMHandler):
             except ProcessLookupError:
                 if hasattr(process, "terminate"):
                     process.terminate()
-            except Exception:
+            except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                 if hasattr(process, "terminate"):
                     process.terminate()
         try:
@@ -143,13 +177,13 @@ class LlamaCppHandler(BaseLLMHandler):
                 try:
                     pgid = await asyncio.to_thread(os.getpgid, process.pid)
                     await asyncio.to_thread(os.killpg, pgid, signal.SIGKILL)
-                except Exception:
+                except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                     if hasattr(process, "kill"):
                         process.kill()
             try:
                 if hasattr(process, "wait"):
                     await process.wait()
-            except Exception:
+            except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                 pass
 
     async def _drain_stream(self, stream, label: str) -> None:
@@ -162,7 +196,7 @@ class LlamaCppHandler(BaseLLMHandler):
                     break
         except asyncio.CancelledError:
             return
-        except Exception:
+        except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
             # Best-effort drain; ignore errors
             return
 
@@ -488,7 +522,7 @@ class LlamaCppHandler(BaseLLMHandler):
                 stdout_redir = log_file_handle
                 stderr_redir = log_file_handle
                 self.logger.info(f"Llama.cpp server logs will be written to: {self.config.log_output_file}")
-            except Exception as e:
+            except _LLAMACPP_NONCRITICAL_EXCEPTIONS as e:
                 self.logger.error(f"Could not open log file {self.config.log_output_file}: {e}. Logging to PIPE.")
 
         try:
@@ -532,7 +566,7 @@ class LlamaCppHandler(BaseLLMHandler):
                     if process.returncode is None:
                         # Stop server if it started but not ready
                         await self._terminate_process(process)
-                except Exception:
+                except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                     pass
                 self.metrics["start_errors"] += 1
                 raise ServerError(f"Llama.cpp server failed to start. Stderr: {stderr_output}")
@@ -589,7 +623,7 @@ class LlamaCppHandler(BaseLLMHandler):
                     except ProcessLookupError:
                         self.logger.warning(f"Process {pid} not found for SIGTERM, likely already terminated.")
                         process_to_stop.terminate()  # Fallback
-                    except Exception as e_pg:
+                    except _LLAMACPP_NONCRITICAL_EXCEPTIONS as e_pg:
                         self.logger.warning(
                             f"Failed to send SIGTERM to process group {pid}: {e_pg}. Falling back to PID.")
                         process_to_stop.terminate()
@@ -604,7 +638,7 @@ class LlamaCppHandler(BaseLLMHandler):
                         if hasattr(process_to_stop, "send_signal"):
                             try:
                                 process_to_stop.send_signal(signal.CTRL_BREAK_EVENT)
-                            except Exception:
+                            except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                                 pass
                         if hasattr(process_to_stop, "terminate"):
                             process_to_stop.terminate()
@@ -625,7 +659,7 @@ class LlamaCppHandler(BaseLLMHandler):
                             except ProcessLookupError:
                                 self.logger.warning(
                                     f"PID {pid} already exited when attempting SIGKILL fallback.")
-                            except Exception as e_killpid:
+                            except _LLAMACPP_NONCRITICAL_EXCEPTIONS as e_killpid:
                                 self.logger.debug(
                                     f"os.kill fallback failed for PID {pid}: {e_killpid}; checking for process.kill()"
                                 )
@@ -635,7 +669,7 @@ class LlamaCppHandler(BaseLLMHandler):
                                         self.logger.info(
                                             f"Invoked process.kill() for PID {pid} (final fallback)."
                                         )
-                                    except Exception as e_pkill:
+                                    except _LLAMACPP_NONCRITICAL_EXCEPTIONS as e_pkill:
                                         self.logger.warning(
                                             f"process.kill() failed for PID {pid}: {e_pkill}")
                     await process_to_stop.wait()
@@ -823,7 +857,7 @@ class LlamaCppHandler(BaseLLMHandler):
                             yield openai_delta_chunk(l)
                     if not done_sent:
                         yield sse_done()
-            except Exception as e:
+            except _LLAMACPP_NONCRITICAL_EXCEPTIONS as e:
                 status = http_utils.get_http_status_from_exception(e)
                 if status is not None:
                     msg = http_utils.get_http_error_text(e)
@@ -860,7 +894,7 @@ class LlamaCppHandler(BaseLLMHandler):
                     except ProcessLookupError:
                         if hasattr(proc, "terminate"):
                             proc.terminate()
-                    except Exception:
+                    except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                         if hasattr(proc, "terminate"):
                             proc.terminate()
 
@@ -873,14 +907,14 @@ class LlamaCppHandler(BaseLLMHandler):
                     # No running event loop - best effort, OS will reap eventually
                     pass
 
-            except Exception:
+            except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                 # Best-effort kill if needed
                 if proc.returncode is None:
                     if platform.system() == "Windows":
                         if hasattr(proc, "kill"):
                             try:
                                 proc.kill()
-                            except Exception:
+                            except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                                 pass
                     else:
                         try:
@@ -889,12 +923,12 @@ class LlamaCppHandler(BaseLLMHandler):
                             if hasattr(proc, "kill"):
                                 try:
                                     proc.kill()
-                                except Exception:
+                                except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                                     pass
             if self._active_server_log_handle:
                 try:
                     self._active_server_log_handle.close()
-                except Exception:
+                except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                     pass
             self._stop_stream_drainers()
 

@@ -15,6 +15,17 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import (
 )
 from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 
+_ERROR_UTILS_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    json.JSONDecodeError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    re.error,
+)
+
 
 def get_http_status_from_exception(exc: Exception) -> int | None:
     """Best-effort extraction of an HTTP status code from common exception shapes."""
@@ -50,29 +61,29 @@ def get_http_error_text(exc: Exception) -> str:
     if response is not None:
         try:
             text = getattr(response, "text", None)
-        except Exception as response_exc:
+        except _ERROR_UTILS_NONCRITICAL_EXCEPTIONS as response_exc:
             text = None
             if getattr(response_exc.__class__, "__name__", "") == "ResponseNotRead":
                 try:
                     response.read()
                     text = getattr(response, "text", None)
-                except Exception:
+                except _ERROR_UTILS_NONCRITICAL_EXCEPTIONS:
                     text = None
         if text is None:
             try:
                 text = getattr(response, "content", None)
-            except Exception as response_exc:
+            except _ERROR_UTILS_NONCRITICAL_EXCEPTIONS as response_exc:
                 text = None
                 if getattr(response_exc.__class__, "__name__", "") == "ResponseNotRead":
                     try:
                         response.read()
                         text = getattr(response, "content", None)
-                    except Exception:
+                    except _ERROR_UTILS_NONCRITICAL_EXCEPTIONS:
                         text = None
             if isinstance(text, (bytes, bytearray)):
                 try:
                     text = text.decode("utf-8", errors="replace")
-                except Exception:
+                except _ERROR_UTILS_NONCRITICAL_EXCEPTIONS:
                     text = None
         if text is not None:
             return str(text)
@@ -90,7 +101,7 @@ def _redact_sensitive_text(text: str) -> str:
         text = re.sub(r"(?i)(bearer)\s+[^\s,;]+", r"\1 [REDACTED]", text)
         text = re.sub(r'(?i)("api[_ -]?key"\s*:\s*)"[^"]+"', r'\1"[REDACTED]"', text)
         text = re.sub(r"(?i)(api[_ -]?key\s*[:=]\s*)([^\s,;]+)", r"\1[REDACTED]", text)
-    except Exception:
+    except _ERROR_UTILS_NONCRITICAL_EXCEPTIONS:
         return text
     return text
 
@@ -98,7 +109,7 @@ def _redact_sensitive_text(text: str) -> str:
 def log_http_400_body(provider: str, exc: Exception, parsed_body: Any = None, max_chars: int = 2000) -> None:
     try:
         status = get_http_status_from_exception(exc)
-    except Exception:
+    except _ERROR_UTILS_NONCRITICAL_EXCEPTIONS:
         status = None
     if status != 400:
         return
@@ -111,17 +122,17 @@ def log_http_400_body(provider: str, exc: Exception, parsed_body: Any = None, ma
         if resp is not None:
             try:
                 body_json = resp.json()
-            except Exception:
+            except _ERROR_UTILS_NONCRITICAL_EXCEPTIONS:
                 body_json = None
     if body_json is not None:
         try:
             body_text = json.dumps(body_json, ensure_ascii=True)
-        except Exception:
+        except _ERROR_UTILS_NONCRITICAL_EXCEPTIONS:
             body_text = str(body_json)
     else:
         try:
             body_text = get_http_error_text(exc)
-        except Exception:
+        except _ERROR_UTILS_NONCRITICAL_EXCEPTIONS:
             body_text = None
     if not body_text:
         return
@@ -149,7 +160,7 @@ def raise_chat_error_from_http(
     if response is not None:
         try:
             parsed_body = response.json()
-        except Exception:
+        except _ERROR_UTILS_NONCRITICAL_EXCEPTIONS:
             parsed_body = None
         log_http_400_body(provider, exc, parsed_body)
         if isinstance(parsed_body, dict):

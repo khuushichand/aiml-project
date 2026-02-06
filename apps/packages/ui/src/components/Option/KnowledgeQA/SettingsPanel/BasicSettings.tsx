@@ -63,6 +63,7 @@ export function BasicSettings() {
             { value: "notes", label: "Notes" },
             { value: "characters", label: "Character Cards" },
             { value: "chats", label: "Chat History" },
+            { value: "kanban", label: "Kanban" },
           ].map((source) => (
             <label key={source.value} className="flex items-center gap-2">
               <input

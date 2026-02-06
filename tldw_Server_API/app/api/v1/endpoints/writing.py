@@ -63,12 +63,35 @@ from tldw_Server_API.app.core.LLM_Calls.capability_registry import get_allowed_f
 
 router = APIRouter()
 
+_WRITING_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    CharactersRAGDBError,
+    ConflictError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    InputError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TokenizerUnavailable,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
+
 
 async def _enforce_rate_limit(rate_limiter: RateLimiter, user_id: int, scope: str) -> None:
     """Enforce a rate limit for the given user and scope."""
     try:
         allowed, meta = await rate_limiter.check_user_rate_limit(int(user_id), scope)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         retry_after = 60
         logger.exception(
             "Rate limiter check failed for user_id={} scope={}",
@@ -121,7 +144,7 @@ def _resolve_tiktoken_encoding(model: str) -> Any:
     """Resolve a tiktoken encoding for the given model name."""
     try:
         import tiktoken  # type: ignore
-    except Exception as exc:  # pragma: no cover - dependency missing
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - dependency missing
         raise TokenizerUnavailable("Tokenizer library unavailable") from exc
     try:
         return tiktoken.encoding_for_model(model)
@@ -408,7 +431,7 @@ def _run_wordcloud_job(
             meta=meta_payload,
             error=None,
         )
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         logger.exception("Wordcloud job failed for {}: {}", wordcloud_id, exc)
         try:
             db.set_writing_wordcloud_result(
@@ -416,7 +439,7 @@ def _run_wordcloud_job(
                 status=WORDCLOUD_STATUS_FAILED,
                 error=str(exc),
             )
-        except Exception:
+        except _WRITING_NONCRITICAL_EXCEPTIONS:
             logger.exception("Failed to persist wordcloud failure for {}", wordcloud_id)
 
 
@@ -566,7 +589,7 @@ async def list_writing_sessions(
         total = db.count_writing_sessions()
         items = [WritingSessionListItem(**item) for item in sessions]
         return WritingSessionListResponse(sessions=items, total=total)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing sessions")
 
 
@@ -602,7 +625,7 @@ async def create_writing_session(
             raise CharactersRAGDBError("Session created but could not be retrieved")
         session["payload"] = session.get("payload") or {}
         return WritingSessionResponse(**session)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing session")
 
 
@@ -627,7 +650,7 @@ async def get_writing_session(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
         session["payload"] = session.get("payload") or {}
         return WritingSessionResponse(**session)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing session")
 
 
@@ -668,7 +691,7 @@ async def update_writing_session(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
         session["payload"] = session.get("payload") or {}
         return WritingSessionResponse(**session)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing session")
 
 
@@ -691,7 +714,7 @@ async def delete_writing_session(
     try:
         db.soft_delete_writing_session(session_id, expected_version)
         return None
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing session")
 
 
@@ -715,7 +738,7 @@ async def clone_writing_session(
         cloned = db.clone_writing_session(session_id, name=payload.name)
         cloned["payload"] = cloned.get("payload") or {}
         return WritingSessionResponse(**cloned)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing session")
 
 
@@ -744,7 +767,7 @@ async def list_writing_templates(
             templates=[WritingTemplateResponse(**tmpl) for tmpl in templates],
             total=total,
         )
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing templates")
 
 
@@ -780,7 +803,7 @@ async def create_writing_template(
             raise CharactersRAGDBError("Template created but could not be retrieved")
         template["payload"] = template.get("payload") or {}
         return WritingTemplateResponse(**template)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing template")
 
 
@@ -805,7 +828,7 @@ async def get_writing_template(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
         template["payload"] = template.get("payload") or {}
         return WritingTemplateResponse(**template)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing template")
 
 
@@ -849,7 +872,7 @@ async def update_writing_template(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
         template["payload"] = template.get("payload") or {}
         return WritingTemplateResponse(**template)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing template")
 
 
@@ -872,7 +895,7 @@ async def delete_writing_template(
     try:
         db.soft_delete_writing_template(name, expected_version)
         return None
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing template")
 
 
@@ -901,7 +924,7 @@ async def list_writing_themes(
             themes=[WritingThemeResponse(**theme) for theme in themes],
             total=total,
         )
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing themes")
 
 
@@ -939,7 +962,7 @@ async def create_writing_theme(
             raise CharactersRAGDBError("Theme created but could not be retrieved")
         _normalize_theme_response(theme)
         return WritingThemeResponse(**theme)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing theme")
 
 
@@ -964,7 +987,7 @@ async def get_writing_theme(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Theme not found")
         _normalize_theme_response(theme)
         return WritingThemeResponse(**theme)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing theme")
 
 
@@ -1012,7 +1035,7 @@ async def update_writing_theme(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Theme not found")
         _normalize_theme_response(theme)
         return WritingThemeResponse(**theme)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing theme")
 
 
@@ -1035,7 +1058,7 @@ async def delete_writing_theme(
     try:
         db.soft_delete_writing_theme(name, expected_version)
         return None
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing theme")
 
 
@@ -1133,7 +1156,7 @@ async def create_wordcloud(
 
     try:
         existing = db.get_writing_wordcloud(cache_key)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing wordcloud")
 
     if existing:
@@ -1154,7 +1177,7 @@ async def create_wordcloud(
             input_chars=len(text),
             status=WORDCLOUD_STATUS_QUEUED,
         )
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing wordcloud")
 
     if _is_test_mode():
@@ -1163,7 +1186,7 @@ async def create_wordcloud(
             refreshed = db.get_writing_wordcloud(cache_key)
             if refreshed:
                 return _build_wordcloud_response_from_row(refreshed, cached=False)
-        except Exception as exc:
+        except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
             _handle_db_errors(exc, "writing wordcloud")
         return WritingWordcloudResponse(id=cache_key, status=WORDCLOUD_STATUS_FAILED, error="Wordcloud job failed")
 
@@ -1194,5 +1217,5 @@ async def get_wordcloud(
         return _build_wordcloud_response_from_row(existing, cached=False)
     except HTTPException:
         raise
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing wordcloud")

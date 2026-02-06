@@ -16,6 +16,19 @@ type UseClearChatOptions = {
   textareaRef?: React.RefObject<HTMLTextAreaElement | null>
 }
 
+type ResettableChatBase = {
+  setMessages: (messagesOrUpdater: unknown) => void
+  setHistory: (historyOrUpdater: unknown) => void
+  setHistoryId: (
+    historyId: string | null,
+    options?: { preserveServerChatId?: boolean }
+  ) => void
+  setIsFirstMessage: (isFirstMessage: boolean) => void
+  setIsLoading: (isLoading: boolean) => void
+  setIsProcessing: (isProcessing: boolean) => void
+  setStreaming: (streaming: boolean) => void
+}
+
 export const useClearChat = ({ textareaRef }: UseClearChatOptions = {}) => {
   const navigate = useNavigate()
   const currentChatModelSettings = useStoreChatModelSettings()
@@ -23,6 +36,15 @@ export const useClearChat = ({ textareaRef }: UseClearChatOptions = {}) => {
 
   const primaryBase = useChatBaseState(useStoreMessageOption)
   const secondaryBase = useChatBaseState(useStoreMessage)
+  const resolveClearChatPath = React.useCallback(() => {
+    if (typeof window !== "undefined") {
+      const hostPath = window.location.pathname.toLowerCase()
+      if (hostPath.endsWith("sidepanel.html")) {
+        return "/"
+      }
+    }
+    return "/chat"
+  }, [])
   const {
     setServerChatId,
     setServerChatVersion,
@@ -71,8 +93,8 @@ export const useClearChat = ({ textareaRef }: UseClearChatOptions = {}) => {
       Modal.destroyAll()
       cleanupAntOverlays()
     }
-    navigate("/")
-    const resetBaseState = (base: typeof primaryBase) => {
+    navigate(resolveClearChatPath())
+    const resetBaseState = (base: ResettableChatBase) => {
       base.setMessages([])
       base.setHistory([])
       base.setHistoryId(null)
@@ -121,6 +143,7 @@ export const useClearChat = ({ textareaRef }: UseClearChatOptions = {}) => {
     currentChatModelSettings,
     defaultInternetSearchOn,
     navigate,
+    resolveClearChatPath,
     setActionInfo,
     setCompareMode,
     setCompareSelectedModels,

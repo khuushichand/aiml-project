@@ -208,9 +208,11 @@ class MetricsCollector:
         self,
         name: str,
         labels: Optional[dict[str, str]] = None,
-        percentiles: list[float] = [50, 75, 90, 95, 99]
+        percentiles: list[float] | None = None
     ) -> dict[float, float]:
         """Get percentiles for histogram metric."""
+        if percentiles is None:
+            percentiles = [50, 75, 90, 95, 99]
         key = self._get_metric_key(name, labels)
 
         if key not in self.histograms or not self.histograms[key]:

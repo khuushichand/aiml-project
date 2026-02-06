@@ -12,11 +12,19 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Resource_Governance.policy_admin import AuthNZPolicyAdmin
 
+_RG_SEED_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    yaml.YAMLError,
+)
+
 
 def _resolve_policy_path(path: Path) -> Path:
     try:
         resolved = path.expanduser()
-    except Exception as exc:
+    except _RG_SEED_NONCRITICAL_EXCEPTIONS as exc:
         logger.opt(exception=exc).debug("Failed to expand RG policy path: {}", path)
         return path
     if resolved.exists():
@@ -26,7 +34,7 @@ def _resolve_policy_path(path: Path) -> Path:
     if not resolved.is_absolute():
         try:
             candidates.append((base / resolved).resolve())
-        except Exception as exc:
+        except _RG_SEED_NONCRITICAL_EXCEPTIONS as exc:
             logger.opt(exception=exc).debug("Failed to resolve RG policy candidate from {}", resolved)
     name = resolved.name or "resource_governor_policies.yaml"
     candidates.append(base / "Config_Files" / name)
@@ -36,7 +44,7 @@ def _resolve_policy_path(path: Path) -> Path:
             if candidate.exists():
                 logger.info("RG policy file not found at {}; using {}", resolved, candidate)
                 return candidate
-        except Exception as exc:
+        except _RG_SEED_NONCRITICAL_EXCEPTIONS as exc:
             logger.opt(exception=exc).debug("Failed to stat RG policy candidate {}", candidate)
     return resolved
 
@@ -184,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
                 seed_all=bool(args.seed_all),
             )
         )
-    except Exception as exc:
+    except _RG_SEED_NONCRITICAL_EXCEPTIONS as exc:
         print(f"ERROR: failed to seed RG DB policies: {exc}")
         return 1
 

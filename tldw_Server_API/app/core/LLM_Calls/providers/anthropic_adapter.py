@@ -19,6 +19,39 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
 
 from .base import ChatProvider
 
+_ANTHROPIC_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EOFError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
+try:
+    import httpx as _httpx  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    _httpx = None  # type: ignore
+else:
+    _ANTHROPIC_NONCRITICAL_EXCEPTIONS = _ANTHROPIC_NONCRITICAL_EXCEPTIONS + (
+        _httpx.DecodingError,
+        _httpx.HTTPError,
+        _httpx.ProtocolError,
+        _httpx.TimeoutException,
+        _httpx.TransportError,
+    )
+
 
 def _prefer_httpx_in_tests() -> bool:
     return bool(os.getenv("PYTEST_CURRENT_TEST"))
@@ -66,7 +99,7 @@ class AnthropicAdapter(ChatProvider):
             base = anth_cfg.get("api_base_url")
             if isinstance(base, str) and base.strip():
                 return base.strip()
-        except Exception:
+        except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
             pass
         return self._anthropic_base_url()
 
@@ -80,16 +113,16 @@ class AnthropicAdapter(ChatProvider):
                 # Accept int/float/str that can be cast to float
                 try:
                     return float(t)
-                except Exception:
+                except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                     pass
-        except Exception:
+        except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
             pass
         if fallback is not None:
             return float(fallback)
         # Use adapter capability default
         try:
             return float(self.capabilities().get("default_timeout_seconds", 60))
-        except Exception:
+        except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
             return 60.0
 
     def _headers(self, api_key: str | None) -> dict[str, str]:
@@ -117,7 +150,7 @@ class AnthropicAdapter(ChatProvider):
             if ";base64" in mime:
                 mime = mime.replace(";base64", "").strip()
             return mime, b64
-        except Exception:
+        except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
             return None
 
     def _anthropic_image_source_from_part(self, image_url: dict[str, Any]) -> dict[str, Any] | None:
@@ -157,7 +190,7 @@ class AnthropicAdapter(ChatProvider):
                     return "".join(text_parts)
             try:
                 return json.dumps(value, ensure_ascii=True)
-            except Exception:
+            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                 return str(value)
 
         for msg in raw_messages:
@@ -210,7 +243,7 @@ class AnthropicAdapter(ChatProvider):
                         if isinstance(args, str):
                             try:
                                 input_obj = json.loads(args)
-                            except Exception:
+                            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                                 input_obj = args
                         elif args is not None:
                             input_obj = args
@@ -268,7 +301,7 @@ class AnthropicAdapter(ChatProvider):
                             "description": desc,
                             "input_schema": schema,
                         })
-                except Exception:
+                except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                     continue
             # Only include tools if at least one valid entry exists.
             # Valid means function name is a non-empty string; malformed entries are skipped.
@@ -287,7 +320,7 @@ class AnthropicAdapter(ChatProvider):
                     name = tool_choice["function"].get("name")
                     if name:
                         payload["tool_choice"] = {"type": "tool", "name": str(name)}
-            except Exception:
+            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                 pass
         return payload
 
@@ -310,7 +343,7 @@ class AnthropicAdapter(ChatProvider):
                     name = p.get("name") or ""
                     try:
                         args = __import__("json").dumps(p.get("input", {}))
-                    except Exception:
+                    except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                         args = str(p.get("input"))
                     tool_calls.append({
                         "id": tool_id,
@@ -363,7 +396,7 @@ class AnthropicAdapter(ChatProvider):
                     resp.raise_for_status()
                     data = resp.json()
                     return self._normalize_to_openai_shape(data)
-            except Exception as e:
+            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS as e:
                 raise self.normalize_error(e)
         # If native HTTP is explicitly disabled, raise a clear error rather than
         # delegating to legacy paths to avoid recursion and mixed behaviors.
@@ -432,7 +465,7 @@ class AnthropicAdapter(ChatProvider):
                                 continue
                             try:
                                 ev = __import__("json").loads(event_data)
-                            except Exception:
+                            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                                 continue
                             ev_type = ev.get("type")
                             if ev_type == "content_block_start":
@@ -446,7 +479,7 @@ class AnthropicAdapter(ChatProvider):
                                     if initial_input is not None:
                                         try:
                                             buf = __import__("json").dumps(initial_input)
-                                        except Exception:
+                                        except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                                             buf = str(initial_input)
                                     tool_states[idx] = {"id": tool_id, "name": tool_name, "buffer": buf, "position": tool_counter}
                                     tool_counter += 1
@@ -486,7 +519,7 @@ class AnthropicAdapter(ChatProvider):
                                     if "input" in delta and delta["input"] is not None:
                                         try:
                                             st["buffer"] = __import__("json").dumps(delta["input"])
-                                        except Exception:
+                                        except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                                             st["buffer"] = str(delta["input"])
                                     yield self._tool_delta_chunk(
                                         st["position"],
@@ -507,7 +540,7 @@ class AnthropicAdapter(ChatProvider):
                         for tail in finalize_stream(response=resp, done_already=done_sent):
                             yield tail
                 return
-            except Exception as e:
+            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS as e:
                 raise self.normalize_error(e)
         # If native HTTP is explicitly disabled, raise a clear error rather than
         # delegating to legacy paths to avoid recursion and mixed behaviors.
@@ -529,13 +562,13 @@ class AnthropicAdapter(ChatProvider):
                     if stop_event.is_set():
                         break
                     loop.call_soon_threadsafe(queue.put_nowait, item)
-            except Exception as exc:
+            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS as exc:
                 loop.call_soon_threadsafe(queue.put_nowait, exc)
             finally:
                 try:
                     if hasattr(gen, "close"):
                         gen.close()
-                except Exception:
+                except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                     pass
                 loop.call_soon_threadsafe(queue.put_nowait, sentinel)
 
@@ -573,7 +606,7 @@ class AnthropicAdapter(ChatProvider):
             body = None
             try:
                 body = resp.json()
-            except Exception:
+            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                 body = None
             log_http_400_body(self.name, exc, body)
             detail = None

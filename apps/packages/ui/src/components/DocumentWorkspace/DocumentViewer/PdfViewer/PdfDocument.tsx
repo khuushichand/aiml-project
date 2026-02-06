@@ -272,11 +272,14 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
     }
   }, [virtualScrollEnabled, currentPage, virtualPageHeight])
 
-  const handleSingleWheel = useCallback(
-    (event: React.WheelEvent<HTMLDivElement>) => {
-      // Fallback path only when virtual scrolling is disabled (e.g., page count
-      // not yet resolved). This keeps wheel paging from overriding normal scroll.
-      if (viewMode !== "single" || virtualScrollEnabled) return
+  useEffect(() => {
+    // Fallback path only when virtual scrolling is disabled (e.g., page count
+    // not yet resolved). This keeps wheel paging from overriding normal scroll.
+    if (viewMode !== "single" || virtualScrollEnabled) return
+    const container = containerRef.current
+    if (!container) return
+
+    const handleWheel = (event: WheelEvent) => {
       if (totalPageCount <= 1) return
 
       wheelAccumulatorRef.current += event.deltaY
@@ -300,9 +303,18 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
         }
         wheelAccumulatorRef.current = 0
       }
-    },
-    [viewMode, virtualScrollEnabled, totalPageCount, currentPage, onPageChange]
-  )
+    }
+
+    container.addEventListener("wheel", handleWheel, { passive: false })
+    return () => {
+      container.removeEventListener("wheel", handleWheel)
+      if (wheelResetRef.current) {
+        window.clearTimeout(wheelResetRef.current)
+        wheelResetRef.current = null
+      }
+      wheelAccumulatorRef.current = 0
+    }
+  }, [viewMode, virtualScrollEnabled, totalPageCount, currentPage, onPageChange])
 
   useEffect(() => {
     return () => {
@@ -341,7 +353,6 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
       ref={containerRef}
       className="flex h-full min-h-0 w-full flex-col items-center overflow-x-auto overflow-y-auto py-4 px-2 sm:px-4"
       onScroll={virtualScrollEnabled ? handleVirtualScroll : undefined}
-      onWheel={handleSingleWheel}
     >
       {/* Text Selection Popover */}
       {selection && selection.text.length > 0 && (

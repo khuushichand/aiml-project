@@ -26,6 +26,27 @@ from tldw_Server_API.cli.utils.output import (
     print_table,
 )
 
+_EVAL_CLI_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    click.ClickException,
+)
+
 
 @click.group()
 def eval_group():
@@ -84,7 +105,7 @@ def geval(ctx, text, summary, provider, model, api_key, save, output_format):
 
         print_success("G-Eval assessment completed successfully")
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("G-Eval assessment failed")
         print_error(f"G-Eval assessment failed: {e}")
         sys.exit(1)
@@ -143,7 +164,7 @@ def rag_eval(ctx, query, context, response, provider, model, api_key, save, outp
 
         print_success("RAG evaluation completed successfully")
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("RAG evaluation failed")
         print_error(f"RAG evaluation failed: {e}")
         sys.exit(1)
@@ -200,7 +221,7 @@ def quality_eval(ctx, text, response, provider, model, api_key, criteria, save, 
 
         print_success("Quality evaluation completed successfully")
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Quality evaluation failed")
         print_error(f"Quality evaluation failed: {e}")
         sys.exit(1)
@@ -261,7 +282,7 @@ def batch_eval(ctx, input_file, output, provider, model, api_key, parallel, outp
 
         print_success(f"Batch evaluation completed: {len(results)} evaluations processed")
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Batch evaluation failed")
         print_error(f"Batch evaluation failed: {e}")
         sys.exit(1)
@@ -316,7 +337,7 @@ def custom_eval(ctx, metric_name, text, prompt, provider, model, api_key, save, 
 
         print_success(f"Custom evaluation '{metric_name}' completed successfully")
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Custom evaluation failed")
         print_error(f"Custom evaluation failed: {e}")
         sys.exit(1)
@@ -349,7 +370,7 @@ def label_choice(ctx, question, labels, context, expected, provider, model, api_
             try:
                 import json as _json
                 mapping_dict = _json.loads(mapping)
-            except Exception as e:
+            except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
                 raise click.ClickException(f"Invalid mapping JSON: {e}")
 
         allowed = [str(l).strip() for l in labels]
@@ -398,7 +419,7 @@ def label_choice(ctx, question, labels, context, expected, provider, model, api_
                 obj = _json.loads(raw)
                 if isinstance(obj, dict):
                     parsed = obj.get('label')
-            except Exception:
+            except _EVAL_CLI_NONCRITICAL_EXCEPTIONS:
                 parsed = None
         if parsed is None:
             up = str(raw).strip().upper()
@@ -444,7 +465,7 @@ def label_choice(ctx, question, labels, context, expected, provider, model, api_
 
         print_success('Label-choice evaluation completed')
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception('Label-choice evaluation failed')
         print_error(f"Label-choice evaluation failed: {e}")
         sys.exit(1)
@@ -477,7 +498,7 @@ def nli_factcheck(ctx, claim, evidence, labels, expected, provider, model, api_k
             try:
                 import json as _json
                 mapping_dict = _json.loads(mapping)
-            except Exception as e:
+            except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
                 raise click.ClickException(f"Invalid mapping JSON: {e}")
 
         allowed = [str(l).strip() for l in labels] if labels else ["SUPPORTED", "REFUTED", "NEI"]
@@ -525,7 +546,7 @@ def nli_factcheck(ctx, claim, evidence, labels, expected, provider, model, api_k
                 obj = _json.loads(raw)
                 if isinstance(obj, dict):
                     parsed = obj.get('label')
-            except Exception:
+            except _EVAL_CLI_NONCRITICAL_EXCEPTIONS:
                 parsed = None
         if parsed is None:
             up = str(raw).strip().upper()
@@ -584,7 +605,7 @@ def nli_factcheck(ctx, claim, evidence, labels, expected, provider, model, api_k
 
         print_success('NLI fact-check evaluation completed')
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception('NLI fact-check evaluation failed')
         print_error(f"NLI fact-check evaluation failed: {e}")
         sys.exit(1)
@@ -599,7 +620,7 @@ def _load_text_content(input_str: str) -> str:
 
         try:
             return file_path.read_text(encoding='utf-8')
-        except Exception as e:
+        except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
             raise click.ClickException(f"Failed to read file {file_path}: {e}")
     else:
         return input_str
@@ -633,7 +654,7 @@ def _run_geval_assessment(text: str, summary: str, provider: str, model: str,
             'details': result
         }
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"G-Eval execution failed: {e}")
         raise
 
@@ -667,7 +688,7 @@ def _run_rag_evaluation(query: str, context: str, response: str, provider: str,
             'details': result
         }
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"RAG evaluation execution failed: {e}")
         raise
 
@@ -702,7 +723,7 @@ def _run_quality_evaluation(text: str, response: str, provider: str, model: str,
             'details': result
         }
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Quality evaluation execution failed: {e}")
         raise
 
@@ -739,7 +760,7 @@ def _run_custom_evaluation(metric_name: str, text: str, prompt: str, provider: s
             'details': result
         }
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Custom evaluation execution failed: {e}")
         raise
 
@@ -770,7 +791,7 @@ def _load_batch_input(input_file: Path) -> list[dict[str, Any]]:
 
         return batch_data
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         raise click.ClickException(f"Failed to load batch input file: {e}")
 
 
@@ -788,7 +809,7 @@ def _run_batch_evaluation(batch_data: list[dict[str, Any]], default_provider: st
                 try:
                     result = _run_single_evaluation(eval_spec, default_provider, default_model, default_api_key, config)
                     results.append(result)
-                except Exception as e:
+                except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Evaluation {i+1} failed: {e}")
                     results.append({
                         'evaluation_index': i + 1,
@@ -803,7 +824,7 @@ def _run_batch_evaluation(batch_data: list[dict[str, Any]], default_provider: st
             try:
                 result = _run_single_evaluation(eval_spec, default_provider, default_model, default_api_key, config)
                 results.append(result)
-            except Exception as e:
+            except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Evaluation {i+1} failed: {e}")
                 results.append({
                     'evaluation_index': i + 1,
@@ -829,7 +850,7 @@ def _load_items_file(path: Path) -> list[dict[str, Any]]:
                     continue
                 items.append(json.loads(line))
             return items
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         raise click.ClickException(f"Failed to load items file {path}: {e}")
 
 
@@ -874,7 +895,7 @@ def _save_batch_results(results: list[dict[str, Any]], output_file: Path):
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, default=str)
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         raise click.ClickException(f"Failed to save results to {output_file}: {e}")
 
 
@@ -960,7 +981,7 @@ def ocr_eval(ctx, items_file, pdfs, ground_truths_file, ground_truths_pages_file
                     gts = json.loads(Path(ground_truths_file).read_text(encoding='utf-8'))
                     if not isinstance(gts, list):
                         raise click.ClickException('ground-truths-file must be a JSON array of strings')
-                except Exception as e:
+                except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
                     raise click.ClickException(f'Failed to read ground-truths-file: {e}')
             gt_pages_all = None
             if ground_truths_pages_file:
@@ -968,7 +989,7 @@ def ocr_eval(ctx, items_file, pdfs, ground_truths_file, ground_truths_pages_file
                     gt_pages_all = json.loads(Path(ground_truths_pages_file).read_text(encoding='utf-8'))
                     if not isinstance(gt_pages_all, list):
                         gt_pages_all = None
-                except Exception as e:
+                except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
                     raise click.ClickException(f'Failed to read ground-truths-pages-file: {e}')
 
             for idx, p in enumerate(pdfs):
@@ -1027,7 +1048,7 @@ def ocr_eval(ctx, items_file, pdfs, ground_truths_file, ground_truths_pages_file
     except click.ClickException as e:
         print_error(str(e))
         sys.exit(2)
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception('OCR evaluation failed')
         print_error(f'OCR evaluation failed: {e}')
         sys.exit(1)

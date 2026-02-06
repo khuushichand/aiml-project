@@ -168,7 +168,7 @@ export const PlaygroundUserMessageBubble: React.FC<Props> = (props) => {
       <div className="flex w-full flex-wrap items-center justify-end gap-2">
         <div className="flex flex-wrap items-center gap-2">
           {isSystemMessage ? (
-            <span className="inline-flex items-center rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-[10px] font-medium text-warn">
+            <span className="inline-flex items-center rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-xs font-medium text-warn">
               {systemLabel}
             </span>
           ) : (
@@ -177,7 +177,7 @@ export const PlaygroundUserMessageBubble: React.FC<Props> = (props) => {
             </span>
           )}
           {messageTimestamp && (
-            <span className="text-[11px] text-text-muted">
+            <span className="text-xs text-text-muted">
               • {messageTimestamp}
             </span>
           )}
@@ -280,7 +280,7 @@ export const PlaygroundUserMessageBubble: React.FC<Props> = (props) => {
               type="button"
               aria-label={t("moreActions", "More actions") as string}
               title={t("moreActions", "More actions") as string}
-              className={`${overflowChipVisibility} rounded-full border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text-muted transition-colors hover:text-text`}>
+              className={`${overflowChipVisibility} rounded-full border border-border bg-surface2 px-2 py-0.5 text-xs text-text-muted transition-colors hover:text-text`}>
               •••
             </button>
             <div

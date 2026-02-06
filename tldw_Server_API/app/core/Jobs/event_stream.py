@@ -2,12 +2,38 @@ from __future__ import annotations
 
 import json
 import os
+from sqlite3 import Error as SQLiteError
 import time
 from typing import Any
 
 from loguru import logger
 
 from .audit_bridge import submit_job_audit_event
+
+try:
+    import psycopg  # type: ignore
+    _PSYCOPG_EXCEPTIONS: tuple[type[Exception], ...] = (psycopg.Error,)
+except ImportError:
+    _PSYCOPG_EXCEPTIONS = ()
+
+_EVENT_AUDIT_EXCEPTIONS = (
+    ConnectionError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_EVENT_LOG_EXCEPTIONS = (OSError, RuntimeError, TypeError, ValueError)
+_OUTBOX_NONCRITICAL_EXCEPTIONS: tuple[type[Exception], ...] = (
+    ConnectionError,
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+) + _PSYCOPG_EXCEPTIONS
 
 
 def _events_enabled() -> bool:
@@ -22,7 +48,7 @@ def emit_job_event(event: str, *, job: dict[str, Any] | None = None, attrs: dict
     """
     try:
         submit_job_audit_event(event, job=job, attrs=attrs)
-    except Exception:
+    except _EVENT_AUDIT_EXCEPTIONS:
         # Audit integration is best-effort. Errors should never break job flow.
         pass
     # Only skip entirely when neither logging nor outbox are enabled
@@ -38,7 +64,7 @@ def emit_job_event(event: str, *, job: dict[str, Any] | None = None, attrs: dict
     if _events_enabled():
         try:
             logger.bind(job_event=True).info(f"job_event event={event} attrs={meta}")
-        except Exception:
+        except _EVENT_LOG_EXCEPTIONS:
             pass
     # Outbox write (append-only) when enabled
     # Optional soft rate-limit for extremely high churn
@@ -47,7 +73,7 @@ def emit_job_event(event: str, *, job: dict[str, Any] | None = None, attrs: dict
             # Basic rate limiter: drop writes if exceeding JOBS_EVENTS_RATE_LIMIT_HZ
             try:
                 hz = float(os.getenv("JOBS_EVENTS_RATE_LIMIT_HZ", "0") or "0")
-            except Exception:
+            except (TypeError, ValueError):
                 hz = 0.0
             if hz > 0:
                 now = time.time()
@@ -63,8 +89,6 @@ def emit_job_event(event: str, *, job: dict[str, Any] | None = None, attrs: dict
             _db_url = os.getenv("JOBS_DB_URL", "").strip()
             if _db_url.startswith("postgres"):
                 try:
-                    import psycopg  # type: ignore
-
                     from .pg_util import negotiate_pg_dsn
                     _dsn = negotiate_pg_dsn(_db_url)
                     with psycopg.connect(_dsn) as _conn:
@@ -88,7 +112,7 @@ def emit_job_event(event: str, *, job: dict[str, Any] | None = None, attrs: dict
                             )
                             _conn.commit()
                     return
-                except Exception:
+                except _OUTBOX_NONCRITICAL_EXCEPTIONS:
                     # Fall back to JobManager-based path if direct insert fails
                     pass
 
@@ -96,7 +120,7 @@ def emit_job_event(event: str, *, job: dict[str, Any] | None = None, attrs: dict
             # Admin context for outbox writes (RLS bypass)
             try:
                 JobManager.set_rls_context(is_admin=True, domain_allowlist=None, owner_user_id=None)
-            except Exception:
+            except _OUTBOX_NONCRITICAL_EXCEPTIONS:
                 pass
             jm = JobManager()
             conn = jm._connect()
@@ -143,13 +167,13 @@ def emit_job_event(event: str, *, job: dict[str, Any] | None = None, attrs: dict
             finally:
                 try:
                     conn.close()
-                except Exception:
+                except _OUTBOX_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     JobManager.clear_rls_context()
-                except Exception:
+                except _OUTBOX_NONCRITICAL_EXCEPTIONS:
                     pass
-    except Exception:
+    except _OUTBOX_NONCRITICAL_EXCEPTIONS:
         # Swallow outbox errors; logging already occurred
         pass
 

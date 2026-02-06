@@ -1,8 +1,9 @@
 import React from "react"
-import { Button, Drawer, Form, Input, Select, Collapse, Tooltip, Space, Tag } from "antd"
+import { Alert, Button, Drawer, Form, Input, Select, Collapse, Tooltip, Space, Tag } from "antd"
 import { useTranslation } from "react-i18next"
 import { ChevronDown, ChevronUp, Info, Cloud, HardDrive, Link2, Unlink } from "lucide-react"
 import type { PromptSyncStatus, PromptSourceSystem } from "@/db/dexie/types"
+import { useFormDraft, formatDraftAge } from "@/hooks/useFormDraft"
 
 interface PromptDrawerProps {
   open: boolean
@@ -46,6 +47,14 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
   const [showSystemHelp, setShowSystemHelp] = React.useState(false)
   const [showUserHelp, setShowUserHelp] = React.useState(false)
 
+  // Draft auto-save
+  const { hasDraft, draftData, saveDraft, clearDraft, applyDraft, dismissDraft } = useFormDraft({
+    storageKey: "tldw-prompt-drawer-draft",
+    formType: mode,
+    editId: initialValues?.name,
+    autoSaveInterval: 30000
+  })
+
   // Check if prompt is synced
   const isSynced = initialValues?.serverId != null
   const syncStatus = initialValues?.syncStatus || "local"
@@ -59,7 +68,21 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
     }
   }, [open, initialValues, mode, form])
 
+  // Auto-save on form value changes
+  React.useEffect(() => {
+    if (!open) return
+    const interval = setInterval(() => {
+      const values = form.getFieldsValue()
+      const hasContent = values.name || values.system_prompt || values.user_prompt
+      if (hasContent) {
+        saveDraft(values)
+      }
+    }, 30000)
+    return () => clearInterval(interval)
+  }, [open, form, saveDraft])
+
   const handleFinish = (values: any) => {
+    clearDraft()
     onSubmit(values)
   }
 
@@ -236,6 +259,38 @@ export const PromptDrawer: React.FC<PromptDrawerProps> = ({
         onFinish={handleFinish}
         initialValues={{ keywords: [] }}
       >
+        {/* Draft recovery banner */}
+        {hasDraft && draftData && (
+          <Alert
+            type="info"
+            showIcon
+            className="mb-4"
+            message={t("managePrompts.drawer.draftRecovered", {
+              defaultValue: "Unsaved draft found ({{age}})",
+              age: formatDraftAge(draftData.savedAt)
+            })}
+            action={
+              <Space>
+                <Button
+                  size="small"
+                  type="primary"
+                  onClick={() => {
+                    const recovered = applyDraft()
+                    if (recovered) {
+                      form.setFieldsValue(recovered)
+                    }
+                  }}
+                >
+                  {t("common:restore", { defaultValue: "Restore" })}
+                </Button>
+                <Button size="small" onClick={dismissDraft}>
+                  {t("common:dismiss", { defaultValue: "Dismiss" })}
+                </Button>
+              </Space>
+            }
+          />
+        )}
+
         {/* Section: Identity */}
         <div className="mb-6">
           <h3 className="text-sm font-medium text-text-muted mb-3 flex items-center gap-2">

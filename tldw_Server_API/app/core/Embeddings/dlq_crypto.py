@@ -8,11 +8,24 @@ Falls back to base64 encoding when crypto is unavailable (marked alg=none).
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import os
 from typing import Any
 
 from loguru import logger
+
+try:
+    from cryptography.exceptions import InvalidTag  # type: ignore
+
+    _DECRYPT_NONCRITICAL_EXCEPTIONS: tuple[type[Exception], ...] = (
+        InvalidTag,
+        TypeError,
+        ValueError,
+        binascii.Error,
+    )
+except ImportError:
+    _DECRYPT_NONCRITICAL_EXCEPTIONS = (TypeError, ValueError, binascii.Error)
 
 _SCRYPT_PARAMS = {
     "n": 2**14,
@@ -54,7 +67,7 @@ def _derive_key_from_passphrase(passphrase: str, salt: bytes) -> tuple[bytes, st
 def _aesgcm_encrypt(plaintext: bytes, key: bytes) -> dict[str, str]:
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # type: ignore
-    except Exception:
+    except ImportError:
         # Fallback to base64-only marker
         return {"alg": "none", "b64": base64.b64encode(plaintext).decode("utf-8")}
     aesgcm = AESGCM(key)
@@ -70,12 +83,12 @@ def _aesgcm_encrypt(plaintext: bytes, key: bytes) -> dict[str, str]:
 def _aesgcm_decrypt(obj: dict[str, str], key: bytes) -> bytes | None:
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # type: ignore
-    except Exception:
+    except ImportError:
         # Fallback: base64-only marker
         if obj.get("alg") == "none" and obj.get("b64"):
             try:
                 return base64.b64decode(obj.get("b64") or "")
-            except Exception:
+            except (TypeError, ValueError, binascii.Error):
                 return None
         return None
     try:
@@ -87,7 +100,7 @@ def _aesgcm_decrypt(obj: dict[str, str], key: bytes) -> bytes | None:
         ct = base64.b64decode(obj.get("ct") or "")
         aesgcm = AESGCM(key)
         return aesgcm.decrypt(nonce, ct, associated_data=None)
-    except Exception:
+    except _DECRYPT_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -110,7 +123,7 @@ def encrypt_payload_if_configured(payload_obj: dict[str, Any]) -> str | None:
                 obj["salt"] = base64.b64encode(salt).decode("utf-8")
                 obj["kdf_params"] = _SCRYPT_PARAMS
         return json.dumps(obj)
-    except Exception:
+    except (MemoryError, OSError, TypeError, ValueError):
         return None
 
 
@@ -120,7 +133,7 @@ def decrypt_payload_if_present(enc_json: str | None) -> dict[str, Any] | None:
         return None
     try:
         obj = json.loads(enc_json)
-    except Exception:
+    except (TypeError, ValueError, json.JSONDecodeError):
         return None
     key_str = os.getenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY")
     if not key_str:
@@ -156,5 +169,14 @@ def decrypt_payload_if_present(enc_json: str | None) -> dict[str, Any] | None:
         if raw is None:
             return None
         return json.loads(raw.decode("utf-8"))
-    except Exception:
+    except (
+        AttributeError,
+        MemoryError,
+        OSError,
+        TypeError,
+        UnicodeDecodeError,
+        ValueError,
+        json.JSONDecodeError,
+        binascii.Error,
+    ):
         return None

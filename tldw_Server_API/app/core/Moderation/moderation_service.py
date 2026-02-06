@@ -864,7 +864,7 @@ class ModerationService:
                 if limit_int <= 0:
                     limit_int = 0
                 if len(redacted) <= self._max_scan_chars:
-                    redacted = pat.sub(lambda _m: replacement, redacted, count=limit_int)
+                    redacted = pat.sub(lambda _m, _r=replacement: _r, redacted, count=limit_int)
                 else:
                     matches = self._collect_rule_matches(redacted, pat)
                     if matches:
@@ -901,7 +901,7 @@ class ModerationService:
                 if limit_int <= 0:
                     limit_int = 0
                 if len(redacted) <= self._max_scan_chars:
-                    redacted, count = pat.subn(lambda _m: replacement, redacted, count=limit_int)
+                    redacted, count = pat.subn(lambda _m, _r=replacement: _r, redacted, count=limit_int)
                 else:
                     matches = self._collect_rule_matches(redacted, pat)
                     count = len(matches)

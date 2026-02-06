@@ -22,11 +22,20 @@ _STORE_LOCK = Lock()
 _STORE_PATH = Path(get_database_dir()) / "system_ops.json"
 _LOCK_TIMEOUT_SECONDS = float(os.getenv("SYSTEM_OPS_LOCK_TIMEOUT", "5"))
 
+_SYSTEM_OPS_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
 try:
     import fcntl  # type: ignore
 
     _HAS_FCNTL = True
-except Exception:
+except ImportError:
     _HAS_FCNTL = False
 
 
@@ -69,16 +78,16 @@ def _store_file_lock(timeout: float = _LOCK_TIMEOUT_SECONDS):
             if _HAS_FCNTL:
                 try:
                     fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                except Exception:
+                except _SYSTEM_OPS_NONCRITICAL_EXCEPTIONS:
                     pass
             try:
                 os.close(lock_fd)
-            except Exception:
+            except _SYSTEM_OPS_NONCRITICAL_EXCEPTIONS:
                 pass
         if not _HAS_FCNTL:
             try:
                 lock_path.unlink(missing_ok=True)
-            except Exception:
+            except _SYSTEM_OPS_NONCRITICAL_EXCEPTIONS:
                 pass
 
 
@@ -126,7 +135,7 @@ def _load_store() -> dict[str, Any]:
     try:
         raw = _STORE_PATH.read_text(encoding="utf-8")
         data = json.loads(raw) if raw.strip() else {}
-    except Exception as exc:
+    except _SYSTEM_OPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning("System ops store unreadable: {}", exc)
         return _default_store()
     if not isinstance(data, dict):

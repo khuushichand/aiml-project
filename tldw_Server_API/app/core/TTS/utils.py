@@ -63,19 +63,19 @@ def estimate_max_new_tokens(
     """Estimate a safe max_new_tokens based on text length."""
     try:
         length = len(text or "")
-    except Exception:
+    except (TypeError, ValueError):
         length = 0
     try:
         est = math.ceil(length * float(tokens_per_char) * float(safety))
-    except Exception:
+    except (OverflowError, TypeError, ValueError):
         est = min_tokens
     try:
         min_tokens = int(min_tokens)
-    except Exception:
+    except (OverflowError, TypeError, ValueError):
         min_tokens = 0
     try:
         max_cap = int(max_cap)
-    except Exception:
+    except (OverflowError, TypeError, ValueError):
         max_cap = 4096
     if max_cap <= 0:
         max_cap = 4096
@@ -167,7 +167,7 @@ def _truncate_segments_payload(payload: dict[str, Any], *, max_bytes: int) -> di
     def _size_bytes(obj: dict[str, Any]) -> int:
         try:
             return len(json.dumps(obj, separators=(",", ":"), ensure_ascii=True).encode("utf-8"))
-        except Exception:
+        except (OverflowError, TypeError, UnicodeError, ValueError):
             return max_bytes + 1
 
     if _size_bytes(payload) <= max_bytes:

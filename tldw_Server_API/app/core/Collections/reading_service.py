@@ -14,6 +14,11 @@ from tldw_Server_API.app.core.Collections.embedding_queue import enqueue_embeddi
 from tldw_Server_API.app.core.Collections.reading_importers import ReadingImportItem, normalize_import_items
 from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncate_text, word_count
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase, ContentItemRow
+from tldw_Server_API.app.core.exceptions import (
+    EgressPolicyError,
+    NetworkError,
+    RetryExhaustedError,
+)
 from tldw_Server_API.app.core.http_client import afetch
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
     resolve_default_transcription_model,
@@ -27,6 +32,27 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
 from tldw_Server_API.app.core.Web_Scraping.url_utils import normalize_for_crawl
 
 READING_DEFAULT_STATUS = "saved"
+
+_READING_SERVICE_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EgressPolicyError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    NetworkError,
+    OSError,
+    PermissionError,
+    RetryExhaustedError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
 
 
 def _contains_html_tag(raw: str) -> bool:
@@ -78,7 +104,7 @@ class ReadingService:
     def _normalize_url(value: str, source: str) -> str:
         try:
             normalized = normalize_for_crawl(value, source)
-        except Exception:
+        except _READING_SERVICE_NONCRITICAL_EXCEPTIONS:
             return value
         return normalized or value
 
@@ -93,13 +119,13 @@ class ReadingService:
                 if inspect.isawaitable(result):
                     await result
                 return
-            except Exception:
+            except _READING_SERVICE_NONCRITICAL_EXCEPTIONS:
                 return
         close = getattr(resp, "close", None)
         if callable(close):
             try:
                 close()
-            except Exception:
+            except _READING_SERVICE_NONCRITICAL_EXCEPTIONS:
                 return
 
     @staticmethod
@@ -110,14 +136,14 @@ class ReadingService:
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
             from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import convert_html_to_markdown
-        except Exception:
+        except _READING_SERVICE_NONCRITICAL_EXCEPTIONS:
             return raw, None
         try:
             validator = FileValidator()
             sanitized_html = validator.sanitize_html_content(raw)
             text = convert_html_to_markdown(sanitized_html)
             return text, sanitized_html
-        except Exception:
+        except _READING_SERVICE_NONCRITICAL_EXCEPTIONS:
             return raw, None
 
     @staticmethod
@@ -154,7 +180,7 @@ class ReadingService:
             resolved_url = str(getattr(resp, "url", "")) or url
             if isinstance(status_code, int) and status_code >= 400:
                 error = f"head_status_{status_code}"
-        except Exception as exc:
+        except _READING_SERVICE_NONCRITICAL_EXCEPTIONS as exc:
             error = str(exc)
         finally:
             await self._close_response(resp)
@@ -171,7 +197,7 @@ class ReadingService:
                     content_type=content_type or "",
                 )
                 _enforce_max_bytes_from_headers(url, content_length, max_bytes)
-            except Exception as exc:
+            except _READING_SERVICE_NONCRITICAL_EXCEPTIONS as exc:
                 error = str(exc)
                 size_exceeded = True
 
@@ -219,7 +245,7 @@ class ReadingService:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
                 process_document_like_item,
             )
-        except Exception as exc:
+        except _READING_SERVICE_NONCRITICAL_EXCEPTIONS as exc:
             return {
                 "url": url,
                 "canonical_url": url,
@@ -260,7 +286,7 @@ class ReadingService:
                     client_id=str(self.user_id),
                     user_id=self.user_id,
                 )
-        except Exception as exc:
+        except _READING_SERVICE_NONCRITICAL_EXCEPTIONS as exc:
             return {
                 "url": url,
                 "canonical_url": url,
@@ -322,7 +348,7 @@ class ReadingService:
                 content_override=content_override,
                 summary_override=summary_override,
             )
-        except Exception as exc:
+        except _READING_SERVICE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Reading article fetch failed for {url}: {exc}")
             article = {
                 "url": url,
@@ -415,7 +441,7 @@ class ReadingService:
                     content=content,
                     metadata=embedding_metadata,
                 )
-            except Exception as exc:
+            except _READING_SERVICE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Embedding enqueue failed for reading item {item_row.id}: {exc}")
             try:
                 self.collections.reanchor_highlights_for_item(
@@ -423,7 +449,7 @@ class ReadingService:
                     content_text=content,
                     content_hash=item_row.content_hash,
                 )
-            except Exception as exc:
+            except _READING_SERVICE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Highlight re-anchoring failed for item {item_row.id}: {exc}")
 
         return ReadingSaveResult(
@@ -498,7 +524,7 @@ class ReadingService:
                 ContentMetadataHandler,
                 scrape_article,
             )
-        except Exception as exc:
+        except _READING_SERVICE_NONCRITICAL_EXCEPTIONS as exc:
             return {
                 "url": url,
                 "canonical_url": self._normalize_url(resolved_url, url),
@@ -517,7 +543,7 @@ class ReadingService:
 
         try:
             data = await scrape_article(url)
-        except Exception as exc:
+        except _READING_SERVICE_NONCRITICAL_EXCEPTIONS as exc:
             return {
                 "url": url,
                 "canonical_url": self._normalize_url(resolved_url, url),
@@ -555,7 +581,7 @@ class ReadingService:
         content = data.get("content") or ""
         try:
             content = ContentMetadataHandler.strip_metadata(content)  # type: ignore[attr-defined]
-        except Exception:
+        except _READING_SERVICE_NONCRITICAL_EXCEPTIONS:
             pass
         content, clean_html = self._sanitize_html_content(content)
         canonical_raw = data.get("canonical_url") or data.get("url") or resolved_url or url
@@ -705,6 +731,6 @@ class ReadingService:
                     imported += 1
                 else:
                     updated += 1
-            except Exception as exc:
+            except _READING_SERVICE_NONCRITICAL_EXCEPTIONS as exc:
                 errors.append(f"{url}: {exc}")
         return ReadingImportResult(imported=imported, updated=updated, skipped=skipped, errors=errors)

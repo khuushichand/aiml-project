@@ -30,6 +30,25 @@ _TF_LOCK = threading.Lock()
 
 _POSTPROCESS_FUNCS: dict[str, Any] | None = None
 
+_NEMOTRON_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
 
 def _resolve_mode() -> str:
     mode = (os.getenv("NEMOTRON_MODE") or "auto").lower()
@@ -80,7 +99,7 @@ class NemotronParseBackend(OCRBackend):
                 has_torch = importlib.util.find_spec("torch") is not None
                 has_pil = importlib.util.find_spec("PIL") is not None
                 return bool(has_tf and has_torch and has_pil)
-            except Exception:
+            except _NEMOTRON_NONCRITICAL_EXCEPTIONS:
                 return False
         return False
 
@@ -130,14 +149,14 @@ class NemotronParseBackend(OCRBackend):
         if mode == "vllm" or (mode == "auto" and os.getenv("NEMOTRON_VLLM_URL")):
             try:
                 raw = _ocr_via_vllm(_prepare_image_bytes(image_bytes), prompt, skip_special)
-            except Exception as e:
+            except _NEMOTRON_NONCRITICAL_EXCEPTIONS as e:
                 logging.error(f"Nemotron vLLM path failed: {e}", exc_info=True)
                 # fall back to transformers if available
 
         if not raw:
             try:
                 raw = _ocr_via_transformers(_prepare_image_bytes(image_bytes), prompt, skip_special)
-            except Exception as e:
+            except _NEMOTRON_NONCRITICAL_EXCEPTIONS as e:
                 logging.error(f"Nemotron transformers path failed: {e}", exc_info=True)
                 return OCRResult(text="", format="text")
 
@@ -192,7 +211,7 @@ def _prepare_image_bytes(image_bytes: bytes) -> bytes:
 
     try:
         from PIL import Image
-    except Exception:
+    except (ImportError, OSError):
         return image_bytes
 
     try:
@@ -216,7 +235,7 @@ def _prepare_image_bytes(image_bytes: bytes) -> bytes:
             out = io.BytesIO()
             resized.save(out, format="PNG")
             return out.getvalue()
-    except Exception:
+    except _NEMOTRON_NONCRITICAL_EXCEPTIONS:
         return image_bytes
 
 
@@ -240,9 +259,9 @@ def _postprocess_output(raw: str, text_format: str = "plain") -> dict[str, Any]:
         except TypeError:
             try:
                 structured["text"] = funcs["postprocess"](raw, text_format, table_format)
-            except Exception:
+            except _NEMOTRON_NONCRITICAL_EXCEPTIONS:
                 pass
-        except Exception:
+        except _NEMOTRON_NONCRITICAL_EXCEPTIONS:
             pass
 
         extractor = funcs.get("extract")
@@ -251,7 +270,7 @@ def _postprocess_output(raw: str, text_format: str = "plain") -> dict[str, Any]:
                 classes, bboxes = extractor(raw)
                 structured["classes"] = classes
                 structured["bboxes"] = bboxes
-            except Exception:
+            except _NEMOTRON_NONCRITICAL_EXCEPTIONS:
                 pass
 
         if structured.get("text"):
@@ -282,7 +301,7 @@ def _load_postprocess_funcs() -> dict[str, Any]:
     for mod_name in candidates:
         try:
             mod = importlib.import_module(mod_name)
-        except Exception:
+        except ImportError:
             continue
         extract = getattr(mod, "extract_classes_bboxes", None)
         postprocess = getattr(mod, "postprocess_text", None)
@@ -302,7 +321,7 @@ def _try_parse_json(raw: str) -> Any | None:
         return None
     try:
         return json.loads(text)
-    except Exception:
+    except (json.JSONDecodeError, TypeError, ValueError):
         return None
 
 
@@ -339,7 +358,7 @@ def _ocr_via_vllm(image_bytes: bytes, prompt: str, skip_special_tokens: bool) ->
     def _getf(env, cast, default):
         try:
             return cast(os.getenv(env, str(default)))
-        except Exception:
+        except (TypeError, ValueError):
             return default
 
     data = {
@@ -369,7 +388,7 @@ def _ocr_via_vllm(image_bytes: bytes, prompt: str, skip_special_tokens: bool) ->
         if tmp_path:
             try:
                 os.unlink(tmp_path)
-            except Exception:
+            except OSError:
                 pass
     choice = (j.get("choices") or [{}])[0]
     content = (
@@ -420,7 +439,7 @@ def _ocr_via_transformers(image_bytes: bytes, prompt: str, skip_special_tokens: 
     model, processor = _load_transformers()
     try:
         from PIL import Image
-    except Exception:
+    except ImportError:
         raise RuntimeError("Pillow is required for transformers mode (PIL).")
 
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -434,7 +453,7 @@ def _ocr_via_transformers(image_bytes: bytes, prompt: str, skip_special_tokens: 
     def _getf(env, cast, default):
         try:
             return cast(os.getenv(env, str(default)))
-        except Exception:
+        except (TypeError, ValueError):
             return default
 
     gen_kwargs = {
@@ -449,7 +468,7 @@ def _ocr_via_transformers(image_bytes: bytes, prompt: str, skip_special_tokens: 
     output = model.generate(**inputs, **gen_kwargs)
     try:
         text = processor.batch_decode(output, skip_special_tokens=skip_special_tokens)[0]
-    except Exception:
+    except _NEMOTRON_NONCRITICAL_EXCEPTIONS:
         text = processor.decode(output[0], skip_special_tokens=skip_special_tokens)
     return text or ""
 
@@ -468,6 +487,6 @@ def _build_transformer_inputs(processor, image, prompt: str):
             ]
             text_input = processor.apply_chat_template(messages, add_generation_prompt=True)
             return processor(images=image, text=text_input, return_tensors="pt")
-        except Exception:
+        except _NEMOTRON_NONCRITICAL_EXCEPTIONS:
             pass
     return processor(images=image, text=prompt, return_tensors="pt")

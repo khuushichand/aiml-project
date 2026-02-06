@@ -36,6 +36,25 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
 _MODEL_CACHE: dict[str, tuple[Any, Any, str]] = {}
 _MODEL_LOCK = threading.Lock()
 
+_VIBEVOICE_PARSE_EXCEPTIONS = (TypeError, ValueError, json.JSONDecodeError)
+_VIBEVOICE_RUNTIME_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+_VIBEVOICE_INFERENCE_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
 
 def _as_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
@@ -55,7 +74,7 @@ def _as_int(value: Any, default: int) -> int:
         return default
     try:
         return int(str(value).strip())
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -80,7 +99,7 @@ def _check_cancel(cancel_check: Callable[[], bool] | None, *, label: str) -> Non
 def _resolve_settings() -> dict[str, Any]:
     try:
         stt_cfg = get_stt_config() or {}
-    except Exception:
+    except _VIBEVOICE_RUNTIME_EXCEPTIONS:
         stt_cfg = {}
 
     model_id = _as_str(stt_cfg.get("vibevoice_model_id"), "microsoft/VibeVoice-ASR")
@@ -150,7 +169,7 @@ def _maybe_resample(audio_np: np.ndarray, sample_rate: int, target_sample_rate: 
         wav = torch.from_numpy(np.asarray(audio_np, dtype="float32")).unsqueeze(0)
         resampled = F.resample(wav, sample_rate, target_sample_rate)
         return resampled.squeeze(0).cpu().numpy().astype("float32"), target_sample_rate
-    except Exception as exc:
+    except _VIBEVOICE_INFERENCE_EXCEPTIONS as exc:
         logger.warning(
             "VibeVoice: resampling from %s Hz to %s Hz failed; proceeding at original rate. Error: %s",
             sample_rate,
@@ -172,7 +191,7 @@ def _coerce_hotwords(hotwords: Sequence[str] | str | None) -> list[str]:
                 parsed = json.loads(raw)
                 if isinstance(parsed, list):
                     return [str(x).strip() for x in parsed if str(x).strip()]
-            except Exception:
+            except _VIBEVOICE_PARSE_EXCEPTIONS:
                 # Fall through to CSV handling
                 pass
         return [part.strip() for part in raw.split(",") if part.strip()]
@@ -188,7 +207,7 @@ def _speaker_label_from_id(speaker_id: Any) -> str:
     try:
         sid = int(speaker_id)
         return f"SPEAKER_{sid}"
-    except Exception:
+    except (TypeError, ValueError):
         s = str(speaker_id).strip()
         return s or "SPEAKER_0"
 
@@ -217,11 +236,11 @@ def _normalize_segments(segments: Iterable[Any], *, duration_seconds: float) -> 
         )
         try:
             start_s = float(start_raw)
-        except Exception:
+        except (TypeError, ValueError):
             start_s = 0.0
         try:
             end_s = float(end_raw)
-        except Exception:
+        except (TypeError, ValueError):
             end_s = start_s
 
         if end_s < start_s:
@@ -283,7 +302,7 @@ def _extract_text_from_response(resp: Any) -> str:
                 .get("message", {})
                 .get("content", "")
             ).strip()
-        except Exception:
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
             return ""
     return ""
 
@@ -369,7 +388,7 @@ def _get_torch_dtype(dtype_name: str) -> Any:
 def _resolve_device(requested_device: str) -> str:
     try:
         import torch
-    except Exception:
+    except ImportError:
         return "cpu"
     dev = (requested_device or "cpu").strip().lower()
     if dev.startswith("cuda") and not torch.cuda.is_available():
@@ -463,7 +482,7 @@ def _build_processor_inputs(
 def _move_inputs_to_device(inputs: Any, device: str) -> Any:
     try:
         import torch
-    except Exception:
+    except ImportError:
         return inputs
     if device == "cpu":
         return inputs
@@ -471,7 +490,7 @@ def _move_inputs_to_device(inputs: Any, device: str) -> Any:
     if hasattr(inputs, "to"):
         try:
             return inputs.to(dev)
-        except Exception:
+        except _VIBEVOICE_INFERENCE_EXCEPTIONS:
             return inputs
     if isinstance(inputs, dict):
         out: dict[str, Any] = {}
@@ -480,7 +499,7 @@ def _move_inputs_to_device(inputs: Any, device: str) -> Any:
                 try:
                     out[k] = v.to(dev)
                     continue
-                except Exception:
+                except _VIBEVOICE_INFERENCE_EXCEPTIONS:
                     pass
             out[k] = v
         return out
@@ -498,7 +517,7 @@ def _decode_generated(processor: Any, generated_ids: Any) -> str:
             if isinstance(generated_ids, (list, tuple)) and generated_ids:
                 return str(processor.decode(generated_ids[0])).strip()
             return str(processor.decode(generated_ids)).strip()
-    except Exception:
+    except _VIBEVOICE_RUNTIME_EXCEPTIONS:
         pass
     return str(generated_ids).strip()
 
@@ -601,7 +620,7 @@ def _audio_duration_seconds(audio_path: Path) -> float:
         info = sf.info(str(audio_path))
         if info.samplerate and info.frames:
             return float(info.frames) / float(info.samplerate)
-    except Exception:
+    except (OSError, RuntimeError, TypeError, ValueError):
         pass
     return 0.0
 
@@ -675,7 +694,7 @@ def is_vibevoice_available() -> bool:
     try:
         import torch  # noqa: F401
         import transformers  # noqa: F401
-    except Exception:
+    except ImportError:
         return False
     return True
 

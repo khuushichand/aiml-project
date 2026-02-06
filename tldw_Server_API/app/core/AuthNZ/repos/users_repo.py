@@ -42,34 +42,34 @@ class AuthnzUsersRepo:
         """
         try:
             base = dict(row) if hasattr(row, "keys") or isinstance(row, dict) else dict(row or {})
-        except Exception:
+        except (TypeError, ValueError):
             base = {}
         user_dict: dict[str, Any] = dict(base)
         if "id" in user_dict:
             try:
                 user_dict["id"] = int(user_dict["id"])
-            except Exception:
+            except (TypeError, ValueError):
                 pass
         if "uuid" in user_dict and user_dict["uuid"] is not None:
             try:
                 user_dict["uuid"] = str(user_dict["uuid"])
-            except Exception:
+            except (TypeError, ValueError):
                 pass
         for field in ("is_active", "is_verified", "is_superuser"):
             if field in user_dict:
                 try:
                     user_dict[field] = bool(user_dict[field])
-                except Exception:
+                except (TypeError, ValueError):
                     pass
         if "storage_quota_mb" in user_dict and user_dict["storage_quota_mb"] is not None:
             try:
                 user_dict["storage_quota_mb"] = int(user_dict["storage_quota_mb"])
-            except Exception:
+            except (TypeError, ValueError):
                 pass
         if "storage_used_mb" in user_dict and user_dict["storage_used_mb"] is not None:
             try:
                 user_dict["storage_used_mb"] = float(user_dict["storage_used_mb"])
-            except Exception:
+            except (TypeError, ValueError):
                 pass
         return user_dict
 

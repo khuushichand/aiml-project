@@ -2,15 +2,30 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sqlite3
 
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    BackendType,
+    DatabaseError as BackendDatabaseError,
+)
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_workflows_database,
     get_content_backend_instance,
 )
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+
+_WORKFLOWS_DB_MAINTENANCE_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    BackendDatabaseError,
+    ConnectionError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    sqlite3.Error,
+)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -59,7 +74,7 @@ async def run_workflows_db_maintenance(stop_event: asyncio.Event) -> None:
                             ):
                                 db._execute_backend(f"VACUUM (ANALYZE) {db.backend.escape_identifier(table)}", connection=conn)
                         logger.info("Workflows DB maintenance: VACUUM (ANALYZE) completed for Postgres tables")
-                    except Exception as e:
+                    except _WORKFLOWS_DB_MAINTENANCE_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Workflows DB maintenance: Postgres VACUUM failed: {e}")
             else:
                 # SQLite: run a checkpoint and optional compact vacuum
@@ -69,25 +84,25 @@ async def run_workflows_db_maintenance(stop_event: asyncio.Event) -> None:
                         checkpoint_mode = "TRUNCATE"
                     try:
                         db._conn.execute(f"PRAGMA wal_checkpoint({checkpoint_mode});")  # type: ignore[attr-defined]
-                    except Exception as e:
+                    except _WORKFLOWS_DB_MAINTENANCE_NONCRITICAL_EXCEPTIONS as e:
                         # Some environments may not be in WAL mode; ignore
                         logger.debug(f"Workflows DB maintenance: WAL checkpoint skipped: {e}")
 
                     # PRAGMA optimize is a lightweight hint to SQLite
                     try:
                         db._conn.execute("PRAGMA optimize;")  # type: ignore[attr-defined]
-                    except Exception as e:
+                    except _WORKFLOWS_DB_MAINTENANCE_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"Workflows DB maintenance: PRAGMA optimize skipped: {e}")
 
                     if _env_bool("WORKFLOWS_SQLITE_VACUUM", False):
                         try:
                             db._conn.execute("VACUUM;")  # type: ignore[attr-defined]
                             logger.info("Workflows DB maintenance: SQLite VACUUM completed")
-                        except Exception as ve:
+                        except _WORKFLOWS_DB_MAINTENANCE_NONCRITICAL_EXCEPTIONS as ve:
                             logger.warning(f"Workflows DB maintenance: SQLite VACUUM failed: {ve}")
-                except Exception as e:
+                except _WORKFLOWS_DB_MAINTENANCE_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Workflows DB maintenance (SQLite) failed: {e}")
-        except Exception as e:
+        except _WORKFLOWS_DB_MAINTENANCE_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Workflows DB maintenance loop error: {e}")
 
         try:

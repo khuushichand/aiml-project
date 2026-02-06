@@ -45,7 +45,7 @@ import {
   setTldwTTSSpeed,
   setTldwTTSResponseFormat,
   setTldwTTSStreamingEnabled,
-  setResponseSplitting
+  setResponseSplitting as persistResponseSplitting
 } from "@/services/tts"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { copyToClipboard } from "@/utils/clipboard"
@@ -1031,6 +1031,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
       }
     }
   }, [
+    addHistoryItem,
     clearSegments,
     extraParams,
     getBufferedBlob,
@@ -1448,7 +1449,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
             setTldwTTSSpeed(preset.speed),
             setTldwTTSResponseFormat(nextFormat),
             setTldwTTSStreamingEnabled(Boolean(preset.streaming) && STREAMING_FORMATS.has(nextFormat)),
-            setResponseSplitting(preset.splitBy)
+            persistResponseSplitting(preset.splitBy)
           ])
           queryClient.invalidateQueries({ queryKey: ["fetchTTSSettings"] })
         } catch {
@@ -1460,6 +1461,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
       activeProviderCaps,
       canStream,
       isTldw,
+      persistResponseSplitting,
       setResponseSplitting,
       setTldwEmotionIntensity,
       setTldwFormat,

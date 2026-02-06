@@ -2,13 +2,9 @@ import React, { useRef, useEffect, useCallback, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Input, Button, Spin } from "antd"
 import { X, ChevronUp, ChevronDown } from "lucide-react"
+import type { EpubSearchResult } from "@/hooks/document-workspace/useEpubSearch"
 import type { Book, Rendition } from "epubjs"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
-
-interface EpubSearchResult {
-  cfi: string
-  excerpt: string
-}
 
 interface EpubSearchProps {
   bookRef: React.RefObject<Book | null>

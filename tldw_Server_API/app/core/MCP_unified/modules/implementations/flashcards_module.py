@@ -15,6 +15,31 @@ from loguru import logger
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError
 from ..base import BaseModule, create_tool_definition
 
+_FLASHCARDS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
+_FLASHCARDS_VALIDATION_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    TypeError,
+    ValueError,
+)
+
 
 class FlashcardsModule(BaseModule):
     """Flashcard management module with spaced repetition for MCP"""
@@ -27,23 +52,19 @@ class FlashcardsModule(BaseModule):
 
     async def check_health(self) -> dict[str, bool]:
         checks = {"initialized": True, "driver_available": False, "disk_space": False}
-        try:
-            _ = CharactersRAGDB
-            checks["driver_available"] = True
-        except Exception:
-            checks["driver_available"] = False
+        checks["driver_available"] = CharactersRAGDB is not None
         try:
             import os
             from pathlib import Path
             try:
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root
                 base = Path(get_project_root())
-            except Exception:
+            except _FLASHCARDS_NONCRITICAL_EXCEPTIONS:
                 base = Path(__file__).resolve().parents[5]
             stat = os.statvfs(str(base))
             free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
             checks["disk_space"] = free_gb > 1
-        except Exception:
+        except _FLASHCARDS_NONCRITICAL_EXCEPTIONS:
             checks["disk_space"] = False
         return checks
 
@@ -388,7 +409,7 @@ class FlashcardsModule(BaseModule):
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
-        except Exception as ve:
+        except _FLASHCARDS_VALIDATION_EXCEPTIONS as ve:
             raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
 
         if tool_name == "flashcards.decks.list":
@@ -450,7 +471,7 @@ class FlashcardsModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _get_deck(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -467,7 +488,7 @@ class FlashcardsModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _create_deck(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -485,7 +506,7 @@ class FlashcardsModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     # Cards
@@ -525,7 +546,7 @@ class FlashcardsModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _get_card(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -542,7 +563,7 @@ class FlashcardsModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _create_card(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -573,7 +594,7 @@ class FlashcardsModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _create_cards_bulk(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -612,7 +633,7 @@ class FlashcardsModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _update_card(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -646,7 +667,7 @@ class FlashcardsModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _delete_card(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -666,7 +687,7 @@ class FlashcardsModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     # Spaced Repetition
@@ -689,7 +710,7 @@ class FlashcardsModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     # Tags
@@ -711,7 +732,7 @@ class FlashcardsModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _get_tags(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -727,7 +748,7 @@ class FlashcardsModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     # Export
@@ -792,5 +813,5 @@ class FlashcardsModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")

@@ -11,7 +11,7 @@ import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 #
 # Third-party Imports

@@ -36,6 +36,20 @@ from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import (
 # Import existing components
 from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
 
+_WEB_SCRAPE_CONFIG_PARSE_EXCEPTIONS = (TypeError, ValueError)
+_WEB_SCRAPE_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
 
 class WebScrapingService:
     """Enhanced web scraping service with production features"""
@@ -118,18 +132,18 @@ class WebScrapingService:
                     s = str(v).strip().lower()
                     if s in {"1", "true", "yes", "on", "y"}: return True
                     if s in {"0", "false", "no", "off", "n"}: return False
-                except Exception:
+                except _WEB_SCRAPE_CONFIG_PARSE_EXCEPTIONS:
                     pass
                 return d
             def _as_int(v: Any, d: int) -> int:
                 try:
                     return int(v)
-                except Exception:
+                except _WEB_SCRAPE_CONFIG_PARSE_EXCEPTIONS:
                     return d
             def _as_float(v: Any, d: float) -> float:
                 try:
                     return float(v)
-                except Exception:
+                except _WEB_SCRAPE_CONFIG_PARSE_EXCEPTIONS:
                     return d
 
             crawl_strategy_cfg: str = str(wc.get('web_crawl_strategy', 'default'))
@@ -230,7 +244,7 @@ class WebScrapingService:
                     stored["task_id"] = task_id
             return stored
 
-        except Exception as e:
+        except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Web scraping task failed: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -488,7 +502,7 @@ class WebScrapingService:
                 system_message=system_prompt
             )
             return summary
-        except Exception as e:
+        except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Summarization failed: {e}")
             return "Summary generation failed"
 
@@ -540,7 +554,7 @@ class WebScrapingService:
             try:
                 reg = get_metrics_registry()
                 reg.set_gauge("webscraping.persist.last_batch_articles", float(len(result.get("articles", []))), {"method": str(result.get("method", "unknown"))})
-            except Exception:
+            except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS:
                 reg = None
             _batch_t0 = time.perf_counter()
             for article in result.get("articles", []):
@@ -608,7 +622,7 @@ class WebScrapingService:
                     try:
                         # Chunk in a worker thread to avoid blocking the event loop for long documents
                         flat = await asyncio.to_thread(
-                            lambda: Chunker().chunk_text_hierarchical_flat(content_with_metadata, method='sentences')
+                            lambda _cwm=content_with_metadata: Chunker().chunk_text_hierarchical_flat(_cwm, method='sentences')
                         )
                         kind_map = {
                             'paragraph': 'text',
@@ -635,12 +649,12 @@ class WebScrapingService:
                                 'chunk_type': ctype,
                                 'metadata': small,
                             })
-                    except Exception as e:
+                    except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"webscraping.persist: chunking failed; storing without chunks: {e}")
                         try:
                             if reg:
                                 reg.increment("app_warning_events_total", 1, {"component": "webscraping", "event": "chunking_failed"})
-                        except Exception:
+                        except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS:
                             logger.debug("metrics increment failed for webscraping chunking_failed")
                         chunks_for_sql = []
 
@@ -666,7 +680,7 @@ class WebScrapingService:
                     try:
                         if reg:
                             reg.observe("webscraping.persist.article_duration_seconds", _dt, {"method": str(result.get("method", "unknown"))})
-                    except Exception as me:
+                    except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as me:
                         logger.debug(f"webscraping.persist: metric observe failed: {me}")
 
                     if media_id:
@@ -675,30 +689,30 @@ class WebScrapingService:
                         try:
                             if reg:
                                 reg.increment("webscraping.persist.stored_total", 1, {"method": str(result.get("method", "unknown"))})
-                        except Exception as me:
+                        except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as me:
                             logger.debug(f"webscraping.persist: metric increment failed: {me}")
                     else:
                         logger.warning(f"Failed to get media_id for article: {article.get('url')}")
                         try:
                             if reg:
                                 reg.increment("webscraping.persist.failed_total", 1, {"method": str(result.get("method", "unknown"))})
-                        except Exception as me:
+                        except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as me:
                             logger.debug(f"webscraping.persist: metric increment failed: {me}")
 
-                except Exception as e:
+                except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to store article: {e}")
                     errors.append(f"Storage failed for {article.get('url')}: {str(e)}")
                     try:
                         if reg:
                             reg.increment("webscraping.persist.failed_total", 1, {"method": str(result.get("method", "unknown"))})
-                    except Exception as me:
+                    except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as me:
                         logger.debug(f"webscraping.persist: metric increment failed: {me}")
 
             try:
                 if reg:
                     _batch_dt = max(0.0, time.perf_counter() - _batch_t0)
                     reg.observe("webscraping.persist.batch_duration_seconds", _batch_dt, {"method": str(result.get("method", "unknown"))})
-            except Exception as me:
+            except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as me:
                 logger.debug(f"webscraping.persist: batch metric observe failed: {me}")
         finally:
             # Close database connection

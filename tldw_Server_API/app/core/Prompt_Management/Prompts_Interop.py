@@ -67,6 +67,17 @@ _client_id_global: Optional[str] = None
 # Expose a stable alias for tests that patch Prompts_Interop.PromptsDB
 PromptsDB = PromptsDatabase
 
+_PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS = (
+    AttributeError,
+    DatabaseError,
+    InputError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
 # --- Initialization and Management ---
 
 def initialize_interop(db_path: Union[str, Path], client_id: str) -> None:
@@ -143,7 +154,7 @@ def shutdown_interop() -> None:
         try:
             # This will close the connection for the current thread
             _db_instance.close_connection()
-        except Exception as e:
+        except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS as e:
             logger.error(f"Error during Prompts Interop Library shutdown (closing current thread's connection): {e}", exc_info=True)
         _db_instance = None
         _db_path_global = None
@@ -337,7 +348,7 @@ class PromptsInteropService:
     def _clean_keywords(self, kws):
         try:
             items = [str(k) for k in (kws or [])]
-        except Exception:
+        except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS:
             items = []
         # Drop the default tag from presentation; if it's the only tag, present as empty
         filtered = [k for k in items if k.strip().lower() != 'no_keyword']
@@ -362,7 +373,7 @@ class PromptsInteropService:
             else:
                 existing = self.list_prompts() or []
                 used_names = {str(it.get('name')) for it in existing if isinstance(it.get('name'), str)}
-        except Exception as e:
+        except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS as e:
             logger.debug(f"Failed to fetch existing prompt names, using empty set: {e}")
             used_names = set()
 
@@ -417,7 +428,7 @@ class PromptsInteropService:
                     keywords=keywords or [],
                     overwrite=False,
                 )
-        except Exception as e:
+        except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS as e:
             # As a fallback, try with a unique name
             logger.warning(f"Initial prompt creation failed, attempting fallback: {e}")
             for n in range(1, MAX_DUPLICATE_NAME_ITERATIONS + 1):
@@ -460,7 +471,7 @@ class PromptsInteropService:
             kid = None
             try:
                 kid = int(prompt_id) if prompt_id is not None else int(data.get("id"))
-            except Exception:
+            except (TypeError, ValueError):
                 kid = None
             if kid is not None and kid in self._orig_keywords:
                 data["keywords"] = list(self._orig_keywords[kid])
@@ -485,7 +496,7 @@ class PromptsInteropService:
                 if callable(meth) and hasattr(meth, "reset_mock"):
                     try:
                         meth.reset_mock()
-                    except Exception:
+                    except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS:
                         pass
                 items = db.list_prompts()
                 # Ensure content mapping if details present
@@ -501,7 +512,7 @@ class PromptsInteropService:
                                 it["keywords"] = self._clean_keywords(it.get("keywords"))
                             if pid in self._name_overrides:
                                 it["name"] = self._name_overrides[pid]
-                        except Exception:
+                        except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS:
                             if "keywords" in it:
                                 it["keywords"] = self._clean_keywords(it.get("keywords"))
                 return items
@@ -520,7 +531,7 @@ class PromptsInteropService:
                     it["keywords"] = self._clean_keywords(it.get("keywords"))
                 if pid in self._name_overrides:
                     it["name"] = self._name_overrides[pid]
-            except Exception:
+            except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS:
                 if "keywords" in it:
                     it["keywords"] = self._clean_keywords(it.get("keywords"))
         return items
@@ -634,14 +645,14 @@ class PromptsInteropService:
         if callable(del_meth) and hasattr(del_meth, "reset_mock"):
             try:
                 del_meth.reset_mock()
-            except Exception:
+            except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS:
                 pass
         for pid in (prompt_ids or []):
             if hasattr(db, "delete_prompt"):
                 try:
                     db.delete_prompt(pid)
                     deleted += 1
-                except Exception as e:
+                except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS as e:
                     logger.warning(f"Failed to delete prompt {pid}: {e}")
                     failed += 1
             else:
@@ -661,7 +672,7 @@ class PromptsInteropService:
                 try:
                     db.update_prompt_keywords(**kwargs)
                     updated += 1
-                except Exception as e:
+                except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS as e:
                     logger.warning(f"Failed to update keywords for prompt {pid}: {e}")
                     failed += 1
         else:
@@ -681,7 +692,7 @@ class PromptsInteropService:
                         indexed[int(it.get('id'))] = it
                     except (ValueError, TypeError):
                         pass  # Skip items with invalid IDs
-            except Exception as e:
+            except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS as e:
                 logger.debug(f"Failed to build prompt index for export: {e}")
                 indexed = {}
             for pid in prompt_ids:
@@ -749,7 +760,7 @@ class PromptsInteropService:
             else:
                 existing_items = self.list_prompts() or []
                 used_names = {str(it.get('name')) for it in existing_items if isinstance(it.get('name'), str)}
-        except Exception as e:
+        except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS as e:
             logger.debug(f"Failed to fetch existing prompt names for import, using empty set: {e}")
             used_names = set()
 
@@ -796,7 +807,7 @@ class PromptsInteropService:
                     pass  # Expected for invalid IDs
                 new_ids.append(pid)
                 imported += 1
-            except Exception as e:
+            except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS as e:
                 logger.warning(f"Failed to import prompt '{p.get('name', '<unknown>')}': {e}")
                 failed += 1
                 if skip_duplicates:
@@ -831,7 +842,7 @@ class PromptsInteropService:
                     self._db_instance.close()
                 else:
                     self._db_instance.close_connection()
-            except Exception as e:
+            except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS as e:
                 logger.debug(f"Error closing database connection: {e}")
 
     # Stats/Analytics
@@ -1041,7 +1052,7 @@ if __name__ == '__main__':
 
     except (DatabaseError, SchemaError, InputError, ConflictError, RuntimeError, ValueError) as e:
         logger.error(f"An error occurred during interop example: {type(e).__name__} - {e}", exc_info=True)
-    except Exception as e:
+    except _PROMPTS_INTEROP_BEST_EFFORT_EXCEPTIONS as e:
         logger.error(f"An unexpected error occurred: {type(e).__name__} - {e}", exc_info=True)
     finally:
         # 8. Shutdown

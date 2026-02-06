@@ -5,8 +5,20 @@ from typing import Any, Optional  # Added for type hinting
 from urllib.parse import quote_plus, urlencode
 
 from bs4 import BeautifulSoup
+from bs4 import FeatureNotFound
 
 from tldw_Server_API.app.core.http_client import fetch
+
+_ARXIV_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+)
 
 #
 # Local Imports (ensure path is correct if this file is moved/used elsewhere)
@@ -33,7 +45,7 @@ def fetch_arxiv_pdf_url(paper_id: str) -> Optional[str]:
         if pdf_link_tag and pdf_link_tag.has_attr('href'):
             return pdf_link_tag['href']
         return None
-    except Exception as e:
+    except _ARXIV_NONCRITICAL_EXCEPTIONS as e:
         print(f"**Error fetching PDF URL for {paper_id}:** {e}")
         return None
 
@@ -61,7 +73,7 @@ def search_arxiv_custom_api(query: Optional[str], author: Optional[str], year: O
         total_results = int(total_results_tag.text) if total_results_tag and total_results_tag.text.isdigit() else 0
 
         return parsed_entries, total_results, None
-    except Exception as e:
+    except _ARXIV_NONCRITICAL_EXCEPTIONS as e:
         error_msg = f"arXiv API request failed: {e}"
         print(f"**Error:** {error_msg}")
         return None, 0, error_msg
@@ -75,7 +87,7 @@ def fetch_arxiv_xml(paper_id: str) -> Optional[str]:
             return None
         time.sleep(1)  # Keep delay
         return r.text
-    except Exception as e:
+    except _ARXIV_NONCRITICAL_EXCEPTIONS as e:
         print(f"**Error fetching XML for {paper_id}:** {e}")
         return None
 
@@ -83,7 +95,7 @@ def fetch_arxiv_xml(paper_id: str) -> Optional[str]:
 def parse_arxiv_feed(xml_content: bytes) -> list[dict[str, Any]]:
     try:
         soup = BeautifulSoup(xml_content, 'lxml-xml')
-    except Exception as e: # Broad exception, can be narrowed to bs4.FeatureNotFound if desired
+    except FeatureNotFound as e:
         print(f"Warning: Failed to use 'lxml-xml' parser ({e}). Falling back to Python's built-in 'xml' parser.")
         print("For potentially better performance and XML feature support, consider installing lxml: pip install lxml")
         soup = BeautifulSoup(xml_content, 'xml') # Fallback
@@ -227,13 +239,13 @@ def get_arxiv_by_id(paper_id: str) -> tuple[Optional[dict[str, Any]], Optional[s
             return None, None  # treat as not found
         try:
             parsed = parse_arxiv_feed(xml_text.encode("utf-8"))
-        except Exception as e:
+        except _ARXIV_NONCRITICAL_EXCEPTIONS as e:
             return None, f"Failed to parse arXiv XML: {e}"
         if not parsed:
             return None, None
         # parse_arxiv_feed already returns dict with required keys
         return parsed[0], None
-    except Exception as e:
+    except _ARXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, f"Unexpected error fetching arXiv paper: {e}"
 
 #

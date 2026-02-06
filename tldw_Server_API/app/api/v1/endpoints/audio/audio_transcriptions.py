@@ -37,20 +37,40 @@ router = APIRouter(
     },
 )
 
+_AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EOFError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 def _audio_shim_attr(name: str):
     from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
     try:
         if name in getattr(audio_shim, "__dict__", {}):
             return getattr(audio_shim, name)
-    except Exception:
+    except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_mod
 
         if hasattr(audio_mod, name):
             return getattr(audio_mod, name)
-    except Exception:
+    except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
         pass
     if not hasattr(audio_shim, name):
         raise NameError(name)
@@ -149,7 +169,7 @@ async def create_transcription(
         """Best-effort RG job heartbeat loop (no-op when unsupported)."""
         try:
             interval = _audio_shim_attr("get_job_heartbeat_interval_seconds")()
-        except Exception as exc:
+        except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(
                 "audio.transcriptions: get_job_heartbeat_interval_seconds failed; "
                 f"skipping job heartbeat. user_id={user_id}, error={exc}"
@@ -165,12 +185,12 @@ async def create_transcription(
                     await _audio_shim_attr("heartbeat_jobs")(user_id)
                 except asyncio.CancelledError:
                     raise
-                except Exception as hb_exc:
+                except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as hb_exc:
                     logger.debug(f"audio.transcriptions heartbeat_jobs failed: {hb_exc}")
 
         try:
             return asyncio.create_task(_hb_loop())
-        except Exception as exc:
+        except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(
                 "audio.transcriptions: failed to start job heartbeat task; "
                 f"user_id={user_id}, error={exc}"
@@ -219,7 +239,7 @@ async def create_transcription(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=msg_job)
     try:
         job_heartbeat_task = await _maybe_start_job_heartbeat(current_user.id)
-    except Exception:
+    except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
         job_heartbeat_task = None
 
     # Record job start (best-effort)
@@ -305,12 +325,12 @@ async def create_transcription(
             if frames is None or not samplerate:
                 raise ValueError("soundfile.info returned incomplete metadata")
             duration_seconds = float(frames) / float(samplerate)
-        except Exception as e:
+        except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"soundfile.info failed; falling back to read for duration: error={e}")
             try:
                 audio_data, sample_rate = sf_mod.read(canonical_path)
                 duration_seconds = float(len(audio_data)) / float(sample_rate or 16000)
-            except Exception as read_err:
+            except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as read_err:
                 logger.debug(f"Failed to compute audio duration; defaulting to 0: error={read_err}")
                 duration_seconds = 0.0
 
@@ -324,7 +344,7 @@ async def create_transcription(
                         granularity_tokens = {str(x).strip().lower() for x in arr}
                 else:
                     granularity_tokens = {t.strip().lower() for t in s.split(",") if t.strip()}
-        except Exception as e:
+        except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Failed to parse timestamp_granularities; defaulting to 'segment': error={e}")
             granularity_tokens = {"segment"}
         if not granularity_tokens:
@@ -342,7 +362,7 @@ async def create_transcription(
                     parsed_hotwords = json.loads(raw_hotwords)
                     if isinstance(parsed_hotwords, list):
                         hotwords_norm = [str(x).strip() for x in parsed_hotwords if str(x).strip()]
-                except Exception as hotwords_exc:
+                except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as hotwords_exc:
                     logger.debug(f"Failed to parse hotwords JSON; falling back to CSV parsing: {hotwords_exc}")
             if hotwords_norm is None:
                 hotwords_norm = [part.strip() for part in raw_hotwords.split(",") if part.strip()]
@@ -438,7 +458,7 @@ async def create_transcription(
                         )
                 except HTTPException:
                     raise
-                except Exception as preflight_exc:  # pragma: no cover - defensive
+                except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as preflight_exc:  # pragma: no cover - defensive
                     logger.debug(f"Whisper model preflight check failed; proceeding without it: {preflight_exc}")
                 try:
                     if task_normalized == "translate":
@@ -460,7 +480,7 @@ async def create_transcription(
                     detected_language = artifact.get("language")
                     segments_for_timing = artifact.get("segments") or []
                     transcribed_text = artifact.get("text", "")
-                except Exception as e:
+                except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Whisper transcription failed: {e}")
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -483,7 +503,7 @@ async def create_transcription(
                     detected_language = artifact.get("language")
                     segments_for_timing = artifact.get("segments") or []
                     transcribed_text = artifact.get("text", "")
-                except Exception as e:
+                except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(
                         "Transcription failed for provider=%s, model=%s: %s",
                         provider,
@@ -523,7 +543,7 @@ async def create_transcription(
             )
 
             transcribed_text = _cv_post(transcribed_text)
-        except Exception as exc:
+        except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Custom vocabulary postprocessing failed; continuing without it: {exc}")
 
         try:
@@ -549,7 +569,7 @@ async def create_transcription(
                         if total_seconds is None:
                             total_seconds = 0.0
                         total_ms = int(round(max(float(total_seconds), 0.0) * 1000))
-                    except Exception:
+                    except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
                         total_ms = 0
                     seconds, ms = divmod(total_ms, 1000)
                     hours, seconds = divmod(seconds, 3600)
@@ -591,7 +611,7 @@ async def create_transcription(
                         if total_seconds is None:
                             total_seconds = 0.0
                         total_ms = int(round(max(float(total_seconds), 0.0) * 1000))
-                    except Exception:
+                    except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
                         total_ms = 0
                     seconds, ms = divmod(total_ms, 1000)
                     hours, seconds = divmod(seconds, 3600)
@@ -688,7 +708,7 @@ async def create_transcription(
                         "transition_indices": segmenter.get_transition_indices(),
                         "segments": segs,
                     }
-            except Exception as seg_err:
+            except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as seg_err:
                 logger.warning(f"Auto-segmentation failed: {seg_err}")
 
         if response_format == "verbose_json":
@@ -699,7 +719,7 @@ async def create_transcription(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error during transcription: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -720,7 +740,7 @@ async def create_transcription(
                     increment_counter(
                         "app_warning_events_total", labels={"component": "audio", "event": "tempfile_remove_failed"}
                     )
-                except Exception as m_err:
+                except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as m_err:
                     logger.debug(f"metrics increment failed (audio tempfile_remove_failed): error={m_err}")
 
 
@@ -766,7 +786,7 @@ async def create_translation(
             tags=[str(model or "")],
             metadata={"filename": getattr(file, "filename", None), "language": "en"},
         )
-    except Exception as e:
+    except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"usage_log audio.translations failed: error={e}")
 
     return await create_transcription(
@@ -833,6 +853,6 @@ async def segment_transcript(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Transcript segmentation error: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Transcript segmentation failed")

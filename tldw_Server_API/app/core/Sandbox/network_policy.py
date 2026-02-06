@@ -8,6 +8,17 @@ from typing import Callable
 
 from loguru import logger
 
+_SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    IndexError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    subprocess.SubprocessError,
+)
+
 
 def _truthy(v: str | None) -> bool:
     return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
@@ -25,7 +36,7 @@ def default_resolver(host: str) -> list[str]:
             ip = sa[0]
             if ip not in out:
                 out.append(ip)
-    except Exception:
+    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
         return []
     return out
 
@@ -92,14 +103,14 @@ def expand_allowlist_to_targets(
                 _ = ipaddress.ip_network(tok, strict=False)
                 results.add(str(tok))
                 continue
-        except Exception:
+        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
             pass
         # Literal IP
         try:
             ipaddress.ip_address(tok)
             results.add(f"{tok}/32")
             continue
-        except Exception:
+        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
             pass
         # Hostname (supports wildcard prefix "*." and suffix ".domain")
         host, is_wild, _is_suffix = _normalize_host_token(tok)
@@ -119,7 +130,7 @@ def expand_allowlist_to_targets(
                 try:
                     ipaddress.ip_address(ip)
                     results.add(f"{ip}/32")
-                except Exception:
+                except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
                     continue
     return sorted(results)
 
@@ -149,13 +160,13 @@ def pin_dns_map(
                 ipaddress.ip_network(tok, strict=False)
                 out.setdefault(tok, [])
                 continue
-        except Exception:
+        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             ipaddress.ip_address(tok)
             out.setdefault(tok, [tok])
             continue
-        except Exception:
+        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
             pass
         # Host tokens
         host, is_wild, _is_suffix = _normalize_host_token(tok)
@@ -175,7 +186,7 @@ def pin_dns_map(
                     ipaddress.ip_address(ip)
                     if ip not in ips:
                         ips.append(ip)
-                except Exception:
+                except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
                     continue
         out[host] = ips
     return out
@@ -196,7 +207,7 @@ def refresh_egress_rules(
     """
     try:
         delete_rules_by_label(label)
-    except Exception:
+    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
         pass
     targets = expand_allowlist_to_targets(raw_allowlist, resolver=resolver, wildcard_subdomains=wildcard_subdomains)
     return apply_egress_rules_atomic(container_ip, targets, label)
@@ -237,7 +248,7 @@ def apply_egress_rules_atomic(container_ip: str, targets: Sequence[str], label: 
             return rule_specs
         else:
             logger.debug("iptables-restore failed; falling back to iterative iptables invocations")
-    except Exception as e:
+    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"iptables-restore invocation failed: {e}")
     # Fallback path: iterative `iptables` calls
     for tgt in targets:
@@ -249,7 +260,7 @@ def apply_egress_rules_atomic(container_ip: str, targets: Sequence[str], label: 
                 "-m", "comment", "--comment", label,
             ], check=False)
             rule_specs.append(f"DOCKER-USER -s {container_ip} -d {dspec} -j ACCEPT -m comment --comment {label}")
-        except Exception:
+        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
             pass
     try:
         subprocess.run([
@@ -258,7 +269,7 @@ def apply_egress_rules_atomic(container_ip: str, targets: Sequence[str], label: 
             "-m", "comment", "--comment", label,
         ], check=False)
         rule_specs.append(f"DOCKER-USER -s {container_ip} -j DROP -m comment --comment {label}")
-    except Exception:
+    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
         pass
     return rule_specs
 
@@ -279,15 +290,15 @@ def delete_rules_by_label(label: str) -> None:
                 try:
                     num = int(ln.split()[0])
                     numbered.append(num)
-                except Exception:
+                except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
                     continue
         for num in sorted(numbered, reverse=True):
             try:
                 subprocess.run(["iptables", "-D", "DOCKER-USER", str(num)], check=False)
-            except Exception:
+            except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
                 pass
         return
-    except Exception:
+    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
         pass
     # Fallback: translate `iptables -S` specs into deletions
     try:
@@ -299,7 +310,7 @@ def delete_rules_by_label(label: str) -> None:
                     parts[0] = "-D"
                     try:
                         subprocess.run(["iptables"] + parts, check=False)
-                    except Exception:
+                    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
                         pass
-    except Exception:
+    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
         pass

@@ -29,7 +29,7 @@ class HFTableTransformerBackend(VLMBackend):
         # Detection threshold: docs often use 0.9 for high precision
         try:
             self._threshold = float(os.getenv("VLM_TABLE_THRESHOLD", "0.9"))
-        except Exception:
+        except (TypeError, ValueError):
             self._threshold = 0.9
         self._processor = None
         self._model = None
@@ -40,7 +40,7 @@ class HFTableTransformerBackend(VLMBackend):
         try:
             import transformers  # noqa: F401
             from PIL import Image  # noqa: F401
-        except Exception:
+        except ImportError:
             return False
         return True
 
@@ -57,7 +57,7 @@ class HFTableTransformerBackend(VLMBackend):
             self._model = TableTransformerForObjectDetection.from_pretrained(
                 self._model_name, revision=self._revision
             )
-        except Exception:
+        except (ImportError, OSError, RuntimeError, TypeError, ValueError):
             from transformers import AutoModelForObjectDetection  # fallback
 
             self._model = AutoModelForObjectDetection.from_pretrained(
@@ -70,7 +70,7 @@ class HFTableTransformerBackend(VLMBackend):
             if cfg and getattr(cfg, "id2label", None):
                 # Normalize to int keys -> str labels
                 self._id2label = {int(k): str(v) for k, v in cfg.id2label.items()}
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             self._id2label = {}
         self._loaded = True
 

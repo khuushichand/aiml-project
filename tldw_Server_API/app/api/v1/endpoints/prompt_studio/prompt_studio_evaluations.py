@@ -38,7 +38,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError, PromptStudioDatabase
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
@@ -55,6 +55,26 @@ from tldw_Server_API.app.core.Logging.log_context import (
     ensure_traceparent,
     get_ps_logger,
     log_context,
+)
+
+_PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    DatabaseError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
 )
 
 
@@ -150,7 +170,7 @@ async def create_evaluation(
         incoming_configs = None
         try:
             incoming_configs = evaluation.model_configs
-        except Exception:
+        except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
             incoming_configs = None
 
         if incoming_configs and isinstance(incoming_configs, list):
@@ -166,7 +186,7 @@ async def create_evaluation(
                         cfg_dict = single_cfg
                     else:
                         cfg_dict = {}
-                except Exception:
+                except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
                     cfg_dict = {}
                 configs_list = [cfg_dict] if cfg_dict else []
             else:
@@ -190,7 +210,7 @@ async def create_evaluation(
         user_id_int = None
         try:
             user_id_int = int(user_context.get("user_id"))
-        except Exception:
+        except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
             user_id_int = None
 
         byok_resolution = await resolve_byok_credentials(
@@ -352,7 +372,7 @@ async def create_evaluation(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS as e:
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
         get_ps_logger(
@@ -426,7 +446,7 @@ async def list_evaluations(
             "offset": offset,
         }
 
-    except Exception as e:
+    except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS as e:
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
         get_ps_logger(
@@ -499,7 +519,7 @@ async def get_evaluation(
         try:
             keys = row.keys() if hasattr(row, 'keys') else [d[0] for d in cursor.description]
             eval_dict = {k: row[k] if hasattr(row, 'keys') else row[i] for i, k in enumerate(keys)}
-        except Exception:
+        except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
             # Final fallback: zip description to row tuple
             cols = [d[0] for d in cursor.description]
             eval_dict = {c: row[idx] for idx, c in enumerate(cols)}
@@ -509,7 +529,7 @@ async def get_evaluation(
         if isinstance(agg, str) and agg:
             try:
                 metrics_obj = json.loads(agg)
-            except Exception:
+            except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
                 metrics_obj = {}
         elif isinstance(agg, dict):
             metrics_obj = agg
@@ -522,7 +542,7 @@ async def get_evaluation(
                 import datetime as _dt
                 if isinstance(val, (_dt.datetime, _dt.date)):
                     return val.isoformat()
-            except Exception:
+            except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
                 pass
             return val
 
@@ -548,7 +568,7 @@ async def get_evaluation(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS as e:
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
         get_ps_logger(
@@ -595,7 +615,7 @@ async def delete_evaluation(
                 cursor.execute("PRAGMA table_info(prompt_studio_evaluations)")
                 columns = {row[1] for row in cursor.fetchall()}
             supports_soft_delete = "deleted" in columns and "deleted_at" in columns
-        except Exception as exc:
+        except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Failed to check prompt_studio_evaluations columns: %s", exc)
 
         if supports_soft_delete:
@@ -622,7 +642,7 @@ async def delete_evaluation(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS as e:
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
         get_ps_logger(
@@ -646,7 +666,7 @@ async def _complete_ping(ping_id: str):
         await asyncio.sleep(0.01)
         _BG_PINGS[ping_id]["status"] = "completed"
         _BG_PINGS[ping_id]["completed_at"] = datetime.now().isoformat()
-    except Exception:
+    except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
         _BG_PINGS[ping_id]["status"] = "failed"
 
 
@@ -725,11 +745,11 @@ async def run_evaluation_async(
         _id, project_id, prompt_id, tc_ids_json, model_cfg_json = row
         try:
             test_case_ids = _json.loads(tc_ids_json) if tc_ids_json else []
-        except Exception:
+        except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
             test_case_ids = []
         try:
             cfg_raw = _json.loads(model_cfg_json) if model_cfg_json else {}
-        except Exception:
+        except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
             cfg_raw = {}
         # Support list or dict
         if isinstance(cfg_raw, list) and cfg_raw:
@@ -752,7 +772,7 @@ async def run_evaluation_async(
                 from tldw_Server_API.app.core.Chat.chat_service import (
                     perform_chat_api_call as _chat_call,  # type: ignore
                 )
-            except Exception:
+            except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
                 _chat_call = None  # Fallback: no chat; mark errors per test case
 
         byok_resolution = None
@@ -815,11 +835,11 @@ async def run_evaluation_async(
                 tc_id, inputs_json, expected_json = tc
                 try:
                     inputs = _json.loads(inputs_json) if inputs_json else {}
-                except Exception:
+                except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
                     inputs = {}
                 try:
                     expected = _json.loads(expected_json) if expected_json else {}
-                except Exception:
+                except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
                     expected = {}
 
                 # Format user prompt with inputs
@@ -827,7 +847,7 @@ async def run_evaluation_async(
                 try:
                     for k, v in (inputs or {}).items():
                         formatted_user_prompt = formatted_user_prompt.replace(f"{{{k}}}", str(v))
-                except Exception:
+                except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
                     pass
 
                 # LLM call best-effort (skip if chat function unavailable)
@@ -875,7 +895,7 @@ async def run_evaluation_async(
                         actual_output = str(resp[0])
                     else:
                         actual_output = extract_response_content(resp) or str(resp)
-                except Exception as e:
+                except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS as e:
                     error = str(e)
 
                 # Score: simple exact/contains match on 'response' field
@@ -949,10 +969,10 @@ async def run_evaluation_async(
                 aggregate_metrics.get("total_tests", 0),
                 round(aggregate_metrics.get("pass_rate", 0.0), 3),
             )
-        except Exception:
+        except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
             pass
 
-    except Exception as e:
+    except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS as e:
         get_ps_logger(
             request_id=request_id,
             ps_component="evaluation_bg",
@@ -969,5 +989,5 @@ async def run_evaluation_async(
                 (str(e), evaluation_id),
             )
             conn.commit()
-        except Exception:
+        except _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS:
             pass

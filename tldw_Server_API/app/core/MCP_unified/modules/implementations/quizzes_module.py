@@ -15,6 +15,25 @@ from ....config import load_and_log_configs
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError
 from ..base import BaseModule, create_tool_definition
 
+_QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
+
 
 class QuizzesModule(BaseModule):
     """Quiz management module for MCP"""
@@ -30,7 +49,7 @@ class QuizzesModule(BaseModule):
         try:
             _ = CharactersRAGDB
             checks["driver_available"] = True
-        except Exception:
+        except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS:
             checks["driver_available"] = False
         try:
             import os
@@ -38,12 +57,12 @@ class QuizzesModule(BaseModule):
             try:
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root
                 base = Path(get_project_root())
-            except Exception:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS:
                 base = Path(__file__).resolve().parents[5]
             stat = os.statvfs(str(base))
             free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
             checks["disk_space"] = free_gb > 1
-        except Exception:
+        except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS:
             checks["disk_space"] = False
         return checks
 
@@ -411,7 +430,7 @@ class QuizzesModule(BaseModule):
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
-        except Exception as ve:
+        except (TypeError, ValueError) as ve:
             raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
 
         if tool_name == "quizzes.list":
@@ -455,7 +474,7 @@ class QuizzesModule(BaseModule):
     def _get_client_id(self, context: Any) -> str:
         try:
             return context.client_id or "mcp_quizzes"
-        except Exception:
+        except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS:
             return "mcp_quizzes"
 
     # Quiz CRUD
@@ -500,7 +519,7 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _get_quiz(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -517,7 +536,7 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _create_quiz(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -540,7 +559,7 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _update_quiz(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -567,7 +586,7 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _delete_quiz(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -596,7 +615,7 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     # Questions
@@ -631,7 +650,7 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _create_question(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -659,7 +678,7 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _update_question(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -686,7 +705,7 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _delete_question(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -715,7 +734,7 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     # Attempts
@@ -737,7 +756,7 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _submit_attempt(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -758,7 +777,7 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _list_attempts(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -787,7 +806,7 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     async def _get_attempt(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -810,7 +829,7 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     # Generation
@@ -850,7 +869,7 @@ class QuizzesModule(BaseModule):
         try:
             response_text = await self._call_llm(prompt, provider=provider, model=model)
             questions_data = self._parse_generated_questions(response_text)
-        except Exception as e:
+        except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Quiz generation failed: {e}")
             raise ValueError(f"Failed to generate quiz: {e}")
 
@@ -875,7 +894,7 @@ class QuizzesModule(BaseModule):
                 return media.get("content") or media.get("transcript") or media.get("summary")
             finally:
                 db.close_all_connections()
-        except Exception as e:
+        except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get media content: {e}")
             return None
 
@@ -931,7 +950,7 @@ Return ONLY the JSON array, no other text."""
         model = args.get("model")
         try:
             settings = load_and_log_configs() or {}
-        except Exception:
+        except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS:
             settings = {}
         if not provider:
             provider = str(settings.get("default_api") or "").strip() or None
@@ -1018,7 +1037,7 @@ Return ONLY the JSON array, no other text."""
                         client_id=client_id,
                     )
                     created_questions.append(qid)
-                except Exception as e:
+                except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Failed to create question {i}: {e}")
 
             quiz = db.get_quiz(quiz_id)
@@ -1031,5 +1050,5 @@ Return ONLY the JSON array, no other text."""
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")

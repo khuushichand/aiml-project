@@ -15,12 +15,6 @@ from .governor import MemoryResourceGovernor, ResourceGovernor, RGDecision, RGRe
 from .metrics_rg import _labels, ensure_rg_metrics_registered, rg_metrics_entity_label_enabled
 from .tenant import hash_entity
 
-try:
-    # Metrics are optional during early startup
-    from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
-except _RG_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - metrics optional
-    get_metrics_registry = None  # type: ignore
-
 from tldw_Server_API.app.core.config import rg_redis_fail_mode
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_async_redis_client
 
@@ -38,6 +32,12 @@ _RG_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     ValueError,
     json.JSONDecodeError,
 )
+
+try:
+    # Metrics are optional during early startup
+    from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+except _RG_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - metrics optional
+    get_metrics_registry = None  # type: ignore
 
 
 class _FallbackToMemory(Exception):

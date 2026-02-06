@@ -128,6 +128,19 @@ class ProcessContextRequest(BaseModel):
     recursive_scanning: bool = Field(False, description="Enable recursive scanning")
 
 
+class ProcessContextDiagnostic(BaseModel):
+    """Per-entry diagnostics for world book context processing."""
+    entry_id: Optional[int] = Field(None, description="Matched entry ID")
+    world_book_id: Optional[int] = Field(None, description="Parent world book ID")
+    activation_reason: str = Field(..., description="Activation reason: keyword_match, regex_match, or depth")
+    keyword: Optional[str] = Field(None, description="Keyword or regex pattern that matched when available")
+    token_cost: int = Field(..., description="Estimated token cost for this entry")
+    priority: int = Field(..., description="Entry priority")
+    regex_match: bool = Field(..., description="Whether this entry uses regex matching")
+    content_preview: str = Field(..., description="Preview of matched entry content")
+    depth_level: Optional[int] = Field(None, description="Recursive depth level for depth-triggered matches")
+
+
 class ProcessContextResponse(BaseModel):
     """Response schema for processed context."""
     injected_content: str = Field(..., description="World info content to inject")
@@ -135,6 +148,22 @@ class ProcessContextResponse(BaseModel):
     tokens_used: int = Field(..., description="Estimated tokens used")
     books_used: int = Field(..., description="Number of world books that had matches")
     entry_ids: list[int] = Field(..., description="IDs of matched entries")
+    token_budget: Optional[int] = Field(
+        None,
+        description="Token budget used for this processing call",
+    )
+    budget_exhausted: Optional[bool] = Field(
+        None,
+        description="Whether token budget was fully consumed during matching",
+    )
+    skipped_entries_due_to_budget: Optional[int] = Field(
+        None,
+        description="Number of matched entries skipped due to token budget",
+    )
+    diagnostics: list[ProcessContextDiagnostic] = Field(
+        default_factory=list,
+        description="Matched entry diagnostics for debugging",
+    )
 
 
 class WorldBookListResponse(BaseModel):

@@ -35,6 +35,25 @@ from ..utils import parse_bool
 # Local Imports
 from .base import AudioFormat, ProviderStatus, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse, VoiceInfo
 
+_VIBEVOICE_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EOFError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 #
 #######################################################################################################################
 #
@@ -129,7 +148,7 @@ class VibeVoiceAdapter(TTSAdapter):
                 if self.use_quantization:
                     logger.info("VibeVoice: Disabling additional 4-bit quantization for 7B-Q8 model")
                 self.use_quantization = False
-        except Exception:
+        except _VIBEVOICE_NONCRITICAL_EXCEPTIONS:
             pass
         self.auto_cleanup = self.config.get("vibevoice_auto_cleanup", True)
         # Auto-download behavior: config override > env overrides > default False
@@ -274,7 +293,7 @@ class VibeVoiceAdapter(TTSAdapter):
 
         except ImportError:
             logger.debug("Voice manager not available, skipping user voice loading")
-        except Exception as e:
+        except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error loading user voices: {e}")
 
     async def initialize(self, user_id: Optional[int] = None) -> bool:
@@ -438,7 +457,7 @@ class VibeVoiceAdapter(TTSAdapter):
                     details={"error": str(e), "device": self.device}
                 )
             raise
-        except Exception as e:
+        except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name}: Initialization failed: {e}")
             self._status = ProviderStatus.ERROR
             raise TTSProviderInitializationError(
@@ -462,7 +481,7 @@ class VibeVoiceAdapter(TTSAdapter):
             mp = Path(self.model_path)
             if mp.exists() and mp.is_dir():
                 try_path = mp
-        except Exception:
+        except _VIBEVOICE_NONCRITICAL_EXCEPTIONS:
             try_path = None
 
         search_dir = try_path or self.model_dir
@@ -486,7 +505,7 @@ class VibeVoiceAdapter(TTSAdapter):
             if mp.exists() and mp.is_dir():
                 logger.info(f"{self.provider_name}: Using existing local model at {mp}")
                 return True
-        except Exception:
+        except _VIBEVOICE_NONCRITICAL_EXCEPTIONS:
             pass
 
         if not self.auto_download:
@@ -527,7 +546,7 @@ class VibeVoiceAdapter(TTSAdapter):
         except ImportError:
             logger.error(f"{self.provider_name}: huggingface_hub not installed. Run: pip install huggingface-hub")
             return False
-        except Exception as e:
+        except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name}: Model download failed: {e}")
             return False
 
@@ -560,7 +579,7 @@ class VibeVoiceAdapter(TTSAdapter):
                         verbose=False,
                     )
             logger.debug(f"{self.provider_name}: Model warmup complete")
-        except Exception as e:
+        except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"{self.provider_name}: Warmup failed: {e}")
 
     def _build_voice_samples(
@@ -594,7 +613,7 @@ class VibeVoiceAdapter(TTSAdapter):
             for k, v in speakers_to_voices.items():
                 try:
                     spk = int(k)
-                except Exception:
+                except _VIBEVOICE_NONCRITICAL_EXCEPTIONS:
                     continue
                 # Normalize to 0-based index used by processor enumeration
                 idx = spk - min_spk if spk >= min_spk else spk
@@ -676,7 +695,7 @@ class VibeVoiceAdapter(TTSAdapter):
         # Validate request using new validation system
         try:
             validate_tts_request(request, provider=self.provider_key)
-        except Exception as e:
+        except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name} request validation failed: {e}")
             raise
 
@@ -827,7 +846,7 @@ class VibeVoiceAdapter(TTSAdapter):
 
         except (TTSProviderNotConfiguredError, TTSModelLoadError):
             raise
-        except Exception as e:
+        except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name} generation error: {e}")
             raise TTSGenerationError(
                 f"Failed to generate speech with {self.provider_name}",
@@ -980,7 +999,7 @@ class VibeVoiceAdapter(TTSAdapter):
 
         except TTSModelNotFoundError:
             raise
-        except Exception as e:
+        except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name} streaming error: {e}")
             raise TTSGenerationError(
                 f"Streaming error in {self.provider_name}",
@@ -995,7 +1014,7 @@ class VibeVoiceAdapter(TTSAdapter):
                     from pathlib import Path
                     Path(voice_reference_path).unlink(missing_ok=True)
                     logger.debug(f"Cleaned up temporary voice reference: {voice_reference_path}")
-                except Exception as e:
+                except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Failed to clean up voice reference: {e}")
 
     async def _generate_complete_vibevoice(
@@ -1097,13 +1116,13 @@ class VibeVoiceAdapter(TTSAdapter):
                     audio_resampled = librosa.resample(audio_data, orig_sr=sr, target_sr=24000)
                     sf.write(tmp_path, audio_resampled, 24000)
 
-            except Exception as e:
+            except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Could not validate voice reference duration: {e}")
 
             logger.info(f"Voice reference prepared for VibeVoice: {tmp_path}")
             return tmp_path
 
-        except Exception as e:
+        except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to prepare voice reference: {e}")
             return None
 
@@ -1201,7 +1220,7 @@ class VibeVoiceAdapter(TTSAdapter):
 
             return None
 
-        except Exception as e:
+        except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to generate synthetic voice: {e}")
             return None
 
@@ -1299,9 +1318,9 @@ class VibeVoiceAdapter(TTSAdapter):
 
                     if allocated_gb > self._memory_stats["peak_vram_gb"]:
                         self._memory_stats["peak_vram_gb"] = allocated_gb
-                except Exception as e:
+                except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"MPS memory tracking not available: error={e}")
-        except Exception as e:
+        except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Could not update memory stats: {e}")
 
     def get_memory_usage(self) -> dict[str, float]:
@@ -1343,7 +1362,7 @@ class VibeVoiceAdapter(TTSAdapter):
             self._update_memory_stats()
 
             logger.debug(f"{self.provider_name}: Resources cleaned up")
-        except Exception as e:
+        except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"{self.provider_name}: Error during cleanup: {e}")
 
     async def cleanup_after_generation(self):
@@ -1363,7 +1382,7 @@ class VibeVoiceAdapter(TTSAdapter):
                 self._update_memory_stats()
                 logger.debug(f"Post-generation cleanup: {self._memory_stats['current_vram_gb']:.2f}GB in use")
 
-        except Exception as e:
+        except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Post-generation cleanup error: {e}")
 
     def cancel_generation(self):

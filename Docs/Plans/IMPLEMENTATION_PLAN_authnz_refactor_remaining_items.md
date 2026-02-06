@@ -1,0 +1,64 @@
+## Context
+This active plan tracks unfinished work split from:
+`Docs/Product/Completed/AuthNZ-Refactor/IMPLEMENTATION_PLAN.md`
+
+## Stage 1: Profiles & Modes
+**Goal**: Introduce a small set of blessed RAG profiles (e.g., production, research, cheap/fast) with documented defaults that map onto `unified_rag_pipeline` parameters without breaking existing callers.
+**Success Criteria**:
+- A lightweight profile abstraction exists (e.g., `RAGProfile`) with three named profiles and clear defaults.
+- Callers can opt into a profile via a simple API (e.g., helper or `profile` argument) while still being able to override individual knobs.
+- Documentation describes each profile's intent, defaults, and tradeoffs (latency, cost, safety).
+- Unit tests cover profile-to-pipeline-args mapping and guard against regression.
+**Tests**:
+- New unit tests for the profile helper module.
+- Adjusted/added tests in `tests/RAG_NEW` that exercise at least one profile end-to-end.
+**Status**: Complete
+
+## Stage 2: Multi-Tenant Isolation Story
+**Goal**: Clarify and tighten multi-tenant isolation across DBs, caches, exemplars, and telemetry for the RAG pipeline.
+**Success Criteria**:
+- Design doc (or section in existing RAG docs) explicitly states tenant/user boundaries and trust assumptions.
+- Caches and persisted artifacts (semantic/adaptive cache, rewrite cache, exemplars) are keyed or scoped by user/namespace/tenant where appropriate, or explicitly disabled in multi-tenant profiles.
+- Telemetry/metrics and tracing include tenant-safe labels and guidance on off-box export.
+- Tests and/or linters guard against obvious cross-tenant leakage patterns in new code.
+**Tests**:
+- Unit tests for cache keying/namespacing behavior.
+- Focused tests for exemplar logging to ensure user/namespace metadata is present and redaction is applied.
+**Status**: Not Started
+
+## Stage 3: Pipeline Refactor & API Cleanups
+**Goal**: Factor the ~2000-line `unified_rag_pipeline` into composable, testable steps with clearer required/optional components, enforced budgets, and cleaner public API boundaries.
+**Success Criteria**:
+- A `RAGPipelineContext` (or equivalent) internal abstraction exists and is used across phases (retrieval, expansion, caching, guardrails, reranking, generation, claims, post-verification, telemetry).
+- The main entry point becomes a thin orchestrator over smaller functions or classes, without changing external behavior.
+- Required vs optional modules are clearly separated; production profiles fail loudly when required components are missing, while experimental paths remain opt-in.
+- Time/cost budgets are enforced in a centralized way, with sensible defaults per profile.
+- API surface issues (e.g., `enable_streaming` semantics, duplicate helpers, return-type guarantees) are documented and partially addressed without breaking existing clients.
+**Tests**:
+- Existing `tests/RAG_NEW` suites continue to pass.
+- New unit tests for at least one extracted phase (e.g., retrieval or guardrails) to validate behavior in isolation.
+**Status**: Not Started
+
+## Stage 4: AuthNZ + Resource Governor Long-Tail Alignment
+**Goal**: Complete the remaining adoption checklist items after the v1 baseline for Resource Governor and claim-first AuthNZ dependencies.
+**Success Criteria**:
+- Remaining legacy limiters are retired once RG parity is validated (Chat `ConversationRateLimiter`, Embeddings `UserRateLimiter`, Evaluations/AuthNZ/Character Chat/Web Scraping shims, legacy SlowAPI counters, and non-RG audio concurrency counters).
+- Remaining RG-free ingress routes are explicitly documented and either mapped through `route_map` policies or kept out-of-scope with rationale.
+- Remaining legacy `require_admin` helpers in evaluations, embeddings v5, and MCP endpoints are migrated to `get_auth_principal` + claims checks (`require_roles("admin")` and/or `require_permissions(...)`).
+- New authorization checks stop branching on `is_single_user_mode()` where principal claims should be authoritative.
+- Remaining inline AuthNZ SQL/backend detection is moved to repositories (remaining DDL in `initialize.py`, quota counters in `quotas.py`, residual `hasattr(conn, 'fetchval')` paths) while preserving SQLite/Postgres parity.
+**Tests**:
+- Keep `tests/Resource_Governance/*`, `tests/AuthNZ_Unit/test_auth_principal_*`, `tests/AuthNZ_Unit/*permissions*_claims.py`, `tests/AuthNZ/integration/test_single_user_claims_permissions.py`, and AuthNZ repo tests passing across SQLite/Postgres backends.
+**Status**: In Progress
+
+## Stage 5: RG v1.1 Legacy Limiter Retirement
+**Goal**: Safely retire remaining legacy limiters/shims once RG parity is verified, leaving ResourceGovernor as the sole enforcer.
+**Success Criteria**:
+- Per-module shadow mismatch metrics show near-zero drift for at least one release window on representative traffic.
+- All mapped routes return stable 429/`Retry-After`/`X-RateLimit-*` headers under both memory and Redis backends.
+- Legacy limiters are demoted to diagnostics-only shims (no counters) with deprecation warnings, then removed after one stable release.
+- Unused `RG_ENABLE_*` aliases and legacy flags are deleted post-release and docs/examples reference RG policies/envs only.
+**Tests**:
+- For each module (chat, embeddings, authnz, evals, character-chat, web-scraping, audio, workflows), keep/extend parity tests and remove legacy-path assertions only after cutover.
+- Regression suite ensures no route double-enforces after shim removal.
+**Status**: In Progress

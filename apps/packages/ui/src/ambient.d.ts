@@ -75,22 +75,49 @@ declare module "pa-tesseract.js" {
 }
 
 declare module "xterm" {
-  export class Terminal {
-    constructor(options?: any)
+  export interface IDisposable {
+    dispose(): void
+  }
+
+  export interface IEvent<T, U = void> {
+    (
+      listener: (arg1: T, arg2: U) => any,
+      thisArg?: any,
+      disposables?: IDisposable[]
+    ): IDisposable
+  }
+
+  export interface ITerminal extends IDisposable {
     open(element: HTMLElement): void
-    loadAddon(addon: any): void
+    loadAddon(addon: ITerminalAddon): void
     write(data: string | Uint8Array, callback?: () => void): void
     focus(): void
-    onResize?(callback: (size: { cols: number; rows: number }) => void): { dispose: () => void }
+    onResize: IEvent<{ cols: number; rows: number }>
+    onData: IEvent<string>
+  }
+
+  export interface ITerminalAddon extends IDisposable {
+    activate(terminal: ITerminal): void
+  }
+
+  export class Terminal implements ITerminal {
+    constructor(options?: any)
+    open(element: HTMLElement): void
+    loadAddon(addon: ITerminalAddon): void
+    write(data: string | Uint8Array, callback?: () => void): void
+    focus(): void
+    onResize: IEvent<{ cols: number; rows: number }>
+    onData: IEvent<string>
     dispose(): void
-    onData?(callback: (data: string) => void): { dispose: () => void }
   }
 }
 
 declare module "@xterm/addon-fit" {
-  export class FitAddon {
+  import type { ITerminal, ITerminalAddon } from "xterm"
+
+  export class FitAddon implements ITerminalAddon {
     constructor()
-    activate(terminal: any): void
+    activate(terminal: ITerminal): void
     fit(): void
     dispose(): void
   }

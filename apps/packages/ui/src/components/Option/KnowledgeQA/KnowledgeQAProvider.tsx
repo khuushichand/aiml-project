@@ -251,12 +251,32 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
     async (conversationId: string, version?: number | null): Promise<void> => {
       if (!conversationId || version == null) return
       try {
+        const conversationResponse = await tldwClient.fetchWithAuth(
+          `/api/v1/chat/conversations/${conversationId}`
+        )
+        const conversationData = await conversationResponse.json()
+        const currentKeywords = Array.isArray(conversationData?.keywords)
+          ? conversationData.keywords
+          : Array.isArray(conversationData?.conversation?.keywords)
+            ? conversationData.conversation.keywords
+            : []
+        const mergedKeywords: string[] = []
+        const seenKeywords = new Set<string>()
+        for (const keyword of [...currentKeywords, KNOWLEDGE_QA_KEYWORD]) {
+          const normalized = String(keyword ?? "").trim()
+          if (!normalized) continue
+          const normalizedKey = normalized.toLowerCase()
+          if (seenKeywords.has(normalizedKey)) continue
+          seenKeywords.add(normalizedKey)
+          mergedKeywords.push(normalized)
+        }
+
         await tldwClient.fetchWithAuth(`/api/v1/chat/conversations/${conversationId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             version,
-            keywords: [KNOWLEDGE_QA_KEYWORD],
+            keywords: mergedKeywords,
           }),
         })
       } catch (error) {

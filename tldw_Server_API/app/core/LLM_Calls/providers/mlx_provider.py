@@ -42,12 +42,27 @@ from tldw_Server_API.app.core.Utils.common import parse_boolean
 from .base import ChatProvider, EmbeddingsProvider
 
 
+_MLX_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
+
 def _coerce_int(val: str | None, default: int | None = None) -> int | None:
     try:
         if val is None:
             return default
         return int(val)
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -58,7 +73,7 @@ def _extract_unexpected_kwarg(err: TypeError) -> str | None:
         return None
     try:
         return message.split(marker, 1)[1].strip().strip("'\"")
-    except Exception:
+    except (AttributeError, IndexError, TypeError, ValueError):
         return None
 
 
@@ -177,10 +192,10 @@ class MLXSessionRegistry:
                         )
                     )
             self._metrics_registered = True
-        except Exception as exc:  # pragma: no cover - metrics must not break flow
+        except _MLX_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - metrics must not break flow
             try:
                 logger.debug(f"MLX metrics registration failed: {exc}")
-            except Exception:
+            except _MLX_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def _import_mlx(self):
@@ -263,7 +278,7 @@ class MLXSessionRegistry:
                 set_gauge("mlx_active_sessions", 1.0)
                 set_gauge("mlx_requests_inflight", float(self._inflight))
                 set_gauge("mlx_queue_depth", 0.0)
-            except Exception:
+            except _MLX_NONCRITICAL_EXCEPTIONS:
                 pass
             return self.status()
         except Exception as exc:
@@ -278,7 +293,7 @@ class MLXSessionRegistry:
                     labels={"model": model_path},
                 )
                 increment_counter("mlx_load_total", labels={"model": model_path, "status": "failure"})
-            except Exception:
+            except _MLX_NONCRITICAL_EXCEPTIONS:
                 pass
             if isinstance(exc, ChatProviderError):
                 raise
@@ -302,7 +317,7 @@ class MLXSessionRegistry:
             set_gauge("mlx_active_sessions", 0.0)
             set_gauge("mlx_requests_inflight", 0.0)
             set_gauge("mlx_queue_depth", 0.0)
-        except Exception:
+        except _MLX_NONCRITICAL_EXCEPTIONS:
             pass
         return {"status": "unloaded"}
 
@@ -326,21 +341,21 @@ class MLXSessionRegistry:
                 try:
                     set_gauge("mlx_requests_inflight", float(self._inflight))
                     set_gauge("mlx_queue_depth", 0.0)
-                except Exception:
+                except _MLX_NONCRITICAL_EXCEPTIONS:
                     pass
             yield session
         finally:
             if acquired:
                 try:
                     sema.release()
-                except Exception:
+                except ValueError:
                     pass
             if counted:
                 with self._lock:
                     self._inflight = max(0, self._inflight - 1)
                     try:
                         set_gauge("mlx_requests_inflight", float(self._inflight))
-                    except Exception:
+                    except _MLX_NONCRITICAL_EXCEPTIONS:
                         pass
 
     def status(self) -> dict[str, Any]:
@@ -401,10 +416,10 @@ def _messages_to_prompt(messages: Any, tokenizer: Any, system_message: str | Non
                 finally:
                     try:
                         tokenizer.chat_template = original_template
-                    except Exception:
+                    except _MLX_NONCRITICAL_EXCEPTIONS:
                         pass
             return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
-    except Exception as exc:
+    except _MLX_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"MLX chat template application failed; falling back: {exc}")
     # Fallback: naive concatenation
     parts = []
@@ -483,7 +498,7 @@ class MLXChatAdapter(ChatProvider):
                     value=float(tokens),
                     labels={"model": session.model_id, "streaming": "false"},
                 )
-            except Exception:
+            except _MLX_NONCRITICAL_EXCEPTIONS:
                 pass
             return {
                 "id": f"chatcmpl-{uuid.uuid4()}",
@@ -539,11 +554,11 @@ class MLXChatAdapter(ChatProvider):
                                 value=float(total_tokens),
                                 labels={"model": session.model_id, "streaming": "true"},
                             )
-                    except Exception:
+                    except _MLX_NONCRITICAL_EXCEPTIONS:
                         pass
                     yield from finalize_stream(None)
                     return
-                except Exception as exc:
+                except _MLX_NONCRITICAL_EXCEPTIONS as exc:
                     logger.error(f"MLX streaming failed, falling back to non-stream: {exc}")
             # Fallback to single-shot if streaming not available
             try:
@@ -571,7 +586,7 @@ class MLXChatAdapter(ChatProvider):
                         value=float(tokens),
                         labels={"model": session.model_id, "streaming": "true"},
                     )
-            except Exception:
+            except _MLX_NONCRITICAL_EXCEPTIONS:
                 pass
             yield openai_delta_chunk(content)
             yield from finalize_stream(None)
@@ -620,7 +635,7 @@ class MLXEmbeddingsAdapter(EmbeddingsProvider):
                     "mlx_embeddings_requests_total",
                     labels={"model": session.model_id},
                 )
-            except Exception:
+            except _MLX_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Normalize to OpenAI-like response shape

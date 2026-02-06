@@ -23,6 +23,18 @@ from tldw_Server_API.cli.utils.output import (
     print_metrics_summary,
 )
 
+_HEALTH_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
 
 @click.group()
 def health_group():
@@ -61,7 +73,7 @@ def health_check(ctx, components, output_format):
         if health_data.get('status') == 'unhealthy':
             sys.exit(1)
 
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Health check failed")
         print_error(f"Health check failed: {e}")
         sys.exit(1)
@@ -91,7 +103,7 @@ def status(ctx, output_format):
         else:
             _display_status_table(status_data)
 
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Status check failed")
         print_error(f"Status check failed: {e}")
         sys.exit(1)
@@ -123,7 +135,7 @@ def metrics(ctx, component, output_format):
         else:
             print_metrics_summary(metrics_data)
 
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Metrics collection failed")
         print_error(f"Metrics collection failed: {e}")
         sys.exit(1)
@@ -146,7 +158,7 @@ def _perform_health_check(config: dict[str, Any], detailed: bool = False) -> dic
         if db_health['status'] in ['unhealthy', 'degraded']:
             health_data['status'] = 'degraded'
 
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Database health check failed: {e}")
         health_data['components']['database'] = {
             'status': 'error',
@@ -171,7 +183,7 @@ def _perform_health_check(config: dict[str, Any], detailed: bool = False) -> dic
                 'message': 'Configuration is valid'
             }
 
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Configuration validation failed: {e}")
         health_data['components']['configuration'] = {
             'status': 'error',
@@ -193,7 +205,7 @@ def _perform_health_check(config: dict[str, Any], detailed: bool = False) -> dic
             'message': 'Rate limiting service operational'
         }
 
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Rate limiting health check failed: {e}")
         health_data['components']['rate_limiting'] = {
             'status': 'error',
@@ -209,7 +221,7 @@ def _perform_health_check(config: dict[str, Any], detailed: bool = False) -> dic
         }
         health_data['components']['webhooks'] = webhook_health
 
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Webhook service health check failed: {e}")
         health_data['components']['webhooks'] = {
             'status': 'error',
@@ -227,7 +239,7 @@ def _perform_health_check(config: dict[str, Any], detailed: bool = False) -> dic
             'enabled': metrics_health.get('metrics_enabled', False)
         }
 
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Metrics health check failed: {e}")
         health_data['components']['metrics'] = {
             'status': 'error',
@@ -253,7 +265,7 @@ def _perform_health_check(config: dict[str, Any], detailed: bool = False) -> dic
             'message': 'Unified audit logging operational',
             'recent_events': len(events)
         }
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unified audit logging health check failed: {e}")
         health_data['components']['audit_logging'] = {
             'status': 'error',
@@ -286,7 +298,7 @@ def _get_system_status(config: dict[str, Any]) -> dict[str, Any]:
             'avg_checkout_time': f"{db_stats.avg_checkout_time:.3f}s"
         }
 
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Could not get database stats: {e}")
         status_data['database'] = {'error': str(e)}
 
@@ -305,7 +317,7 @@ def _get_system_status(config: dict[str, Any]) -> dict[str, Any]:
             last_created = items[0].get('created_at')
             try:
                 last_eval_display = format_timestamp(last_created)
-            except Exception:
+            except (TypeError, ValueError):
                 last_eval_display = str(last_created)
 
         status_data['evaluations'] = {
@@ -313,7 +325,7 @@ def _get_system_status(config: dict[str, Any]) -> dict[str, Any]:
             'last_evaluation': last_eval_display
         }
 
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Could not get evaluation stats: {e}")
         status_data['evaluations'] = {'error': str(e)}
 
@@ -341,7 +353,7 @@ def _get_system_metrics(config: dict[str, Any], component: str = None) -> dict[s
         health_metrics = metrics.get_health_metrics()
         metrics_data.update(health_metrics)
 
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Could not collect metrics: {e}")
         metrics_data['error'] = str(e)
 
@@ -364,7 +376,7 @@ def _get_system_metrics(config: dict[str, Any], component: str = None) -> dict[s
                 'pool_exhausted_count': db_stats.pool_exhausted_count
             }
 
-        except Exception as e:
+        except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Could not get database metrics: {e}")
             if 'database' not in metrics_data:
                 metrics_data['database'] = {}

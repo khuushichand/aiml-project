@@ -1,6 +1,7 @@
 import { FileIcon, X } from "lucide-react"
-import { Form, Input, Select } from "antd"
-import { useQueryClient } from "@tanstack/react-query"
+import React from "react"
+import { Form, Input, InputNumber, Select } from "antd"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
 import { tldwClient, type ConversationState } from "@/services/tldw/TldwApiClient"
 import {
@@ -8,6 +9,9 @@ import {
   normalizeConversationState
 } from "@/utils/conversation-state"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
+import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
+import { PromptAssemblyPreview } from "@/components/Common/Settings/PromptAssemblyPreview"
+import { LorebookDebugPanel } from "@/components/Common/Settings/LorebookDebugPanel"
 
 interface UploadedFile {
   id: string
@@ -18,6 +22,7 @@ interface UploadedFile {
 
 interface ConversationTabProps {
   useDrawer?: boolean
+  historyId: string | null
   selectedSystemPrompt: string | null
   onSystemPromptChange: (value: string) => void
   uploadedFiles: UploadedFile[]
@@ -32,6 +37,11 @@ interface ConversationTabProps {
 
 interface UpdateChatResponse {
   version?: number | null
+}
+
+type CharacterLite = {
+  id: string | number
+  name?: string | null
 }
 
 function isErrorWithMessage(error: unknown): error is { message: string } {
@@ -55,8 +65,214 @@ function getUpdateChatVersion(value: unknown): number | null {
   return value.version ?? null
 }
 
+const sanitizeDepth = (value: unknown): number => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.floor(value))
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10)
+    if (Number.isFinite(parsed)) {
+      return Math.max(0, Math.floor(parsed))
+    }
+  }
+  return 1
+}
+
+const sanitizeAutoSummaryThreshold = (value: unknown): number => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(2, Math.min(5000, Math.floor(value)))
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10)
+    if (Number.isFinite(parsed)) {
+      return Math.max(2, Math.min(5000, Math.floor(parsed)))
+    }
+  }
+  return 40
+}
+
+const sanitizeAutoSummaryWindow = (
+  value: unknown,
+  threshold: number
+): number => {
+  const maxWindow = Math.max(1, threshold - 1)
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(1, Math.min(maxWindow, Math.floor(value)))
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10)
+    if (Number.isFinite(parsed)) {
+      return Math.max(1, Math.min(maxWindow, Math.floor(parsed)))
+    }
+  }
+  return Math.min(12, maxWindow)
+}
+
+const normalizeAuthorNotePosition = (
+  value: unknown
+): { mode: "before_system" | "depth"; depth: number } => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return { mode: "depth", depth: sanitizeDepth(value) }
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    if (
+      normalized === "before_system" ||
+      normalized === "before-system" ||
+      normalized === "before system" ||
+      normalized === "before"
+    ) {
+      return { mode: "before_system", depth: 1 }
+    }
+    if (normalized.startsWith("depth")) {
+      const suffix = normalized.replace(/^depth\s*:?\s*/, "")
+      return { mode: "depth", depth: sanitizeDepth(suffix) }
+    }
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>
+    const modeRaw = record.mode
+    const mode =
+      typeof modeRaw === "string" ? modeRaw.trim().toLowerCase() : ""
+    if (mode === "depth" || mode === "at_depth") {
+      return { mode: "depth", depth: sanitizeDepth(record.depth) }
+    }
+    if (
+      mode === "before_system" ||
+      mode === "before-system" ||
+      mode === "before"
+    ) {
+      return { mode: "before_system", depth: 1 }
+    }
+  }
+
+  return { mode: "before_system", depth: 1 }
+}
+
+const normalizeGreetingScope = (value: unknown): "chat" | "character" => {
+  if (typeof value === "string" && value.trim().toLowerCase() === "character") {
+    return "character"
+  }
+  return "chat"
+}
+
+const normalizePresetScope = (value: unknown): "chat" | "character" => {
+  if (typeof value === "string" && value.trim().toLowerCase() === "chat") {
+    return "chat"
+  }
+  return "character"
+}
+
+const normalizeMemoryScope = (
+  value: unknown
+): "shared" | "character" | "both" => {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    if (
+      normalized === "shared" ||
+      normalized === "character" ||
+      normalized === "both"
+    ) {
+      return normalized
+    }
+  }
+  return "shared"
+}
+
+const normalizeTurnTakingMode = (value: unknown): "single" | "round_robin" => {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    if (
+      normalized === "round_robin" ||
+      normalized === "round-robin" ||
+      normalized === "round robin"
+    ) {
+      return "round_robin"
+    }
+  }
+  return "single"
+}
+
+const normalizeParticipantCharacterIds = (value: unknown): string[] => {
+  const normalizedIds: string[] = []
+  const seen = new Set<string>()
+
+  const append = (candidate: unknown) => {
+    const text = String(candidate ?? "").trim()
+    if (!text) return
+    const parsed = Number.parseInt(text, 10)
+    if (!Number.isFinite(parsed) || parsed <= 0) return
+    const key = String(parsed)
+    if (seen.has(key)) return
+    seen.add(key)
+    normalizedIds.push(key)
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach(append)
+    return normalizedIds
+  }
+
+  if (typeof value === "string") {
+    const text = value.trim()
+    if (!text) return normalizedIds
+    try {
+      const parsed = JSON.parse(text)
+      if (Array.isArray(parsed)) {
+        parsed.forEach(append)
+        return normalizedIds
+      }
+    } catch {
+      // Fallback to comma-separated input.
+    }
+    text
+      .split(",")
+      .map((entry) => entry.trim())
+      .forEach(append)
+    return normalizedIds
+  }
+
+  return normalizedIds
+}
+
+const normalizeDirectedCharacterId = (value: unknown): string | null => {
+  const text = String(value ?? "").trim()
+  if (!text) return null
+  const parsed = Number.parseInt(text, 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  return String(parsed)
+}
+
+const normalizeCharacterMemoryById = (
+  value: unknown
+): Record<string, { note: string; updatedAt?: string }> => {
+  if (!value || typeof value !== "object") return {}
+  const normalized: Record<string, { note: string; updatedAt?: string }> = {}
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    const parsedId = Number.parseInt(String(key), 10)
+    if (!Number.isFinite(parsedId) || parsedId <= 0) continue
+    if (entry && typeof entry === "object") {
+      const note = String((entry as { note?: unknown }).note ?? "").trim()
+      if (!note) continue
+      const updatedAt = (entry as { updatedAt?: unknown }).updatedAt
+      normalized[String(parsedId)] = {
+        note,
+        updatedAt: typeof updatedAt === "string" ? updatedAt : undefined
+      }
+      continue
+    }
+    const note = String(entry ?? "").trim()
+    if (!note) continue
+    normalized[String(parsedId)] = { note }
+  }
+  return normalized
+}
+
 export function ConversationTab({
   useDrawer,
+  historyId,
   selectedSystemPrompt,
   onSystemPromptChange,
   uploadedFiles,
@@ -71,11 +287,324 @@ export function ConversationTab({
   const { t } = useTranslation(["common", "playground"])
   const notification = useAntdNotification()
   const queryClient = useQueryClient()
+  const { settings: chatSettings, updateSettings } = useChatSettingsRecord({
+    historyId,
+    serverChatId
+  })
+  const [authorNoteDraft, setAuthorNoteDraft] = React.useState("")
+  const [authorNoteMode, setAuthorNoteMode] = React.useState<
+    "before_system" | "depth"
+  >("before_system")
+  const [authorNoteDepth, setAuthorNoteDepth] = React.useState(1)
+  const [memoryCharacterId, setMemoryCharacterId] = React.useState<string | null>(
+    null
+  )
+  const [memoryNoteDraft, setMemoryNoteDraft] = React.useState("")
+  const summarySettings =
+    chatSettings?.summary && typeof chatSettings.summary === "object"
+      ? (chatSettings.summary as Record<string, unknown>)
+      : null
+  const persistedAutoSummaryEnabled = Boolean(
+    chatSettings?.autoSummaryEnabled ?? summarySettings?.enabled ?? false
+  )
+  const persistedAutoSummaryThreshold = sanitizeAutoSummaryThreshold(
+    chatSettings?.autoSummaryThresholdMessages ??
+      summarySettings?.thresholdMessages
+  )
+  const persistedAutoSummaryWindow = sanitizeAutoSummaryWindow(
+    chatSettings?.autoSummaryWindowMessages ?? summarySettings?.windowMessages,
+    persistedAutoSummaryThreshold
+  )
+  const [autoSummaryEnabledDraft, setAutoSummaryEnabledDraft] = React.useState(
+    persistedAutoSummaryEnabled
+  )
+  const [autoSummaryThresholdDraft, setAutoSummaryThresholdDraft] =
+    React.useState(persistedAutoSummaryThreshold)
+  const [autoSummaryWindowDraft, setAutoSummaryWindowDraft] = React.useState(
+    persistedAutoSummaryWindow
+  )
+  const greetingScopeValue = normalizeGreetingScope(chatSettings?.greetingScope)
+  const presetScopeValue = normalizePresetScope(chatSettings?.presetScope)
+  const memoryScopeValue = normalizeMemoryScope(chatSettings?.memoryScope)
+  const turnTakingModeValue = normalizeTurnTakingMode(chatSettings?.turnTakingMode)
+  const directedCharacterIdValue = normalizeDirectedCharacterId(
+    chatSettings?.directedCharacterId
+  )
+  const characterMemoryById = React.useMemo(
+    () => normalizeCharacterMemoryById(chatSettings?.characterMemoryById),
+    [chatSettings?.characterMemoryById]
+  )
+  const participantCharacterIdsValue = normalizeParticipantCharacterIds(
+    chatSettings?.participantCharacterIds
+  )
+  const { data: availableCharacters = [] } = useQuery<CharacterLite[]>({
+    queryKey: ["tldw:listCharacters", "conversation-tab"],
+    queryFn: async () => {
+      await tldwClient.initialize().catch(() => null)
+      const list = await tldwClient.listCharacters({ limit: 200 })
+      return Array.isArray(list) ? (list as CharacterLite[]) : []
+    },
+    staleTime: 60_000
+  })
+  const { data: pinnedMessages = [] } = useQuery<
+    Array<{ id: string; role: string; content: string }>
+  >({
+    queryKey: ["conversation-tab:pinned-messages", serverChatId],
+    enabled: Boolean(serverChatId),
+    queryFn: async () => {
+      if (!serverChatId) return []
+      await tldwClient.initialize().catch(() => null)
+      const list = await tldwClient.listChatMessages(serverChatId, {
+        include_deleted: "false",
+        include_metadata: "true"
+      })
+      return list
+        .filter((item) => Boolean(item.pinned))
+        .map((item) => ({
+          id: item.id,
+          role: item.role,
+          content: String(item.content ?? "")
+        }))
+    },
+    staleTime: 10_000
+  })
+
+  React.useEffect(() => {
+    setAuthorNoteDraft(
+      typeof chatSettings?.authorNote === "string" ? chatSettings.authorNote : ""
+    )
+    const normalized = normalizeAuthorNotePosition(chatSettings?.authorNotePosition)
+    setAuthorNoteMode(normalized.mode)
+    setAuthorNoteDepth(normalized.depth)
+  }, [chatSettings?.authorNote, chatSettings?.authorNotePosition])
+
+  React.useEffect(() => {
+    setAutoSummaryEnabledDraft(persistedAutoSummaryEnabled)
+    setAutoSummaryThresholdDraft(persistedAutoSummaryThreshold)
+    setAutoSummaryWindowDraft(persistedAutoSummaryWindow)
+  }, [
+    persistedAutoSummaryEnabled,
+    persistedAutoSummaryThreshold,
+    persistedAutoSummaryWindow
+  ])
 
   const conversationStateOptions = CONVERSATION_STATE_OPTIONS.map((option) => ({
     value: option.value,
     label: t(option.labelToken, option.defaultLabel)
   }))
+
+  const authorNotePositionOptions = [
+    {
+      value: "before_system",
+      label: t("playground:composer.authorNotePosition.beforeSystem", {
+        defaultValue: "Before system"
+      })
+    },
+    {
+      value: "depth",
+      label: t("playground:composer.authorNotePosition.depthN", {
+        defaultValue: "Depth N"
+      })
+    }
+  ]
+  const greetingScopeOptions = [
+    {
+      value: "chat",
+      label: t("playground:composer.greetingScope.chat", {
+        defaultValue: "Per chat"
+      })
+    },
+    {
+      value: "character",
+      label: t("playground:composer.greetingScope.character", {
+        defaultValue: "Per character"
+      })
+    }
+  ]
+  const presetScopeOptions = [
+    {
+      value: "chat",
+      label: t("playground:composer.presetScope.chat", {
+        defaultValue: "Chat override"
+      })
+    },
+    {
+      value: "character",
+      label: t("playground:composer.presetScope.character", {
+        defaultValue: "Per character"
+      })
+    }
+  ]
+  const memoryScopeOptions = [
+    {
+      value: "shared",
+      label: t("playground:composer.memoryScope.shared", {
+        defaultValue: "Shared"
+      })
+    },
+    {
+      value: "character",
+      label: t("playground:composer.memoryScope.character", {
+        defaultValue: "Per character"
+      })
+    },
+    {
+      value: "both",
+      label: t("playground:composer.memoryScope.both", {
+        defaultValue: "Both"
+      })
+    }
+  ]
+  const turnTakingModeOptions = [
+    {
+      value: "single",
+      label: t("playground:composer.turnTakingMode.single", {
+        defaultValue: "Single speaker"
+      })
+    },
+    {
+      value: "round_robin",
+      label: t("playground:composer.turnTakingMode.roundRobin", {
+        defaultValue: "Round robin"
+      })
+    }
+  ]
+  const participantCharacterOptions = availableCharacters.map((character) => ({
+    value: String(character.id),
+    label: character.name || String(character.id)
+  }))
+
+  React.useEffect(() => {
+    if (participantCharacterOptions.length === 0) {
+      setMemoryCharacterId(null)
+      return
+    }
+    if (
+      memoryCharacterId &&
+      participantCharacterOptions.some((option) => option.value === memoryCharacterId)
+    ) {
+      return
+    }
+    const optionValues = new Set(participantCharacterOptions.map((option) => option.value))
+    const preferredFromMap = Object.keys(characterMemoryById).find((key) =>
+      optionValues.has(key)
+    )
+    const fallback =
+      preferredFromMap ||
+      participantCharacterIdsValue.find((id) => optionValues.has(id)) ||
+      participantCharacterOptions[0]?.value ||
+      null
+    setMemoryCharacterId(fallback)
+  }, [
+    characterMemoryById,
+    memoryCharacterId,
+    participantCharacterIdsValue,
+    participantCharacterOptions
+  ])
+
+  React.useEffect(() => {
+    if (!memoryCharacterId) {
+      setMemoryNoteDraft("")
+      return
+    }
+    setMemoryNoteDraft(characterMemoryById[memoryCharacterId]?.note || "")
+  }, [characterMemoryById, memoryCharacterId])
+
+  const persistAuthorNote = async (value: string) => {
+    await updateSettings({
+      authorNote: value.trim()
+    })
+  }
+
+  const persistAuthorNotePosition = async (
+    mode: "before_system" | "depth",
+    depth: number
+  ) => {
+    if (mode === "depth") {
+      await updateSettings({
+        authorNotePosition: {
+          mode: "depth",
+          depth: sanitizeDepth(depth)
+        }
+      })
+      return
+    }
+    await updateSettings({ authorNotePosition: "before_system" })
+  }
+  const persistGreetingScope = async (value: "chat" | "character") => {
+    await updateSettings({ greetingScope: value })
+  }
+  const persistPresetScope = async (value: "chat" | "character") => {
+    await updateSettings({ presetScope: value })
+  }
+  const persistMemoryScope = async (
+    value: "shared" | "character" | "both"
+  ) => {
+    await updateSettings({ memoryScope: value })
+  }
+  const persistTurnTakingMode = async (value: "single" | "round_robin") => {
+    await updateSettings({ turnTakingMode: value })
+  }
+  const persistParticipantCharacterIds = async (values: string[]) => {
+    const normalized = normalizeParticipantCharacterIds(values).map((id) =>
+      Number.parseInt(id, 10)
+    )
+    await updateSettings({ participantCharacterIds: normalized })
+  }
+  const persistDirectedCharacterId = async (value: string | null) => {
+    const normalized = normalizeDirectedCharacterId(value)
+    await updateSettings({
+      directedCharacterId: normalized ? Number.parseInt(normalized, 10) : null
+    })
+  }
+  const persistCharacterMemoryNote = async (
+    characterId: string,
+    noteDraft: string
+  ) => {
+    const normalizedId = normalizeDirectedCharacterId(characterId)
+    if (!normalizedId) return
+    const nextMap = { ...characterMemoryById }
+    const nextNote = noteDraft.trim()
+    if (nextNote.length === 0) {
+      delete nextMap[normalizedId]
+    } else {
+      nextMap[normalizedId] = {
+        note: nextNote,
+        updatedAt: new Date().toISOString()
+      }
+    }
+    await updateSettings({ characterMemoryById: nextMap })
+  }
+  const persistAutoSummaryEnabled = async (enabled: boolean) => {
+    await updateSettings({ autoSummaryEnabled: enabled })
+  }
+  const persistAutoSummaryThreshold = async (value: unknown) => {
+    const normalizedThreshold = sanitizeAutoSummaryThreshold(value)
+    const normalizedWindow = sanitizeAutoSummaryWindow(
+      autoSummaryWindowDraft,
+      normalizedThreshold
+    )
+    setAutoSummaryThresholdDraft(normalizedThreshold)
+    setAutoSummaryWindowDraft(normalizedWindow)
+    await updateSettings({
+      autoSummaryThresholdMessages: normalizedThreshold,
+      autoSummaryWindowMessages: normalizedWindow
+    })
+  }
+  const persistAutoSummaryWindow = async (value: unknown) => {
+    const normalizedThreshold = sanitizeAutoSummaryThreshold(
+      autoSummaryThresholdDraft
+    )
+    const normalizedWindow = sanitizeAutoSummaryWindow(
+      value,
+      normalizedThreshold
+    )
+    setAutoSummaryWindowDraft(normalizedWindow)
+    await updateSettings({
+      autoSummaryThresholdMessages: normalizedThreshold,
+      autoSummaryWindowMessages: normalizedWindow
+    })
+  }
 
   const handleStateChange = async (val: string) => {
     const next = normalizeConversationState(val)
@@ -123,6 +652,49 @@ export function ConversationTab({
       })
     }
   }
+
+  const previewSettingsFingerprint = React.useMemo(
+    () =>
+      JSON.stringify({
+        authorNote: chatSettings?.authorNote || "",
+        authorNotePosition: chatSettings?.authorNotePosition || null,
+        greetingScope: greetingScopeValue,
+        presetScope: presetScopeValue,
+        memoryScope: memoryScopeValue,
+        turnTakingMode: turnTakingModeValue,
+        participantCharacterIds: participantCharacterIdsValue.join(","),
+        directedCharacterId: directedCharacterIdValue,
+        characterMemoryById: JSON.stringify(characterMemoryById),
+        autoSummaryEnabled: autoSummaryEnabledDraft,
+        autoSummaryThresholdMessages: autoSummaryThresholdDraft,
+        autoSummaryWindowMessages: autoSummaryWindowDraft,
+        summaryUpdatedAt:
+          typeof summarySettings?.updatedAt === "string"
+            ? summarySettings.updatedAt
+            : null,
+        greetingEnabled: chatSettings?.greetingEnabled ?? true,
+        greetingSelectionId: chatSettings?.greetingSelectionId || null,
+        chatPresetOverrideId: chatSettings?.chatPresetOverrideId || null
+      }),
+    [
+      chatSettings?.authorNote,
+      chatSettings?.authorNotePosition,
+      greetingScopeValue,
+      presetScopeValue,
+      memoryScopeValue,
+      turnTakingModeValue,
+      participantCharacterIdsValue,
+      directedCharacterIdValue,
+      characterMemoryById,
+      autoSummaryEnabledDraft,
+      autoSummaryThresholdDraft,
+      autoSummaryWindowDraft,
+      summarySettings,
+      chatSettings?.greetingEnabled,
+      chatSettings?.greetingSelectionId,
+      chatSettings?.chatPresetOverrideId
+    ]
+  )
 
   return (
     <div className="space-y-4">
@@ -240,6 +812,371 @@ export function ConversationTab({
           )}
         />
       </Form.Item>
+
+      <Form.Item
+        label={t("playground:composer.authorNote.label", "Author note")}
+        help={t(
+          "playground:composer.authorNote.help",
+          "Optional note injected into character prompts for this chat."
+        )}
+      >
+        <Input.TextArea
+          rows={3}
+          showCount
+          maxLength={1200}
+          value={authorNoteDraft}
+          onChange={(e) => setAuthorNoteDraft(e.target.value)}
+          onBlur={() => {
+            const persisted =
+              typeof chatSettings?.authorNote === "string" ? chatSettings.authorNote : ""
+            if (persisted.trim() === authorNoteDraft.trim()) return
+            void persistAuthorNote(authorNoteDraft)
+          }}
+          placeholder={t(
+            "playground:composer.authorNote.placeholder",
+            "E.g., Keep responses grounded, avoid repetition, and progress the scene."
+          )}
+        />
+      </Form.Item>
+
+      <Form.Item
+        label={t(
+          "playground:composer.authorNotePosition.label",
+          "Author note insertion"
+        )}
+        help={t(
+          "playground:composer.authorNotePosition.help",
+          "Choose whether the note is inserted before system instructions or at conversation depth N."
+        )}
+      >
+        <div className="space-y-2">
+          <Select
+            value={authorNoteMode}
+            options={authorNotePositionOptions}
+            onChange={(value) => {
+              const nextMode = value === "depth" ? "depth" : "before_system"
+              setAuthorNoteMode(nextMode)
+              void persistAuthorNotePosition(nextMode, authorNoteDepth)
+            }}
+          />
+          {authorNoteMode === "depth" && (
+            <InputNumber
+              min={0}
+              step={1}
+              value={authorNoteDepth}
+              onChange={(value) => {
+                setAuthorNoteDepth(sanitizeDepth(value))
+              }}
+              onBlur={() => {
+                void persistAuthorNotePosition("depth", authorNoteDepth)
+              }}
+              addonBefore={t(
+                "playground:composer.authorNotePosition.depthLabel",
+                "Depth"
+              )}
+            />
+          )}
+        </div>
+      </Form.Item>
+
+      <Form.Item
+        label={t("playground:composer.greetingScope.label", "Greeting scope")}
+        help={t("playground:composer.greetingScope.help", {
+          defaultValue:
+            "Choose whether greeting behavior is resolved per chat or per character."
+        })}
+      >
+        <Select
+          value={greetingScopeValue}
+          options={greetingScopeOptions}
+          onChange={(value) => {
+            const next = value === "character" ? "character" : "chat"
+            void persistGreetingScope(next)
+          }}
+        />
+      </Form.Item>
+
+      <Form.Item
+        label={t("playground:composer.presetScope.label", "Preset scope")}
+        help={t("playground:composer.presetScope.help", {
+          defaultValue:
+            "Choose whether chat preset override or per-character preset is used by default."
+        })}
+      >
+        <Select
+          value={presetScopeValue}
+          options={presetScopeOptions}
+          onChange={(value) => {
+            const next = value === "chat" ? "chat" : "character"
+            void persistPresetScope(next)
+          }}
+        />
+      </Form.Item>
+
+      <Form.Item
+        label={t("playground:composer.memoryScope.label", "Memory scope")}
+        help={t("playground:composer.memoryScope.help", {
+          defaultValue:
+            "Choose whether memory is shared, per-character, or both."
+        })}
+      >
+        <Select
+          value={memoryScopeValue}
+          options={memoryScopeOptions}
+          onChange={(value) => {
+            const normalized = normalizeMemoryScope(value)
+            void persistMemoryScope(normalized)
+          }}
+        />
+      </Form.Item>
+
+      <Form.Item
+        label={t("playground:composer.turnTakingMode.label", "Turn-taking mode")}
+        help={t("playground:composer.turnTakingMode.help", {
+          defaultValue:
+            "Choose whether responses use one active speaker or rotate across selected participants."
+        })}
+      >
+        <Select
+          value={turnTakingModeValue}
+          options={turnTakingModeOptions}
+          onChange={(value) => {
+            const normalized = normalizeTurnTakingMode(value)
+            void persistTurnTakingMode(normalized)
+          }}
+        />
+      </Form.Item>
+
+      <Form.Item
+        label={t("playground:composer.participants.label", "Participants")}
+        help={t("playground:composer.participants.help", {
+          defaultValue:
+            "Select additional characters for multi-character chats. The chat's primary character remains included."
+        })}
+      >
+        <Select
+          mode="multiple"
+          allowClear
+          showSearch
+          value={participantCharacterIdsValue}
+          options={participantCharacterOptions}
+          placeholder={t("playground:composer.participants.placeholder", {
+            defaultValue: "Select additional characters"
+          })}
+          onChange={(values) => {
+            const nextValues = Array.isArray(values)
+              ? values.map((value) => String(value))
+              : []
+            void persistParticipantCharacterIds(nextValues)
+          }}
+        />
+      </Form.Item>
+
+      <Form.Item
+        label={t(
+          "playground:composer.directedReply.label",
+          "Directed responder"
+        )}
+        help={t("playground:composer.directedReply.help", {
+          defaultValue:
+            "Optional: choose which participant should generate the next response."
+        })}
+      >
+        <Select
+          allowClear
+          showSearch
+          value={directedCharacterIdValue ?? undefined}
+          options={participantCharacterOptions}
+          placeholder={t("playground:composer.directedReply.placeholder", {
+            defaultValue: "Automatic by turn-taking"
+          })}
+          onChange={(value) => {
+            const normalized = value != null ? String(value) : null
+            void persistDirectedCharacterId(normalized)
+          }}
+        />
+      </Form.Item>
+
+      {memoryScopeValue !== "shared" && (
+        <Form.Item
+          label={t(
+            "playground:composer.characterMemory.label",
+            "Per-character memory"
+          )}
+          help={t("playground:composer.characterMemory.help", {
+            defaultValue:
+              "Edit memory notes for individual characters used when memory scope includes per-character injection."
+          })}
+        >
+          <div className="space-y-2">
+            <Select
+              showSearch
+              value={memoryCharacterId ?? undefined}
+              options={participantCharacterOptions}
+              placeholder={t("playground:composer.characterMemory.target", {
+                defaultValue: "Select character"
+              })}
+              onChange={(value) => {
+                const normalized = value ? String(value) : null
+                setMemoryCharacterId(normalized)
+                setMemoryNoteDraft(
+                  normalized ? characterMemoryById[normalized]?.note || "" : ""
+                )
+              }}
+            />
+            <Input.TextArea
+              rows={3}
+              showCount
+              maxLength={600}
+              value={memoryNoteDraft}
+              onChange={(e) => setMemoryNoteDraft(e.target.value)}
+              onBlur={() => {
+                if (!memoryCharacterId) return
+                const persisted = characterMemoryById[memoryCharacterId]?.note || ""
+                if (persisted.trim() === memoryNoteDraft.trim()) return
+                void persistCharacterMemoryNote(memoryCharacterId, memoryNoteDraft)
+              }}
+              placeholder={t(
+                "playground:composer.characterMemory.placeholder",
+                "Character-specific memory note"
+              )}
+            />
+          </div>
+        </Form.Item>
+      )}
+
+      <Form.Item
+        label={t("playground:composer.autoSummary.label", "Auto summary")}
+        help={t("playground:composer.autoSummary.help", {
+          defaultValue:
+            "Compress older unpinned messages once the threshold is reached."
+        })}
+      >
+        <div className="space-y-2">
+          <Select
+            value={autoSummaryEnabledDraft ? "on" : "off"}
+            options={[
+              {
+                value: "on",
+                label: t("playground:composer.autoSummary.on", {
+                  defaultValue: "Enabled"
+                })
+              },
+              {
+                value: "off",
+                label: t("playground:composer.autoSummary.off", {
+                  defaultValue: "Disabled"
+                })
+              }
+            ]}
+            onChange={(value) => {
+              const enabled = value === "on"
+              setAutoSummaryEnabledDraft(enabled)
+              void persistAutoSummaryEnabled(enabled)
+            }}
+          />
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <InputNumber
+              min={2}
+              max={5000}
+              step={1}
+              value={autoSummaryThresholdDraft}
+              disabled={!autoSummaryEnabledDraft}
+              addonBefore={t(
+                "playground:composer.autoSummary.threshold",
+                "Threshold"
+              )}
+              onChange={(value) => {
+                setAutoSummaryThresholdDraft(
+                  sanitizeAutoSummaryThreshold(value)
+                )
+              }}
+              onBlur={() => {
+                void persistAutoSummaryThreshold(autoSummaryThresholdDraft)
+              }}
+            />
+            <InputNumber
+              min={1}
+              max={Math.max(1, autoSummaryThresholdDraft - 1)}
+              step={1}
+              value={autoSummaryWindowDraft}
+              disabled={!autoSummaryEnabledDraft}
+              addonBefore={t(
+                "playground:composer.autoSummary.window",
+                "Recent window"
+              )}
+              onChange={(value) => {
+                setAutoSummaryWindowDraft(
+                  sanitizeAutoSummaryWindow(value, autoSummaryThresholdDraft)
+                )
+              }}
+              onBlur={() => {
+                void persistAutoSummaryWindow(autoSummaryWindowDraft)
+              }}
+            />
+          </div>
+        </div>
+      </Form.Item>
+
+      <Form.Item
+        label={t("playground:composer.pinnedMessages.label", "Pinned messages")}
+        help={t("playground:composer.pinnedMessages.help", {
+          defaultValue:
+            "Pinned messages are excluded from auto-summary compression."
+        })}
+      >
+        <div className="space-y-2 max-h-40 overflow-y-auto rounded-md border border-border/60 bg-surface2/30 p-2">
+          {pinnedMessages.length === 0 ? (
+            <div className="text-xs text-text-muted">
+              {t("playground:composer.pinnedMessages.empty", {
+                defaultValue: "No pinned messages in this chat."
+              })}
+            </div>
+          ) : (
+            pinnedMessages.map((entry) => (
+              <div
+                key={entry.id}
+                className="rounded bg-surface px-2 py-1 text-xs text-text"
+              >
+                <span className="mr-1 uppercase text-[10px] text-text-subtle">
+                  {entry.role}
+                </span>
+                <span>{entry.content.slice(0, 180)}</span>
+              </div>
+            ))
+          )}
+        </div>
+      </Form.Item>
+
+      {typeof summarySettings?.content === "string" &&
+        summarySettings.content.trim().length > 0 && (
+          <Form.Item
+            label={t(
+              "playground:composer.autoSummary.currentSummary",
+              "Current summary"
+            )}
+            help={t(
+              "playground:composer.autoSummary.currentSummaryHelp",
+              "Persisted server-side summary used for prompt compression."
+            )}
+          >
+            <Input.TextArea
+              readOnly
+              rows={4}
+              value={summarySettings.content}
+            />
+          </Form.Item>
+        )}
+
+      <PromptAssemblyPreview
+        serverChatId={serverChatId}
+        settingsFingerprint={previewSettingsFingerprint}
+      />
+
+      <LorebookDebugPanel
+        serverChatId={serverChatId}
+        settingsFingerprint={previewSettingsFingerprint}
+      />
     </div>
   )
 }

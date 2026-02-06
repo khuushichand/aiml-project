@@ -15,6 +15,17 @@ from typing import Any, Callable, Optional
 
 from loguru import logger
 
+_REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 #######################################################################################################################
 #
 # Types:
@@ -115,7 +126,7 @@ class RequestQueue:
                 loop.run_in_executor(self._executor, lambda: None)
                 for _ in range(warm_n)
             ])
-        except Exception:
+        except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
             pass
 
         logger.info("Started {} queue workers", num_workers)
@@ -133,7 +144,7 @@ class RequestQueue:
         self._workers.clear()
         try:
             self._executor.shutdown(wait=True)
-        except Exception:
+        except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
             pass
 
         logger.info("Stopped queue workers")
@@ -148,7 +159,7 @@ class RequestQueue:
                 if not worker.done():
                     alive = True
                     break
-            except Exception:
+            except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
                 alive = True
                 break
         if not alive:
@@ -227,7 +238,9 @@ class RequestQueue:
                         logger.info(f"Request {request.request_id} processing was cancelled")
                         process_succeeded = True
                         raise
-                    except Exception as e:
+                    except BaseException as e:
+                        if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                            raise
                         logger.error(f"Error processing request {request.request_id}: {e}")
                         try:
                             if not request.future.cancelled():
@@ -245,7 +258,9 @@ class RequestQueue:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except BaseException as e:
+                if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                    raise
                 logger.error(f"Worker {worker_id} error: {e}")
                 await asyncio.sleep(1)
 
@@ -352,7 +367,7 @@ class RequestQueue:
                         break
                     try:
                         await request.stream_channel.put(chunk)
-                    except Exception as ch_e:
+                    except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS as ch_e:
                         logger.warning(f"Failed to enqueue stream chunk for {request.request_id}: {ch_e}")
                         break
             finally:
@@ -361,19 +376,19 @@ class RequestQueue:
                     aclose = getattr(aiter, "aclose", None)
                     if callable(aclose):
                         await aclose()
-                except Exception:
+                except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
                     pass
                 # Signal completion
                 try:
                     await request.stream_channel.put(None)
-                except Exception:
+                except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
                     pass
 
         def _pump_sync_iterator(sync_iter):
             def _put_with_backpressure(item: Any) -> bool:
                 try:
                     fut = asyncio.run_coroutine_threadsafe(request.stream_channel.put(item), loop)
-                except Exception as ch_e:
+                except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS as ch_e:
                     logger.warning(f"Failed to enqueue stream chunk (sync) for {request.request_id}: {ch_e}")
                     return False
                 while True:
@@ -384,10 +399,10 @@ class RequestQueue:
                         if request.future.cancelled() or loop.is_closed() or not self._running:
                             try:
                                 fut.cancel()
-                            except Exception:
+                            except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
                                 pass
                             return False
-                    except Exception as ch_e:
+                    except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS as ch_e:
                         logger.warning(f"Failed to enqueue stream chunk (sync) for {request.request_id}: {ch_e}")
                         return False
 
@@ -396,13 +411,13 @@ class RequestQueue:
                     try:
                         if not _put_with_backpressure(chunk):
                             break
-                    except Exception as ch_e:
+                    except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS as ch_e:
                         logger.warning(f"Failed to enqueue stream chunk (sync) for {request.request_id}: {ch_e}")
                         break
             finally:
                 try:
                     _put_with_backpressure(None)
-                except Exception:
+                except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
                     pass
 
         # Run the processor to obtain the stream (potentially blocking)
@@ -422,7 +437,7 @@ class RequestQueue:
                 await request.stream_channel.put(err_msg)
                 await request.stream_channel.put("data: [DONE]\n\n")
                 await request.stream_channel.put(None)
-            except Exception:
+            except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
                 pass
             logger.error(f"Processor error starting stream for {request.request_id}: {e}")
             self._recent_activity.append({
@@ -464,7 +479,7 @@ class RequestQueue:
                 await request.stream_channel.put(f'data: {error_payload}\n\n')
                 await request.stream_channel.put("data: [DONE]\n\n")
                 await request.stream_channel.put(None)
-            except Exception:
+            except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
                 pass
             logger.error(f"Streaming processor error for {request.request_id}: {e}")
             self._recent_activity.append({

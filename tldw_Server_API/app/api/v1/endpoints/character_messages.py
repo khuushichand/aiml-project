@@ -46,6 +46,24 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     InputError,
 )
 
+_CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 def _detect_image_mime_type(data: bytes) -> Optional[str]:
     """
@@ -215,7 +233,7 @@ async def send_message(
             await rate_limiter.check_message_limit(chat_id, msg_count + 1)
         except HTTPException:
             raise
-        except Exception as e:
+        except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(
                 "count_messages_for_conversation failed for chat_id={} include_deleted={} error={}",
                 chat_id,
@@ -272,7 +290,7 @@ async def send_message(
                 # Preflight size check before decoding/DB layer
                 try:
                     _max_img_bytes = int(settings.get("MAX_MESSAGE_IMAGE_BYTES", 5 * 1024 * 1024))
-                except Exception:
+                except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS:
                     _max_img_bytes = 5 * 1024 * 1024
                 if isinstance(raw_b64, (str, bytes, bytearray)):
                     max_b64_len = ((_max_img_bytes + 2) // 3) * 4
@@ -300,7 +318,7 @@ async def send_message(
                 image_mime_type = detected_mime
             except HTTPException:
                 raise
-            except Exception as e:
+            except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to decode image data: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -350,7 +368,7 @@ async def send_message(
     except CharactersRAGDBError as e:
         logger.error(f"DB error sending message to chat {chat_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+    except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error sending message to chat {chat_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -410,7 +428,7 @@ async def get_chat_messages(
         # Compute total message count for pagination metadata
         try:
             total_count = db.count_messages_for_conversation(chat_id, include_deleted=include_deleted)
-        except Exception as e:
+        except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(
                 "count_messages_for_conversation failed for chat_id={} include_deleted={} error={}",
                 chat_id,
@@ -436,7 +454,7 @@ async def get_chat_messages(
                     return ""
                 try:
                     return replace_placeholders(text, character_name, user_name)
-                except Exception as exc:
+                except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(
                         "Placeholder replacement failed for chat_id={} value_type={}: {}",
                         chat_id,
@@ -487,7 +505,7 @@ async def get_chat_messages(
                     md = None
                     try:
                         md = db.get_message_metadata(msg_id)
-                    except Exception:
+                    except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS:
                         md = None
 
                     if include_metadata and md and md.get('extra') is not None and msg_id:
@@ -511,7 +529,7 @@ async def get_chat_messages(
                                         tool_calls_list = parsed
                                     if not isinstance(tool_calls_list, list):
                                         tool_calls_list = None
-                            except Exception as e:
+                            except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
                                 logger.debug(f"character_messages: failed to parse tool_calls from suffix: {e}")
                                 tool_calls_list = None
 
@@ -529,7 +547,7 @@ async def get_chat_messages(
                             tr = extra.get('tool_results') if isinstance(extra, dict) else None
                             if isinstance(tr, dict):
                                 tool_results_by_id = tr
-                        except Exception as e:
+                        except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(f"character_messages: failed to extract tool_results: {e}")
                             tool_results_by_id = {}
 
@@ -540,7 +558,7 @@ async def get_chat_messages(
                                 tc_id = tc.get('id')
                                 func = tc.get('function') or {}
                                 tc_name = func.get('name')
-                            except Exception as e:
+                            except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
                                 logger.debug(f"character_messages: tool_call parse error: {e}")
                             tool_content = ""
                             # If we have stored results keyed by tool_call_id, include them
@@ -553,7 +571,7 @@ async def get_chat_messages(
                                         tool_content = _json.dumps(res)
                                     else:
                                         tool_content = str(res)
-                            except Exception as e:
+                            except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
                                 logger.debug(f"character_messages: failed to stringify tool result: {e}")
                             tool_msg: dict[str, Any] = {"role": "tool", "content": tool_content}
                             if tc_id:
@@ -597,7 +615,7 @@ async def get_chat_messages(
                                 updates["metadata_extra"] = md.get('extra')
                             if updates:
                                 resp = resp.model_copy(update=updates)
-                    except Exception as e:
+                    except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"character_messages: failed to include metadata in response: {e}")
                 built_messages.append(resp)
             response = MessageListResponse(
@@ -635,7 +653,7 @@ async def get_chat_messages(
                 return ""
             try:
                 return replace_placeholders(text, character_name, user_name)
-            except Exception as exc:
+            except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(
                     "Placeholder replacement failed for chat_id={} value_type={}: {}",
                     chat_id,
@@ -660,7 +678,7 @@ async def get_chat_messages(
                             updates["metadata_extra"] = md.get('extra')
                         if updates:
                             resp = resp.model_copy(update=updates)
-                except Exception as e:
+                except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"character_messages: failed to include metadata (std): {e}")
             built_messages.append(resp)
         return MessageListResponse(
@@ -672,7 +690,7 @@ async def get_chat_messages(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting messages for chat {chat_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -713,7 +731,7 @@ async def get_message(
                     resp = resp.model_copy(update={"tool_calls": md.get('tool_calls')})
                 if include_metadata and md and md.get('extra') is not None:
                     resp = resp.model_copy(update={"metadata_extra": md.get('extra')})
-            except Exception as exc:
+            except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(
                     "Non-fatal: failed to load metadata for message {}: {}",
                     message_id,
@@ -723,7 +741,7 @@ async def get_message(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting message {message_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -741,7 +759,7 @@ async def edit_message(
     current_user: User = Depends(get_request_user)
 ):
     """
-    Edit the content of a message.
+    Edit message content and or metadata.
 
     Args:
         message_id: Message ID to edit
@@ -771,20 +789,43 @@ async def edit_message(
                 detail=f"Version mismatch. Expected {expected_version}, found {message.get('version', 1)}"
             )
 
-        # Update message content
-        success = edit_message_content(db, message_id, update_data.content, expected_version)
-
-        if not success:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to update message"
+        content_updated = False
+        if update_data.content is not None and str(update_data.content).strip():
+            success = edit_message_content(
+                db,
+                message_id,
+                update_data.content,
+                expected_version,
             )
+            if not success:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to update message content",
+                )
+            content_updated = True
+
+        metadata_updated = False
+        if update_data.pinned is not None:
+            metadata_updated = db.set_message_metadata_extra(
+                message_id,
+                {"pinned": bool(update_data.pinned)},
+                merge=True,
+            )
+            if not metadata_updated:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to update message metadata",
+                )
 
         # Update conversation metadata (last_modified/version) via DB abstraction
-        conv = db.get_conversation_by_id(message['conversation_id'])
-        if conv:
+        conv = db.get_conversation_by_id(message["conversation_id"])
+        if conv and (content_updated or metadata_updated):
             try:
-                db.update_conversation(message['conversation_id'], {}, conv.get('version', 1))
+                db.update_conversation(
+                    message["conversation_id"],
+                    {},
+                    conv.get("version", 1),
+                )
             except (ConflictError, CharactersRAGDBError) as e:
                 logger.warning(
                     "Non-fatal: failed to bump conversation metadata for {}: {}",
@@ -804,8 +845,22 @@ async def edit_message(
         updated_msg = retrieve_message_details(db, message_id, character_name, user_name)
 
         logger.info(f"Updated message {message_id} by user {current_user.id}")
-
-        return _convert_db_message_to_response(updated_msg)
+        response_payload = _convert_db_message_to_response(updated_msg)
+        if metadata_updated:
+            try:
+                metadata = db.get_message_metadata(message_id) or {}
+                extra = metadata.get("extra")
+                if isinstance(extra, dict):
+                    response_payload = response_payload.model_copy(
+                        update={"metadata_extra": extra}
+                    )
+            except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(
+                    "Non-fatal: failed to include metadata in edit response for message {}: {}",
+                    message_id,
+                    exc,
+                )
+        return response_payload
 
     except HTTPException:
         raise
@@ -815,7 +870,7 @@ async def edit_message(
     except CharactersRAGDBError as e:
         logger.error(f"DB error editing message {message_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+    except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error editing message {message_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -896,7 +951,7 @@ async def delete_message(
     except CharactersRAGDBError as e:
         logger.error(f"DB error deleting message {message_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+    except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error deleting message {message_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -968,7 +1023,7 @@ async def search_messages(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error searching messages in chat {chat_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

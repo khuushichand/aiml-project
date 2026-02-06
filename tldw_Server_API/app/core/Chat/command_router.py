@@ -32,9 +32,27 @@ from tldw_Server_API.app.core.Integrations import weather_providers
 from tldw_Server_API.app.core.Metrics import increment_counter
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter
 
+_COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 try:
     from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission as _user_has_permission
-except Exception:  # pragma: no cover - fallback if AuthNZ is trimmed in tests
+except ImportError:  # pragma: no cover - fallback if AuthNZ is trimmed in tests
     def _user_has_permission(user_id: int, permission: str) -> bool:  # type: ignore
         return True
 
@@ -45,7 +63,7 @@ SLASH_RE = re.compile(r"^/(\w+)(?:\s+(.*))?$")
 def _cfg() -> any | None:
     try:
         return load_comprehensive_config()
-    except Exception:
+    except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -58,7 +76,7 @@ def _cfg_bool(env_name: str, cfg_key: str, fallback: bool) -> bool:
         try:
             raw = cp.get('Chat-Commands', cfg_key, fallback=str(fallback))
             return str(raw).strip().lower() in {"1", "true", "yes", "on"}
-        except Exception:
+        except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
             return fallback
     return fallback
 
@@ -68,14 +86,14 @@ def _cfg_int(env_name: str, cfg_key: str, fallback: int) -> int:
     if isinstance(v, str) and v.strip():
         try:
             return max(1, int(v))
-        except Exception:
+        except (TypeError, ValueError):
             return fallback
     cp = _cfg()
     if cp and cp.has_section('Chat-Commands'):
         try:
             raw = cp.get('Chat-Commands', cfg_key, fallback=str(fallback))
             return max(1, int(str(raw)))
-        except Exception:
+        except (TypeError, ValueError):
             return fallback
     return fallback
 
@@ -89,7 +107,7 @@ def _cfg_str(env_name: str, cfg_key: str, fallback: str) -> str:
         try:
             raw = cp.get('Chat-Commands', cfg_key, fallback=fallback)
             return str(raw).strip()
-        except Exception:
+        except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
             return fallback
     return fallback
 
@@ -106,7 +124,7 @@ def is_single_user_mode() -> bool:
     """
     try:
         return str(os.getenv("AUTH_MODE", "")).strip().lower() == "single_user"
-    except Exception:
+    except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
         return False
 
 
@@ -225,14 +243,14 @@ async def async_dispatch_command(ctx: CommandContext, command: str, args: str | 
                 permitted = bool(_user_has_permission(int(ctx.auth_user_id), spec.required_permission))
             else:
                 permitted = False
-        except Exception:
+        except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
             permitted = False
         if not permitted:
             log_counter("chat_command_error", labels={"command": cmd, "reason": "permission_denied"})
             try:
                 increment_counter("chat_command_errors_total", labels={"command": cmd, "reason": "permission_denied"})
                 increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "denied"})
-            except Exception:
+            except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
                 pass
             details.update({"permitted": False})
             return CommandResult(
@@ -250,7 +268,7 @@ async def async_dispatch_command(ctx: CommandContext, command: str, args: str | 
         try:
             increment_counter("chat_command_errors_total", labels={"command": cmd, "reason": "rate_limited"})
             increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "rate_limited"})
-        except Exception:
+        except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
             pass
         return CommandResult(
             ok=False,
@@ -267,21 +285,21 @@ async def async_dispatch_command(ctx: CommandContext, command: str, args: str | 
         if rbac_enforced and spec.required_permission:
             try:
                 res.metadata = {**(res.metadata or {}), "rbac": {"checked": True, "required_permission": spec.required_permission, "permitted": True}}
-            except Exception:
+            except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
                 pass
         log_counter("chat_command_invoked", labels={"command": cmd})
         try:
             increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "success"})
-        except Exception:
+        except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
             pass
         return res
-    except Exception as e:
+    except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error executing /{cmd}: {e}", exc_info=True)
         log_counter("chat_command_error", labels={"command": cmd, "reason": "exception"})
         try:
             increment_counter("chat_command_errors_total", labels={"command": cmd, "reason": "exception"})
             increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "error"})
-        except Exception:
+        except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
             pass
         return CommandResult(ok=False, command=cmd, content=f"Command /{cmd} failed: {e}", metadata={"error": "exception"})
 
@@ -302,7 +320,7 @@ def _time_handler(ctx: CommandContext, args: str | None) -> CommandResult:
                 from zoneinfo import ZoneInfo  # Python 3.9+
                 dt = datetime.now(ZoneInfo(tzlabel))
                 tzused = tzlabel
-            except Exception:
+            except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
                 dt = datetime.now()
                 tzused = "local"
         else:
@@ -314,7 +332,7 @@ def _time_handler(ctx: CommandContext, args: str | None) -> CommandResult:
             content=f"Current time ({tzused}): {text}",
             metadata={"tz": tzused},
         )
-    except Exception as e:
+    except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS as e:
         return CommandResult(ok=False, command="time", content=f"Time lookup failed: {e}", metadata={"error": "time_error"})
 
 
@@ -333,7 +351,7 @@ def _weather_handler(ctx: CommandContext, args: str | None) -> CommandResult:
         if result.ok:
             return CommandResult(ok=True, command="weather", content=result.summary, metadata=result.metadata)
         return CommandResult(ok=False, command="weather", content=result.summary, metadata={"error": "unavailable"})
-    except Exception as e:
+    except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Weather provider error: {e}", exc_info=True)
         return CommandResult(ok=False, command="weather", content=f"Weather unavailable: {e}", metadata={"error": "exception"})
 

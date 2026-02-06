@@ -74,7 +74,7 @@ Follows existing `Button` ghost variant pattern from `apps/packages/ui/src/compo
    - Normal: `pb-1` -> `pb-2`, `md:px-3` -> `md:px-4`
 
 2. Add left accent to bot messages:
-   ```
+   ```text
    border-l-2 border-l-primary/20
    ```
 
@@ -190,7 +190,7 @@ This matches the sidebar toggle button style (line 83) which already has no bord
 
 ## Implementation Order
 
-```
+```text
 V1 (Typography) -- independent, low risk, sweep
 V4 (Header buttons) -- independent, small change
 V6 (Empty state) -- independent, component-scoped

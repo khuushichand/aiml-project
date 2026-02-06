@@ -644,6 +644,89 @@ class TestStatistics:
         result_override = service.process_context("topic", [wb_id], token_budget=100, scan_depth=1)
         assert result_override.get('entries_matched') == 1
 
+    @pytest.mark.unit
+    def test_process_context_returns_diagnostics_with_reason_and_token_cost(self, world_book_service):
+        """Diagnostics include activation reason and per-entry token accounting."""
+        service = world_book_service
+
+        wb_id = service.create_world_book(name="Diagnostics Book")
+        keyword_entry_id = service.add_entry(
+            wb_id,
+            ["seed"],
+            "dragon marker",
+            priority=120,
+        )
+        regex_entry_id = service.add_entry(
+            wb_id,
+            [r"se.d"],
+            "regex marker",
+            priority=110,
+            regex_match=True,
+        )
+        depth_entry_id = service.add_entry(
+            wb_id,
+            ["dragon"],
+            "depth marker",
+            priority=90,
+        )
+
+        result = service.process_context(
+            "seed",
+            [wb_id],
+            token_budget=200,
+            recursive_scanning=True,
+            recursive_depth=1,
+            include_diagnostics=True,
+        )
+
+        assert isinstance(result, dict)
+        diagnostics = result.get("diagnostics") or []
+        assert diagnostics
+
+        diagnostics_by_id = {
+            item.get("entry_id"): item
+            for item in diagnostics
+            if isinstance(item, dict)
+        }
+
+        keyword_diag = diagnostics_by_id.get(keyword_entry_id)
+        regex_diag = diagnostics_by_id.get(regex_entry_id)
+        depth_diag = diagnostics_by_id.get(depth_entry_id)
+
+        assert keyword_diag is not None
+        assert keyword_diag.get("activation_reason") == "keyword_match"
+        assert keyword_diag.get("token_cost") == service.count_tokens("dragon marker")
+
+        assert regex_diag is not None
+        assert regex_diag.get("activation_reason") == "regex_match"
+        assert regex_diag.get("token_cost") == service.count_tokens("regex marker")
+
+        assert depth_diag is not None
+        assert depth_diag.get("activation_reason") == "depth"
+        assert depth_diag.get("token_cost") == service.count_tokens("depth marker")
+
+    @pytest.mark.unit
+    def test_process_context_reports_budget_exhaustion_metadata(self, world_book_service):
+        """Budget metadata reports skipped entries when token budget is exhausted."""
+        service = world_book_service
+
+        wb_id = service.create_world_book(name="Budget Diagnostics")
+        service.add_entry(wb_id, ["topic"], "small one", priority=100)
+        service.add_entry(wb_id, ["topic"], "small two", priority=90)
+        service.add_entry(wb_id, ["topic"], "small three", priority=80)
+
+        result = service.process_context(
+            "topic",
+            [wb_id],
+            token_budget=2,
+            include_diagnostics=True,
+        )
+
+        assert isinstance(result, dict)
+        assert result.get("token_budget") == 2
+        assert result.get("budget_exhausted") is True
+        assert int(result.get("skipped_entries_due_to_budget", 0)) >= 1
+
 # ========================================================================
 # Cloning Tests
 # ========================================================================

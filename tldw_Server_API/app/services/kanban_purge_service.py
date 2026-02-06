@@ -19,12 +19,21 @@ from loguru import logger
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
 
+_KANBAN_PURGE_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
 
 def _enumerate_user_ids() -> list[int]:
     """Get list of user IDs from user database directories."""
     try:
         base = DatabasePaths.get_user_db_base_dir()
-    except Exception as exc:
+    except _KANBAN_PURGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"kanban_purge: failed to resolve user db base dir: {exc}")
         return []
 
@@ -39,7 +48,7 @@ def _enumerate_user_ids() -> list[int]:
     if not uids:
         try:
             uids = [DatabasePaths.get_single_user_id()]
-        except Exception:
+        except _KANBAN_PURGE_NONCRITICAL_EXCEPTIONS:
             uids = []
 
     return sorted(set(uids))
@@ -54,7 +63,7 @@ def _purge_for_user(user_id: int, grace_days: int) -> dict:
     finally:
         try:
             db.close()
-        except Exception:
+        except _KANBAN_PURGE_NONCRITICAL_EXCEPTIONS:
             pass
 
 
@@ -85,7 +94,7 @@ async def start_kanban_purge_scheduler() -> asyncio.Task | None:
                         "Kanban purge removed boards={boards} lists={lists} cards={cards}",
                         **totals,
                     )
-            except Exception as exc:
+            except _KANBAN_PURGE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"kanban_purge: purge run failed: {exc}")
             await asyncio.sleep(interval)
 

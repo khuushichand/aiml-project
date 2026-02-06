@@ -1,12 +1,17 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from tldw_Server_API.app.core.RAG import (
+    DataSource,
     list_profiles,
     get_profile,
     get_profile_kwargs,
     apply_profile_to_kwargs,
     get_multi_tenant_safe_kwargs,
+    unified_rag_pipeline,
 )
+from tldw_Server_API.app.core.RAG.rag_service.types import Document
 
 
 @pytest.mark.unit
@@ -52,3 +57,48 @@ class TestRAGProfiles:
             with pytest.raises(ValueError):
                 # type: ignore[arg-type]
                 get_multi_tenant_safe_kwargs(bad)  # noqa: PT011
+
+    @pytest.mark.asyncio
+    async def test_profile_kwargs_drive_unified_pipeline_retrieval_config(self):
+        """Exercise a profile through unified_rag_pipeline and validate mapped knobs."""
+        with patch(
+            "tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever"
+        ) as mock_retriever:
+            retriever_instance = MagicMock()
+            retriever_instance.retrieve = AsyncMock(
+                return_value=[
+                    Document(
+                        id="doc-1",
+                        content="RAG content",
+                        metadata={},
+                        source=DataSource.MEDIA_DB,
+                        score=0.9,
+                    )
+                ]
+            )
+            mock_retriever.return_value = retriever_instance
+
+            with patch(
+                "tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.AnswerGenerator"
+            ) as mock_generator:
+                generator_instance = MagicMock()
+                generator_instance.generate = AsyncMock(return_value={"answer": "Profile answer"})
+                mock_generator.return_value = generator_instance
+
+                kwargs = get_profile_kwargs(
+                    "cheap",
+                    overrides={
+                        "enable_cache": False,
+                        "enable_reranking": False,
+                        "enable_security_filter": False,
+                    },
+                )
+                result = await unified_rag_pipeline(query="What is RAG?", **kwargs)
+
+                assert result.generated_answer == "Profile answer"
+                assert retriever_instance.retrieve.await_count >= 1
+                retrieve_kwargs = retriever_instance.retrieve.await_args.kwargs
+                config = retrieve_kwargs["config"]
+                assert config.max_results == kwargs["top_k"]
+                assert config.use_fts is True
+                assert config.use_vector is False

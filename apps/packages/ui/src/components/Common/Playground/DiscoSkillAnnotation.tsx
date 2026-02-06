@@ -84,7 +84,7 @@ export const DiscoSkillAnnotation: React.FC<DiscoSkillAnnotationProps> = ({
             </span>
             <span
               className="
-                inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium
+                inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium
                 bg-surface2/80 text-text-muted
               "
             >

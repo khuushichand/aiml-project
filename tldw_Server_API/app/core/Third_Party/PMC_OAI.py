@@ -16,6 +16,16 @@ from xml.etree import ElementTree as ET
 from tldw_Server_API.app.core.http_client import fetch
 
 BASE_URL = "https://pmc.ncbi.nlm.nih.gov/api/oai/v1/mh/"
+_PMC_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    ET.ParseError,
+)
 
 
 def _get_xml(params: dict[str, Any]) -> ET.Element:
@@ -29,7 +39,7 @@ def _get_xml(params: dict[str, Any]) -> ET.Element:
     finally:
         try:
             r.close()
-        except Exception:
+        except (AttributeError, OSError):
             pass
 
 
@@ -54,7 +64,7 @@ def pmc_oai_identify() -> tuple[dict[str, Any] | None, str | None]:
             "granularity": text("granularity"),
         })
         return info, None
-    except Exception as e:
+    except _PMC_NONCRITICAL_EXCEPTIONS as e:
         return None, f"PMC OAI-PMH Identify error: {str(e)}"
 
 
@@ -84,7 +94,7 @@ def pmc_oai_list_sets(resumption_token: str | None = None) -> tuple[list[dict[st
                 "setName": name.text if name is not None else None,
             })
         return sets, _parse_resumption(root), None
-    except Exception as e:
+    except _PMC_NONCRITICAL_EXCEPTIONS as e:
         return None, None, f"PMC OAI-PMH ListSets error: {str(e)}"
 
 
@@ -119,17 +129,17 @@ def _parse_dc_metadata(md: ET.Element) -> dict[str, Any]:
                     # canonical PMC URL looks like https://pmc.ncbi.nlm.nih.gov/PMC1234567
                     pmcid = val.split("/PMC")[-1]
                     out["pmcid"] = pmcid
-                except Exception:
+                except (AttributeError, IndexError, TypeError, ValueError):
                     pass
             if "pubmed.ncbi.nlm.nih.gov" in val:
                 try:
                     out["pmid"] = val.rstrip('/').split('/')[-1]
-                except Exception:
+                except (AttributeError, IndexError, TypeError, ValueError):
                     pass
             if "doi.org/" in val:
                 try:
                     out["doi"] = val.split("doi.org/")[-1]
-                except Exception:
+                except (AttributeError, IndexError, TypeError, ValueError):
                     pass
     for r in md.findall(".//dc:rights", ns):
         if r.text:
@@ -191,7 +201,7 @@ def pmc_oai_list_records(
         root = _get_xml(params)
         items = _parse_records(root)
         return items, _parse_resumption(root), None
-    except Exception as e:
+    except _PMC_NONCRITICAL_EXCEPTIONS as e:
         return None, None, f"PMC OAI-PMH ListRecords error: {str(e)}"
 
 
@@ -227,7 +237,7 @@ def pmc_oai_list_identifiers(
                 "setSpecs": ss if ss else None,
             })
         return items, _parse_resumption(root), None
-    except Exception as e:
+    except _PMC_NONCRITICAL_EXCEPTIONS as e:
         return None, None, f"PMC OAI-PMH ListIdentifiers error: {str(e)}"
 
 
@@ -244,5 +254,5 @@ def pmc_oai_get_record(
         if not items:
             return None, None
         return items[0], None
-    except Exception as e:
+    except _PMC_NONCRITICAL_EXCEPTIONS as e:
         return None, f"PMC OAI-PMH GetRecord error: {str(e)}"

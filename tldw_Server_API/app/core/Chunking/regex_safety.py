@@ -11,12 +11,22 @@ import re
 
 try:  # pragma: no cover
     from loguru import logger as _logger
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     class _N:
         def warning(self, *a, **k):
             pass
     _logger = _N()
 import time
+
+_REGEX_SAFETY_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    re.error,
+)
 
 # Pre-compiled heuristics to catch catastrophic backtracking risks
 _DANGEROUS_CHECKS = [
@@ -37,7 +47,7 @@ def check_pattern(pattern: str, *, max_len: int = 256) -> str | None:
     """
     try:
         pat = str(pattern or "")
-    except Exception:
+    except (TypeError, ValueError):
         return "Pattern must be a string"
     if not pat:
         return None
@@ -47,12 +57,12 @@ def check_pattern(pattern: str, *, max_len: int = 256) -> str | None:
         for chk in _DANGEROUS_CHECKS:
             if chk.search(pat):
                 return "Pattern contains potentially dangerous regex constructs (nested quantifiers/alternations)"
-    except Exception:
+    except re.error:
         # Non-fatal, continue to compile test
         pass
     try:
         re.compile(pat)
-    except Exception as e:
+    except re.error as e:
         return f"Invalid regex: {e}"
     return None
 
@@ -65,7 +75,7 @@ def compile_flags(flags_str: str, *, allowed: set[str] | None = None, max_len: i
     allowed = allowed or {"i", "m"}
     try:
         s = str(flags_str or "").lower()
-    except Exception:
+    except (TypeError, ValueError):
         return (0, "Flags must be a string")
     if len(s) > max_len:
         return (0, f"Flags too long (max {max_len})")
@@ -88,7 +98,7 @@ def warn_ambiguity(pattern: str) -> str | None:
     """
     try:
         pat = str(pattern or "")
-    except Exception:
+    except (TypeError, ValueError):
         return None
     if not pat:
         return None
@@ -102,7 +112,7 @@ def warn_ambiguity(pattern: str) -> str | None:
 _re2 = None
 try:  # pragma: no cover - optional dependency
     import re2 as _re2  # type: ignore
-except Exception:  # pragma: no cover - absence is fine
+except ImportError:  # pragma: no cover - absence is fine
     _re2 = None
 
 
@@ -125,16 +135,16 @@ def safe_search(compiled_pat: re.Pattern, text: str, *, timeout_env: str = "CHUN
             _val = _cp.get('Chunking', 'regex_timeout_seconds', fallback='0')
             try:
                 timeout_s = float(str(_val) or 0.0)
-            except Exception:
+            except (TypeError, ValueError):
                 timeout_s = 0.0
-    except Exception:
+    except _REGEX_SAFETY_NONCRITICAL_EXCEPTIONS:
         timeout_s = 0.0
     # Fast path: optional RE2 search (only when flags are zero to preserve semantics)
     if _re2 is not None and getattr(compiled_pat, 'flags', 0) == 0:
         try:
             rp = _re2.compile(compiled_pat.pattern)
             return rp.search(text) is not None
-        except Exception:
+        except _REGEX_SAFETY_NONCRITICAL_EXCEPTIONS:
             # fall back to python-re
             pass
     # Python re fallback
@@ -146,5 +156,5 @@ def safe_search(compiled_pat: re.Pattern, text: str, *, timeout_env: str = "CHUN
             _logger.warning("Regex search exceeded configured timeout; treating as no match")
             return False
         return found
-    except Exception:
+    except _REGEX_SAFETY_NONCRITICAL_EXCEPTIONS:
         return False

@@ -17,6 +17,25 @@ from loguru import logger
 from ..models import RunPhase, RunSpec, RunStatus
 from ..streams import get_hub
 
+_LIMA_RUNNER_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    subprocess.SubprocessError,
+)
+
 
 def _truthy(v: str | None) -> bool:
     return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
@@ -45,7 +64,7 @@ def lima_version() -> str | None:
             if tok and tok[0].isdigit():
                 return tok
         return out if out else None
-    except Exception:
+    except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -156,7 +175,7 @@ class LimaRunner:
                     timeout=30,
                     capture_output=True,
                 )
-            except Exception:
+            except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Delete the VM
@@ -167,14 +186,14 @@ class LimaRunner:
                     timeout=30,
                     capture_output=True,
                 )
-            except Exception:
+            except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Cleanup run directory
             if run_dir:
                 try:
                     shutil.rmtree(run_dir, ignore_errors=True)
-                except Exception:
+                except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
 
             return True
@@ -209,7 +228,7 @@ class LimaRunner:
                 "runtime": "lima",
                 "net": "off",
             })
-        except Exception:
+        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Compute pseudo image digest
@@ -217,7 +236,7 @@ class LimaRunner:
         base = spec.base_image or "ubuntu:24.04"
         try:
             image_digest = f"sha256:{hashlib.sha256(base.encode('utf-8')).hexdigest()}"
-        except Exception:
+        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
             image_digest = None
 
         # Simulate execution time
@@ -234,12 +253,12 @@ class LimaRunner:
                     artifacts_map[sample_name] = b""
                 else:
                     artifacts_map[key] = b""
-        except Exception:
+        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
             artifacts_map = {}
 
         try:
             hub.publish_event(run_id, "end", {"exit_code": 0})
-        except Exception:
+        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
 
         finished = datetime.utcnow()
@@ -247,7 +266,7 @@ class LimaRunner:
         # Usage accounting
         try:
             log_bytes_total = int(hub.get_log_bytes(run_id))
-        except Exception:
+        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
             log_bytes_total = 0
 
         art_bytes = sum(len(v) for v in artifacts_map.values()) if artifacts_map else 0
@@ -286,7 +305,7 @@ class LimaRunner:
                 "runtime": "lima",
                 "net": "off" if (spec.network_policy or "deny_all") == "deny_all" else "on",
             })
-        except Exception:
+        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Create temp directory for this run
@@ -409,7 +428,7 @@ class LimaRunner:
             stop_flag["stop"] = True
             try:
                 log_thread.join(timeout=2)
-            except Exception:
+            except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Publish remaining logs
@@ -419,7 +438,7 @@ class LimaRunner:
                         log_data = f.read()
                     if log_data:
                         hub.publish_stdout(run_id, log_data, 10 * 1024 * 1024)
-                except Exception:
+                except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
 
             # Collect artifacts
@@ -429,7 +448,7 @@ class LimaRunner:
             try:
                 config_str = json.dumps(lima_config, sort_keys=True)
                 image_digest = f"sha256:{hashlib.sha256(config_str.encode()).hexdigest()}"
-            except Exception:
+            except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
                 image_digest = None
 
             phase = RunPhase.completed if exit_code == 0 else RunPhase.failed
@@ -443,7 +462,7 @@ class LimaRunner:
             exit_code = None
             phase = RunPhase.timed_out
             message = "execution_timeout"
-        except Exception as e:
+        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Lima execution error: {e}")
             exit_code = None
             phase = RunPhase.failed
@@ -457,7 +476,7 @@ class LimaRunner:
                     timeout=30,
                     capture_output=True,
                 )
-            except Exception:
+            except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
 
             try:
@@ -467,13 +486,13 @@ class LimaRunner:
                     timeout=30,
                     capture_output=True,
                 )
-            except Exception:
+            except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Cleanup run directory
             try:
                 shutil.rmtree(run_dir, ignore_errors=True)
-            except Exception:
+            except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Unregister VM
@@ -483,7 +502,7 @@ class LimaRunner:
 
         try:
             hub.publish_event(run_id, "end", {"exit_code": exit_code})
-        except Exception:
+        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
 
         finished = datetime.utcnow()
@@ -491,7 +510,7 @@ class LimaRunner:
         # Usage accounting
         try:
             log_bytes_total = int(hub.get_log_bytes(run_id))
-        except Exception:
+        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
             log_bytes_total = 0
 
         art_bytes = sum(len(v) for v in artifacts_map.values()) if artifacts_map else 0
@@ -531,7 +550,7 @@ class LimaRunner:
                 t = os.path.join(tgt_root, fn)
                 try:
                     shutil.copy2(s, t)
-                except Exception:
+                except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
 
     @staticmethod
@@ -588,7 +607,7 @@ exit $exit_code
         max_log = None
         try:
             max_log = int(os.getenv("SANDBOX_MAX_LOG_BYTES", "10485760"))
-        except Exception:
+        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
             max_log = 10 * 1024 * 1024
 
         # Wait for log file to appear
@@ -609,7 +628,7 @@ exit $exit_code
                         time.sleep(0.05)
                         continue
                     hub.publish_stdout(run_id, line, max_log)
-        except Exception:
+        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
             return
 
     @staticmethod
@@ -642,9 +661,9 @@ exit $exit_code
                         try:
                             with open(full, "rb") as rf:
                                 artifacts_map[rel_posix] = rf.read()
-                        except Exception:
+                        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
                             pass
-        except Exception:
+        except _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
 
         return artifacts_map

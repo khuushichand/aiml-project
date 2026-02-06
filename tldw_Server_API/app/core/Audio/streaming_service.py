@@ -14,6 +14,26 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import (
     get_metrics_registry,
 )
 
+_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EOFError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 def _get_chat_history_max_messages() -> int:
     """
@@ -65,7 +85,7 @@ try:
             labels=["reason"],
         )
     )
-except Exception as e:
+except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as e:
     # Metrics must never break imports; log for diagnostics
     logger.debug(f"audio: metrics registration skipped/failed: {e}")
 
@@ -122,28 +142,28 @@ async def _stream_tts_to_websocket(
                 except QueueFull:
                     try:
                         _ = queue.get_nowait()
-                    except Exception as q_err:
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as q_err:
                         logger.debug(f"{route} queue get_nowait failed: error={q_err}")
                     try:
                         queue.put_nowait(chunk)
                         reg.increment("audio_stream_underruns_total", 1, labels=underrun_labels)
-                    except Exception as m_err:
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                         logger.debug(f"{route} underrun metrics update failed: error={m_err}")
                         reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-        except Exception as exc:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
             try:
                 reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-            except Exception as m_err:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                 logger.debug(f"{route} producer metrics update failed (outer): error={m_err}")
             if error_handler is not None:
                 try:
                     await error_handler(exc)
-                except Exception as send_exc:
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
                     logger.debug(f"{route} error handler failed: error={send_exc}")
         finally:
             try:
                 await queue.put(None)
-            except Exception as q_err:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as q_err:
                 logger.debug(f"{route} queue sentinel enqueue failed: error={q_err}")
 
     async def _consumer() -> None:
@@ -156,25 +176,25 @@ async def _stream_tts_to_websocket(
                     await websocket.send_bytes(item)
                     if outer_stream:
                         outer_stream.mark_activity()
-                except Exception as exc:
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
                     try:
                         reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                    except Exception as m_err:
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                         logger.debug(f"{route} consumer metrics update failed: error={m_err}")
                     try:
                         await websocket.close(code=1011)
-                    except Exception as close_exc:
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as close_exc:
                         logger.debug(f"{route} websocket close in consumer failed: error={close_exc}")
                     if error_handler is not None:
                         try:
                             await error_handler(exc)
-                        except Exception as send_exc:
+                        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
                             logger.debug(f"{route} consumer error handler failed: error={send_exc}")
                     break
-        except Exception:
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
             try:
                 reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-            except Exception as m_err:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                 logger.debug(f"{route} consumer metrics update failed (outer): error={m_err}")
 
     producer_task = create_task(_producer())
@@ -189,7 +209,7 @@ async def _stream_tts_to_websocket(
             task.cancel()
             try:
                 await task
-            except Exception as wait_exc:
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as wait_exc:
                 logger.debug(f"{route} wait for pending task failed after cancel: error={wait_exc}")
     finally:
         producer_task.cancel()
@@ -230,7 +250,7 @@ async def _audio_ws_authenticate(
         try:
             from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
             from tldw_Server_API.app.core.AuthNZ.quotas import increment_and_check_jwt_quota
-        except Exception as exc:  # pragma: no cover - defensive import
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive import
             logger.warning(f"Failed to import JWT quota helpers: {exc}")
             return False
 
@@ -342,7 +362,7 @@ async def _audio_ws_authenticate(
                     if isinstance(allowed_eps, str):
                         try:
                             allowed_eps = json.loads(allowed_eps)
-                        except Exception:
+                        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                             allowed_eps = None
                     if isinstance(allowed_eps, list) and allowed_eps:
                         if endpoint_id not in [str(x) for x in allowed_eps]:
@@ -352,7 +372,7 @@ async def _audio_ws_authenticate(
                     if isinstance(meta, str):
                         try:
                             meta = json.loads(meta)
-                        except Exception:
+                        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                             meta = None
                     if isinstance(meta, dict):
                         ap = meta.get("allowed_paths")
@@ -384,7 +404,7 @@ async def _audio_ws_authenticate(
                 uid = info.get("user_id")
                 try:
                     jwt_user_id = int(uid) if uid is not None else None
-                except Exception:
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                     jwt_user_id = None
                 return True, jwt_user_id
             except Exception as exc:  # noqa: BLE001

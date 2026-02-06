@@ -10,6 +10,7 @@ Env:
 """
 
 import base64
+import binascii
 import hashlib
 import json
 import os
@@ -19,8 +20,16 @@ try:
     from Cryptodome.Cipher import AES
     from Cryptodome.Random import get_random_bytes
     _HAS_CRYPTO = True
-except Exception:
+except ImportError:
     _HAS_CRYPTO = False
+
+_B64_DECODE_EXCEPTIONS = (binascii.Error, TypeError, ValueError)
+_JSON_CRYPTO_DECRYPT_EXCEPTIONS = (
+    json.JSONDecodeError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
 
 
 def _get_key_from_env() -> bytes | None:
@@ -31,7 +40,7 @@ def _get_key_from_env() -> bytes | None:
     raw: bytes | None
     try:
         raw = base64.b64decode(key_b64)
-    except Exception:
+    except _B64_DECODE_EXCEPTIONS:
         raw = None
     # If base64 failed, derive from the literal string
     if raw is None or len(raw) == 0:
@@ -50,7 +59,7 @@ def _get_secondary_key_from_env() -> bytes | None:
         return None
     try:
         raw = base64.b64decode(key_b64)
-    except Exception:
+    except _B64_DECODE_EXCEPTIONS:
         raw = None
     if raw is None or len(raw) == 0:
         return hashlib.sha256(key_b64.encode("utf-8")).digest()
@@ -77,7 +86,7 @@ def encrypt_json_blob(data: dict[str, Any]) -> dict[str, Any] | None:
             "ct": base64.b64encode(ct).decode("ascii"),
             "tag": base64.b64encode(tag).decode("ascii"),
         }
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -95,7 +104,7 @@ def decrypt_json_blob(envelope: dict[str, Any]) -> dict[str, Any] | None:
         nonce_b = base64.b64decode(envelope.get("nonce", ""))
         ct_b = base64.b64decode(envelope.get("ct", ""))
         tag_b = base64.b64decode(envelope.get("tag", ""))
-    except Exception:
+    except _B64_DECODE_EXCEPTIONS:
         return None
     # Try primary key first
     for key in (primary, secondary):
@@ -105,7 +114,7 @@ def decrypt_json_blob(envelope: dict[str, Any]) -> dict[str, Any] | None:
             cipher = AES.new(key, AES.MODE_GCM, nonce=nonce_b)
             pt = cipher.decrypt_and_verify(ct_b, tag_b)
             return json.loads(pt.decode("utf-8"))
-        except Exception:
+        except _JSON_CRYPTO_DECRYPT_EXCEPTIONS:
             continue
     return None
 
@@ -113,7 +122,7 @@ def decrypt_json_blob(envelope: dict[str, Any]) -> dict[str, Any] | None:
 def _decode_key_b64(key_b64: str) -> bytes | None:
     try:
         raw = base64.b64decode(key_b64)
-    except Exception:
+    except _B64_DECODE_EXCEPTIONS:
         raw = None
     if raw is None or len(raw) == 0:
         # Derive from literal if not valid base64
@@ -142,7 +151,7 @@ def encrypt_json_blob_with_key(data: dict[str, Any], key_b64: str) -> dict[str, 
             "ct": base64.b64encode(ct).decode("ascii"),
             "tag": base64.b64encode(tag).decode("ascii"),
         }
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -162,5 +171,5 @@ def decrypt_json_blob_with_key(envelope: dict[str, Any], key_b64: str) -> dict[s
         cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
         pt = cipher.decrypt_and_verify(ct, tag)
         return json.loads(pt.decode("utf-8"))
-    except Exception:
+    except (_B64_DECODE_EXCEPTIONS, *_JSON_CRYPTO_DECRYPT_EXCEPTIONS):
         return None

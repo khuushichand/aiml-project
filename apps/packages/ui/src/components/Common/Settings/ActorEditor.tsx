@@ -987,9 +987,11 @@ export const ActorEditor: React.FC<Props> = ({
                       setSettings(profile)
                       const fieldValues: Record<string, any> = {
                         actorNotes: profile.notes ?? "",
+                        actorNotesGmOnly: profile.notesGmOnly ?? false,
                         actorChatPosition: profile.chatPosition,
                         actorChatDepth: profile.chatDepth,
                         actorChatRole: profile.chatRole,
+                        actorTemplateMode: profile.templateMode ?? "merge",
                         actorAppendable: profile.appendable ?? false
                       }
                       for (const aspect of profile.aspects || []) {

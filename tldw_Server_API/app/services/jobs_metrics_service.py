@@ -22,14 +22,28 @@ Tests can call reconcile_once(limit) directly for determinism.
 
 import os
 import time
+from sqlite3 import Error as SQLiteError
 
 from loguru import logger
 
 try:
     # JobManager path in this repository
     from tldw_Server_API.app.core.Jobs.manager import JobManager
-except Exception:  # Fallback path for historical imports
+except ImportError:  # Fallback path for historical imports
     from tldw_Server_API.app.core.Jobs.manager import JobManager  # type: ignore
+
+
+_JOBS_METRICS_BEST_EFFORT_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 def _is_truthy(v: str | None) -> bool:
@@ -107,7 +121,7 @@ class JobsMetricsService:
                         )
                         try:
                             jm._update_gauges(domain=d, queue=q, job_type=jt)
-                        except Exception:
+                        except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS:
                             pass
                         reconciled += 1
             else:
@@ -149,17 +163,17 @@ class JobsMetricsService:
                     )
                     try:
                         self.jm._update_gauges(domain=d, queue=q, job_type=jt)
-                    except Exception:
+                    except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS:
                         pass
                     reconciled += 1
                 try:
                     conn.commit()
-                except Exception:
+                except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS:
                     pass
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS:
                 pass
         return reconciled
 
@@ -173,7 +187,7 @@ class JobsMetricsService:
             try:
                 n = self.reconcile_once()
                 logger.debug(f"Jobs metrics reconcile tick: updated {n} group(s)")
-            except Exception as e:
+            except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS as e:
                 logger.warning(f"Jobs metrics reconcile error: {e}")
             time.sleep(self.interval)
 
@@ -189,7 +203,7 @@ async def run_jobs_metrics_reconcile(stop_event) -> None:
     while not stop_event.is_set():
         try:
             svc.reconcile_once()
-        except Exception as e:
+        except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS as e:
             logger.debug(f"Jobs reconcile loop error: {e}")
         await asyncio.sleep(interval)
 
@@ -209,11 +223,11 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
     try:
         from tldw_Server_API.app.core.Jobs.metrics import ensure_jobs_metrics_registered
         from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
-    except Exception:
+    except ImportError:
         return
     try:
         ensure_jobs_metrics_registered()
-    except Exception:
+    except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS:
         pass
     reg = get_metrics_registry()
     if not reg:
@@ -223,15 +237,15 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
     jm = JobManager(backend=backend, db_url=db_url)
     try:
         interval = float(os.getenv("JOBS_METRICS_INTERVAL_SEC", "5") or "5")
-    except Exception:
+    except (TypeError, ValueError):
         interval = 5.0
     try:
         window_h = int(os.getenv("JOBS_SLO_WINDOW_HOURS", "24") or "24")
-    except Exception:
+    except (TypeError, ValueError):
         window_h = 24
     try:
         max_groups = int(os.getenv("JOBS_SLO_MAX_GROUPS", "100") or "100")
-    except Exception:
+    except (TypeError, ValueError):
         max_groups = 100
 
     def _set_gauges(d: str, q: str, jt: str, owner: str, qlat_p: tuple[float,float,float], dur_p: tuple[float,float,float]):
@@ -296,7 +310,7 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
                             grp[(str(owner or ""), str(d or ""), str(q or ""), str(jt or ""))]["qlat"].append(float(qlat))
                         if dur is not None:
                             grp[(str(owner or ""), str(d or ""), str(q or ""), str(jt or ""))]["dur"].append(float(dur))
-                    except Exception:
+                    except (TypeError, ValueError):
                         continue
                 # Limit groups per loop
                 count = 0
@@ -308,8 +322,8 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
             finally:
                 try:
                     conn.close()
-                except Exception:
+                except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS:
                     pass
-        except Exception as e:
+        except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS as e:
             logger.debug(f"Jobs SLO gauges loop error: {e}")
         await asyncio.sleep(interval)

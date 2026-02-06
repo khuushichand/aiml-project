@@ -119,6 +119,7 @@ export const PlaygroundChat = () => {
     isSearchingInternet,
     editMessage,
     deleteMessage,
+    toggleMessagePinned,
     ttsEnabled,
     onSubmit,
     actionInfo,
@@ -370,6 +371,9 @@ export const PlaygroundChat = () => {
                 onDeleteMessage={() => {
                   deleteMessage(block.index)
                 }}
+                onTogglePinned={() => {
+                  void toggleMessagePinned(block.index)
+                }}
                 onNewBranch={() => {
                   createChatBranch(block.index)
                 }}
@@ -397,6 +401,7 @@ export const PlaygroundChat = () => {
                 serverChatId={serverChatId}
                 serverMessageId={message.serverMessageId}
                 messageId={message.id}
+                pinned={Boolean(message.pinned)}
                 discoSkillComment={message.discoSkillComment}
                 historyId={stableHistoryId ?? undefined}
                 conversationInstanceId={conversationInstanceId}
@@ -599,6 +604,9 @@ export const PlaygroundChat = () => {
                 onDeleteMessage={() => {
                   deleteMessage(block.userIndex)
                 }}
+                onTogglePinned={() => {
+                  void toggleMessagePinned(block.userIndex)
+                }}
                 onNewBranch={() => {
                   createChatBranch(block.userIndex)
                 }}
@@ -626,6 +634,7 @@ export const PlaygroundChat = () => {
                 serverChatId={serverChatId}
                 serverMessageId={userMessage.serverMessageId}
                 messageId={userMessage.id}
+                pinned={Boolean(userMessage.pinned)}
                 discoSkillComment={userMessage.discoSkillComment}
                 historyId={stableHistoryId ?? undefined}
                 conversationInstanceId={conversationInstanceId}
@@ -929,6 +938,9 @@ export const PlaygroundChat = () => {
                         onDeleteMessage={() => {
                           deleteMessage(index)
                         }}
+                        onTogglePinned={() => {
+                          void toggleMessagePinned(index)
+                        }}
                         onNewBranch={() => {
                           createChatBranch(index)
                         }}
@@ -956,6 +968,7 @@ export const PlaygroundChat = () => {
                         serverChatId={serverChatId}
                         serverMessageId={message.serverMessageId}
                         messageId={message.id}
+                        pinned={Boolean(message.pinned)}
                         discoSkillComment={message.discoSkillComment}
                         historyId={stableHistoryId ?? undefined}
                         conversationInstanceId={conversationInstanceId}

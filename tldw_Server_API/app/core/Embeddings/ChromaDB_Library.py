@@ -14,11 +14,6 @@ from typing import Any, Callable, Literal, Optional, Union
 # 3rd-Party Imports:
 import chromadb
 
-try:
-    # Prefer the modern Settings from chromadb.config (works in 0.4.x and 1.x)
-    from chromadb.config import Settings as ChromaSettings  # type: ignore
-except _CHROMA_IMPORT_EXCEPTIONS:  # pragma: no cover - fallback for older versions
-    from chromadb import Settings as ChromaSettings  # type: ignore
 from itertools import islice
 
 import numpy as np
@@ -28,6 +23,13 @@ from chromadb.errors import ChromaError
 
 _CHROMA_IMPORT_EXCEPTIONS = (ImportError, AttributeError, RuntimeError)
 _CHROMA_EMBEDDINGS_IMPORT_EXCEPTIONS = (ImportError, OSError, RuntimeError)
+
+try:
+    # Prefer the modern Settings from chromadb.config (works in 0.4.x and 1.x)
+    from chromadb.config import Settings as ChromaSettings  # type: ignore
+except _CHROMA_IMPORT_EXCEPTIONS:  # pragma: no cover - fallback for older versions
+    from chromadb import Settings as ChromaSettings  # type: ignore
+
 _CHROMA_NONCRITICAL_EXCEPTIONS = (
     OSError,
     ValueError,
@@ -1083,14 +1085,14 @@ class ChromaDBManager:
                         if not isinstance(citation_payload, dict):
                             citation_payload = {}
 
-                        def _citation_value(key: str, aliases: tuple[str, ...] = ()) -> Any:
-                            if key in citation_payload:
-                                return citation_payload.get(key)
+                        def _citation_value(key: str, aliases: tuple[str, ...] = (), _citation_payload=citation_payload, _chunk_meta=chunk_meta) -> Any:
+                            if key in _citation_payload:
+                                return _citation_payload.get(key)
                             for alias in aliases:
-                                if alias in chunk_meta:
-                                    return chunk_meta.get(alias)
-                            if key in chunk_meta:
-                                return chunk_meta.get(key)
+                                if alias in _chunk_meta:
+                                    return _chunk_meta.get(alias)
+                            if key in _chunk_meta:
+                                return _chunk_meta.get(key)
                             return None
 
                         citation_numeric_fields = {

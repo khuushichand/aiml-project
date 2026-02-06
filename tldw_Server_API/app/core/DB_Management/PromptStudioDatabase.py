@@ -5888,7 +5888,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         if row2:
                             st = str(row2[0]) if row2[0] is not None else ""
                             owner = str(row2[1]) if row2[1] is not None else None
-                            if st.lower() == "processing" and (owner_value is None or owner == owner_value):
+                            if st.lower() == "processing" and owner is None:
                                 return True
                     except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         pass

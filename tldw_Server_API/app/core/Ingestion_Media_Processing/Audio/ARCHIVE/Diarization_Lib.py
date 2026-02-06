@@ -24,6 +24,7 @@ from pyannote.audio.pipelines.speaker_diarization import SpeakerDiarization
 # Import Local Libraries
 from tldw_Server_API.app.core.Metrics.metrics_logger import timeit
 from tldw_Server_API.app.core.Utils.Utils import logging
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import speech_to_text
 
 #
 #######################################################################################################################

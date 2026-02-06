@@ -13,6 +13,18 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registr
 
 router = APIRouter(tags=["metrics"])
 
+_METRICS_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 
 # Note: Avoid path conflict with the JSON metrics in main.py (`/api/v1/metrics`).
 # Expose text format under `/api/v1/metrics/text`.
@@ -48,22 +60,22 @@ async def get_prometheus_metrics() -> Response:
                         d = await client.get(f"embeddings:stage:{_st}:drain")
                         _emb.embedding_stage_flag.labels(stage=_st, flag="paused").set(1.0 if str(p).lower() in ("1","true","yes") else 0.0)
                         _emb.embedding_stage_flag.labels(stage=_st, flag="drain").set(1.0 if str(d).lower() in ("1","true","yes") else 0.0)
-                    except Exception:
+                    except _METRICS_NONCRITICAL_EXCEPTIONS:
                         logger.debug("metrics: failed to refresh stage gauge for %s", _st)
                 try:
                     await client.close()
-                except Exception:
+                except _METRICS_NONCRITICAL_EXCEPTIONS:
                     logger.debug("metrics: failed to close redis client")
-            except Exception:
+            except _METRICS_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics: redis not available for stage flags")
-        except Exception:
+        except _METRICS_NONCRITICAL_EXCEPTIONS:
             logger.debug("metrics: embeddings modules not available for import")
         prometheus_text = registry.export_prometheus_format() or ""
         try:
             from prometheus_client import REGISTRY as PC_REGISTRY
             from prometheus_client import generate_latest as pc_generate_latest
             prometheus_text = (prometheus_text + "\n" + pc_generate_latest(PC_REGISTRY).decode('utf-8')).strip() + "\n"
-        except Exception:
+        except _METRICS_NONCRITICAL_EXCEPTIONS:
             logger.debug("metrics: failed to augment with prometheus_client registry")
         return Response(
             content=prometheus_text,
@@ -74,7 +86,7 @@ async def get_prometheus_metrics() -> Response:
                 "Expires": "0"
             }
         )
-    except Exception as e:
+    except _METRICS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error exporting metrics: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -104,7 +116,7 @@ async def get_json_metrics() -> dict[str, Any]:
             "active_operations": active_operations,
             "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         }
-    except Exception as e:
+    except _METRICS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting metrics: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -141,7 +153,7 @@ async def health_check_with_metrics() -> dict[str, Any]:
             "active_transactions": active["active_transactions"],
             "message": "Service is operational"
         }
-    except Exception as e:
+    except _METRICS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Metrics Health check failed: {e}")
         return {
             "status": "unhealthy",
@@ -196,7 +208,7 @@ async def get_chat_metrics_endpoint() -> dict[str, Any]:
             "metrics": chat_stats,
             "token_costs": chat_metrics.token_costs  # Model pricing info
         }
-    except Exception as e:
+    except _METRICS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting chat metrics: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -237,7 +249,7 @@ async def reset_metrics() -> dict[str, str]:
             "status": "success",
             "message": "Registry metrics have been reset"
         }
-    except Exception as e:
+    except _METRICS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error resetting metrics: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

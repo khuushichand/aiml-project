@@ -27,6 +27,18 @@ from tldw_Server_API.app.core.Templating.template_renderer import (
 )
 from tldw_Server_API.app.core.Utils.Utils import logging
 
+_CHAT_DICT_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    re.error,
+    UnicodeError,
+)
+
 
 def _truthy_env(name: str, default: bool = False) -> bool:
     val = os.getenv(name)
@@ -44,7 +56,7 @@ def _templates_enabled() -> bool:
         if cp and cp.has_section('Chat-Templating'):
             raw = cp.get('Chat-Templating', 'enable_templates', fallback='false')
             return str(raw).strip().lower() in {"1", "true", "yes", "on"}
-    except Exception:
+    except _CHAT_DICT_NONCRITICAL_EXCEPTIONS:
         pass
     return False
 
@@ -52,7 +64,7 @@ def _templates_enabled() -> bool:
 def _has_template_syntax(text: str) -> bool:
     try:
         return ("{{" in text) or ("{%" in text)
-    except Exception:
+    except TypeError:
         return False
 
 
@@ -62,7 +74,7 @@ def _build_template_context(extra: dict[str, Any] | None = None) -> TemplateCont
         try:
             cp = load_comprehensive_config()
             tz = cp.get('Chat-Templating', 'default_timezone', fallback='UTC') if cp else 'UTC'
-        except Exception:
+        except _CHAT_DICT_NONCRITICAL_EXCEPTIONS:
             tz = 'UTC'
     env = TemplateEnv(timezone=str(tz or 'UTC'))
     ex = dict(extra or {})
@@ -160,7 +172,7 @@ def parse_user_dict_markdown_file(file_path: str) -> dict[str, str]:
     except FileNotFoundError:
         logger.error(f"Chat dictionary file not found: {file_path}")
         return {}
-    except Exception as exc:
+    except _CHAT_DICT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Error parsing chat dictionary file {file_path}: {exc}", exc_info=True)
         return {}
 
@@ -387,7 +399,7 @@ def apply_replacement_once(text: str, entry: ChatDictionary) -> tuple[str, int]:
                     ctx = _build_template_context(extra=extra_ctx)
                     rendered = render_template(entry.content, ctx)
                     return rendered
-                except Exception as _e:
+                except _CHAT_DICT_NONCRITICAL_EXCEPTIONS as _e:
                     logger.debug(f"chat_dict.template_render_error(regex): {_e}")
                     return entry.content
 
@@ -412,7 +424,7 @@ def apply_replacement_once(text: str, entry: ChatDictionary) -> tuple[str, int]:
                 extra_ctx = {"matched_text": match.group(0)}
                 ctx = _build_template_context(extra=extra_ctx)
                 return render_template(entry.content, ctx)
-            except Exception as _e:
+            except _CHAT_DICT_NONCRITICAL_EXCEPTIONS as _e:
                 logger.debug(f"chat_dict.template_render_error(literal): {_e}")
                 return entry.content
 
@@ -458,7 +470,7 @@ def process_user_input(
                 else:
                     matched_entries.append(entry)
             matched_entries = match_whole_words(matched_entries, user_input)
-        except Exception as exc:
+        except _CHAT_DICT_NONCRITICAL_EXCEPTIONS as exc:
             log_counter("chat_dict_match_error")
             logging.error(f"Error matching chat dictionary entries: {exc}")
             matched_entries = []
@@ -467,7 +479,7 @@ def process_user_input(
         try:
             logging.debug("Chat Dictionary: Applying group scoring.")
             matched_entries = group_scoring(matched_entries)
-        except Exception as exc:
+        except _CHAT_DICT_NONCRITICAL_EXCEPTIONS as exc:
             log_counter("chat_dict_group_scoring_error")
             logging.error(f"Error during chat dictionary group scoring: {exc}")
             matched_entries = []
@@ -476,7 +488,7 @@ def process_user_input(
         try:
             logging.debug("Chat Dictionary: Filtering by probability for %s entries", len(matched_entries))
             matched_entries = filter_by_probability(matched_entries)
-        except Exception as exc:
+        except _CHAT_DICT_NONCRITICAL_EXCEPTIONS as exc:
             log_counter("chat_dict_probability_error")
             logging.error(f"Error in probability filtering: {exc}")
             matched_entries = []
@@ -491,7 +503,7 @@ def process_user_input(
                 if apply_timed_effects(entry, current_time):
                     active_timed_entries.append(entry)
             matched_entries = active_timed_entries
-        except Exception as exc:
+        except _CHAT_DICT_NONCRITICAL_EXCEPTIONS as exc:
             log_counter("chat_dict_timed_effects_error")
             logging.error(f"Error applying timed effects: {exc}")
             matched_entries = []
@@ -504,14 +516,14 @@ def process_user_input(
             log_counter("chat_dict_token_limit")
             logging.warning(str(warning))
             matched_entries = []
-        except Exception as exc:
+        except _CHAT_DICT_NONCRITICAL_EXCEPTIONS as exc:
             log_counter("chat_dict_token_budget_error")
             logging.error(f"Error enforcing token budget: {exc}")
             matched_entries = []
 
         try:
             alert_token_budget_exceeded(matched_entries, max_tokens)
-        except Exception as exc:
+        except _CHAT_DICT_NONCRITICAL_EXCEPTIONS as exc:
             log_counter("chat_dict_token_alert_error")
             logging.error(f"Error in token budget alert: {exc}")
 
@@ -519,7 +531,7 @@ def process_user_input(
         try:
             logging.debug("Chat Dictionary: Applying replacement strategy.")
             matched_entries = apply_strategy(matched_entries, strategy)
-        except Exception as exc:
+        except _CHAT_DICT_NONCRITICAL_EXCEPTIONS as exc:
             log_counter("chat_dict_strategy_error")
             logging.error(f"Error applying strategy: {exc}")
             matched_entries = []
@@ -539,7 +551,7 @@ def process_user_input(
                         break
                 if replacements_done > 0:
                     logging.debug(f"Replaced {replacements_done} occurrences of '{entry.key_raw}'.")
-            except Exception as exc:
+            except _CHAT_DICT_NONCRITICAL_EXCEPTIONS as exc:
                 log_counter("chat_dict_replacement_error", labels={"key": entry.key_raw})
                 logging.error(
                     f"Error applying replacement for entry {entry.key_raw}: {exc}",
@@ -549,7 +561,7 @@ def process_user_input(
 
         return temp_user_input
 
-    except Exception as critical_exc:
+    except _CHAT_DICT_NONCRITICAL_EXCEPTIONS as critical_exc:
         log_counter("chat_dict_processing_error")
         logging.error(f"Critical error in process_user_input: {critical_exc}", exc_info=True)
         return user_input

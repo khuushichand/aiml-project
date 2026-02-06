@@ -19,6 +19,25 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
 
+_RAG_EVAL_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    np.linalg.LinAlgError,
+)
+
 # Safe import of embeddings helpers to avoid heavy deps during app import
 try:
     from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
@@ -27,7 +46,7 @@ try:
         get_embedding_config,
     )
     _RAG_EMBEDDINGS_AVAILABLE = True
-except Exception:
+except ImportError:
     _RAG_EMBEDDINGS_AVAILABLE = False
     def create_embedding(*args, **kwargs):  # type: ignore[misc]
         raise RuntimeError("Embeddings backend unavailable; install required dependencies")
@@ -118,7 +137,7 @@ class RAGEvaluator:
                         model_name_or_path=self.embedding_model,
                         api_key=self.api_key
                     )
-            except Exception:
+            except _RAG_EVAL_NONCRITICAL_EXCEPTIONS:
                 models[self.embedding_model] = OpenAIModelCfg(
                     provider=self.embedding_provider,
                     model_name_or_path=self.embedding_model,
@@ -130,7 +149,7 @@ class RAGEvaluator:
             try:
                 oa = config.setdefault("openai_api", {})
                 oa.setdefault("api_key", self.api_key)
-            except Exception:
+            except _RAG_EVAL_NONCRITICAL_EXCEPTIONS:
                 pass
 
         return config
@@ -155,7 +174,7 @@ class RAGEvaluator:
             # Try to get a test embedding
             result = create_embedding("test", self.embedding_config, model_id_override=self.embedding_model)
             return result is not None and len(result) > 0
-        except Exception as e:
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Embeddings test failed: {e}")
             return False
 
@@ -270,14 +289,14 @@ class RAGEvaluator:
                     try:
                         # Remove canonical to keep metric set compact and OpenAI-style
                         results["metrics"].pop("relevance", None)
-                    except Exception:
+                    except _RAG_EVAL_NONCRITICAL_EXCEPTIONS:
                         pass
                 if "answer_faithfulness" in results["metrics"] and "faithfulness" in results["metrics"]:
                     try:
                         results["metrics"].pop("faithfulness", None)
-                    except Exception:
+                    except _RAG_EVAL_NONCRITICAL_EXCEPTIONS:
                         pass
-        except Exception as e:
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Critical failure in evaluation: {e}")
             raise ValueError(f"Evaluation failed: {str(e)}")
 
@@ -302,7 +321,7 @@ class RAGEvaluator:
             for i, ctx in enumerate(contexts or []):
                 try:
                     docs.append(Document(id=f"ctx_{i+1}", content=str(ctx or ""), metadata={}))
-                except Exception:
+                except _RAG_EVAL_NONCRITICAL_EXCEPTIONS:
                     # Minimal fallback if Document import shape changes
                     docs.append(Document(id=f"ctx_{i+1}", content=str(ctx or ""), metadata={}))
 
@@ -334,7 +353,7 @@ class RAGEvaluator:
                 "raw_score": float(score * 5.0),  # map to 1-5 like other metrics if desired
                 "explanation": "Fraction of claims supported by contexts (APS extraction + hybrid verification)"
             })
-        except Exception as e:
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Claim faithfulness evaluation failed: {e}")
             raise ValueError(f"Claim faithfulness evaluation failed: {str(e)}")
 
@@ -402,7 +421,7 @@ class RAGEvaluator:
             logger.warning(f"Circuit breaker open for relevance evaluation: {e}")
             # Re-raise with more context
             raise ValueError(f"Service temporarily unavailable for relevance evaluation: {str(e)}")
-        except Exception as e:
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Relevance evaluation failed: {e}")
             # Raise exception instead of returning 0.0
             raise ValueError(f"Relevance evaluation failed: {str(e)}")
@@ -468,7 +487,7 @@ class RAGEvaluator:
                 "explanation": "Measures if response is grounded in retrieved contexts"
             })
 
-        except Exception as e:
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Faithfulness evaluation failed: {e}")
             # Raise exception instead of returning 0.0
             raise ValueError(f"Faithfulness evaluation failed: {str(e)}")
@@ -514,7 +533,7 @@ class RAGEvaluator:
                     "method": "embeddings"
                 })
 
-            except Exception as e:
+            except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Embedding-based similarity failed: {e}. Falling back.")
                 # Only synthesize embeddings in TEST_MODE when an API key was explicitly provided
                 import os as _os
@@ -633,7 +652,7 @@ class RAGEvaluator:
                 "method": "llm"
             })
 
-        except Exception as e:
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Answer similarity evaluation failed: {e}")
             # Raise exception instead of returning 0.0 (fixing error handling issue)
             raise ValueError(f"Answer similarity evaluation failed: {str(e)}")
@@ -668,7 +687,7 @@ class RAGEvaluator:
 
                 relevance_scores.append(float(score_str.strip()) / 5.0)
 
-            except Exception as e:
+            except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Failed to parse LLM-provided relevance score; defaulting to 0. error={e}")
                 relevance_scores.append(0.0)
 
@@ -723,7 +742,7 @@ class RAGEvaluator:
                     logger.warning(f"Invalid score format from LLM: {score_str}")
                     relevance_scores.append(0.0)
 
-            except Exception as e:
+            except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Context relevance evaluation failed for a context: {e}")
                 relevance_scores.append(0.0)
 
@@ -783,7 +802,7 @@ class RAGEvaluator:
                 "explanation": "Coverage of necessary information in contexts"
             })
 
-        except Exception as e:
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Context recall evaluation failed: {e}")
             # Raise exception instead of returning 0.0
             raise ValueError(f"Context recall evaluation failed: {str(e)}")
@@ -871,7 +890,7 @@ class RAGEvaluator:
                     result = min_s
                 elif result > max_s:
                     result = max_s
-        except Exception:
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS:
             pass
 
         return result

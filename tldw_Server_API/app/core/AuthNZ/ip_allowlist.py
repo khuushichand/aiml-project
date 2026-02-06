@@ -8,6 +8,15 @@ from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 
+_IP_ALLOWLIST_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
 
 def _normalize_entries(raw: Iterable[Any]) -> list[str]:
     return [str(entry).strip() for entry in raw if str(entry).strip()]
@@ -55,18 +64,18 @@ def resolve_client_ip(request: Any, settings: Settings | None = None) -> str | N
         return None
     try:
         s = settings or get_settings()
-    except Exception:
+    except _IP_ALLOWLIST_NONCRITICAL_EXCEPTIONS:
         s = settings
     try:
         peer = getattr(getattr(request, "client", None), "host", None)
-    except Exception:
+    except _IP_ALLOWLIST_NONCRITICAL_EXCEPTIONS:
         peer = None
 
     trust_xff = bool(getattr(s, "AUTH_TRUST_X_FORWARDED_FOR", False)) if s is not None else False
     if trust_xff and is_trusted_proxy_ip(peer, s):
         try:
             xr = request.headers.get("x-real-ip") or request.headers.get("X-Real-IP")
-        except Exception:
+        except _IP_ALLOWLIST_NONCRITICAL_EXCEPTIONS:
             xr = None
         if xr:
             xr_val = xr.strip()
@@ -77,12 +86,12 @@ def resolve_client_ip(request: Any, settings: Settings | None = None) -> str | N
                 pass
         try:
             fwd = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
-        except Exception:
+        except _IP_ALLOWLIST_NONCRITICAL_EXCEPTIONS:
             fwd = None
         if fwd:
             try:
                 leftmost = fwd.split(",", 1)[0].strip()
-            except Exception:
+            except _IP_ALLOWLIST_NONCRITICAL_EXCEPTIONS:
                 leftmost = ""
             if leftmost:
                 try:

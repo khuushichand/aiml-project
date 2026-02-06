@@ -23,6 +23,16 @@ from tldw_Server_API.app.core.http_client import fetch
 
 ABS_URL = "https://vixra.org/abs/{vid}"
 PDF_BASE = "https://vixra.org/pdf/{suffix}"
+_VIXRA_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    re.error,
+)
 
 
 def _try_pdf(url: str) -> str | None:
@@ -34,7 +44,7 @@ def _try_pdf(url: str) -> str | None:
             if "pdf" in ct or url.lower().endswith(".pdf"):
                 return url
         return None
-    except Exception:
+    except _VIXRA_NONCRITICAL_EXCEPTIONS:
         return None
 
 def _extract_pdf_from_abs(abs_url: str) -> str | None:
@@ -49,7 +59,7 @@ def _extract_pdf_from_abs(abs_url: str) -> str | None:
             if href.startswith("/"):
                 return f"https://vixra.org{href}"
         return None
-    except Exception:
+    except _VIXRA_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -75,7 +85,7 @@ def get_vixra_by_id(vid: str) -> tuple[dict[str, Any] | None, str | None]:
             r_abs = fetch(method="GET", url=abs_url, timeout=20)
             if r_abs.status_code == 200:
                 html = r_abs.text or None
-        except Exception:
+        except _VIXRA_NONCRITICAL_EXCEPTIONS:
             html = None
 
         if not pdf_url:
@@ -100,7 +110,7 @@ def get_vixra_by_id(vid: str) -> tuple[dict[str, Any] | None, str | None]:
             "provider": "vixra",
         }
         return item, None
-    except Exception as e:
+    except _VIXRA_NONCRITICAL_EXCEPTIONS as e:
         return None, f"vixra error: {str(e)}"
 
 
@@ -128,7 +138,7 @@ def search(term: str, page: int = 1, results_per_page: int = 10) -> tuple[list[d
                     html = r.text
                     url_used = url
                     break
-            except Exception:
+            except _VIXRA_NONCRITICAL_EXCEPTIONS:
                 continue
         if not html:
             return [], 0, "viXra search failed to fetch results"
@@ -156,7 +166,7 @@ def search(term: str, page: int = 1, results_per_page: int = 10) -> tuple[list[d
                 r_abs = fetch(method="GET", url=abs_url, timeout=12)
                 if r_abs.status_code == 200 and r_abs.text:
                     better_title, authors, pub_date = _parse_abs_details(r_abs.text)
-            except Exception:
+            except _VIXRA_NONCRITICAL_EXCEPTIONS:
                 pass
             item = {
                 "id": vid,
@@ -175,7 +185,7 @@ def search(term: str, page: int = 1, results_per_page: int = 10) -> tuple[list[d
                 break
         total = len(items)
         return items, total, None
-    except Exception as e:
+    except _VIXRA_NONCRITICAL_EXCEPTIONS as e:
         return None, 0, f"vixra search error: {str(e)}"
 
 
@@ -228,5 +238,5 @@ def _parse_abs_details(html: str) -> tuple[str | None, str | None, str | None]:
 
         authors = ", ".join(authors_list) if authors_list else None
         return title, authors, pub_date
-    except Exception:
+    except _VIXRA_NONCRITICAL_EXCEPTIONS:
         return None, None, None

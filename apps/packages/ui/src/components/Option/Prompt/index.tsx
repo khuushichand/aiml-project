@@ -10,7 +10,8 @@ import {
   Segmented,
   Tag,
   Select,
-  Alert
+  Alert,
+  type InputRef
 } from "antd"
 import { Computer, Zap, Star, StarOff, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers, Cloud } from "lucide-react"
 import { PromptActionsMenu } from "./PromptActionsMenu"
@@ -106,6 +107,7 @@ export const PromptBody = () => {
   )
   const [tagFilter, setTagFilter] = useState<string[]>([])
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const searchInputRef = useRef<InputRef | null>(null)
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge")
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
   const [insertPrompt, setInsertPrompt] = useState<{
@@ -811,6 +813,30 @@ export const PromptBody = () => {
     setDrawerOpen(true)
   }
 
+  // Keyboard shortcuts: N = new prompt, / = focus search, Esc = close drawer
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement
+      const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable
+      if (e.key === "Escape" && drawerOpen) {
+        setDrawerOpen(false)
+        return
+      }
+      if (isInput) return
+      if (e.key === "n" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault()
+        openCreateDrawer()
+        return
+      }
+      if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault()
+        searchInputRef.current?.focus()
+      }
+    }
+    document.addEventListener("keydown", handler)
+    return () => document.removeEventListener("keydown", handler)
+  }, [drawerOpen])
+
   const openEditDrawer = (record: any) => {
     if (guardPrivateMode()) return
     setEditId(record.id)
@@ -928,15 +954,18 @@ export const PromptBody = () => {
           <div className="flex flex-wrap items-center justify-between gap-3">
             {/* Left: Action buttons */}
             <div className="flex flex-wrap items-center gap-2">
+              <Tooltip title={t("managePrompts.newPromptHint", { defaultValue: "New prompt (N)" })}>
               <button
                 onClick={openCreateDrawer}
                 data-testid="prompts-add"
                 className="inline-flex items-center rounded-md border border-transparent bg-primary px-2 py-2 text-md font-medium leading-4 text-white shadow-sm hover:bg-primaryStrong focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-50">
-                {t("managePrompts.addBtn")}
+                {t("managePrompts.newPromptBtn", { defaultValue: "New prompt" })}
               </button>
+              </Tooltip>
               <button
                 onClick={() => triggerExport()}
                 data-testid="prompts-export"
+                aria-label={t("managePrompts.exportLabel", { defaultValue: "Export prompts" })}
                 className="inline-flex items-center gap-2 rounded-md border border-border px-2 py-2 text-md font-medium leading-4 text-text hover:bg-surface2">
                 <Download className="size-4" /> {t("managePrompts.export", { defaultValue: "Export" })}
               </button>
@@ -970,6 +999,7 @@ export const PromptBody = () => {
                 accept="application/json"
                 className="hidden"
                 data-testid="prompts-import-file"
+                aria-label={t("managePrompts.importFileLabel", { defaultValue: "Import prompts file" })}
                 onChange={(e) => {
                   const file = e.target.files?.[0]
                   if (file) handleImportFile(file)
@@ -979,25 +1009,22 @@ export const PromptBody = () => {
             </div>
             {/* Right: Filters */}
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex flex-col">
-                <Input
+              <Input
+                  ref={searchInputRef}
                   allowClear
-                  placeholder={t("managePrompts.search", { defaultValue: "Search prompts..." })}
+                  placeholder={t("managePrompts.searchWithScope", { defaultValue: "Search name, content, keywords..." })}
                   value={searchText}
                   onChange={(e) => setSearchText(e.target.value)}
                   data-testid="prompts-search"
-                  style={{ width: 220 }}
+                  aria-label={t("managePrompts.search", { defaultValue: "Search prompts..." })}
+                  suffix={<kbd className="rounded border border-border px-1 text-xs text-text-subtle">/</kbd>}
+                  style={{ width: 260 }}
                 />
-                <span className="text-xs text-text-muted mt-0.5">
-                  {t("managePrompts.searchScope", {
-                    defaultValue: "Searches name, author, content, keywords"
-                  })}
-                </span>
-              </div>
               <Select
                 value={typeFilter}
                 onChange={(v) => setTypeFilter(v as any)}
                 data-testid="prompts-type-filter"
+                aria-label={t("managePrompts.filter.typeLabel", { defaultValue: "Filter by type" })}
                 style={{ width: 130 }}
                 options={[
                   { label: t("managePrompts.filter.all", { defaultValue: "All types" }), value: "all" },
@@ -1013,6 +1040,7 @@ export const PromptBody = () => {
                 value={tagFilter}
                 onChange={(v) => setTagFilter(v)}
                 data-testid="prompts-tag-filter"
+                aria-label={t("managePrompts.tags.filterLabel", { defaultValue: "Filter by keywords" })}
                 options={allTags.map((t) => ({ label: t, value: t }))}
               />
             </div>

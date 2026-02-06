@@ -10,26 +10,26 @@ import numpy as np
 # Defer heavy imports; set to None if missing and import lazily where needed
 try:  # pragma: no cover
     import torch  # type: ignore
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     torch = None  # type: ignore
 
 try:  # pragma: no cover
     import librosa  # type: ignore
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     librosa = None  # type: ignore
 
 # Try to import perth; fall back to local stub if unavailable
 try:
     import perth  # type: ignore
-except Exception:  # pragma: no cover - dev env fallback
+except ImportError:  # pragma: no cover - dev env fallback
     try:
         from vendor_stubs import perth  # type: ignore
-    except Exception:
+    except ImportError:
         perth = None  # type: ignore
 
 try:
     from neucodec import DistillNeuCodec, NeuCodec  # type: ignore
-except Exception:  # pragma: no cover - adapter will gracefully handle missing dep
+except ImportError:  # pragma: no cover - adapter will gracefully handle missing dep
     NeuCodec = None  # type: ignore
     DistillNeuCodec = None  # type: ignore
 

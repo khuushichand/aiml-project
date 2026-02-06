@@ -9,7 +9,7 @@ import sys
 from collections.abc import MutableMapping
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import urlparse
 
 import yaml
@@ -20,6 +20,9 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from tldw_Server_API.app.core.config_paths import resolve_config_file
+
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LlamaCppConfig
 
 _CONFIG_NONCRITICAL_EXCEPTIONS = (
     AssertionError,

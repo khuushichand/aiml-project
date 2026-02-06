@@ -29,6 +29,25 @@ if TYPE_CHECKING:
     import torch
 
 
+_DIARIZATION_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
+
 # Module availability probes (evaluated lazily to avoid heavy imports during test collection)
 
 @lru_cache(maxsize=1)
@@ -36,10 +55,10 @@ def _module_spec_available(module_name: str) -> bool:
     """Best-effort probe using importlib without importing heavy modules."""
     try:
         return importlib.util.find_spec(module_name) is not None
-    except Exception as exc:  # pragma: no cover - defensive logging
+    except _DIARIZATION_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive logging
         try:
             logger.debug(f"Module spec probe failed for {module_name}: {exc}")
-        except Exception:
+        except _DIARIZATION_NONCRITICAL_EXCEPTIONS:
             pass
         return False
 
@@ -52,7 +71,7 @@ def _torch_available() -> bool:
     try:
         import torch  # type: ignore  # noqa: F401
         return True
-    except Exception as exc:  # pragma: no cover - import error surfaces once
+    except _DIARIZATION_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - import error surfaces once
         logger.debug(f"PyTorch import failed: {exc}")
         return False
 
@@ -65,7 +84,7 @@ def _torchaudio_available() -> bool:
     try:
         import torchaudio  # type: ignore  # noqa: F401
         return True
-    except Exception as exc:  # pragma: no cover - import error surfaces once
+    except _DIARIZATION_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - import error surfaces once
         logger.debug(f"TorchAudio import failed: {exc}")
         return False
 
@@ -82,7 +101,7 @@ def _speechbrain_available() -> bool:
     try:
         import speechbrain  # type: ignore  # noqa: F401
         return True
-    except Exception as exc:  # pragma: no cover - import error surfaces once
+    except _DIARIZATION_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - import error surfaces once
         logger.debug(f"SpeechBrain import failed: {exc}")
         return False
 
@@ -95,7 +114,7 @@ def _sklearn_available() -> bool:
     try:
         import sklearn  # type: ignore  # noqa: F401
         return True
-    except Exception as exc:  # pragma: no cover - import error surfaces once
+    except _DIARIZATION_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - import error surfaces once
         logger.debug(f"scikit-learn import failed: {exc}")
         return False
 
@@ -206,7 +225,7 @@ def _onnxruntime_available() -> bool:
     try:
         import onnxruntime  # type: ignore  # noqa: F401
         return True
-    except Exception as exc:  # pragma: no cover - import error surfaces once
+    except _DIARIZATION_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - import error surfaces once
         logger.debug(f"onnxruntime import failed: {exc}")
         return False
 
@@ -405,7 +424,7 @@ class DiarizationService:
                 "segments": segments,
             }
 
-        except Exception as e:
+        except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to propose edit boundaries: {e}")
             raise
 
@@ -670,7 +689,7 @@ class DiarizationService:
                             run_opts={"device": device}
                         )
                     logger.info(f"Embedding model loaded successfully on {device}")
-                except Exception as e:
+                except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to load embedding model: {e}")
                     raise DiarizationError(f"Failed to load embedding model: {e}") from e
 
@@ -728,7 +747,7 @@ class DiarizationService:
                             f"Failed to map Silero VAD utilities. The utility order may have changed. Error: {e}"
                         ) from e
 
-                except Exception as e:
+                except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to load VAD model: {e}")
                     self._vad_model = None
                     self._vad_utils = None
@@ -912,7 +931,7 @@ class DiarizationService:
             }
             return result
 
-        except Exception as e:
+        except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Diarization failed: {e}", exc_info=True)
             raise DiarizationError(f"Diarization failed: {str(e)}") from e
 
@@ -942,7 +961,7 @@ class DiarizationService:
                     resampler = torchaudio.transforms.Resample(sample_rate, 16000)
                     waveform = resampler(waveform)
                 return waveform.squeeze()
-            except Exception as e:
+            except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to load audio with torchaudio: {e}")
                 # Fall through to Silero VAD fallback
         else:
@@ -953,7 +972,7 @@ class DiarizationService:
             if not self._vad_utils:
                 try:
                     self._load_vad_model()
-                except Exception as e:
+                except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to load VAD model for audio reading: {e}")
                     raise DiarizationError(f"Cannot load audio: VAD model load failed: {e}") from e
 
@@ -978,7 +997,7 @@ class DiarizationService:
 
                 return waveform
 
-            except Exception as e:
+            except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to load audio with Silero read_audio: {e}")
                 raise DiarizationError(
                     f"Failed to load audio file '{audio_path}': {str(e)}"
@@ -1031,7 +1050,7 @@ class DiarizationService:
                 if hasattr(waveform, "detach") and hasattr(waveform, "cpu"):
                     try:
                         audio_np = waveform.detach().cpu().numpy().astype("float32")
-                    except Exception:
+                    except _DIARIZATION_NONCRITICAL_EXCEPTIONS:
                         audio_np = np_mod.asarray(waveform, dtype=np_mod.float32).reshape(-1)
                 else:
                     audio_np = np_mod.asarray(waveform, dtype=np_mod.float32).reshape(-1)
@@ -1125,7 +1144,7 @@ class DiarizationService:
 
                 return speech_timestamps
 
-            except Exception as outer_onnx:
+            except _DIARIZATION_NONCRITICAL_EXCEPTIONS as outer_onnx:
                 logger.warning(f"ONNX-based VAD detection failed: {outer_onnx}; using fallback full-span")
                 return _fallback_full_span()
 
@@ -1169,7 +1188,7 @@ class DiarizationService:
                     # Reset iterator
                     vad_iterator.reset_states()
 
-                except Exception as e:
+                except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Streaming VAD failed, falling back to standard VAD: {e}")
                     streaming = False
 
@@ -1201,7 +1220,7 @@ class DiarizationService:
                             logger.debug("Invalid VAD timestamp format; using fallback full-span")
                             return _fallback_full_span()
 
-                except Exception as e:
+                except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"VAD detection failed: {e}; using fallback full-span")
                     return _fallback_full_span()
 
@@ -1212,7 +1231,7 @@ class DiarizationService:
 
             return speech_timestamps
 
-        except Exception as outer:
+        except _DIARIZATION_NONCRITICAL_EXCEPTIONS as outer:
             logger.warning(f"VAD unavailable or failed early: {outer}; using fallback full-span")
             return _fallback_full_span()
 
@@ -1284,7 +1303,7 @@ class DiarizationService:
                     padding_needed = min_segment_samples - speech_duration
                     try:
                         padded_waveform = torch.nn.functional.pad(segment_waveform, (0, padding_needed))
-                    except Exception as e:
+                    except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Failed to pad short segment: {e}")
                         continue  # Skip this segment if padding fails
 
@@ -1356,7 +1375,7 @@ class DiarizationService:
                                     'original_duration': remaining_samples / sample_rate,
                                     'speech_region': speech
                                 })
-                            except Exception as e:
+                            except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
                                 logger.warning(f"Failed to pad last segment: {e}")
 
         return segments
@@ -1418,7 +1437,7 @@ class DiarizationService:
                 else:
                     # Original behavior - use stored waveforms
                     waveforms = torch.stack([seg['waveform'].unsqueeze(0) for seg in batch_segments])
-            except Exception as e:
+            except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to stack waveforms for batch {batch_idx}: {e}")
                 raise DiarizationError(f"Failed to prepare batch: {e}") from e
 
@@ -1429,13 +1448,13 @@ class DiarizationService:
                     try:
                         with torch.inference_mode():  # type: ignore[attr-defined]
                             batch_embeddings = self._embedding_model.encode_batch(waveforms)
-                    except Exception as e:
+                    except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"torch.inference_mode failed: {e}; trying no_grad")
                         if hasattr(torch, 'no_grad'):
                             try:
                                 with torch.no_grad():
                                     batch_embeddings = self._embedding_model.encode_batch(waveforms)
-                            except Exception as e2:
+                            except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e2:
                                 logger.debug(f"torch.no_grad failed: {e2}; calling directly")
                                 batch_embeddings = self._embedding_model.encode_batch(waveforms)
                         else:
@@ -1444,7 +1463,7 @@ class DiarizationService:
                     try:
                         with torch.no_grad():
                             batch_embeddings = self._embedding_model.encode_batch(waveforms)
-                    except Exception as e:
+                    except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"torch.no_grad failed: {e}; calling directly")
                         batch_embeddings = self._embedding_model.encode_batch(waveforms)
                 else:
@@ -1458,7 +1477,7 @@ class DiarizationService:
                 for embedding in batch_embeddings:
                     embeddings.append(embedding.squeeze())
 
-            except Exception as e:
+            except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to extract embeddings for batch starting at {batch_idx}: {e}")
                 raise DiarizationError(f"Batch embedding extraction failed: {e}") from e
 
@@ -1478,7 +1497,7 @@ class DiarizationService:
 
         try:
             return np.array(embeddings)
-        except Exception as e:
+        except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create numpy array from embeddings: {e}")
             raise DiarizationError(f"Failed to create embedding array: {e}") from e
 
@@ -1594,7 +1613,7 @@ class DiarizationService:
                     max_score = score
                     best_n = n
 
-            except Exception as e:
+            except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to test {n} speakers: {e}")
 
         return best_n
@@ -1643,7 +1662,7 @@ class DiarizationService:
             # If average similarity is very high, likely single speaker
             return avg_similarity > threshold
 
-        except Exception as e:
+        except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to check single speaker: {e}")
             # On error, assume multiple speakers for safety
             return False
@@ -1845,7 +1864,7 @@ class DiarizationService:
                     f"with potential overlapping speech"
                 )
 
-        except Exception as e:
+        except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to detect overlapping speech: {e}")
             # Don't fail the whole process, just skip overlap detection
 
@@ -1929,7 +1948,7 @@ def audio_diarization(
         else:
             return []
 
-    except Exception as e:
+    except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
         if isinstance(e, DiarizationError):
             raise
         else:
@@ -1990,7 +2009,7 @@ def combine_transcription_and_diarization(
         else:
             return transcription_segments
 
-    except Exception as e:
+    except _DIARIZATION_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Failed to combine transcription and diarization: {e}")
         return transcription_segments
 

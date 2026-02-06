@@ -13,7 +13,37 @@ from loguru import logger
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.http_client import create_async_client
 
+try:
+    import httpx as _httpx
+except ImportError:  # pragma: no cover - optional in some test environments
+    _httpx = None  # type: ignore[assignment]
+
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+_HF_HTTP_EXCEPTIONS: tuple[type[BaseException], ...] = ()
+if _httpx is not None:
+    _HF_HTTP_EXCEPTIONS = (
+        _httpx.HTTPError,
+        _httpx.TimeoutException,
+    )
+
+_HF_API_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+) + _HF_HTTP_EXCEPTIONS
 
 
 async def _async_retry_sleep(delay: float, attempt: int) -> None:
@@ -48,15 +78,15 @@ class HuggingFaceAPI:
         # Retry/timeout settings (config.txt only as requested)
         try:
             self.api_retries = int(hf_cfg.get("api_retries", 2))
-        except Exception:
+        except (TypeError, ValueError):
             self.api_retries = 2
         try:
             self.api_retry_delay = float(hf_cfg.get("api_retry_delay", 0.5))
-        except Exception:
+        except (TypeError, ValueError):
             self.api_retry_delay = 0.5
         try:
             self.api_timeout = float(hf_cfg.get("api_timeout", 30.0))
-        except Exception:
+        except (TypeError, ValueError):
             self.api_timeout = 30.0
 
     async def search_models(
@@ -116,7 +146,7 @@ class HuggingFaceAPI:
                     )
                     resp.raise_for_status()
                     return resp.json()
-                except Exception as e:
+                except _HF_API_NONCRITICAL_EXCEPTIONS as e:
                     last_exc = e
                     if attempt + 1 >= attempts:
                         break
@@ -148,7 +178,7 @@ class HuggingFaceAPI:
                     )
                     resp.raise_for_status()
                     return resp.json()
-                except Exception as e:
+                except _HF_API_NONCRITICAL_EXCEPTIONS as e:
                     last_exc = e
                     if attempt + 1 >= attempts:
                         break
@@ -183,7 +213,7 @@ class HuggingFaceAPI:
                         files = [f for f in files if f.get("path", "").startswith(path)]
                     gguf_files = [f for f in files if f.get("path", "").endswith(".gguf")]
                     return gguf_files
-                except Exception as e:
+                except _HF_API_NONCRITICAL_EXCEPTIONS as e:
                     last_exc = e
                     if attempt + 1 >= attempts:
                         break
@@ -249,7 +279,7 @@ class HuggingFaceAPI:
                         head_resp = await client.head(url, headers=self.headers)
                         total_size = int(head_resp.headers.get("content-length", 0))
                         break
-                    except Exception as e:
+                    except _HF_API_NONCRITICAL_EXCEPTIONS as e:
                         last_exc = e
                         if attempt + 1 >= attempts:
                             logger.error(f"HEAD failed for {filename}: {last_exc}")
@@ -274,32 +304,32 @@ class HuggingFaceAPI:
                                 if progress_callback and total_size:
                                     try:
                                         progress_callback(min(downloaded, total_size), total_size)
-                                    except Exception:
+                                    except _HF_API_NONCRITICAL_EXCEPTIONS:
                                         pass
                         temp_file.replace(destination)
                         # Final progress callback to ensure completion state
                         if progress_callback and total_size and downloaded < total_size:
                             try:
                                 progress_callback(total_size, total_size)
-                            except Exception:
+                            except _HF_API_NONCRITICAL_EXCEPTIONS:
                                 pass
                         logger.info(f"Successfully downloaded {filename} to {destination}")
                         return True
-                except Exception as e:
+                except _HF_API_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Error downloading {filename}: {e}")
                     try:
                         if temp_file.exists():
                             temp_file.unlink()
-                    except Exception:
+                    except _HF_API_NONCRITICAL_EXCEPTIONS:
                         pass
                     return False
-        except Exception as e:
+        except _HF_API_NONCRITICAL_EXCEPTIONS as e:
             # Catch any unexpected errors outside inner blocks
             logger.error(f"Unexpected error downloading {filename} from {repo_id}: {e}")
             try:
                 if temp_file.exists():
                     temp_file.unlink()
-            except Exception:
+            except _HF_API_NONCRITICAL_EXCEPTIONS:
                 pass
             return False
 
@@ -323,7 +353,7 @@ class HuggingFaceAPI:
                 resp = await client.get(url, headers=self.headers)
                 if resp.status_code < 400:
                     return resp.text
-            except Exception:
+            except _HF_API_NONCRITICAL_EXCEPTIONS:
                 pass
             # Fallback README (no extension)
             alt = f"{self.BASE_URL}/{repo_id}/raw/main/README"
@@ -335,7 +365,7 @@ class HuggingFaceAPI:
                         return resp.text
                     else:
                         last_exc = Exception(f"status={resp.status_code}")
-                except Exception as e:
+                except _HF_API_NONCRITICAL_EXCEPTIONS as e:
                     last_exc = e
                 if attempt + 1 < attempts:
                     await asyncio.sleep(max(0.001, (backoff_ms / 1000.0)))
@@ -363,7 +393,7 @@ class HuggingFaceAPI:
                     resp = await client.get(url, headers=self.headers)
                     resp.raise_for_status()
                     return resp.json()
-                except Exception as e:
+                except _HF_API_NONCRITICAL_EXCEPTIONS as e:
                     last_exc = e
                     if attempt + 1 < attempts:
                         await asyncio.sleep(max(0.001, (backoff_ms / 1000.0)))

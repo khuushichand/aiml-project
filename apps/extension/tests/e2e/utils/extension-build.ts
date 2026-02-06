@@ -105,6 +105,21 @@ export async function launchWithBuiltExtension(
     (cfg, allowOfflineFlag) => {
       try {
         if (typeof chrome === 'undefined' || !chrome.storage?.local) return
+        const baseSeed = {
+          __tldw_first_run_complete: true,
+          tldw_skip_landing_hub: true,
+          quickIngestInspectorIntroDismissed: true,
+          quickIngestOnboardingDismissed: true,
+          "tldw:workflow:landing-config": {
+            showOnFirstRun: true,
+            dismissedAt: Date.now(),
+            completedWorkflows: [],
+          },
+        }
+        const seededConfig =
+          cfg && typeof cfg === "object"
+            ? { ...baseSeed, tldwConfig: cfg, ...cfg }
+            : baseSeed
         const setLocal = (data: Record<string, any>, done?: () => void) => {
           // @ts-ignore
           const setter = chrome?.storage?.local?.set
@@ -125,6 +140,7 @@ export async function launchWithBuiltExtension(
         }
         const finalize = () => {
           setLocal({ __e2eSeeded: true })
+          setSync({ __e2eSeeded: true })
         }
 
         chrome.storage.local.get('__e2eSeeded', (items) => {
@@ -140,11 +156,11 @@ export async function launchWithBuiltExtension(
             setLocal({ __tldw_allow_offline: true }, done)
           }
 
-          if (cfg) {
+          if (seededConfig) {
             pending += 1
-            setLocal({ tldwConfig: cfg }, done)
+            setLocal(seededConfig, done)
             pending += 1
-            setSync({ tldwConfig: cfg }, done)
+            setSync(seededConfig, done)
           }
 
           if (pending === 0) finalize()
@@ -199,6 +215,21 @@ export async function launchWithBuiltExtension(
     if (seedConfig) {
       await sw.evaluate(({ cfg, allowOfflineFlag }) => {
         return new Promise<void>((resolve) => {
+          const baseSeed = {
+            __tldw_first_run_complete: true,
+            tldw_skip_landing_hub: true,
+            quickIngestInspectorIntroDismissed: true,
+            quickIngestOnboardingDismissed: true,
+            "tldw:workflow:landing-config": {
+              showOnFirstRun: true,
+              dismissedAt: Date.now(),
+              completedWorkflows: [],
+            },
+          }
+          const seededConfig =
+            cfg && typeof cfg === "object"
+              ? { ...baseSeed, tldwConfig: cfg, ...cfg }
+              : baseSeed
           const setLocal = (data: Record<string, any>, done?: () => void) => {
             try {
               chrome.storage.local.set(data, () => done?.())
@@ -225,9 +256,9 @@ export async function launchWithBuiltExtension(
                 setLocal({ __tldw_allow_offline: true }, done)
               }
               pending += 1
-              setSync(cfg, done)
+              setSync(seededConfig, done)
               pending += 1
-              setLocal(cfg, done)
+              setLocal(seededConfig, done)
               pending += 1
               setSync({ __e2eSeeded: true }, done)
               pending += 1
@@ -270,6 +301,52 @@ export async function launchWithBuiltExtension(
   const page = await context.newPage()
   await page.goto(optionsUrl)
   await waitForStorageSeed(page)
+
+  // When seeding config, proactively hydrate the connection store so tests do
+  // not race first-run onboarding checks on initial mount.
+  if (seedConfig) {
+    await page
+      .waitForFunction(
+        () =>
+          typeof (window as any).__tldw_useConnectionStore?.getState ===
+          "function",
+        undefined,
+        { timeout: 15_000 }
+      )
+      .catch(() => undefined)
+
+    await page
+      .evaluate(async (cfg) => {
+        const store = (window as any).__tldw_useConnectionStore
+        if (!store?.getState) return
+        const actions = store.getState()
+
+        try {
+          if (cfg && typeof cfg === "object" && typeof actions.setConfigPartial === "function") {
+            await actions.setConfigPartial(cfg)
+          }
+        } catch {
+          // ignore config hydration failures in test contexts
+        }
+
+        try {
+          if (typeof actions.markFirstRunComplete === "function") {
+            await actions.markFirstRunComplete()
+          }
+        } catch {
+          // ignore flag write failures in test contexts
+        }
+
+        try {
+          if (typeof actions.checkOnce === "function") {
+            await actions.checkOnce()
+          }
+        } catch {
+          // ignore connection check failures in test contexts
+        }
+      }, seedConfig)
+      .catch(() => undefined)
+  }
 
   async function openSidepanel() {
     const p = await context.newPage()

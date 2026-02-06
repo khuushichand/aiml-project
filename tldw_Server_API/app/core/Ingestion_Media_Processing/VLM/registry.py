@@ -2,6 +2,15 @@ from __future__ import annotations
 
 from .base import VLMBackend
 
+_BACKEND_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
 
 def _backend_map() -> dict[str, type[VLMBackend]]:
     mapping: dict[str, type[VLMBackend]] = {}
@@ -9,14 +18,14 @@ def _backend_map() -> dict[str, type[VLMBackend]]:
         from .backends.hf_table_transformer import HFTableTransformerBackend
 
         mapping[HFTableTransformerBackend.name] = HFTableTransformerBackend
-    except Exception:
+    except ImportError:
         # transformers or PIL may be missing - silently ignore; available() will reflect this
         pass
     try:
         from .backends.docling_vlm import DoclingVLMBackend
 
         mapping[DoclingVLMBackend.name] = DoclingVLMBackend
-    except Exception:
+    except ImportError:
         # docling may be missing
         pass
     return mapping
@@ -38,7 +47,7 @@ def get_backend(name: str | None = None) -> VLMBackend | None:
         try:
             if cls.available():
                 return cls()
-        except Exception:
+        except _BACKEND_NONCRITICAL_EXCEPTIONS:
             continue
     return None
 
@@ -56,7 +65,7 @@ def list_backends() -> dict[str, dict[str, bool]]:
         ok = False
         try:
             ok = bool(cls.available())
-        except Exception:
+        except _BACKEND_NONCRITICAL_EXCEPTIONS:
             ok = False
         out[k] = {"available": ok}
     return out

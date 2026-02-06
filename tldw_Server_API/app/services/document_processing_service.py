@@ -22,6 +22,19 @@ from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 from tldw_Server_API.app.core.Utils.Utils import logging
 
+_DOC_PROCESSING_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 
 def _ensure_placeholder_enabled():
     s = get_settings()
@@ -85,7 +98,7 @@ async def process_documents(
                 if os.path.exists(fp):
                     os.remove(fp)
                     update_progress(f"Removed temp file: {fp}")
-            except Exception as e:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
                 update_progress(f"Failed to remove {fp}: {str(e)}")
 
     def download_document_file(url: str, use_cookies: bool, cookies: Optional[str]) -> str:
@@ -109,7 +122,7 @@ async def process_documents(
                         raise RuntimeError(msg)
                     else:
                         logging.warning(f"[file_security] non-strict: {msg}")
-            except Exception as _e:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as _e:
                 if _file_security_strict():
                     raise RuntimeError(f"Egress policy failure: {_e}")
                 else:
@@ -152,9 +165,9 @@ async def process_documents(
                 finally:
                     try:
                         sc0.close()
-                    except Exception as cleanup_err:
+                    except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as cleanup_err:
                         _logger.debug(f"Ignored client close error (preflight GET): {cleanup_err}")
-            except Exception as e_gr:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as e_gr:
                 _last_err = e_gr
                 _logger.debug("Preflight GET Range failed, trying single HEAD with retries=1 (no http2): {}", e_gr)
                 # As a best-effort fallback, try a single HEAD with http2 disabled and limited retries
@@ -178,14 +191,14 @@ async def process_documents(
                         finally:
                             try:
                                 head_resp2.close()
-                            except Exception as cleanup_err:
+                            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as cleanup_err:
                                 _logger.debug(f"Ignored response close error (preflight HEAD): {cleanup_err}")
                     finally:
                         try:
                             sc.close()
-                        except Exception as cleanup_err:
+                        except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as cleanup_err:
                             _logger.debug(f"Ignored client close error (preflight HEAD): {cleanup_err}")
-                except Exception as e2:
+                except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as e2:
                     _last_err = e2
                     _logger.warning("All preflight attempts failed for URL {}: {}", url, e2)
                     raise _last_err from e2
@@ -206,7 +219,7 @@ async def process_documents(
                             raise RuntimeError(f"MIME not allowed: {mt}")
                         else:
                             logging.warning(f"[file_security] non-strict: MIME {mt} not allowed; continuing")
-            except Exception as _guard:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as _guard:
                 if _file_security_strict():
                     raise RuntimeError(str(_guard))
                 else:
@@ -222,13 +235,13 @@ async def process_documents(
                 http_download(url=url, dest=tmp_path, headers=headers, retry=RetryPolicy())
                 temp_files.append(tmp_path)
                 return tmp_path
-            except Exception as e:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
                 try:
                     os.unlink(tmp_path)
-                except Exception as cleanup_err:
+                except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as cleanup_err:
                     logging.debug(f"Ignored tmp unlink error: {cleanup_err}")
                 raise RuntimeError(f"Download from '{url}' failed: {e}")
-        except Exception as e:
+        except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
             raise RuntimeError(f"Download from '{url}' failed: {str(e)}")
 
     def convert_to_text(file_path: str) -> str:
@@ -254,7 +267,7 @@ async def process_documents(
             # Minimal placeholder for PDF - prefer the dedicated PDF pipeline elsewhere
             try:
                 return pypandoc.convert_file(file_path, 'plain', format='pdf')
-            except Exception:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS:
                 return "[PDF format not handled here - use a separate PDF pipeline?]"
 
         else:
@@ -346,7 +359,7 @@ async def process_documents(
                 # Combine them in a single pass
                 combined_summary = "\n\n".join(chunk_summaries)
                 return combined_summary
-        except Exception as e:
+        except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
             update_progress(f"Summarization failed: {str(e)}")
             return "Summary generation failed"
 
@@ -425,7 +438,7 @@ async def process_documents(
                 processed_count += 1
                 item_result["success"] = True
                 update_progress(f"Processed URL {i} successfully.")
-            except Exception as exc:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as exc:
                 failed_count += 1
                 item_result["error"] = str(exc)
                 update_progress(f"Failed to process URL {i}: {str(exc)}")
@@ -504,7 +517,7 @@ async def process_documents(
                 processed_count += 1
                 item_result["success"] = True
                 update_progress(f"Processed file {i}/{len(doc_files)}: {file_path}")
-            except Exception as exc:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as exc:
                 failed_count += 1
                 item_result["error"] = str(exc)
                 update_progress(f"Failed to process file {i} ({file_path}): {str(exc)}")

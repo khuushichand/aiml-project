@@ -23,6 +23,17 @@ from .utils import format as format_utils
 from .utils import git as git_utils
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="tldw_server setup wizard CLI")
+_WIZARD_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+    subprocess.SubprocessError,
+)
 
 
 def _emit(result: dict[str, Any], use_json: bool) -> None:
@@ -50,7 +61,7 @@ def _resolve_database_url(env_path: Path) -> str | None:
 def _validate_database_url(db_url: str) -> tuple[bool, str]:
     try:
         parsed = urlsplit(db_url)
-    except Exception:
+    except ValueError:
         return False, "unable to parse DATABASE_URL"
     scheme = (parsed.scheme or "").split("+", 1)[0].lower()
     if scheme in {"postgres", "postgresql"}:
@@ -65,7 +76,7 @@ def _validate_database_url(db_url: str) -> tuple[bool, str]:
 def _resolve_sqlite_db_path(db_url: str) -> Path | None:
     try:
         from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
-    except Exception:
+    except ImportError:
         return None
     _, _, fs_path = DatabasePool._resolve_sqlite_paths(db_url)
     if not fs_path or fs_path == ":memory:":
@@ -83,7 +94,7 @@ def _resolve_user_db_base_dir_for_dry_run() -> Path:
     if raw:
         try:
             candidate = Path(raw).expanduser()
-        except Exception:
+        except (OSError, TypeError, ValueError):
             candidate = Path(raw)
         if not candidate.is_absolute():
             candidate = (Path.cwd() / candidate).resolve()
@@ -322,7 +333,7 @@ def _probe_endpoint(base_url: str, path: str, *, timeout: float = 2.0) -> dict[s
     try:
         resp = httpx.get(url, timeout=timeout)
         return {"url": url, "status_code": resp.status_code, "ok": resp.status_code < 400}
-    except Exception as exc:
+    except (httpx.HTTPError, OSError, TimeoutError, ValueError) as exc:
         return {"url": url, "ok": False, "error": str(exc)}
 
 
@@ -491,7 +502,7 @@ def init(
             changed = git_utils.changed_or_untracked_files(base)
             if changed:
                 format_utils.maybe_format(changed)
-        except Exception as e:
+        except _WIZARD_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"format step skipped: {e}")
 
     result = {
@@ -956,7 +967,7 @@ def db(
             from tldw_Server_API.app.core.AuthNZ.database import test_database_connection
 
             ok = asyncio.run(test_database_connection())
-        except Exception as exc:
+        except _WIZARD_NONCRITICAL_EXCEPTIONS as exc:
             ok = False
             notes.append(f"Postgres validation failed: {exc}")
         actions.append({"postgres_check": {"status": "ok" if ok else "error"}})
@@ -1129,7 +1140,7 @@ def mcp(
 
         try:
             data, raw = _load_json_file(candidate_path)
-        except Exception as exc:
+        except _WIZARD_NONCRITICAL_EXCEPTIONS as exc:
             actions.append(
                 {
                     "mcp_client": {
@@ -1221,7 +1232,7 @@ def format(
                 else:
                     format_utils.maybe_format(changed)
                     actions["formatted"] = changed
-            except Exception as e:
+            except _WIZARD_NONCRITICAL_EXCEPTIONS as e:
                 actions["error"] = str(e)
     result = {"command": "format", "status": "ok", "actions": actions, "dry_run": dry_run}
     _emit(result, json_out)
@@ -1314,7 +1325,7 @@ def doctor(
                 actions.append({"set_env": masked})
                 if env_result.backup_path:
                     actions.append({"backup": str(env_result.backup_path)})
-            except Exception as exc:
+            except _WIZARD_NONCRITICAL_EXCEPTIONS as exc:
                 env_action["status"] = "error"
                 env_action["error"] = str(exc)
                 had_error = True
@@ -1336,7 +1347,7 @@ def doctor(
             try:
                 files_utils.ensure_gitignore(gitignore_path, entries=desired_entries)
                 git_action["status"] = "updated"
-            except Exception as exc:
+            except _WIZARD_NONCRITICAL_EXCEPTIONS as exc:
                 git_action["status"] = "error"
                 git_action["error"] = str(exc)
                 had_error = True

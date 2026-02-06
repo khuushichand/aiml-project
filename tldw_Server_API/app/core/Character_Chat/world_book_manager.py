@@ -35,7 +35,7 @@ from loguru import logger
 
 try:
     from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens
-except Exception:
+except ImportError:
     from tldw_Server_API.app.core.utils.tokenizer import count_tokens as _count_tokens
 
 # Local imports
@@ -69,6 +69,25 @@ _WORLD_BOOK_ENTRY_UPDATE_FIELDS = frozenset({
     "keywords", "content", "priority", "enabled", "case_sensitive",
     "regex_match", "whole_word_match", "metadata", "last_modified"
 })
+
+_WORLD_BOOK_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
 
 
 def _build_safe_update_clause(
@@ -202,14 +221,14 @@ class WorldBookEntry:
         # Compile patterns for efficient matching
         self._patterns = self._compile_patterns()
 
-    def _compile_patterns(self) -> list[re.Pattern]:
+    def _compile_patterns(self) -> list[tuple[re.Pattern, str]]:
         """
         Compile keyword patterns for matching.
 
         For regex patterns, validates against potential ReDoS vulnerabilities
         before compilation. Dangerous patterns are rejected with a warning.
         """
-        patterns = []
+        patterns: list[tuple[re.Pattern, str]] = []
 
         for keyword in self.keywords:
             if self.regex_match:
@@ -227,7 +246,7 @@ class WorldBookEntry:
                 try:
                     flags = 0 if self.case_sensitive else re.IGNORECASE
                     pattern = re.compile(keyword, flags)
-                    patterns.append(pattern)
+                    patterns.append((pattern, keyword))
                 except re.error as e:
                     logger.warning("Invalid regex pattern '{}': {}", keyword, e)
             else:
@@ -239,7 +258,7 @@ class WorldBookEntry:
                     pattern_str = escaped
 
                 flags = 0 if self.case_sensitive else re.IGNORECASE
-                patterns.append(re.compile(pattern_str, flags))
+                patterns.append((re.compile(pattern_str, flags), keyword))
 
         return patterns
 
@@ -256,11 +275,25 @@ class WorldBookEntry:
         if not self.enabled or not self._patterns:
             return False
 
-        for pattern in self._patterns:
+        for pattern, _keyword in self._patterns:
             if pattern.search(text):
                 return True
 
         return False
+
+    def get_first_match_info(self, text: str) -> Optional[dict[str, Any]]:
+        """Return the first matching keyword and reason, if any."""
+        if not self.enabled or not self._patterns:
+            return None
+
+        for pattern, keyword in self._patterns:
+            if pattern.search(text):
+                return {
+                    "reason": "regex_match" if self.regex_match else "keyword_match",
+                    "keyword": keyword,
+                }
+
+        return None
 
     def get_match_count(self, text: str) -> int:
         """
@@ -276,7 +309,7 @@ class WorldBookEntry:
             return 0
 
         count = 0
-        for pattern in self._patterns:
+        for pattern, _keyword in self._patterns:
             if pattern.search(text):
                 count += 1
 
@@ -513,7 +546,7 @@ class WorldBookService:
 
                 conn.commit()
                 logger.info("World book tables initialized")
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to initialize world book tables: {e}")
             raise CharactersRAGDBError(f"Failed to initialize world book tables: {e}")
 
@@ -592,7 +625,7 @@ class WorldBookService:
             if _is_unique_violation(e):
                 raise ConflictError(f"World book with name '{name}' already exists", "world_books", name)
             raise
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Database error creating world book: {e}")
             raise CharactersRAGDBError(f"Database error creating world book: {e}") from e
 
@@ -640,7 +673,7 @@ class WorldBookService:
                     return book_data
                 return None
 
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching world book: {e}")
             raise CharactersRAGDBError(f"Error fetching world book: {e}")
 
@@ -672,7 +705,7 @@ class WorldBookService:
 
                 return books
 
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error listing world books: {e}")
             raise CharactersRAGDBError(f"Error listing world books: {e}")
 
@@ -786,7 +819,7 @@ class WorldBookService:
                     return True
                 return False
 
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error deleting world book: {e}")
             raise CharactersRAGDBError(f"Error deleting world book: {e}")
 
@@ -831,7 +864,7 @@ class WorldBookService:
         # Clamp priority to [0, 100]
         try:
             priority = int(priority)
-        except Exception:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS:
             priority = 0
         priority = max(0, min(100, priority))
 
@@ -895,7 +928,7 @@ class WorldBookService:
                 self._invalidate_cache()
                 return int(entry_id)
 
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error adding world book entry: {e}")
             raise CharactersRAGDBError(f"Error adding world book entry: {e}")
 
@@ -984,7 +1017,7 @@ class WorldBookService:
                 # Return hybrid views for legacy/new compatibility
                 return [WorldBookEntryView(e.to_api_dict()) for e in entries]
 
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching world book entries: {e}")
             raise CharactersRAGDBError(f"Error fetching world book entries: {e}")
 
@@ -1038,7 +1071,7 @@ class WorldBookService:
             if priority is not None:
                 try:
                     p = int(priority)
-                except Exception:
+                except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS:
                     p = 0
                 p = max(0, min(100, p))
                 updates.append("priority = ?")
@@ -1086,7 +1119,7 @@ class WorldBookService:
 
         except InputError:
             raise
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error updating world book entry: {e}")
             raise CharactersRAGDBError(f"Error updating world book entry: {e}")
 
@@ -1114,7 +1147,7 @@ class WorldBookService:
                     return True
                 return False
 
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error deleting world book entry: {e}")
             raise CharactersRAGDBError(f"Error deleting world book entry: {e}")
 
@@ -1175,7 +1208,7 @@ class WorldBookService:
                         )
                         return OpResult(False)
                     raise
-                except Exception as e:
+                except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
                     # psycopg raises different exceptions; detect FK violation generically
                     msg = str(e).lower()
                     if "foreign key" in msg and "constraint" in msg:
@@ -1185,7 +1218,7 @@ class WorldBookService:
                         return OpResult(False)
                     raise
 
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error attaching world book to character: {e}")
             raise CharactersRAGDBError(f"Error attaching world book to character: {e}")
 
@@ -1216,7 +1249,7 @@ class WorldBookService:
                     return OpResult(True)
                 return OpResult(False)
 
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error detaching world book from character: {e}")
             raise CharactersRAGDBError(f"Error detaching world book from character: {e}")
 
@@ -1250,7 +1283,7 @@ class WorldBookService:
                 cursor = conn.execute(query, tuple(params))
                 return [dict(row) for row in cursor.fetchall()]
 
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching character world books: {e}")
             raise CharactersRAGDBError(f"Error fetching character world books: {e}")
 
@@ -1283,6 +1316,7 @@ class WorldBookService:
         # Aliases
         if 'max_tokens' in kwargs and kwargs.get('max_tokens') is not None:
             token_budget = int(kwargs['max_tokens'])
+        include_diagnostics = bool(kwargs.get("include_diagnostics", False))
         recursive_depth = int(kwargs.get('recursive_depth', 0) or 0)
         # Clamp recursive depth to prevent infinite loops
         if recursive_depth > MAX_RECURSIVE_DEPTH:
@@ -1322,8 +1356,13 @@ class WorldBookService:
                 "processed_context": "",
                 "entries_matched": 0,
                 "tokens_used": 0,
-                "books_used": 0
+                "books_used": 0,
+                "token_budget": int(token_budget),
+                "budget_exhausted": False,
+                "skipped_entries_due_to_budget": 0,
             }
+            if include_diagnostics:
+                empty["diagnostics"] = []
             return [] if compact_return else empty
 
         def _normalize_depth(value: Any) -> Optional[int]:
@@ -1364,9 +1403,41 @@ class WorldBookService:
         matched_entries = []
         tokens_used = 0
         per_book_match_count: dict[int, int] = {}
+        diagnostics_by_key: dict[int, dict[str, Any]] = {}
+        skipped_entries_due_to_budget = 0
+
+        def _record_diagnostic(
+            *,
+            entry: WorldBookEntry,
+            entry_tokens: int,
+            activation_reason: str,
+            match_info: Optional[dict[str, Any]] = None,
+            depth_level: Optional[int] = None,
+        ) -> None:
+            if not include_diagnostics:
+                return
+
+            entry_key = int(entry.entry_id) if entry.entry_id is not None else id(entry)
+            keyword_raw = (match_info or {}).get("keyword")
+            keyword = str(keyword_raw).strip() if keyword_raw is not None else None
+            if keyword == "":
+                keyword = None
+
+            diagnostics_by_key[entry_key] = {
+                "entry_id": int(entry.entry_id) if entry.entry_id is not None else None,
+                "world_book_id": int(entry.world_book_id) if entry.world_book_id is not None else None,
+                "activation_reason": activation_reason,
+                "keyword": keyword,
+                "token_cost": int(entry_tokens),
+                "priority": int(entry.priority),
+                "regex_match": bool(entry.regex_match),
+                "content_preview": (entry.content or "")[:240],
+                "depth_level": depth_level,
+            }
 
         for entry in all_entries:
-            if not entry.matches(text):
+            match_info = entry.get_first_match_info(text)
+            if match_info is None:
                 continue
             book_id = getattr(entry, 'world_book_id', None)
             limit = book_entry_limits.get(book_id)
@@ -1377,9 +1448,17 @@ class WorldBookService:
             if tokens_used + entry_tokens <= token_budget:
                 matched_entries.append(entry)
                 tokens_used += entry_tokens
+                _record_diagnostic(
+                    entry=entry,
+                    entry_tokens=entry_tokens,
+                    activation_reason=str(match_info.get("reason") or "keyword_match"),
+                    match_info=match_info,
+                    depth_level=0,
+                )
                 if limit is not None:
                     per_book_match_count[book_id] = per_book_match_count.get(book_id, 0) + 1
             else:
+                skipped_entries_due_to_budget += 1
                 continue  # Skip oversized entry but continue scanning
 
         # Handle recursive scanning
@@ -1388,6 +1467,7 @@ class WorldBookService:
             seen = set(matched_entries)
             combined_content = " ".join(e.content for e in matched_entries)
             while current_depth > 0:
+                depth_level = current_depth
                 additional_entries = []
                 for entry in all_entries:
                     if entry in seen:
@@ -1396,13 +1476,24 @@ class WorldBookService:
                     limit = book_entry_limits.get(book_id)
                     if limit is not None and per_book_match_count.get(book_id, 0) >= limit:
                         continue
-                    if entry.matches(combined_content):
-                        entry_tokens = self.count_tokens(entry.content)
-                        if tokens_used + entry_tokens <= token_budget:
-                            additional_entries.append(entry)
-                            tokens_used += entry_tokens
-                            if limit is not None:
-                                per_book_match_count[book_id] = per_book_match_count.get(book_id, 0) + 1
+                    match_info = entry.get_first_match_info(combined_content)
+                    if match_info is None:
+                        continue
+                    entry_tokens = self.count_tokens(entry.content)
+                    if tokens_used + entry_tokens <= token_budget:
+                        additional_entries.append(entry)
+                        tokens_used += entry_tokens
+                        _record_diagnostic(
+                            entry=entry,
+                            entry_tokens=entry_tokens,
+                            activation_reason="depth",
+                            match_info=match_info,
+                            depth_level=depth_level,
+                        )
+                        if limit is not None:
+                            per_book_match_count[book_id] = per_book_match_count.get(book_id, 0) + 1
+                    else:
+                        skipped_entries_due_to_budget += 1
                 if not additional_entries:
                     break
                 for e in additional_entries:
@@ -1431,18 +1522,35 @@ class WorldBookService:
                 for wb, count in per_book_counts.items():
                     self._activation_counts[wb] = self._activation_counts.get(wb, 0) + count
                     self._last_activated_at[wb] = now
-        except Exception:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS:
             pass
 
         if compact_return:
             return [e.to_api_dict() for e in matched_entries]
-        return {
+
+        diagnostics: list[dict[str, Any]] = []
+        if include_diagnostics and matched_entries:
+            for entry in matched_entries:
+                entry_key = int(entry.entry_id) if entry.entry_id is not None else id(entry)
+                diagnostic = diagnostics_by_key.get(entry_key)
+                if diagnostic is not None:
+                    diagnostics.append(diagnostic)
+
+        response = {
             "processed_context": injected_content,
             "entries_matched": len(matched_entries),
             "tokens_used": tokens_used,
             "books_used": len(set(e.world_book_id for e in matched_entries)) if matched_entries else 0,
-            "entry_ids": [e.entry_id for e in matched_entries]
+            "entry_ids": [e.entry_id for e in matched_entries],
+            "token_budget": int(token_budget),
+            "budget_exhausted": bool(
+                int(token_budget) > 0 and tokens_used >= int(token_budget)
+            ),
+            "skipped_entries_due_to_budget": int(skipped_entries_due_to_budget),
         }
+        if include_diagnostics:
+            response["diagnostics"] = diagnostics
+        return response
 
     # --- Import/Export ---
 
@@ -1642,7 +1750,7 @@ class WorldBookService:
                     "average_entries_per_world_book": avg_entries
                 }
 
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error getting statistics: {e}")
             raise CharactersRAGDBError(f"Error getting statistics: {e}")
 
@@ -1683,7 +1791,7 @@ class WorldBookService:
                             rd['keywords'] = json.loads(kw_raw)
                             if not isinstance(rd['keywords'], list):
                                 rd['keywords'] = []
-                        except Exception:
+                        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS:
                             # Fallback: comma-separated string
                             rd['keywords'] = [s.strip() for s in kw_raw.split(',') if s.strip()]
                     else:
@@ -1694,7 +1802,7 @@ class WorldBookService:
                     results.append(rd)
                 return results
 
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error searching entries: {e}")
             raise CharactersRAGDBError(f"Error searching entries: {e}")
 
@@ -1760,7 +1868,7 @@ class WorldBookService:
                 self._invalidate_cache()
                 return updated_count
 
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error bulk updating entries: {e}")
             raise CharactersRAGDBError(f"Error bulk updating entries: {e}")
 
@@ -1827,7 +1935,7 @@ class WorldBookService:
 
         except ConflictError:
             raise
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error cloning world book: {e}")
             raise CharactersRAGDBError(f"Error cloning world book: {e}")
 
@@ -1860,7 +1968,7 @@ class WorldBookService:
                     self._invalidate_cache()
                     return True
                 return False
-        except Exception as e:
+        except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error toggling entry enabled: {e}")
             raise CharactersRAGDBError(f"Error toggling entry enabled: {e}")
 

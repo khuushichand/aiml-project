@@ -29,6 +29,19 @@ from .base import ChatProvider
 # Expose a patchable factory for tests; production uses the centralized client
 http_client_factory = _hc_create_client
 
+_GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
 
 def _stream_debug_enabled(provider: str) -> bool:
     value = (os.getenv("LLM_ADAPTERS_STREAM_DEBUG") or "").strip().lower()
@@ -154,9 +167,9 @@ class GoogleAdapter(ChatProvider):
             if t is not None:
                 try:
                     return float(t)
-                except Exception:
+                except (TypeError, ValueError):
                     pass
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
         if fallback is not None:
             return float(fallback)
@@ -201,7 +214,7 @@ class GoogleAdapter(ChatProvider):
                                     header, b64 = u.split(",", 1)
                                     mime = header.split(":", 1)[1].split(";", 1)[0] or "application/octet-stream"
                                     parts.append({"inlineData": {"mimeType": mime, "data": b64}})
-                                except Exception:
+                                except (AttributeError, IndexError, TypeError, ValueError):
                                     parts.append({"text": "[image: unsupported data URI]"})
                             elif allow_image_urls and (u.startswith("http://") or u.startswith("https://")):
                                 parts.append({"fileData": {"mimeType": "image/*", "fileUri": u}})
@@ -220,7 +233,7 @@ class GoogleAdapter(ChatProvider):
                                     header, b64 = u.split(",", 1)
                                     mime = header.split(":", 1)[1].split(";", 1)[0] or "audio/*"
                                     parts.append({"inlineData": {"mimeType": mime, "data": b64}})
-                                except Exception:
+                                except (AttributeError, IndexError, TypeError, ValueError):
                                     parts.append({"text": "[audio: unsupported data URI]"})
                             elif allow_audio_urls and (u.startswith("http://") or u.startswith("https://")):
                                 parts.append({"fileData": {"mimeType": "audio/*", "fileUri": u}})
@@ -239,7 +252,7 @@ class GoogleAdapter(ChatProvider):
                                     header, b64 = u.split(",", 1)
                                     mime = header.split(":", 1)[1].split(";", 1)[0] or "video/*"
                                     parts.append({"inlineData": {"mimeType": mime, "data": b64}})
-                                except Exception:
+                                except (AttributeError, IndexError, TypeError, ValueError):
                                     parts.append({"text": "[video: unsupported data URI]"})
                             elif allow_video_urls and (u.startswith("http://") or u.startswith("https://")):
                                 parts.append({"fileData": {"mimeType": "video/*", "fileUri": u}})
@@ -326,7 +339,7 @@ class GoogleAdapter(ChatProvider):
                         fdecls.append(fdecl)
                 if fdecls:
                     payload["tools"] = [{"functionDeclarations": fdecls}]
-            except Exception:
+            except _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS:
                 # tools mapping is best-effort and optional
                 pass
         elif tools and not openai_tools:
@@ -373,7 +386,7 @@ class GoogleAdapter(ChatProvider):
                             try:
                                 import json as _json
                                 arg_str = _json.dumps(args if args is not None else {})
-                            except Exception:
+                            except (TypeError, ValueError):
                                 arg_str = "{}"
                             tool_calls.append({
                                 "id": f"call_{tc_idx}",
@@ -406,7 +419,7 @@ class GoogleAdapter(ChatProvider):
                 "usage": usage,
                 "provider_response": data,
             }
-        except Exception:
+        except _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS:
             return data
 
     @staticmethod
@@ -442,7 +455,7 @@ class GoogleAdapter(ChatProvider):
                     args = fc.get("args")
                     try:
                         arg_str = json.dumps(args if args is not None else {})
-                    except Exception:
+                    except (TypeError, ValueError):
                         arg_str = "{}"
                     yield sse_data({
                         "choices": [{
@@ -494,7 +507,7 @@ class GoogleAdapter(ChatProvider):
             body = None
             try:
                 body = resp.json()
-            except Exception:
+            except (TypeError, ValueError, json.JSONDecodeError):
                 body = None
             log_http_400_body(self.name, exc, body)
             detail = None
@@ -538,7 +551,7 @@ class GoogleAdapter(ChatProvider):
                 resp.raise_for_status()
                 data = resp.json()
                 return self._normalize_to_openai_shape(data)
-        except Exception as e:
+        except _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS as e:
             raise self.normalize_error(e)
 
     def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
@@ -571,7 +584,7 @@ class GoogleAdapter(ChatProvider):
                             logger.debug(f"{self.name} stream raw: {raw!r}")
                         try:
                             line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
-                        except Exception:
+                        except (TypeError, UnicodeDecodeError, ValueError):
                             line = str(raw)
                         if is_done_line(line):
                             if not seen_done:
@@ -588,7 +601,7 @@ class GoogleAdapter(ChatProvider):
                                 continue
                             try:
                                 event = json.loads(payload_text)
-                            except Exception:
+                            except (TypeError, ValueError, json.JSONDecodeError):
                                 normalized = normalize_provider_line(line)
                                 if normalized is not None:
                                     yield normalized
@@ -600,7 +613,7 @@ class GoogleAdapter(ChatProvider):
                             buffer += stripped
                             try:
                                 event = json.loads(buffer)
-                            except Exception:
+                            except (TypeError, ValueError, json.JSONDecodeError):
                                 continue
                             buffer = ""
                             yielded = False
@@ -615,7 +628,7 @@ class GoogleAdapter(ChatProvider):
                     for tail in finalize_stream(response=resp, done_already=seen_done):
                         yield tail
             return
-        except Exception as e:
+        except _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS as e:
             raise self.normalize_error(e)
 
     async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:

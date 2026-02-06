@@ -5,12 +5,22 @@ Search/get prompts via PromptsDatabase (per-user prompts DB path).
 """
 
 import asyncio
+from sqlite3 import Error as SQLiteError
 from typing import Any
 
 from loguru import logger
 
 from ....DB_Management.Prompts_DB import PromptsDatabase
 from ..base import BaseModule, create_tool_definition
+
+_PROMPTS_HEALTHCHECK_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TypeError,
+    ValueError,
+)
+_PROMPTS_CLOSE_EXCEPTIONS = (OSError, RuntimeError, SQLiteError, TypeError, ValueError)
 
 
 class PromptsModule(BaseModule):
@@ -25,7 +35,7 @@ class PromptsModule(BaseModule):
         try:
             _ = PromptsDatabase  # noqa: F401
             checks["driver_available"] = True
-        except Exception:
+        except NameError:
             checks["driver_available"] = False
         try:
             import os
@@ -33,7 +43,7 @@ class PromptsModule(BaseModule):
             stat = os.statvfs(base)
             free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
             checks["disk_space"] = free_gb > 1
-        except Exception:
+        except (AttributeError, OSError, TypeError, ValueError):
             checks["disk_space"] = False
         # Optional ephemeral DB write test (heavy) for deeper validation
         try:
@@ -45,7 +55,7 @@ class PromptsModule(BaseModule):
                     # Trivial read to confirm
                     _ = db.get_prompt_by_name("nonexistent")
                 checks["ephemeral_db_ok"] = True
-        except Exception:
+        except _PROMPTS_HEALTHCHECK_EXCEPTIONS:
             checks["ephemeral_db_ok"] = False
 
         return checks
@@ -84,7 +94,7 @@ class PromptsModule(BaseModule):
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
-        except Exception as ve:
+        except (TypeError, ValueError) as ve:
             raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
         if tool_name == "prompts.search":
             return await self._search(args, context)
@@ -177,7 +187,7 @@ class PromptsModule(BaseModule):
         finally:
             try:
                 db.close_connection()
-            except Exception as exc:
+            except _PROMPTS_CLOSE_EXCEPTIONS as exc:
                 logger.debug("Failed to close Prompts DB connections after prompts search: {}", exc)
 
     def _get_sync(self, context: Any | None, ident: str) -> dict[str, Any]:
@@ -187,7 +197,7 @@ class PromptsModule(BaseModule):
             try:
                 pid = int(ident)
                 row = db.get_prompt_by_id(pid)
-            except Exception:
+            except (TypeError, ValueError):
                 row = db.get_prompt_by_name(ident)
             if not row:
                 raise ValueError(f"Prompt not found: {ident}")
@@ -214,7 +224,7 @@ class PromptsModule(BaseModule):
         finally:
             try:
                 db.close_connection()
-            except Exception as exc:
+            except _PROMPTS_CLOSE_EXCEPTIONS as exc:
                 logger.debug("Failed to close Prompts DB connections after prompts get: {}", exc)
 
     def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):

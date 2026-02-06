@@ -8,7 +8,13 @@ type SourceChipsProps = {
   disabled?: boolean
 }
 
-const ALL_SOURCES: RagSource[] = ["media_db", "notes", "characters", "chats"]
+const ALL_SOURCES: RagSource[] = [
+  "media_db",
+  "notes",
+  "characters",
+  "chats",
+  "kanban",
+]
 
 /**
  * Source filter chips - multi-select with "All" behavior
@@ -38,7 +44,8 @@ export const SourceChips: React.FC<SourceChipsProps> = ({
     media_db: t("sidepanel:rag.sources.media", "Media"),
     notes: t("sidepanel:rag.sources.notes", "Notes"),
     characters: t("sidepanel:rag.sources.characters", "Characters"),
-    chats: t("sidepanel:rag.sources.chats", "Chats")
+    chats: t("sidepanel:rag.sources.chats", "Chats"),
+    kanban: t("sidepanel:rag.sources.kanban", "Kanban"),
   }
 
   const handleAllClick = () => {

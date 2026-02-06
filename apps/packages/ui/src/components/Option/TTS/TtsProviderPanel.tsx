@@ -56,10 +56,9 @@ export const TtsProviderPanel: React.FC<Props> = ({
 
   const handleFocusProviderSelect = () => {
     const el = document.getElementById("tts-provider-select")
-    if (el) {
-      ;(el as HTMLElement).focus()
-      ;(el as HTMLElement).click()
-    }
+    if (!(el instanceof HTMLElement)) return
+    el.focus()
+    el.click()
   }
 
   const content = (
@@ -215,7 +214,9 @@ export const TtsProviderPanel: React.FC<Props> = ({
           </Paragraph>
           {onSelectPreset && (
             <div className="flex flex-wrap items-center gap-2 pb-2">
-              <Text className="text-xs text-text-subtle">Preset:</Text>
+              <Text className="text-xs text-text-subtle">
+                {t("playground:tts.preset", "Preset")}:
+              </Text>
               <Space size="small">
                 {["fast", "balanced", "quality"].map((preset) => (
                   <Button
@@ -224,7 +225,10 @@ export const TtsProviderPanel: React.FC<Props> = ({
                     type={currentPreset === preset ? "primary" : "default"}
                     onClick={() => onSelectPreset(preset)}
                   >
-                    {preset[0].toUpperCase() + preset.slice(1)}
+                    {t(
+                      `playground:tts.preset_${preset}`,
+                      preset[0].toUpperCase() + preset.slice(1)
+                    )}
                   </Button>
                 ))}
               </Space>

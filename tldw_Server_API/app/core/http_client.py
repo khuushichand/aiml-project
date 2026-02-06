@@ -31,12 +31,6 @@ from types import SimpleNamespace
 from typing import Any, Protocol, TypedDict, Union
 from urllib.parse import urljoin, urlparse
 
-try:
-    # Python 3.8+/backport safe import
-    from importlib import metadata as _importlib_metadata  # type: ignore
-except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
-    _importlib_metadata = None  # type: ignore
-
 from loguru import logger
 
 try:
@@ -88,6 +82,12 @@ _HTTPCLIENT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     ValueError,
     json.JSONDecodeError,
 )
+
+try:
+    # Python 3.8+/backport safe import
+    from importlib import metadata as _importlib_metadata  # type: ignore
+except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
+    _importlib_metadata = None  # type: ignore
 
 
 def _resolve_httpx():

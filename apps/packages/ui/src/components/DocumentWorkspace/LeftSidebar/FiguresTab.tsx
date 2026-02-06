@@ -31,7 +31,8 @@ export const FiguresTab: React.FC = () => {
   const [loadError, setLoadError] = React.useState<string | null>(null)
 
   const documentUrl = activeDocument?.url
-  const pageCount = totalPages || numPages
+  // Prefer the locally loaded page count from this tab's Document instance.
+  const pageCount = numPages > 0 ? numPages : totalPages
 
   React.useEffect(() => {
     setNumPages(0)
@@ -111,7 +112,7 @@ export const FiguresTab: React.FC = () => {
       <Document
         file={documentUrl}
         onLoadSuccess={(pdf) => {
-          setNumPages(pdf.numPages)
+          setNumPages(pdf.numPages > 0 ? pdf.numPages : 0)
           setLoadError(null)
         }}
         onLoadError={(error) => {

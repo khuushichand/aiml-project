@@ -7,6 +7,8 @@ within their scope. Admins also permitted.
 
 from __future__ import annotations
 
+from sqlite3 import Error as SQLiteError
+
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
@@ -21,6 +23,17 @@ from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_org_members, list_team_members
 
 router = APIRouter(prefix="", tags=["mcp-catalogs-scope"])
+_CATALOG_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_CATALOG_MEMBER_PARSE_EXCEPTIONS = (AttributeError, TypeError, ValueError)
 
 
 def _is_manager(role: str | None) -> bool:
@@ -42,9 +55,9 @@ async def _require_org_manager(user: dict, org_id: int) -> None:
             try:
                 if int(m.get("user_id")) == uid and _is_manager(m.get("role")):
                     return
-            except Exception:
+            except _CATALOG_MEMBER_PARSE_EXCEPTIONS:
                 pass
-    except Exception as e:
+    except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Org manager check failed: {e}")
     raise HTTPException(status_code=403, detail="Org manager role required")
 
@@ -60,9 +73,9 @@ async def _require_team_manager(user: dict, team_id: int) -> None:
             try:
                 if int(m.get("user_id")) == uid and _is_manager(m.get("role")):
                     return
-            except Exception:
+            except _CATALOG_MEMBER_PARSE_EXCEPTIONS:
                 pass
-    except Exception as e:
+    except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Team manager check failed: {e}")
     raise HTTPException(status_code=403, detail="Team manager role required")
 
@@ -102,7 +115,7 @@ async def list_org_tool_catalogs(
                     id=r[0], name=r[1], description=r[2], org_id=r[3], team_id=r[4], is_active=bool(r[5]), created_at=r[6], updated_at=r[7]
                 ) for r in rows
             ]
-    except Exception as e:
+    except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list org tool catalogs: {e}")
         raise HTTPException(status_code=500, detail="Failed to list org tool catalogs")
 
@@ -167,7 +180,7 @@ async def create_org_tool_catalog(
             )
     except HTTPException:
         raise
-    except Exception as e:
+    except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to create org tool catalog: {e}")
         raise HTTPException(status_code=500, detail="Failed to create tool catalog")
 
@@ -207,7 +220,7 @@ async def list_team_tool_catalogs(
                     id=r[0], name=r[1], description=r[2], org_id=r[3], team_id=r[4], is_active=bool(r[5]), created_at=r[6], updated_at=r[7]
                 ) for r in rows
             ]
-    except Exception as e:
+    except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list team tool catalogs: {e}")
         raise HTTPException(status_code=500, detail="Failed to list team tool catalogs")
 
@@ -268,7 +281,7 @@ async def create_team_tool_catalog(
             )
     except HTTPException:
         raise
-    except Exception as e:
+    except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to create team tool catalog: {e}")
         raise HTTPException(status_code=500, detail="Failed to create tool catalog")
 
@@ -389,7 +402,7 @@ async def delete_org_tool_catalog(org_id: int, catalog_id: int, user: dict = Dep
         return {"message": "Catalog deleted", "id": catalog_id, "scope": {"org_id": org_id}}
     except HTTPException:
         raise
-    except Exception as e:
+    except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to delete org tool catalog {catalog_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete tool catalog")
 
@@ -429,7 +442,7 @@ async def delete_org_catalog_entry(org_id: int, catalog_id: int, tool_name: str,
         return {"message": "Entry deleted", "catalog_id": catalog_id, "tool_name": tool_name, "scope": {"org_id": org_id}}
     except HTTPException:
         raise
-    except Exception as e:
+    except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to delete org tool catalog entry: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete tool catalog entry")
 
@@ -465,7 +478,7 @@ async def delete_team_tool_catalog(team_id: int, catalog_id: int, user: dict = D
         return {"message": "Catalog deleted", "id": catalog_id, "scope": {"team_id": team_id}}
     except HTTPException:
         raise
-    except Exception as e:
+    except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to delete team tool catalog {catalog_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete tool catalog")
 
@@ -504,6 +517,6 @@ async def delete_team_catalog_entry(team_id: int, catalog_id: int, tool_name: st
         return {"message": "Entry deleted", "catalog_id": catalog_id, "tool_name": tool_name, "scope": {"team_id": team_id}}
     except HTTPException:
         raise
-    except Exception as e:
+    except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to delete team tool catalog entry: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete tool catalog entry")

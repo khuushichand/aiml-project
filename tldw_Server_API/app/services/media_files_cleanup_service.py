@@ -21,12 +21,25 @@ import asyncio
 import os
 import time
 from pathlib import Path
+from sqlite3 import Error as SQLiteError
 
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+
+_MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 # Configuration from environment
 CLEANUP_ENABLED = os.environ.get("MEDIA_FILES_CLEANUP_ENABLED", "false").lower() == "true"
@@ -45,7 +58,7 @@ def _get_storage_base_path() -> Path | None:
         storage_path = config.get("media_storage_path") or config.get("storage_path")
         if storage_path:
             return Path(storage_path)
-    except Exception as e:
+    except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"media_files_cleanup: failed to read storage path from config: {e}")
 
     # Fallback to default location
@@ -57,7 +70,7 @@ def _enumerate_user_ids() -> list[int]:
     """Get list of user IDs from user database directories."""
     try:
         base = DatabasePaths.get_user_db_base_dir()
-    except Exception as exc:
+    except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"media_files_cleanup: failed to resolve user db base dir: {exc}")
         return []
 
@@ -72,7 +85,7 @@ def _enumerate_user_ids() -> list[int]:
     if not uids:
         try:
             uids = [DatabasePaths.get_single_user_id()]
-        except Exception:
+        except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS:
             uids = []
 
     return sorted(set(uids))
@@ -97,7 +110,7 @@ def _collect_known_storage_paths(user_id: int) -> set[str]:
                     known_paths.add(path)
         finally:
             db.close_connection()
-    except Exception as e:
+    except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"media_files_cleanup: failed to query MediaFiles for user {user_id}: {e}")
 
     return known_paths
@@ -218,7 +231,7 @@ async def cleanup_orphaned_files() -> dict:
             except OSError:
                 pass
 
-        except Exception as e:
+        except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"media_files_cleanup: failed to remove {file_path}: {e}")
             errors.append(str(file_path))
 
@@ -237,7 +250,7 @@ async def cleanup_orphaned_files() -> dict:
             "media_files_cleanup_bytes_freed",
             bytes_freed
         )
-    except Exception:
+    except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS:
         pass
 
     logger.info(
@@ -265,14 +278,14 @@ async def _cleanup_loop():
         except asyncio.CancelledError:
             logger.info("media_files_cleanup: task cancelled")
             break
-        except Exception as e:
+        except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"media_files_cleanup: error in cleanup cycle: {e}")
             try:
                 get_metrics_registry().increment(
                     "media_files_cleanup_runs_total",
                     labels={"status": "error"}
                 )
-            except Exception:
+            except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS:
                 pass
 
         await asyncio.sleep(CLEANUP_INTERVAL_SEC)

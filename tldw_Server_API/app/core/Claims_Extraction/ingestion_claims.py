@@ -158,7 +158,15 @@ def extract_claims_for_chunks(
                 except Exception:
                     timeout_sec = 8.0
 
-                def _call_provider():
+                def _call_provider(
+                    provider=provider,
+                    messages=messages,
+                    temperature=temperature,
+                    system=system,
+                    model_override=model_override,
+                    provider_name=provider_name,
+                    timeout_sec=timeout_sec,
+                ):
                     override = globals().get("chat_api_call")
                     if callable(override):
                         return override(

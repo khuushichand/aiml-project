@@ -48,6 +48,25 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 
 router = APIRouter()
 
+_CHAT_DOCS_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 @router.post(
     "/documents/generate",
@@ -77,13 +96,13 @@ async def generate_document(
         # Resolve provider key requirements
         try:
             from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
-        except Exception:
+        except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS:
             def provider_requires_api_key(_provider: str) -> bool:  # type: ignore[misc]
                 return True
 
         try:
             _is_pytest = bool(os.getenv("PYTEST_CURRENT_TEST"))
-        except Exception:
+        except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS:
             _is_pytest = False
         _is_test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -106,7 +125,7 @@ async def generate_document(
             user_id_int = None
             try:
                 user_id_int = int(current_user.get("id"))
-            except Exception:
+            except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS:
                 user_id_int = None
 
             byok_resolution = await resolve_byok_credentials(
@@ -202,7 +221,7 @@ async def generate_document(
                 if isinstance(chunk, (bytes, bytearray)):
                     try:
                         return chunk.decode("utf-8")
-                    except Exception:
+                    except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS:
                         return chunk.decode("utf-8", errors="ignore")
                 return str(chunk)
 
@@ -247,7 +266,7 @@ async def generate_document(
                                     continue
                                 await stream.send_raw_sse_line(f"data: {line}")
                         await stream.done()
-                    except Exception as exc:
+                    except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as exc:
                         await stream.error("internal_error", f"{exc}")
 
                 async def _gen() -> AsyncIterator[str]:
@@ -259,18 +278,18 @@ async def generate_document(
                         if not prod.done():
                             try:
                                 prod.cancel()
-                            except Exception:
+                            except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS:
                                 pass
                             try:
                                 await prod
-                            except (asyncio.CancelledError, Exception):
+                            except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS:
                                 pass
                         raise
                     else:
                         if not prod.done():
                             try:
                                 await prod
-                            except Exception:
+                            except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS:
                                 pass
                         try:
                             document_body = "".join(collected_chunks).strip()
@@ -292,7 +311,7 @@ async def generate_document(
                                 )
                             if byok_resolution and byok_resolution.uses_byok and not explicit_key:
                                 await byok_resolution.touch_last_used()
-                        except Exception as persist_exc:
+                        except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as persist_exc:
                             logger.error(
                                 "Failed to persist streamed document for conversation %s: %s",
                                 request.conversation_id,
@@ -339,7 +358,7 @@ async def generate_document(
                             )
                         if byok_resolution and byok_resolution.uses_byok and not explicit_key:
                             await byok_resolution.touch_last_used()
-                    except Exception as persist_exc:
+                    except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as persist_exc:
                         logger.error(
                             "Failed to persist streamed document for conversation %s: %s",
                             request.conversation_id,
@@ -389,7 +408,7 @@ async def generate_document(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error generating document: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -448,7 +467,7 @@ async def get_job_status(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting job status: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
@@ -496,7 +515,7 @@ async def cancel_job(
         return {"message": f"Job {job_id} cancelled successfully"}
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error cancelling job: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
@@ -535,7 +554,7 @@ async def list_generated_documents(
             conversation_id=conversation_id,
             document_type=document_type,
         )
-    except Exception as e:
+    except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error listing generated documents: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
@@ -567,7 +586,7 @@ async def get_generated_document(
         return GeneratedDocument(**doc)
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting document {document_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
@@ -598,7 +617,7 @@ async def delete_generated_document(
         return {"message": f"Document {document_id} deleted successfully"}
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error deleting document {document_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
@@ -647,7 +666,7 @@ async def save_prompt_config(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error saving prompt config: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
@@ -686,7 +705,7 @@ async def get_prompt_config(
         except sqlite3.DatabaseError as e:
             logger.error(f"Database error checking custom prompts for doc_type={doc_type.value}: {e}")
             is_custom = False
-        except Exception as e:
+        except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error checking custom prompts: {type(e).__name__}: {e}", exc_info=True)
             is_custom = False
 
@@ -700,7 +719,7 @@ async def get_prompt_config(
             created_at=None,
             updated_at=None,
         )
-    except Exception as e:
+    except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting prompt config: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
@@ -745,7 +764,7 @@ async def bulk_generate_documents(
             estimated_time_seconds=estimated_time,
             message=f"Created {total_jobs} generation jobs",
         )
-    except Exception as e:
+    except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error creating bulk generation jobs: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
@@ -812,6 +831,6 @@ async def get_generation_statistics(
             last_generated=last_doc["created_at"],
             most_used_model=most_used_model,
         )
-    except Exception as e:
+    except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting generation statistics: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))

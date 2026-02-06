@@ -19,21 +19,6 @@ from starlette import status
 MAX_CHARACTER_FILE_SIZE = 10 * 1024 * 1024  # 10MB max file size
 ALLOWED_EXTENSIONS = frozenset({".png", ".webp", ".jpeg", ".jpg", ".json", ".yaml", ".yml", ".txt", ".md"})
 
-_CHARACTERS_NONCRITICAL_EXCEPTIONS = (
-    OSError,
-    ValueError,
-    TypeError,
-    KeyError,
-    RuntimeError,
-    AttributeError,
-    ConnectionError,
-    TimeoutError,
-    UnicodeError,
-    CharactersRAGDBError,
-    ConflictError,
-    InputError,
-)
-
 def _detect_mime_type(data: bytes) -> Optional[str]:
     """
     Detect MIME type from file magic bytes.
@@ -172,6 +157,21 @@ from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import get_c
 from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
+
+_CHARACTERS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    UnicodeError,
     CharactersRAGDBError,
     ConflictError,
     InputError,
@@ -1376,7 +1376,8 @@ async def process_context_with_world_info(
             character_id=request.character_id,
             scan_depth=request.scan_depth,
             token_budget=request.token_budget,
-            recursive_scanning=request.recursive_scanning
+            recursive_scanning=request.recursive_scanning,
+            include_diagnostics=True,
         )
 
         if isinstance(result, dict):
@@ -1385,7 +1386,13 @@ async def process_context_with_world_info(
                 entries_matched=int(result.get("entries_matched", 0)),
                 tokens_used=int(result.get("tokens_used", 0)),
                 books_used=int(result.get("books_used", 0)),
-                entry_ids=[int(e) for e in result.get("entry_ids", [])]
+                entry_ids=[int(e) for e in result.get("entry_ids", [])],
+                token_budget=int(result.get("token_budget", request.token_budget)),
+                budget_exhausted=bool(result.get("budget_exhausted", False)),
+                skipped_entries_due_to_budget=int(
+                    result.get("skipped_entries_due_to_budget", 0)
+                ),
+                diagnostics=list(result.get("diagnostics") or []),
             )
 
         if isinstance(result, list):
@@ -1413,7 +1420,29 @@ async def process_context_with_world_info(
                 entries_matched=len(result),
                 tokens_used=tokens_used,
                 books_used=len(books_used),
-                entry_ids=entry_ids
+                entry_ids=entry_ids,
+                token_budget=request.token_budget,
+                budget_exhausted=tokens_used >= request.token_budget
+                if request.token_budget
+                else False,
+                skipped_entries_due_to_budget=0,
+                diagnostics=[
+                    {
+                        "entry_id": entry.get("id"),
+                        "world_book_id": entry.get("world_book_id"),
+                        "activation_reason": "regex_match"
+                        if bool(entry.get("regex_match"))
+                        else "keyword_match",
+                        "keyword": (entry.get("keywords") or [None])[0],
+                        "token_cost": int(service.count_tokens(entry.get("content", ""))),
+                        "priority": int(entry.get("priority") or 0),
+                        "regex_match": bool(entry.get("regex_match")),
+                        "content_preview": str(entry.get("content", ""))[:240],
+                        "depth_level": None,
+                    }
+                    for entry in result
+                    if isinstance(entry, dict)
+                ],
             )
 
         logger.error(
@@ -1655,6 +1684,18 @@ async def export_character(
         HTTPException: 404 if character not found
     """
     try:
+        def _as_export_str(value: Any, default: str = "") -> str:
+            if value is None:
+                return default
+            if isinstance(value, str):
+                return value
+            return str(value)
+
+        def _as_export_str_list(value: Any) -> list[str]:
+            if not isinstance(value, list):
+                return []
+            return [str(item) for item in value if item is not None]
+
         # Get character
         character = get_character_details(db, character_id)
         if not character:
@@ -1662,6 +1703,13 @@ async def export_character(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Character with ID {character_id} not found"
             )
+
+        get_character_world_books_fn = getattr(db, "get_character_world_books", None)
+        character_world_books: list[dict[str, Any]] = []
+        if (format == "v2" or include_world_books) and callable(get_character_world_books_fn):
+            result = get_character_world_books_fn(character_id)
+            if isinstance(result, list):
+                character_world_books = result
 
         # Build export data based on format
         if format == "v3":
@@ -1688,18 +1736,38 @@ async def export_character(
             }
         elif format == "v2":
             # Character Card V2 format
+            extensions = character.get("extensions")
+            if not isinstance(extensions, dict):
+                extensions = {}
+            if character_world_books:
+                extensions = extensions.copy()
+                extensions.setdefault(
+                    "world_book_links",
+                    [
+                        wb["world_book_id"]
+                        for wb in character_world_books
+                        if isinstance(wb.get("world_book_id"), int)
+                    ],
+                )
+
             export_data = {
-                "name": character.get('name'),
-                "description": character.get('description'),
-                "personality": character.get('personality'),
-                "scenario": character.get('scenario'),
-                "first_mes": character.get('first_message'),
-                "mes_example": character.get('message_example'),
-                "metadata": {
-                    "version": 2,
-                    "created": character.get('created_at'),
-                    "modified": character.get('last_modified'),
-                    "id": character_id
+                "spec": "chara_card_v2",
+                "spec_version": "2.0",
+                "data": {
+                    "name": _as_export_str(character.get("name")),
+                    "description": _as_export_str(character.get("description")),
+                    "personality": _as_export_str(character.get("personality")),
+                    "scenario": _as_export_str(character.get("scenario")),
+                    "first_mes": _as_export_str(character.get("first_message")),
+                    "mes_example": _as_export_str(character.get("message_example")),
+                    "creator_notes": _as_export_str(character.get("creator_notes")),
+                    "system_prompt": _as_export_str(character.get("system_prompt")),
+                    "post_history_instructions": _as_export_str(character.get("post_history_instructions")),
+                    "alternate_greetings": _as_export_str_list(character.get("alternate_greetings")),
+                    "tags": _as_export_str_list(character.get("tags")),
+                    "creator": _as_export_str(character.get("creator")),
+                    "character_version": _as_export_str(character.get("character_version"), default="1.0"),
+                    "extensions": extensions,
                 }
             }
         else:
@@ -1708,7 +1776,13 @@ async def export_character(
 
         # Add world books if requested
         if include_world_books:
-            world_books = db.get_character_world_books(character_id)
+            if character_world_books:
+                world_books = character_world_books
+            elif callable(get_character_world_books_fn):
+                fetched = get_character_world_books_fn(character_id)
+                world_books = fetched if isinstance(fetched, list) else []
+            else:
+                world_books = []
             if world_books:
                 export_data["world_books"] = []
                 for wb in world_books:
@@ -1721,7 +1795,10 @@ async def export_character(
         # Add character image if present
         if character.get('image'):
             import base64
-            export_data["character_image"] = base64.b64encode(character['image']).decode('utf-8')
+            encoded_image = base64.b64encode(character['image']).decode('utf-8')
+            if format == "v2":
+                export_data["data"]["char_image"] = encoded_image
+            export_data["character_image"] = encoded_image
 
         logger.info(f"Exported character {character_id} in format {format}")
 

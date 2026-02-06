@@ -3,7 +3,7 @@ import { Card, Input, Typography } from "antd"
 
 const { Text } = Typography
 
-type LongformDraftEditorProps = {
+export type LongformDraftEditorProps = {
   outline: string
   transcript: string
   onOutlineChange: (value: string) => void
@@ -22,6 +22,10 @@ export const LongformDraftEditor: React.FC<LongformDraftEditorProps> = ({
   transcriptError,
   preview
 }) => {
+  const inputIdPrefix = React.useId()
+  const outlineInputId = `${inputIdPrefix}-outline-input`
+  const transcriptInputId = `${inputIdPrefix}-transcript-input`
+
   return (
     <Card size="small">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -32,8 +36,11 @@ export const LongformDraftEditor: React.FC<LongformDraftEditorProps> = ({
       </div>
       <div className="mt-3 grid gap-4 lg:grid-cols-2">
         <div className="space-y-2">
-          <label className="text-xs text-text">Outline</label>
+          <label htmlFor={outlineInputId} className="text-xs text-text">
+            Outline
+          </label>
           <Input.TextArea
+            id={outlineInputId}
             value={outline}
             onChange={(e) => onOutlineChange(e.target.value)}
             autoSize={{ minRows: 6, maxRows: 12 }}
@@ -46,8 +53,11 @@ export const LongformDraftEditor: React.FC<LongformDraftEditorProps> = ({
           )}
         </div>
         <div className="space-y-2">
-          <label className="text-xs text-text">Transcript draft</label>
+          <label htmlFor={transcriptInputId} className="text-xs text-text">
+            Transcript draft
+          </label>
           <Input.TextArea
+            id={transcriptInputId}
             value={transcript}
             onChange={(e) => onTranscriptChange(e.target.value)}
             autoSize={{ minRows: 6, maxRows: 12 }}

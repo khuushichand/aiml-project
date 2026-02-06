@@ -826,6 +826,26 @@ def test_validate_v2_card_missing_mes_example_logs_warning(caplog_handler):
     assert "mes_example" in caplog.text
 
 
+def test_validate_v2_card_rejects_overlong_text_field():
+    card = copy.deepcopy(MINIMAL_V2_CARD_UNIT)
+    card["data"] = card["data"].copy()
+    card["data"]["name"] = "N" * 501
+    is_valid, errors = validate_v2_card(card)
+    assert not is_valid
+    assert any("name" in err and "exceeds max length" in err for err in errors)
+
+
+def test_validate_v2_card_rejects_non_string_list_values():
+    card = copy.deepcopy(MINIMAL_V2_CARD_UNIT)
+    card["data"] = card["data"].copy()
+    card["data"]["alternate_greetings"] = ["hi", 42]
+    card["data"]["tags"] = ["ok", {"bad": True}]
+    is_valid, errors = validate_v2_card(card)
+    assert not is_valid
+    assert any("alternate_greetings[1]" in err for err in errors)
+    assert any("tags[1]" in err for err in errors)
+
+
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_validation.validate_v2_card")
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_validation.parse_v2_card")
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_validation.parse_v1_card")
@@ -1046,6 +1066,52 @@ def test_extract_json_from_image_file_rejects_oversized_ztxt(tmp_path):
 
     png_bytes = _build_png_with_ztxt(b"chara", b64_payload)
     dummy_png_path = tmp_path / "oversized.png"
+    dummy_png_path.write_bytes(png_bytes)
+
+    assert extract_json_from_image_file(str(dummy_png_path)) is None
+
+
+def test_extract_json_from_image_file_rejects_crc_mismatch(tmp_path):
+    chara_json = json.dumps({"name": "CRC Broken", "description": "bad crc"})
+    encoded = base64.b64encode(chara_json.encode("utf-8"))
+
+    chunk_type = b"tEXt"
+    chunk_data = b"chara\x00" + encoded
+    chunk_len = len(chunk_data).to_bytes(4, "big")
+    good_crc = binascii.crc32(chunk_type + chunk_data) & 0xFFFFFFFF
+    bad_crc = (good_crc ^ 0xFFFFFFFF).to_bytes(4, "big")
+    text_chunk = chunk_len + chunk_type + chunk_data + bad_crc
+
+    base_png = (
+        b"\x89PNG\r\n\x1a\n"
+        b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    )
+    idat_chunk = b"\x00\x00\x00\x0cIDAT\x08\xd7c`\x00\x00\x00\x02\x00\x01\xe2!\xbc\x33"
+    iend_chunk = b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    png_bytes = base_png + text_chunk + idat_chunk + iend_chunk
+
+    dummy_png_path = tmp_path / "crc_bad.png"
+    dummy_png_path.write_bytes(png_bytes)
+
+    assert extract_json_from_image_file(str(dummy_png_path)) is None
+
+
+def test_extract_json_from_image_file_rejects_malformed_chunk_length(tmp_path):
+    base_png = (
+        b"\x89PNG\r\n\x1a\n"
+        b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    )
+    # Declares length 32 but only includes 5 bytes before CRC, which should be rejected.
+    malformed_chunk = (
+        (32).to_bytes(4, "big")
+        + b"tEXt"
+        + b"chara"
+        + (0).to_bytes(4, "big")
+    )
+    iend_chunk = b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    png_bytes = base_png + malformed_chunk + iend_chunk
+
+    dummy_png_path = tmp_path / "malformed_chunk.png"
     dummy_png_path.write_bytes(png_bytes)
 
     assert extract_json_from_image_file(str(dummy_png_path)) is None
@@ -1451,6 +1517,78 @@ def test_import_and_save_character_from_file_integration(MockPILImageModule, moc
     assert success_png and char_id_png is not None
     retrieved_png = db.get_character_card_by_id(char_id_png)
     assert retrieved_png["name"] == "PNG Chara" and retrieved_png["image"] == dummy_png_bytes
+
+
+def test_import_and_save_character_from_file_returns_v2_validation_error(db, tmp_path):
+    invalid_v2 = {
+        "spec": "chara_card_v2",
+        "spec_version": "2.0",
+        "data": {
+            "name": "BrokenV2",
+            "description": "D",
+            "personality": "P",
+            "scenario": "S",
+            "first_mes": 123,
+            "mes_example": "Example",
+        },
+    }
+    json_file = tmp_path / "invalid_v2.json"
+    json_file.write_text(json.dumps(invalid_v2))
+
+    success, message, char_id = import_and_save_character_from_file(db, str(json_file))
+    assert not success
+    assert char_id is None
+    assert "first_mes" in message
+
+
+def test_import_and_save_character_from_file_rejects_disallowed_script_payload(db, tmp_path):
+    payload = {
+        **MINIMAL_V1_CARD_UNIT,
+        "name": "ScriptReject",
+        "description": "<script>alert('x')</script>",
+    }
+    json_file = tmp_path / "script_payload.json"
+    json_file.write_text(json.dumps(payload))
+
+    success, message, char_id = import_and_save_character_from_file(db, str(json_file))
+    assert not success
+    assert char_id is None
+    assert "disallowed content pattern" in message
+
+
+def test_import_and_save_character_from_file_rejects_oversized_avatar_base64(db, tmp_path):
+    oversized_avatar = create_dummy_png_bytes() + (b"A" * (205 * 1024))
+    payload = {
+        **MINIMAL_V1_CARD_UNIT,
+        "name": "OversizedAvatar",
+        "char_image": base64.b64encode(oversized_avatar).decode("utf-8"),
+    }
+    json_file = tmp_path / "oversized_avatar.json"
+    json_file.write_text(json.dumps(payload))
+
+    success, message, char_id = import_and_save_character_from_file(db, str(json_file))
+    assert not success
+    assert char_id is None
+    assert "exceeds max size" in message
+
+
+def test_import_and_save_character_from_file_sanitizes_control_chars(db, tmp_path):
+    payload = {
+        **MINIMAL_V1_CARD_UNIT,
+        "name": "SanitizeControlChars",
+        "description": "Hello\x00World",
+    }
+    json_file = tmp_path / "sanitize_control_chars.json"
+    json_file.write_text(json.dumps(payload))
+
+    success, message, char_id = import_and_save_character_from_file(db, str(json_file))
+    assert success
+    assert char_id is not None
+
+    saved_char = db.get_character_card_by_id(char_id)
+    assert saved_char is not None
+    assert "\x00" not in saved_char["description"]
+    assert saved_char["description"] == "HelloWorld"
 
 
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.Image", new_callable=mock.MagicMock)

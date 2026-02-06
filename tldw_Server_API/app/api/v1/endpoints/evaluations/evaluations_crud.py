@@ -2,6 +2,7 @@
 Evaluations CRUD and Runs endpoints extracted from evaluations_unified.
 """
 
+import json
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
@@ -36,6 +37,17 @@ from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
 )
 from tldw_Server_API.app.core.Evaluations.webhook_identity import webhook_user_id_from_user
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+
+_EVALS_CRUD_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 class CreateRunSimpleRequest(BaseModel):
@@ -84,10 +96,10 @@ async def create_evaluation(
                             if response is not None:
                                 response.headers["X-Idempotent-Replay"] = "true"
                                 response.headers["Idempotency-Key"] = idempotency_key
-                        except Exception as e:
+                        except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(f"evaluations_crud: failed to set idempotency headers for {existing_id}: {e}")
                         return EvaluationResponse(**existing)
-            except Exception as e:
+            except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"evaluations_crud: idempotency lookup failed for key {idempotency_key}: {e}")
         evaluation = await svc.create_evaluation(
             name=eval_request.name,
@@ -102,12 +114,12 @@ async def create_evaluation(
         try:
             if idempotency_key and evaluation.get("id"):
                 svc.db.record_idempotency("evaluation", idempotency_key, evaluation["id"], stable_user_id)
-        except Exception as e:
+        except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(
                 f"evaluations_crud: failed to record idempotency for evaluation {evaluation.get('id')}: {e}"
             )
         return EvaluationResponse(**evaluation)
-    except Exception as e:
+    except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to create evaluation: {e}")
         raise create_error_response(
             message=f"Failed to create evaluation: {sanitize_error_message(e, 'evaluation creation')}",
@@ -147,7 +159,7 @@ async def list_evaluations(
             first_id=first_id,
             last_id=last_id,
         )
-    except Exception as e:
+    except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list evaluations: {e}")
         raise create_error_response(
             message=f"Failed to list evaluations: {sanitize_error_message(e, 'listing evaluations')}",
@@ -178,7 +190,7 @@ async def get_evaluation(
         return EvaluationResponse(**evaluation)
     except HTTPException:
         raise
-    except Exception as e:
+    except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to get evaluation: {e}")
         raise create_error_response(
             message=f"Failed to get evaluation: {sanitize_error_message(e, 'retrieving evaluation')}",
@@ -212,7 +224,7 @@ async def update_evaluation(
         return EvaluationResponse(**evaluation)
     except HTTPException:
         raise
-    except Exception as e:
+    except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to update evaluation: {e}")
         raise create_error_response(
             message=f"Failed to update evaluation: {sanitize_error_message(e, 'updating evaluation')}",
@@ -244,7 +256,7 @@ async def delete_evaluation(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     except HTTPException:
         raise
-    except Exception as e:
+    except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to delete evaluation: {e}")
         raise create_error_response(
             message=f"Failed to delete evaluation: {sanitize_error_message(e, 'deleting evaluation')}",
@@ -291,12 +303,12 @@ async def create_run(
                             if response is not None:
                                 response.headers["X-Idempotent-Replay"] = "true"
                                 response.headers["Idempotency-Key"] = idempotency_key
-                        except Exception as e:
+                        except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(
                                 f"evaluations_crud: failed to set idempotency headers for {existing_id}: {e}"
                             )
                         return RunResponse(**existing)
-            except Exception as e:
+            except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"evaluations_crud: idempotency lookup failed for key {idempotency_key}: {e}")
         target_model = request.target_model
         # Allow free-form config; convert Pydantic models if provided in future
@@ -315,12 +327,12 @@ async def create_run(
         try:
             if idempotency_key and run.get("id"):
                 svc.db.record_idempotency("run", idempotency_key, run["id"], stable_user_id)
-        except Exception as e:
+        except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"evaluations_crud: failed to record idempotency for run {run.get('id')}: {e}")
         return RunResponse(**run)
     except HTTPException:
         raise
-    except Exception as e:
+    except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to create run: {e}")
         raise create_error_response(
             message=f"Failed to create run: {sanitize_error_message(e, 'creating run')}",
@@ -348,7 +360,7 @@ async def list_runs(
         first_id = runs[0]["id"] if runs else None
         last_id = runs[-1]["id"] if runs else None
         return RunListResponse(object="list", data=[RunResponse(**run) for run in runs], has_more=has_more, first_id=first_id, last_id=last_id)
-    except Exception as e:
+    except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list runs: {e}")
         raise create_error_response(
             message=f"Failed to list runs: {sanitize_error_message(e, 'listing runs')}",
@@ -379,7 +391,7 @@ async def get_run(
         return RunResponse(**run)
     except HTTPException:
         raise
-    except Exception as e:
+    except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to get run: {e}")
         raise create_error_response(
             message=f"Failed to get run: {sanitize_error_message(e, 'retrieving run')}",
@@ -409,7 +421,7 @@ async def cancel_run(
         return {"status": "cancelled", "run_id": run_id}
     except HTTPException:
         raise
-    except Exception as e:
+    except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to cancel run: {e}")
         raise create_error_response(
             message=f"Failed to cancel run: {sanitize_error_message(e, 'cancelling run')}",

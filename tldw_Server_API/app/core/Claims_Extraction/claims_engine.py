@@ -157,6 +157,7 @@ class ClaimVerification:
             VerificationStatus.HALLUCINATION: "refuted",
             VerificationStatus.UNVERIFIED: "nei",
             VerificationStatus.NUMERICAL_ERROR: "refuted",
+            VerificationStatus.CONTESTED: "contested",
         }
         return status_to_label.get(self.status, "nei")
 

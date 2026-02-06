@@ -1,8 +1,18 @@
 """
-Personalization Scorer (scaffold)
+Personalization Scorer (Stage 1 scaffold)
 
 Blend BM25, vector score, personal similarity, and recency into a final score.
 Provides optional lightweight explanation signals.
+
+NOTE: This module is currently NOT used by the RAG pipeline. The RAG pipeline
+uses a separate system: ``UserPersonalizationStore`` (JSON file-based document
+boost) in ``user_personalization_store.py``. Two parallel personalization
+systems exist with no integration between them.
+
+TODO(Stage-2): Integrate with unified_pipeline.py reranking step.
+    The ``rerank()`` function below should be called from the RAG pipeline's
+    result post-processing phase to blend personal relevance signals with
+    retrieval scores.
 """
 from __future__ import annotations
 

@@ -12,6 +12,14 @@ from tldw_Server_API.app.services import admin_personalization_service
 router = APIRouter()
 
 
+def _require_admin(principal: AuthPrincipal) -> None:
+    if not (principal.is_admin or ("admin" in (principal.roles or []))):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+
+
 @router.post(
     "/personalization/consolidate",
     response_model=dict,
@@ -31,14 +39,18 @@ async def trigger_personalization_consolidation(
     Returns:
         Consolidation trigger result payload.
     """
-    if not (principal.is_admin or ("admin" in (principal.roles or []))):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required",
-        )
+    _require_admin(principal)
     return await admin_personalization_service.trigger_consolidation(user_id=user_id)
 
 
-@router.get("/personalization/status", response_model=dict)
-async def get_personalization_status() -> dict:
+@router.get(
+    "/personalization/status",
+    response_model=dict,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def get_personalization_status(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict:
+    """Return personalization consolidation status (admin scope)."""
+    _require_admin(principal)
     return await admin_personalization_service.get_status()

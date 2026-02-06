@@ -223,6 +223,8 @@ export const SidePanelBody = ({
   return (
     <>
       <div
+        role="log"
+        aria-live="polite"
         className={`relative flex w-full flex-col items-center ${topPaddingClass} pb-4`}
       >
         {messages.length === 0 && <EmptySidePanel inputRef={inputRef} />}
