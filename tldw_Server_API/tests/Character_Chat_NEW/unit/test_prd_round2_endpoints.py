@@ -7,6 +7,7 @@ Unit + integration tests for PRD Round 2 endpoints:
 """
 
 import json
+from uuid import uuid4
 import pytest
 
 from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import (
@@ -385,6 +386,105 @@ class TestLorebookDiagnosticExport:
         assert data["chat_id"] == chat_id
         assert data["total_turns_with_diagnostics"] == 0
         assert data["turns"] == []
+
+    @pytest.mark.integration
+    def test_diagnostics_ordering_and_pagination(
+        self,
+        test_client,
+        auth_headers,
+        sample_character_card,
+        character_db,
+    ):
+        """Returns paginated diagnostics in requested sort order."""
+        char_resp = test_client.post("/api/v1/characters/", json=sample_character_card, headers=auth_headers)
+        char_id = char_resp.json()["id"]
+
+        chat_resp = test_client.post(
+            "/api/v1/chats/",
+            json={"character_id": char_id, "title": "diag-order"},
+            headers=auth_headers,
+        )
+        chat_id = chat_resp.json()["id"]
+
+        first_message_id = str(uuid4())
+        second_message_id = str(uuid4())
+
+        character_db.add_message(
+            {
+                "id": first_message_id,
+                "conversation_id": chat_id,
+                "sender": "assistant",
+                "content": "First assistant turn",
+                "parent_message_id": None,
+                "deleted": 0,
+                "client_id": "test_client",
+                "version": 1,
+            }
+        )
+        character_db.add_message(
+            {
+                "id": second_message_id,
+                "conversation_id": chat_id,
+                "sender": "assistant",
+                "content": "Second assistant turn",
+                "parent_message_id": first_message_id,
+                "deleted": 0,
+                "client_id": "test_client",
+                "version": 1,
+            }
+        )
+
+        first_diag = {
+            "entry_id": 11,
+            "world_book_id": 5,
+            "activation_reason": "keyword_match",
+            "keyword": "alpha",
+            "token_cost": 12,
+            "priority": 10,
+            "regex_match": False,
+            "content_preview": "alpha preview",
+        }
+        second_diag = {
+            "entry_id": 22,
+            "world_book_id": 6,
+            "activation_reason": "regex_match",
+            "keyword": "beta.*",
+            "token_cost": 18,
+            "priority": 20,
+            "regex_match": True,
+            "content_preview": "beta preview",
+        }
+
+        assert character_db.add_message_metadata(
+            first_message_id,
+            extra={"lorebook_diagnostics": [first_diag]},
+        )
+        assert character_db.add_message_metadata(
+            second_message_id,
+            extra={"lorebook_diagnostics": [second_diag]},
+        )
+
+        asc_resp = test_client.get(
+            f"/api/v1/chats/{chat_id}/diagnostics/lorebook",
+            params={"page": 1, "size": 1, "order": "asc"},
+            headers=auth_headers,
+        )
+        assert asc_resp.status_code == 200
+        asc_data = asc_resp.json()
+        assert asc_data["total_turns_with_diagnostics"] == 2
+        assert len(asc_data["turns"]) == 1
+        assert asc_data["turns"][0]["message_id"] == first_message_id
+
+        desc_resp = test_client.get(
+            f"/api/v1/chats/{chat_id}/diagnostics/lorebook",
+            params={"page": 1, "size": 1, "order": "desc"},
+            headers=auth_headers,
+        )
+        assert desc_resp.status_code == 200
+        desc_data = desc_resp.json()
+        assert desc_data["total_turns_with_diagnostics"] == 2
+        assert len(desc_data["turns"]) == 1
+        assert desc_data["turns"][0]["message_id"] == second_message_id
 
 
 # ========================================================================

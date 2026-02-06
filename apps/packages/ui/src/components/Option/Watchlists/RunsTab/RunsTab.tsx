@@ -28,6 +28,7 @@ const POLL_INTERVAL_MS = 5000
 const DEFAULT_RUNS_CSV_SERVER_THRESHOLD = 2000
 const RUNS_API_PAGE_SIZE = 200
 const RUNS_CSV_SERVER_PAGE_SIZE = 1000
+type RunsCsvTalliesMode = "none" | "per_run" | "aggregate"
 
 const resolveRunsCsvServerThreshold = (): number => {
   const raw = process.env.NEXT_PUBLIC_RUNS_CSV_SERVER_THRESHOLD
@@ -73,6 +74,7 @@ export const RunsTab: React.FC = () => {
   const selectedRunId = useWatchlistsStore((s) => s.selectedRunId)
   const [jobs, setJobs] = useState<WatchlistJob[]>([])
   const [exportingRunsCsv, setExportingRunsCsv] = useState(false)
+  const [runsCsvTalliesMode, setRunsCsvTalliesMode] = useState<RunsCsvTalliesMode>("none")
 
   // Store actions
   const setRuns = useWatchlistsStore((s) => s.setRuns)
@@ -156,6 +158,12 @@ export const RunsTab: React.FC = () => {
     loadRuns()
     loadJobs()
   }, [loadRuns, loadJobs])
+
+  useEffect(() => {
+    if (runsJobFilter && runsCsvTalliesMode === "aggregate") {
+      setRunsCsvTalliesMode("per_run")
+    }
+  }, [runsJobFilter, runsCsvTalliesMode])
 
   // Polling for active runs
   useEffect(() => {
@@ -277,9 +285,22 @@ export const RunsTab: React.FC = () => {
   const fetchServerRunsCsvMerged = useCallback(async (): Promise<string> => {
     const scope: "global" | "job" = runsJobFilter ? "job" : "global"
     const q = !runsJobFilter && runsStatusFilter ? runsStatusFilter : undefined
+    const talliesMode: RunsCsvTalliesMode =
+      runsJobFilter && runsCsvTalliesMode === "aggregate"
+        ? "per_run"
+        : runsCsvTalliesMode
+    if (scope === "global" && talliesMode === "aggregate") {
+      return exportRunsCsv({
+        scope,
+        q,
+        include_tallies: true,
+        tallies_mode: "aggregate"
+      })
+    }
     let page = 1
     let header = ""
     const dataRows: string[] = []
+    const includeTallies = talliesMode === "per_run"
 
     // Merge paginated CSV chunks into a single downloadable CSV.
     while (true) {
@@ -289,7 +310,8 @@ export const RunsTab: React.FC = () => {
         q,
         page,
         size: RUNS_CSV_SERVER_PAGE_SIZE,
-        include_tallies: false
+        include_tallies: includeTallies,
+        tallies_mode: includeTallies ? "per_run" : undefined
       })
       const lines = csvChunk.split("\n")
       if (!header) {
@@ -311,14 +333,18 @@ export const RunsTab: React.FC = () => {
     }
     if (!header) return ""
     return `${[header, ...dataRows].join("\n")}\n`
-  }, [runsJobFilter, runsStatusFilter])
+  }, [runsCsvTalliesMode, runsJobFilter, runsStatusFilter])
 
   const handleExportRunsCsv = useCallback(async () => {
     try {
       setExportingRunsCsv(true)
       const threshold = resolveRunsCsvServerThreshold()
       const rowEstimate = Math.max(Number(runsTotal || 0), Array.isArray(runs) ? runs.length : 0)
-      const preferServerCsv = rowEstimate >= threshold
+      const talliesMode: RunsCsvTalliesMode =
+        runsJobFilter && runsCsvTalliesMode === "aggregate"
+          ? "per_run"
+          : runsCsvTalliesMode
+      const preferServerCsv = talliesMode !== "none" || rowEstimate >= threshold
       const csv = preferServerCsv
         ? await fetchServerRunsCsvMerged()
         : toRunsCsv(await fetchAllRunsForClientCsv())
@@ -327,7 +353,12 @@ export const RunsTab: React.FC = () => {
         return
       }
       const filenameSuffix = runsJobFilter ? `job_${runsJobFilter}` : "global"
-      const filename = `watchlists_runs_${filenameSuffix}_${Date.now()}.csv`
+      const filename =
+        talliesMode === "aggregate"
+          ? `watchlists_runs_global_tallies_${Date.now()}.csv`
+          : talliesMode === "per_run"
+            ? `watchlists_runs_${filenameSuffix}_with_tallies_${Date.now()}.csv`
+            : `watchlists_runs_${filenameSuffix}_${Date.now()}.csv`
       downloadCsv(csv, filename)
       message.success(t("watchlists:runs.exported", "Runs CSV exported"))
     } catch (err) {
@@ -340,6 +371,7 @@ export const RunsTab: React.FC = () => {
     fetchAllRunsForClientCsv,
     fetchServerRunsCsvMerged,
     runs,
+    runsCsvTalliesMode,
     runsJobFilter,
     runsTotal,
     t,
@@ -517,6 +549,21 @@ export const RunsTab: React.FC = () => {
           >
             {t("common:refresh", "Refresh")}
           </Button>
+          <Select
+            value={runsCsvTalliesMode}
+            onChange={(value) => setRunsCsvTalliesMode(value as RunsCsvTalliesMode)}
+            className="w-56"
+            data-testid="runs-csv-tallies-mode"
+            options={[
+              { value: "none", label: t("watchlists:runs.exportMode.standard", "Standard CSV") },
+              { value: "per_run", label: t("watchlists:runs.exportMode.perRun", "Per-run tallies") },
+              {
+                value: "aggregate",
+                label: t("watchlists:runs.exportMode.aggregate", "Global tallies summary"),
+                disabled: Boolean(runsJobFilter)
+              }
+            ]}
+          />
           <Button
             icon={<Download className="h-4 w-4" />}
             onClick={handleExportRunsCsv}

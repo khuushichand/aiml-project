@@ -27,6 +27,7 @@ import contextlib
 import hashlib
 import json
 import os
+import sqlite3
 import threading
 import time
 import uuid
@@ -135,19 +136,33 @@ _MEDIA_DB_CACHE: LRUCache = LRUCache(maxsize=_MAX_DB_CACHE_SIZE)
 _CHACHA_DB_CACHE: LRUCache = LRUCache(maxsize=_MAX_DB_CACHE_SIZE)
 _MEDIA_DB_LOCK = threading.Lock()
 _CHACHA_DB_LOCK = threading.Lock()
+DATA_TABLES_DB_EXCEPTIONS = (
+    sqlite3.Error,
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+)
+DATA_TABLES_RUNTIME_EXCEPTIONS = (
+    *DATA_TABLES_DB_EXCEPTIONS,
+    json.JSONDecodeError,
+    ChatConfigurationError,
+)
 
 
 def _close_media_db(user_id: str, db: MediaDatabase) -> None:
     try:
         db.close_connection()
-    except Exception as exc:
+    except DATA_TABLES_DB_EXCEPTIONS as exc:
         logger.warning("data_tables: failed to close media db for user_id {}: {}", user_id, exc)
 
 
 def _close_chacha_db(user_id: str, db: CharactersRAGDB) -> None:
     try:
         db.close_connection()
-    except Exception as exc:
+    except DATA_TABLES_DB_EXCEPTIONS as exc:
         logger.warning("data_tables: failed to close chacha db for user_id {}: {}", user_id, exc)
 
 
@@ -692,7 +707,7 @@ def _extract_media_text(db: MediaDatabase, media_id: int) -> str:
     if not text.strip():
         try:
             latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
-        except Exception as exc:
+        except DATA_TABLES_DB_EXCEPTIONS as exc:
             logger.debug(
                 "data_tables: get_document_version failed for media_id {}: {}",
                 media_id,
@@ -704,7 +719,7 @@ def _extract_media_text(db: MediaDatabase, media_id: int) -> str:
         else:
             try:
                 fallback = get_latest_transcription(db, media_id)
-            except Exception as exc:
+            except DATA_TABLES_DB_EXCEPTIONS as exc:
                 logger.debug(
                     "data_tables: get_latest_transcription failed for media_id {}: {}",
                     media_id,
@@ -795,7 +810,7 @@ async def _resolve_rag_query_source(
 def _is_job_cancelled(jm: JobManager, job_id: int) -> bool:
     try:
         job = jm.get_job(job_id)
-    except Exception:
+    except DATA_TABLES_DB_EXCEPTIONS:
         return False
     status = str(job.get("status") or "").lower() if job else ""
     return status == "cancelled"
@@ -1007,7 +1022,7 @@ async def _handle_job(job: dict[str, Any], jm: JobManager) -> dict[str, Any]:
                 await llm_future
             except asyncio.CancelledError:
                 pass
-            except Exception as cleanup_exc:
+            except DATA_TABLES_RUNTIME_EXCEPTIONS as cleanup_exc:
                 logger.debug(
                     "data_tables worker: error awaiting cancelled LLM future: {}",
                     cleanup_exc,
@@ -1094,18 +1109,18 @@ async def _handle_job(job: dict[str, Any], jm: JobManager) -> dict[str, Any]:
         if db is not None and table_id > 0:
             try:
                 db.update_data_table(table_id, status="failed", last_error=str(exc), owner_user_id=user_id)
-            except Exception as reset_exc:
+            except DATA_TABLES_DB_EXCEPTIONS as reset_exc:
                 logger.debug(
                     "data_tables worker: failed to update table status for {}: {}",
                     table_id,
                     reset_exc,
                 )
         raise
-    except Exception as exc:
+    except DATA_TABLES_RUNTIME_EXCEPTIONS as exc:
         if db is not None and table_id > 0:
             try:
                 db.update_data_table(table_id, status="failed", last_error=str(exc), owner_user_id=user_id)
-            except Exception as reset_exc:
+            except DATA_TABLES_DB_EXCEPTIONS as reset_exc:
                 logger.debug(
                     "data_tables worker: failed to update table status for {}: {}",
                     table_id,

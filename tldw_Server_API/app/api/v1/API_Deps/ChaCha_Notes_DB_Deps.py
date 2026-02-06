@@ -480,7 +480,7 @@ async def _drain_default_character_tasks(timeout: float = 5.0) -> None:
     done, pending = await asyncio.wait(tasks, timeout=timeout)
     if pending:
         logger.warning(
-            "ChaChaNotes shutdown: %d default-character tasks still running; cancelling.",
+            "ChaChaNotes shutdown: {} default-character tasks still running; cancelling.",
             len(pending),
         )
         for task in pending:
@@ -498,7 +498,7 @@ async def _drain_default_character_futures(timeout: float = 5.0) -> None:
     done, pending = await asyncio.wait(futures, timeout=timeout)
     if pending:
         logger.warning(
-            "ChaChaNotes shutdown: %d default-character futures still running; waiting on executor shutdown.",
+            "ChaChaNotes shutdown: {} default-character futures still running; waiting on executor shutdown.",
             len(pending),
         )
     with _chacha_default_char_futures_lock:

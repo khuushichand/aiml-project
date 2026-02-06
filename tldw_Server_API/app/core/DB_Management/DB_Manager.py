@@ -144,6 +144,16 @@ single_user_workflows_path: str = single_user_config.get(
     fallback=str(DatabasePaths.get_workflows_db_path(DatabasePaths.get_single_user_id()))
 )
 
+DB_MANAGER_RUNTIME_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    KeyError,
+    configparser.Error,
+)
+
 
 def get_content_backend_instance() -> Optional[DatabaseBackend]:
     """Return the shared content DatabaseBackend instance (if configured)."""
@@ -162,7 +172,7 @@ def shutdown_content_backend() -> None:
     """
     try:
         backend = get_content_backend_instance()
-    except Exception:
+    except RuntimeError:
         backend = None
     if backend is None:
         return
@@ -170,7 +180,7 @@ def shutdown_content_backend() -> None:
         pool = backend.get_pool()
         pool.close_all()
         logger.info("Content backend connection pool closed")
-    except Exception as exc:  # pragma: no cover - defensive shutdown
+    except DB_MANAGER_RUNTIME_EXCEPTIONS as exc:  # pragma: no cover - defensive shutdown
         logger.warning(f"Failed to close content backend pool: {exc}")
 
 
@@ -204,9 +214,9 @@ def reset_content_backend(
             else:
                 cb._cached_backend = None  # type: ignore[attr-defined]
                 cb._cached_backend_signature = None  # type: ignore[attr-defined]
-        except Exception as e:
+        except DB_MANAGER_RUNTIME_EXCEPTIONS as e:
             logger.debug(f"reset_content_backend: failed to clear backend cache: {e}")
-    except Exception as e:
+    except ImportError as e:
         logger.debug(f"reset_content_backend: unable to import content_backend: {e}")
 
     # Clear shared instance
@@ -254,13 +264,13 @@ def reset_content_backend(
                 f"Unknown Database.type '{raw_backend_local}', defaulting to sqlite content backend"
             )
             db_type = 'sqlite'
-    except Exception as e:
+    except DB_MANAGER_RUNTIME_EXCEPTIONS as e:
         logger.debug(f"reset_content_backend: failed to recompute content settings: {e}")
 
     if reload:
         try:
             _CONTENT_DB_BACKEND = get_content_backend(cfg)
-        except Exception as e:
+        except DB_MANAGER_RUNTIME_EXCEPTIONS as e:
             logger.debug(f"reset_content_backend: unable to rebuild content backend: {e}")
     return _CONTENT_DB_BACKEND
 
@@ -388,7 +398,7 @@ def validate_postgres_content_backend() -> None:
     finally:
         try:
             validator.close_connection()
-        except Exception:
+        except DB_MANAGER_RUNTIME_EXCEPTIONS:
             pass
 
 
@@ -491,7 +501,7 @@ def get_db_config():
     except FileNotFoundError:
         logger.warning("Config file not found. Using default database configuration.")
         return default_db_config()
-    except Exception as e:
+    except DB_MANAGER_RUNTIME_EXCEPTIONS as e:
         logger.error(f"Error reading config: {str(e)}. Using default database configuration.")
         return default_db_config()
 

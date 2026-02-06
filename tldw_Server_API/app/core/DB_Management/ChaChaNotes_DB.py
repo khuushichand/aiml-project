@@ -4555,7 +4555,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         )
 
     def upsert_conversation_settings(self, conversation_id: str, settings: dict[str, Any]) -> bool:
-        """Upsert per-conversation settings JSON."""
+        """Upsert per-conversation settings JSON.
+
+        Also bumps ``conversations.version`` and ``conversations.last_modified``
+        so that clients using optimistic-locking can detect the change.
+        """
         try:
             self._ensure_conversation_settings_table()
             payload = json.dumps(settings)
@@ -4567,6 +4571,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     "last_modified=CURRENT_TIMESTAMP"
                 )
                 self.execute_query(query, (conversation_id, payload), commit=True)
+                # Bump parent conversation version + last_modified (best-effort).
+                self.execute_query(
+                    "UPDATE conversations SET version = version + 1, last_modified = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND deleted = 0",
+                    (conversation_id,),
+                    commit=True,
+                )
                 return True
 
             upsert = (
@@ -4576,6 +4587,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 "last_modified = NOW()"
             )
             self.backend.execute(upsert, (conversation_id, payload))
+            # Bump parent conversation version + last_modified (best-effort).
+            self.backend.execute(
+                "UPDATE conversations SET version = version + 1, last_modified = NOW() "
+                "WHERE id = %s AND deleted = 0",
+                (conversation_id,),
+            )
             return True
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"upsert_conversation_settings failed for {conversation_id}: {exc}")

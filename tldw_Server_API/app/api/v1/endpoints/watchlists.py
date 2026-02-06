@@ -20,7 +20,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import (
     APIRouter,
@@ -256,6 +256,58 @@ def _deep_merge_dict(base: dict[str, Any] | None, override: dict[str, Any] | Non
         else:
             result[key] = value
     return result
+
+
+def _is_truthy_env(raw: str | None) -> bool:
+    if raw is None:
+        return False
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _watchlists_runs_require_admin() -> bool:
+    explicit = os.getenv("WATCHLISTS_RUNS_REQUIRE_ADMIN")
+    if explicit is not None:
+        return _is_truthy_env(explicit)
+    # Keep parity with existing frontend toggle if backend-specific flag is absent.
+    return _is_truthy_env(os.getenv("NEXT_PUBLIC_RUNS_REQUIRE_ADMIN"))
+
+
+def _normalize_claim_values(raw: Any) -> list[str]:
+    values = raw if isinstance(raw, (list, tuple, set)) else ([raw] if raw is not None else [])
+    out: list[str] = []
+    for value in values:
+        text = str(value).strip().lower()
+        if text:
+            out.append(text)
+    return out
+
+
+def _is_runs_admin_user(current_user: User) -> bool:
+    try:
+        if bool(getattr(current_user, "is_admin", False)):
+            return True
+        if bool(getattr(current_user, "is_superuser", False)):
+            return True
+        role_value = str(getattr(current_user, "role", "")).strip().lower()
+        if role_value == "admin":
+            return True
+        if "admin" in _normalize_claim_values(getattr(current_user, "roles", [])):
+            return True
+        if "admin" in _normalize_claim_values(getattr(current_user, "permissions", [])):
+            return True
+        if "admin" in _normalize_claim_values(getattr(current_user, "scopes", [])):
+            return True
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+        return False
+    return False
+
+
+def _enforce_runs_admin_if_configured(current_user: User) -> None:
+    if not _watchlists_runs_require_admin():
+        return
+    if _is_runs_admin_user(current_user):
+        return
+    raise HTTPException(status_code=403, detail="watchlists_runs_admin_required")
 
 
 def _build_email_bodies(content: str | None, fmt: str, title: str, preferred: str = "auto") -> tuple[str, str]:
@@ -2203,6 +2255,7 @@ async def list_runs_for_job(
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    _enforce_runs_admin_if_configured(current_user)
     limit = size
     offset = (page - 1) * limit
     rows, total = db.list_runs_for_job(job_id, limit=limit, offset=offset)
@@ -2219,6 +2272,7 @@ async def list_runs_global(
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    _enforce_runs_admin_if_configured(current_user)
     limit = size
     offset = (page - 1) * limit
     rows, total = db.list_runs(q=q, limit=limit, offset=offset)
@@ -2246,15 +2300,78 @@ async def export_runs_csv(
     page: int = Query(1, ge=1),
     size: int = Query(200, ge=1, le=1000),
     include_tallies: bool = Query(False, description="When true, include a filter_tallies_json column per row"),
+    tallies_mode: Literal["per_run", "aggregate"] = Query(
+        "per_run",
+        description="Tallies export mode when include_tallies=true. Use 'aggregate' to export global filter-key totals.",
+    ),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    _enforce_runs_admin_if_configured(current_user)
     """Return a CSV export of runs with basic counters.
 
     Columns: id,job_id,status,started_at,finished_at,items_found,items_ingested,filters_include,filters_exclude,filters_flag
     """
     limit = size
     offset = (page - 1) * limit
+
+    def _safe_parse_stats(raw_stats_json: str | None) -> dict[str, Any]:
+        try:
+            parsed = json.loads(raw_stats_json or "{}") if raw_stats_json else {}
+        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+            parsed = {}
+        if not isinstance(parsed, dict):
+            return {}
+        return parsed
+
+    def _safe_parse_filter_tallies(stats: dict[str, Any]) -> dict[str, int]:
+        raw_tallies = stats.get("filter_tallies")
+        if not isinstance(raw_tallies, dict):
+            return {}
+        tallies_out: dict[str, int] = {}
+        for key, value in raw_tallies.items():
+            key_text = str(key).strip()
+            if not key_text:
+                continue
+            if isinstance(value, (int, float)):
+                tallies_out[key_text] = int(value)
+        return tallies_out
+
+    if include_tallies and tallies_mode == "aggregate":
+        if scope != "global":
+            raise HTTPException(status_code=400, detail="tallies_aggregation_global_only")
+
+        aggregate: dict[str, int] = {}
+        scan_offset = 0
+        scan_limit = 1000
+        while True:
+            scan_rows, _scan_total = db.list_runs(q=q, limit=scan_limit, offset=scan_offset)
+            if not scan_rows:
+                break
+            for row in scan_rows:
+                stats = _safe_parse_stats(row.stats_json)
+                tallies = _safe_parse_filter_tallies(stats)
+                for tally_key, tally_count in tallies.items():
+                    aggregate[tally_key] = aggregate.get(tally_key, 0) + tally_count
+            if len(scan_rows) < scan_limit:
+                break
+            scan_offset += len(scan_rows)
+
+        output = io.StringIO()
+        writer = csv.writer(output, lineterminator="\n")
+        writer.writerow(["filter_key", "count"])
+        for key, count in sorted(aggregate.items(), key=lambda item: (-item[1], item[0])):
+            writer.writerow([key, int(count)])
+        filename = f"watchlists_runs_global_tallies_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.csv"
+        return PlainTextResponse(
+            output.getvalue(),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "X-Has-More": "false",
+            },
+        )
+
     if scope == "job":
         if not job_id:
             raise HTTPException(status_code=400, detail="job_id_required")
@@ -2279,12 +2396,7 @@ async def export_runs_csv(
     writer = csv.writer(output, lineterminator="\n")
     writer.writerow(headers)
     for r in rows:
-        try:
-            stats = json.loads(r.stats_json or "{}") if r.stats_json else {}
-        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-            stats = {}
-        if not isinstance(stats, dict):
-            stats = {}
+        stats = _safe_parse_stats(r.stats_json)
         vals = [
             int(r.id),
             int(r.job_id),
@@ -2299,8 +2411,7 @@ async def export_runs_csv(
         ]
         if include_tallies:
             try:
-                tallies = stats.get("filter_tallies") if isinstance(stats, dict) else None
-                vals.append(json.dumps(tallies or {}))
+                vals.append(json.dumps(_safe_parse_filter_tallies(stats)))
             except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
                 vals.append("{}")
         writer.writerow(vals)
@@ -2325,6 +2436,7 @@ async def get_run(
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    _enforce_runs_admin_if_configured(current_user)
     try:
         r = db.get_run(run_id)
     except KeyError:
@@ -2341,6 +2453,7 @@ async def get_run_details(
     db = Depends(get_watchlists_db_for_user),
     response: Response = None,  # type: ignore[assignment]
 ):
+    _enforce_runs_admin_if_configured(current_user)
     """Return a summarized view of run stats and logs.
 
     Note: Per-filter tallies are retained in the raw run stats (GET /watchlists/runs/{run_id})
@@ -2589,6 +2702,7 @@ async def export_run_tallies_csv(
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    _enforce_runs_admin_if_configured(current_user)
     try:
         r = db.get_run(run_id)
     except KeyError:

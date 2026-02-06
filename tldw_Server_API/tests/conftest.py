@@ -143,6 +143,25 @@ async def _close_tracked_aiosqlite_connections() -> None:
                 pass
 
 
+def _run_coro_sync_best_effort(coro):
+    """Run an async cleanup coroutine from sync pytest hooks/fixtures."""
+    try:
+        loop = asyncio.get_event_loop_policy().get_event_loop()
+    except Exception:
+        loop = None
+    if loop is not None and not loop.is_closed():
+        try:
+            if loop.is_running():
+                return None
+            return loop.run_until_complete(coro)
+        except Exception:
+            return None
+    try:
+        return asyncio.run(coro)
+    except Exception:
+        return None
+
+
 _AUTH_ENV_BASELINE_KEYS = (
     # AuthNZ mode + core configuration.
     "AUTH_MODE",
@@ -575,45 +594,36 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
     """Log and relax any remaining non-daemon threads to avoid interpreter shutdown hangs."""
     try:
         import sys, traceback
-        def _run_cleanup(coro):
-            try:
-                loop = asyncio.get_event_loop_policy().get_event_loop()
-            except Exception:
-                loop = None
-            if loop is not None and not loop.is_closed():
-                try:
-                    if loop.is_running():
-                        return None
-                    return loop.run_until_complete(coro)
-                except Exception:
-                    return None
-            try:
-                return asyncio.run(coro)
-            except Exception:
-                return None
 
         try:
             from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import shutdown_all_audit_services
-            _run_cleanup(shutdown_all_audit_services())
+            _run_coro_sync_best_effort(shutdown_all_audit_services())
         except Exception:
             pass
         try:
             from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool as _reset_db_pool
-            _run_cleanup(_reset_db_pool())
+            _run_coro_sync_best_effort(_reset_db_pool())
         except Exception:
             pass
         try:
             from tldw_Server_API.app.core.Scheduler import stop_global_scheduler as _stop_global_scheduler
-            _run_cleanup(_stop_global_scheduler())
+            _run_coro_sync_best_effort(_stop_global_scheduler())
         except Exception:
             pass
         try:
             from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler as _get_wf_scheduler
-            _run_cleanup(_get_wf_scheduler().stop())
+            _run_coro_sync_best_effort(_get_wf_scheduler().stop())
         except Exception:
             pass
         try:
-            _run_cleanup(_close_tracked_aiosqlite_connections())
+            _run_coro_sync_best_effort(_close_tracked_aiosqlite_connections())
+        except Exception:
+            pass
+        try:
+            from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
+                shutdown_chacha_resources,
+            )
+            _run_coro_sync_best_effort(shutdown_chacha_resources(wait_timeout=5.0))
         except Exception:
             pass
         try:
@@ -889,12 +899,12 @@ def _reset_workflow_scheduler():
     # workers by the per-test scheduler reset diagnostics.
     try:
         from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
-            close_all_chacha_db_instances,
-            shutdown_chacha_executor,
+            reset_chacha_shutdown_state,
+            shutdown_chacha_resources,
         )
 
-        close_all_chacha_db_instances()
-        shutdown_chacha_executor(wait=True)
+        _run_coro_sync_best_effort(shutdown_chacha_resources(wait_timeout=5.0))
+        reset_chacha_shutdown_state()
     except Exception:
         pass
 

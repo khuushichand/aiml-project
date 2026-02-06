@@ -8,7 +8,7 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - Docs updated (API: runs/tallies/OPML examples/gating table; Product PRD; Ops runbook). 410 shim for legacy Subscriptions is live.
 
 ## Remaining To-Do (v1 sign-off)
-- Verify “Runs” role gating against the real user object in your auth setup; otherwise rely on env toggles (`NEXT_PUBLIC_RUNS_REQUIRE_ADMIN`).
+- Runs role gating verified end-to-end against real auth user objects (API + UI), with server enforcement toggle support (`WATCHLISTS_RUNS_REQUIRE_ADMIN`, fallback `NEXT_PUBLIC_RUNS_REQUIRE_ADMIN`).
 - Optional: widen YouTube normalization edge tests (keep policy of 400 for handles/vanity).
 - Optional: add include_tallies aggregation mode to global runs CSV if admins need it.
 - Optional: deterministic rate-limit header assertions under a non-test configuration for OPML import and filters endpoints.
@@ -127,5 +127,5 @@ Checklist (quick)
 - [x] Docs polish (gating table, OPML examples, regex flags note, Admin Items/CSV)
 - [x] Preview endpoint tests (RSS + site; include-only on/off)
 - [x] Rate-limit headers strict test (non-test mode via monkeypatch)
-- [ ] Verify Runs role gating against real user object (or disable via env)
+- [x] Verify Runs role gating against real user object (or disable via env)
 - [ ] Optional: CSV include_tallies aggregation mode (API + UI)

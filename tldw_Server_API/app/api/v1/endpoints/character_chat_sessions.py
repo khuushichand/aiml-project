@@ -4537,6 +4537,10 @@ async def export_lorebook_diagnostics(
     chat_id: str = Path(..., description="Chat session ID"),
     page: int = Query(1, ge=1, description="Page number"),
     size: int = Query(50, ge=1, le=200, description="Page size"),
+    order: Literal["asc", "desc"] = Query(
+        "asc",
+        description="Sort order for turns by assistant turn number",
+    ),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
@@ -4577,10 +4581,11 @@ async def export_lorebook_diagnostics(
             diagnostics=diags,
         ))
 
-    # Pagination
+    # Pagination (allow newest-first retrieval without changing default behavior).
+    ordered_turns = turns_with_diags if order == "asc" else list(reversed(turns_with_diags))
     total = len(turns_with_diags)
     start = (page - 1) * size
-    page_items = turns_with_diags[start:start + size]
+    page_items = ordered_turns[start:start + size]
 
     return LorebookDiagnosticExportResponse(
         chat_id=chat_id,

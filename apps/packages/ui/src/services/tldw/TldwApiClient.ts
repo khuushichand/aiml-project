@@ -194,6 +194,23 @@ export type WorldBookProcessResponse = {
   diagnostics: WorldBookProcessDiagnostic[]
 }
 
+export type LorebookDiagnosticTurn = {
+  message_id: string
+  timestamp?: string | null
+  turn_number: number
+  message_preview: string
+  diagnostics: Record<string, unknown>[]
+}
+
+export type LorebookDiagnosticExportResponse = {
+  chat_id: string
+  character_id?: string | null
+  total_turns_with_diagnostics: number
+  turns: LorebookDiagnosticTurn[]
+  page: number
+  size: number
+}
+
 type PromptPayload = {
   name?: string
   title?: string
@@ -1100,7 +1117,45 @@ export class TldwApiClient {
 
   async ragSearch(query: string, options?: any): Promise<any> {
     const { timeoutMs, ...rest } = options || {}
-    return await bgRequest<any>({ path: '/api/v1/rag/search', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query, ...rest }, timeoutMs })
+    try {
+      return await bgRequest<any>({
+        path: '/api/v1/rag/search',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: { query, ...rest },
+        timeoutMs
+      })
+    } catch (error) {
+      const status = (error as { status?: number } | null)?.status
+      const message = error instanceof Error ? error.message : String(error ?? '')
+      const shouldRetryWithoutRerank =
+        status === 500 &&
+        rest?.enable_reranking !== false &&
+        rest?.reranking_strategy !== 'none'
+
+      if (!shouldRetryWithoutRerank) {
+        throw error
+      }
+
+      // Some local/dev servers fail hard when FlashRank assets are missing.
+      // Retry once with reranking disabled so retrieval still works.
+      console.warn(
+        '[tldw:rag] /api/v1/rag/search failed; retrying once without reranking',
+        { status, message }
+      )
+      return await bgRequest<any>({
+        path: '/api/v1/rag/search',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: {
+          query,
+          ...rest,
+          enable_reranking: false,
+          reranking_strategy: 'none'
+        },
+        timeoutMs
+      })
+    }
   }
 
   async ragSimple(query: string, options?: any): Promise<any> {
@@ -2214,6 +2269,18 @@ export class TldwApiClient {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: { settings }
+    })
+  }
+
+  async getChatLorebookDiagnostics(
+    chat_id: string | number,
+    params?: Record<string, any>
+  ): Promise<LorebookDiagnosticExportResponse> {
+    const cid = String(chat_id)
+    const query = this.buildQuery(params)
+    return await bgRequest<LorebookDiagnosticExportResponse>({
+      path: `/api/v1/chats/${cid}/diagnostics/lorebook${query}`,
+      method: "GET"
     })
   }
 

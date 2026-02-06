@@ -13,6 +13,7 @@ structured insights via the existing chat LLM abstraction layer.
 from __future__ import annotations
 
 import asyncio
+import configparser
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -30,6 +31,17 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_api_key_from_config,
     resolve_provider_model,
     split_system_message,
+)
+
+LIVE_INSIGHTS_RUNTIME_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    asyncio.TimeoutError,
+    json.JSONDecodeError,
 )
 
 LIVE_SYSTEM_PROMPT = (
@@ -290,7 +302,7 @@ class LiveMeetingInsights:
         config = None
         try:
             config = load_comprehensive_config()
-        except Exception as err:
+        except (OSError, RuntimeError, ValueError, TypeError, configparser.Error) as err:
             logger.debug(f"LiveMeetingInsights: unable to load config for defaults: {err}")
 
         if not provider:
@@ -298,7 +310,7 @@ class LiveMeetingInsights:
             if config is not None:
                 try:
                     candidate = config.get("Chat-API", "default_chat_provider", fallback=None)
-                except Exception:
+                except (configparser.Error, AttributeError, TypeError, ValueError):
                     candidate = None
             provider = (candidate or "openai").lower()
 
@@ -316,7 +328,7 @@ class LiveMeetingInsights:
             if section and config.has_section(section):
                 try:
                     model = config.get(section, "model", fallback=model)
-                except Exception:
+                except (configparser.Error, AttributeError, TypeError, ValueError):
                     pass
 
         if not model:
@@ -344,7 +356,7 @@ class LiveMeetingInsights:
                 exc = done_task.exception()
             except asyncio.CancelledError:
                 return
-            except Exception as exc:  # pragma: no cover - defensive
+            except (asyncio.InvalidStateError, RuntimeError, ValueError, TypeError) as exc:  # pragma: no cover - defensive
                 logger.debug(f"LiveMeetingInsights: task exception check failed: {exc}")
                 return
             if exc:
@@ -413,7 +425,7 @@ class LiveMeetingInsights:
 
         try:
             response_payload = await self._call_llm(transcript, stage=stage)
-        except Exception as exc:
+        except (ChatConfigurationError, *LIVE_INSIGHTS_RUNTIME_EXCEPTIONS) as exc:
             logger.error(f"LiveMeetingInsights: LLM request failed ({stage}): {exc}")
             await self._safe_send(
                 {
@@ -555,9 +567,9 @@ class LiveMeetingInsights:
             if start != -1 and end != -1 and end > start:
                 try:
                     return json.loads(text[start : end + 1])
-                except Exception:
+                except (json.JSONDecodeError, TypeError, ValueError):
                     return None
-        except Exception:
+        except (TypeError, ValueError):
             return None
         return None
 
@@ -615,7 +627,7 @@ class LiveMeetingInsights:
     async def _safe_send(self, payload: dict[str, Any]) -> None:
         try:
             await self.websocket.send_json(payload)
-        except Exception as exc:
+        except (OSError, RuntimeError, ValueError, TypeError, AttributeError) as exc:
             logger.error(f"LiveMeetingInsights: failed to send payload: {exc}")
 
     async def _drain_pending(self, cancel: bool = False) -> None:

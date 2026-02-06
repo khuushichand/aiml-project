@@ -22,6 +22,18 @@ from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
 #
 # End of Imports
 
+DB_BACKUP_RUNTIME_EXCEPTIONS = (
+    sqlite3.Error,
+    OSError,
+    shutil.Error,
+    subprocess.SubprocessError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    RuntimeError,
+    InvalidStoragePathError,
+)
+
 
 def _safe_join(base_dir: str, name: str) -> Optional[str]:
     """
@@ -71,11 +83,11 @@ def _get_allowed_db_roots() -> list[str]:
     roots: list[str] = []
     try:
         roots.append(str(DatabasePaths.get_user_db_base_dir(allow_legacy_alias=True)))
-    except Exception as exc:
+    except (InvalidStoragePathError, OSError, RuntimeError, ValueError, TypeError) as exc:
         logger.debug("Failed to resolve user DB base dir: {}", exc)
     try:
         roots.append(get_project_relative_path("Databases"))
-    except Exception as exc:
+    except (InvalidStoragePathError, OSError, RuntimeError, ValueError, TypeError) as exc:
         logger.debug("Failed to resolve project Databases path: {}", exc)
 
     extra = os.environ.get("TLDW_DB_ALLOWED_BASE_DIRS")
@@ -86,7 +98,7 @@ def _get_allowed_db_roots() -> list[str]:
                 continue
             try:
                 expanded = os.path.expanduser(candidate)
-            except Exception as exc:
+            except (OSError, ValueError, TypeError) as exc:
                 logger.debug("Failed to expand DB base dir {!r}: {}", candidate, exc)
                 expanded = candidate
             if os.path.isabs(expanded):
@@ -108,7 +120,7 @@ def _sqlite_uri_to_path(raw: str) -> Optional[str]:
         return None
     try:
         parsed = urllib.parse.urlparse(raw)
-    except Exception:
+    except (ValueError, TypeError, AttributeError):
         return None
     if parsed.scheme != "file":
         return None
@@ -248,7 +260,7 @@ def create_backup(db_path: str, backup_dir: str, db_name: str) -> str:
 
         logger.info(f"Backup created successfully: {backup_file}")
         return f"Backup created: {backup_file}"
-    except Exception as e:
+    except DB_BACKUP_RUNTIME_EXCEPTIONS as e:
         error_msg = f"Failed to create backup: {str(e)}"
         logger.error(error_msg)
         return error_msg
@@ -301,7 +313,7 @@ def create_incremental_backup(db_path: str, backup_dir: str, db_name: str) -> st
 
         logger.info(f"Incremental backup created: {backup_file}")
         return f"Incremental backup created: {backup_file}"
-    except Exception as e:
+    except DB_BACKUP_RUNTIME_EXCEPTIONS as e:
         error_msg = f"Failed to create incremental backup: {str(e)}"
         logger.error(error_msg)
         return error_msg
@@ -320,7 +332,7 @@ def list_backups(backup_dir: str) -> str:
                    if f.endswith(('.db', '.sqlib'))]
         backups.sort(reverse=True)  # Most recent first
         return "\n".join(backups) if backups else "No backups found"
-    except Exception as e:
+    except DB_BACKUP_RUNTIME_EXCEPTIONS as e:
         error_msg = f"Failed to list backups: {str(e)}"
         logger.error(error_msg)
         return error_msg
@@ -398,7 +410,7 @@ def restore_single_db_backup(db_path: str, backup_dir: str, db_name: str, backup
 
         logger.info(f"Database restored from {backup_name}")
         return f"Database restored from {backup_name}"
-    except Exception as e:
+    except DB_BACKUP_RUNTIME_EXCEPTIONS as e:
         error_msg = f"Failed to restore backup: {str(e)}"
         logger.error(error_msg)
         return error_msg

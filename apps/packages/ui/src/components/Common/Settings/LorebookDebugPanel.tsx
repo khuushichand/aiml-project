@@ -60,58 +60,6 @@ const toLatestTurnScanText = (
     .trim();
 };
 
-type ChatMessageLite = {
-  id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  created_at: string;
-};
-
-const buildTurnScanWindows = (
-  messages: ChatMessageLite[],
-  maxRecentMessagesPerTurn = 8,
-): Array<{
-  turnIndex: number;
-  assistantMessageId: string;
-  assistantCreatedAt: string;
-  assistantPreview: string;
-  scanText: string;
-}> => {
-  const relevant = messages.filter((msg) => {
-    if (msg.role !== "user" && msg.role !== "assistant") return false;
-    return String(msg.content || "").trim().length > 0;
-  });
-
-  const windows: Array<{
-    turnIndex: number;
-    assistantMessageId: string;
-    assistantCreatedAt: string;
-    assistantPreview: string;
-    scanText: string;
-  }> = [];
-
-  let turnCounter = 0;
-  for (let index = 0; index < relevant.length; index += 1) {
-    const message = relevant[index];
-    if (message.role !== "assistant") continue;
-    turnCounter += 1;
-    const start = Math.max(0, index - (maxRecentMessagesPerTurn - 1));
-    const windowMessages = relevant.slice(start, index + 1);
-    const scanText = toLatestTurnScanText(windowMessages);
-    if (!scanText) continue;
-
-    windows.push({
-      turnIndex: turnCounter,
-      assistantMessageId: message.id,
-      assistantCreatedAt: message.created_at,
-      assistantPreview: message.content.slice(0, 240),
-      scanText,
-    });
-  }
-
-  return windows;
-};
-
 const activationReasonLabel = (
   reason: string,
   fallbackRegexMatch: boolean,
@@ -269,96 +217,63 @@ export const LorebookDebugPanel: React.FC<Props> = ({
 
     setIsExporting(true);
     try {
-      const chat = await tldwClient.getChat(serverChatId);
-      const characterId = normalizeCharacterId(chat?.character_id);
-      if (!characterId) {
-        return;
-      }
-
-      const rawMessages = await tldwClient.listChatMessages(serverChatId, {
-        limit: 2000,
-        offset: 0,
-      });
-      const messages = Array.isArray(rawMessages)
-        ? (rawMessages as ChatMessageLite[])
-        : [];
-      const windows = buildTurnScanWindows(messages);
-      const maxTurnsForExport = 120;
-      const truncated = windows.length > maxTurnsForExport;
-      const selectedWindows = truncated
-        ? windows.slice(-maxTurnsForExport)
-        : windows;
-
-      const books = await tldwClient
-        .listCharacterWorldBooks(characterId)
-        .catch(() => []);
-      const list = Array.isArray(books) ? books : [];
-      const worldBookNameById = new Map<number, string>(
-        list
-          .map((book: any) => {
-            const idRaw = book?.world_book_id ?? book?.id;
-            const id = Number(idRaw);
-            const name = String(book?.name || "").trim();
-            if (!Number.isFinite(id) || name.length === 0) return null;
-            return [id, name] as const;
-          })
-          .filter((pair): pair is readonly [number, string] => pair !== null),
-      );
-
+      const pageSize = 200;
+      let page = 1;
+      let totalTurnsWithDiagnostics = 0;
+      let characterId: string | null = null;
       const turns: Array<Record<string, unknown>> = [];
-      for (const window of selectedWindows) {
-        const response = await tldwClient.processWorldBookContext({
-          text: window.scanText,
-          character_id: characterId,
-          scan_depth: 3,
-          token_budget: DEFAULT_LOREBOOK_TOKEN_BUDGET,
-          recursive_scanning: true,
-        });
 
-        const diagnostics = Array.isArray(response?.diagnostics)
-          ? response.diagnostics.map((entry) => ({
-              ...entry,
-              world_book_name:
-                typeof entry.world_book_id === "number"
-                  ? worldBookNameById.get(entry.world_book_id) || null
-                  : null,
-            }))
-          : [];
-        const status = getLorebookBudgetStatus({
-          tokensUsed: Number(response?.tokens_used || 0),
-          tokenBudget:
-            typeof response?.token_budget === "number"
-              ? response.token_budget
-              : DEFAULT_LOREBOOK_TOKEN_BUDGET,
-          budgetExhausted: Boolean(response?.budget_exhausted),
-          skippedEntriesDueToBudget: Number(
-            response?.skipped_entries_due_to_budget || 0,
-          ),
-        });
-        const conflicts = detectLorebookKeywordConflicts(diagnostics);
+      while (true) {
+        const response = await tldwClient.getChatLorebookDiagnostics(
+          serverChatId,
+          {
+            page,
+            size: pageSize,
+            order: "asc",
+          },
+        );
 
-        turns.push({
-          turn_index: window.turnIndex,
-          assistant_message_id: window.assistantMessageId,
-          assistant_created_at: window.assistantCreatedAt,
-          assistant_preview: window.assistantPreview,
-          entries_matched: Number(response?.entries_matched || 0),
-          tokens_used: status.tokensUsed,
-          token_budget: status.tokenBudget,
-          budget_exhausted: status.budgetExhausted,
-          skipped_entries_due_to_budget: status.skippedEntriesDueToBudget,
-          conflicts,
-          diagnostics,
-        });
+        if (page === 1) {
+          totalTurnsWithDiagnostics = Number(
+            response?.total_turns_with_diagnostics || 0,
+          );
+          characterId =
+            response?.character_id !== undefined &&
+            response?.character_id !== null
+              ? String(response.character_id)
+              : null;
+        }
+
+        const batch = Array.isArray(response?.turns) ? response.turns : [];
+        for (const turn of batch) {
+          turns.push({
+            turn_index: turn.turn_number,
+            assistant_message_id: turn.message_id,
+            assistant_created_at: turn.timestamp || null,
+            assistant_preview: turn.message_preview,
+            entries_matched: Array.isArray(turn.diagnostics)
+              ? turn.diagnostics.length
+              : 0,
+            diagnostics: Array.isArray(turn.diagnostics) ? turn.diagnostics : [],
+          });
+        }
+
+        if (batch.length === 0) break;
+        if (totalTurnsWithDiagnostics > 0 && turns.length >= totalTurnsWithDiagnostics) {
+          break;
+        }
+        if (batch.length < pageSize) break;
+        page += 1;
+        if (page > 500) break;
       }
 
       const exportPayload = {
         exported_at: new Date().toISOString(),
         chat_id: serverChatId,
         character_id: characterId,
-        turns_total: windows.length,
-        turns_exported: selectedWindows.length,
-        turns_truncated: truncated,
+        turns_total_with_diagnostics: totalTurnsWithDiagnostics,
+        turns_exported: turns.length,
+        turns_truncated: false,
         turns,
       };
 

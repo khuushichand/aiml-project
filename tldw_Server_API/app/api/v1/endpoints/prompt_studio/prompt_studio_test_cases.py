@@ -54,6 +54,18 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_io impor
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_manager import TestCaseManager
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
+PROMPT_STUDIO_TEST_CASE_EXCEPTIONS = (
+    DatabaseError,
+    InputError,
+    ConflictError,
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+)
+
 ########################################################################################################################
 # Router Setup
 
@@ -702,7 +714,7 @@ async def import_test_cases(
             }
         )
 
-    except Exception as e:
+    except PROMPT_STUDIO_TEST_CASE_EXCEPTIONS as e:
         logger.error(f"Error importing test cases: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -767,7 +779,7 @@ async def import_test_cases_csv_upload(
         content_bytes = await file.read()
         try:
             csv_text = content_bytes.decode("utf-8")
-        except Exception:
+        except UnicodeDecodeError:
             csv_text = content_bytes.decode("latin-1")
 
         imported, errors = io_manager.import_from_csv(
@@ -788,7 +800,7 @@ async def import_test_cases_csv_upload(
                 "total_test_cases": current_total
             }
         )
-    except Exception as e:
+    except PROMPT_STUDIO_TEST_CASE_EXCEPTIONS as e:
         logger.error(f"Error importing test cases via upload: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to import CSV test cases")
 
@@ -833,7 +845,7 @@ async def get_csv_import_template(
             media_type="text/csv",
             headers={"Content-Disposition": "attachment; filename=prompt_studio_test_cases_template.csv"}
         )
-    except Exception as e:
+    except PROMPT_STUDIO_TEST_CASE_EXCEPTIONS as e:
         logger.error(f"Failed to generate CSV template: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate CSV template")
 
@@ -854,14 +866,14 @@ async def run_test_cases_simple(
     if getattr(payload, "project_id", None):
         try:
             project_id = int(payload.project_id)  # type: ignore[attr-defined]
-        except Exception:
+        except (TypeError, ValueError, AttributeError):
             project_id = None
     if project_id is None:
         # Fallback: resolve project via prompt record
         try:
             prompt_row = db.get_prompt(prompt_id)
             project_id = int(prompt_row["project_id"]) if prompt_row and "project_id" in prompt_row else None
-        except Exception:
+        except (DatabaseError, InputError, KeyError, TypeError, ValueError):
             project_id = None
     if project_id is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Prompt {prompt_id} not found or no project context")
@@ -953,7 +965,7 @@ async def export_test_cases(
             }
         )
 
-    except Exception as e:
+    except PROMPT_STUDIO_TEST_CASE_EXCEPTIONS as e:
         logger.error(f"Error exporting test cases: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1077,7 +1089,7 @@ async def generate_test_cases(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid test case generation request"
         )
-    except Exception as e:
+    except PROMPT_STUDIO_TEST_CASE_EXCEPTIONS as e:
         logger.error(f"Error generating test cases: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

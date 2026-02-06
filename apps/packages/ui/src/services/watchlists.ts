@@ -302,6 +302,7 @@ export interface ExportRunsCsvParams extends FetchRunsParams {
   scope?: "global" | "job"
   job_id?: number
   include_tallies?: boolean
+  tallies_mode?: "per_run" | "aggregate"
 }
 
 export const fetchWatchlistRuns = async (

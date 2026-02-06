@@ -51,6 +51,14 @@ class ExternalProviderConfig:
 
 # Global cache for provider configurations
 _provider_configs: dict[str, ExternalProviderConfig] = {}
+EXTERNAL_PROVIDER_RUNTIME_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+)
 
 
 async def _close_response(resp: Any) -> None:
@@ -94,7 +102,7 @@ def load_external_provider_config(provider_name: str = "default") -> Optional[Ex
             external_config = config_data.get('STT-Settings', {}).get('external_providers', {}).get(provider_name, {})
             if external_config:
                 base_url = external_config.get('base_url')
-        except Exception as e:
+        except (ImportError, OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError) as e:
             logger.debug(f"Could not load config for external provider {provider_name}: {e}")
             return None
 
@@ -135,7 +143,7 @@ def validate_external_provider_config(config: ExternalProviderConfig) -> tuple[b
         parsed = urlparse(config.base_url)
         if not parsed.scheme or not parsed.netloc:
             return False, "Invalid base URL format"
-    except Exception as e:
+    except (ValueError, TypeError, AttributeError) as e:
         return False, f"Invalid base URL: {e}"
 
     # Validate timeout
@@ -267,7 +275,7 @@ async def transcribe_with_external_provider_async(
             try:
                 try:
                     file_handle.seek(0)
-                except Exception:
+                except (OSError, ValueError):
                     pass
 
                 resp = await afetch(
@@ -301,7 +309,7 @@ async def transcribe_with_external_provider_async(
                 try:
                     error_json = resp.json()
                     error_detail = error_json.get('error', {}).get('message', error_detail)
-                except Exception as parse_err:
+                except (ValueError, TypeError, AttributeError) as parse_err:
                     logger.debug(f"Failed to parse provider error JSON: error={parse_err}")
                 return f"[Error: API returned {status_code} - {error_detail}]"
 
@@ -309,14 +317,14 @@ async def transcribe_with_external_provider_async(
                 return f"[Error: {str(e)}]"
             except NetworkError as e:
                 return f"[Error: {str(e)}]"
-            except Exception as e:
+            except EXTERNAL_PROVIDER_RUNTIME_EXCEPTIONS as e:
                 return f"[Error: {str(e)}]"
             finally:
                 await _close_response(resp)
 
         return "[Error: Failed to transcribe after all retries]"
 
-    except Exception as e:
+    except EXTERNAL_PROVIDER_RUNTIME_EXCEPTIONS as e:
         logger.error(f"Error in external provider transcription: {e}")
         return f"[Error: {str(e)}]"
 
@@ -384,7 +392,7 @@ def transcribe_with_external_provider(
                     **kwargs,
                 )
             )
-    except Exception as e:
+    except EXTERNAL_PROVIDER_RUNTIME_EXCEPTIONS as e:
         logger.error(f"Error in external provider transcription: {e}")
         return f"[Error: {str(e)}]"
 
@@ -478,7 +486,7 @@ async def test_external_provider(
             'provider': provider_name
         }
 
-    except Exception as e:
+    except EXTERNAL_PROVIDER_RUNTIME_EXCEPTIONS as e:
         return {
             'success': False,
             'error': str(e),

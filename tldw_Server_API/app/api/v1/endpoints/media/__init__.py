@@ -43,7 +43,7 @@ from tldw_Server_API.app.core.Utils.Utils import smart_download as _smart_downlo
 try:
     # Optional shim so tests can monkeypatch media.process_web_scraping_task
     from tldw_Server_API.app.services.web_scraping_service import process_web_scraping_task  # pragma: no cover
-except Exception:  # pragma: no cover - keep import failures isolated during minimal start
+except ImportError:  # pragma: no cover - keep import failures isolated during minimal start
     process_web_scraping_task = None  # type: ignore[assignment]
 
 
@@ -187,6 +187,13 @@ class _DummyCache(dict):
 cache = _DummyCache()
 _legacy_media = None  # Backwards-compat attribute for tests expecting it.
 smart_download = _smart_download  # Backwards-compat for tests monkeypatching media.smart_download
+MEDIA_CACHE_EXCEPTIONS = (
+    RuntimeError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    OSError,
+)
 
 
 def cache_response(key: str, response: dict) -> None:
@@ -207,16 +214,16 @@ def cache_response(key: str, response: dict) -> None:
                 seg = path[len("/api/v1/media/"):].split("/", 1)[0]
                 try:
                     media_id_int = int(seg)
-                except Exception:
+                except (TypeError, ValueError):
                     media_id_int = None
                 if media_id_int is not None:
                     idx_key = f"cacheidx:/api/v1/media/{media_id_int}"
                     try:
                         cache.sadd(idx_key, key)
                         cache.expire(idx_key, 300)
-                    except Exception:
+                    except MEDIA_CACHE_EXCEPTIONS:
                         pass
-    except Exception:
+    except (ValueError, TypeError, AttributeError, RuntimeError, OSError):
         return
 
 
@@ -229,13 +236,13 @@ def invalidate_cache(media_id: int) -> None:
         keys = set()
         try:
             keys = cache.smembers(idx_key)  # type: ignore[attr-defined]
-        except Exception:
+        except MEDIA_CACHE_EXCEPTIONS:
             keys = set()
         for k in keys or []:
             cache.delete(k)
         try:
             cache.delete(idx_key)
-        except Exception:
+        except MEDIA_CACHE_EXCEPTIONS:
             pass
         if not keys:
             try:
@@ -247,9 +254,9 @@ def invalidate_cache(media_id: int) -> None:
                         cache.delete(k)
                     if not cursor:
                         break
-            except Exception:
+            except MEDIA_CACHE_EXCEPTIONS:
                 pass
-    except Exception:
+    except MEDIA_CACHE_EXCEPTIONS:
         return
 
 

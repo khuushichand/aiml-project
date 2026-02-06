@@ -38,7 +38,7 @@ try:  # Optional embeddings dependencies
     from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
         create_embeddings_batch,
     )
-except Exception:  # pragma: no cover - embeddings optional
+except (ImportError, AttributeError):  # pragma: no cover - embeddings optional
     ChromaDBManager = None  # type: ignore
     create_embeddings_batch = None  # type: ignore
 #
@@ -66,6 +66,24 @@ _STDOUT_HANDLER_ID: Optional[int] = None
 _FILE_HANDLER_ID: Optional[int] = None
 ALLOWED_MEDIAWIKI_DUMP_EXTENSIONS = frozenset({".xml", ".xml.bz2", ".xml.gz", ".bz2", ".gz"})
 MAX_MEDIAWIKI_FILE_SIZE_BYTES = 10 * 1024 * 1024 * 1024  # 10GB limit
+MEDIAWIKI_RUNTIME_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    RuntimeError,
+    json.JSONDecodeError,
+    InvalidStoragePathError,
+)
+MEDIAWIKI_EMBEDDING_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    RuntimeError,
+)
 
 
 def get_safe_log_path(log_filename: str) -> Optional[Path]:
@@ -124,7 +142,7 @@ def get_safe_log_path(log_filename: str) -> Optional[Path]:
             return None
 
         return log_path
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
         logger.error(f"Error creating safe log path: {e}")
         return None
 
@@ -171,7 +189,7 @@ def get_mediawiki_import_config() -> dict[str, Any]:
     if _mediawiki_import_config_cache is None:
         try:
             _mediawiki_import_config_cache = load_mediawiki_import_config() or {}
-        except Exception as exc:
+        except (OSError, yaml.YAMLError, InvalidStoragePathError, ValueError, TypeError) as exc:
             logger.warning(f"Failed to load mediawiki_import_config.yaml, using defaults: {exc}")
             _mediawiki_import_config_cache = {}
     return _mediawiki_import_config_cache
@@ -392,7 +410,7 @@ def parse_mediawiki_dump(
                         timestamp_obj = datetime.fromisoformat(ts_str)
                         if timestamp_obj.tzinfo is None:
                             timestamp_obj = timestamp_obj.replace(tzinfo=timezone.utc)
-                    except Exception:
+                    except (TypeError, ValueError):
                         timestamp_obj = datetime.now(timezone.utc)
                 else:
                     # Fallback timestamp if revision has none
@@ -608,7 +626,7 @@ def _store_mediawiki_chunks_in_vector_db(
             user_id=str(vector_user_id),
             user_embedding_config=user_embedding_config,
         )
-    except Exception as exc:
+    except MEDIAWIKI_EMBEDDING_EXCEPTIONS as exc:
         return False, f"Vector store init failed: {exc}"
 
     indexed_chunks = [
@@ -627,7 +645,7 @@ def _store_mediawiki_chunks_in_vector_db(
             user_app_config=user_embedding_config,
             model_id_override=model_id,
         )
-    except Exception as exc:
+    except MEDIAWIKI_EMBEDDING_EXCEPTIONS as exc:
         return False, f"Embedding generation failed: {exc}"
 
     if not embeddings:
@@ -665,7 +683,7 @@ def _store_mediawiki_chunks_in_vector_db(
             metadatas=metadatas,
             embedding_model_id_for_dim_check=model_id,
         )
-    except Exception as exc:
+    except MEDIAWIKI_EMBEDDING_EXCEPTIONS as exc:
         return False, f"Vector store write failed: {exc}"
 
     return True, f"Stored {len(texts)} chunks in vector store '{collection_name}'."
@@ -792,7 +810,7 @@ def process_single_item(
         logging.info(f"Successfully processed item '{title}' (Status: {processed_data['status']})")
         return processed_data
 
-    except Exception as e:
+    except MEDIAWIKI_RUNTIME_EXCEPTIONS as e:
         logging.error(f"Error processing item {title}: {str(e)}")
         logging.error(f"Exception details: {traceback.format_exc()}")
         # Ensure all keys from 'processed_data' are present in error return

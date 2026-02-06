@@ -39,6 +39,15 @@ ARXIV_DELAY = 0.1
 # Cache TTL for external enrichment lookups (seconds)
 EXTERNAL_ENRICHMENT_CACHE_TTL = 3600
 EXTERNAL_ENRICHMENT_COOLDOWN = 300
+REFERENCE_ENRICH_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    asyncio.TimeoutError,
+)
 
 # Reference section detection patterns
 REFERENCES_PARSER_VERSION = "4"
@@ -159,7 +168,7 @@ def _is_provider_cooldown(provider: str) -> bool:
             value = value.decode("utf-8")
         until_ts = float(value)
         return time.time() < until_ts
-    except Exception:
+    except REFERENCE_ENRICH_EXCEPTIONS:
         return False
 
 
@@ -171,7 +180,7 @@ def _set_provider_cooldown(provider: str) -> None:
     try:
         until_ts = time.time() + EXTERNAL_ENRICHMENT_COOLDOWN
         cache.setex(key, EXTERNAL_ENRICHMENT_COOLDOWN, str(until_ts))
-    except Exception:
+    except REFERENCE_ENRICH_EXCEPTIONS:
         return
 
 
@@ -484,7 +493,7 @@ async def _enrich_with_semantic_scholar(references: list[ReferenceEntry]) -> tup
                     enriched.append(enriched_ref)
                     enriched.extend(refs_to_enrich[idx + 1 :])
                     break
-            except Exception as e:
+            except REFERENCE_ENRICH_EXCEPTIONS as e:
                 logger.debug("DOI lookup failed for {}: {}", ref.doi, e)
 
         # Try to look up by arXiv ID
@@ -514,7 +523,7 @@ async def _enrich_with_semantic_scholar(references: list[ReferenceEntry]) -> tup
                     enriched.append(enriched_ref)
                     enriched.extend(refs_to_enrich[idx + 1 :])
                     break
-            except Exception as e:
+            except REFERENCE_ENRICH_EXCEPTIONS as e:
                 logger.debug("arXiv lookup failed for {}: {}", ref.arxiv_id, e)
 
         # Try title search as fallback
@@ -551,7 +560,7 @@ async def _enrich_with_semantic_scholar(references: list[ReferenceEntry]) -> tup
                     enriched.append(enriched_ref)
                     enriched.extend(refs_to_enrich[idx + 1 :])
                     break
-            except Exception as e:
+            except REFERENCE_ENRICH_EXCEPTIONS as e:
                 logger.debug("Title search failed for {}: {}", ref.title, e)
 
         enriched.append(enriched_ref)
@@ -695,7 +704,7 @@ async def _enrich_with_crossref(references: list[ReferenceEntry]) -> tuple[list[
                     enriched.append(enriched_ref)
                     enriched.extend(refs_to_enrich[idx + 1 :])
                     break
-            except Exception as e:
+            except REFERENCE_ENRICH_EXCEPTIONS as e:
                 logger.debug("Crossref lookup failed for {}: {}", ref.doi, e)
         enriched.append(enriched_ref)
 
@@ -745,7 +754,7 @@ async def _enrich_with_arxiv(references: list[ReferenceEntry]) -> tuple[list[Ref
                     enriched.append(enriched_ref)
                     enriched.extend(refs_to_enrich[idx + 1 :])
                     break
-            except Exception as e:
+            except REFERENCE_ENRICH_EXCEPTIONS as e:
                 logger.debug("arXiv lookup failed for {}: {}", ref.arxiv_id, e)
         enriched.append(enriched_ref)
 
@@ -961,7 +970,7 @@ async def get_document_references(
                             "Enriched references with arXiv for media_id={}",
                             media_id,
                         )
-        except Exception as e:
+        except REFERENCE_ENRICH_EXCEPTIONS as e:
             logger.warning(
                 "Failed to enrich references for media_id={}: {}",
                 media_id,
