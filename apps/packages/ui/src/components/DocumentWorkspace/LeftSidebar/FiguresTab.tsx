@@ -119,6 +119,7 @@ export const FiguresTab: React.FC = () => {
       ) : null}
       <Document
         file={documentUrl}
+        error={null}
         onLoadSuccess={(pdf) => {
           setNumPages(pdf.numPages > 0 ? pdf.numPages : 0)
           setLoadError(null)

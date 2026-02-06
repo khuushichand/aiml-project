@@ -2,6 +2,7 @@ import React from "react";
 import { ChevronDown, ChevronUp, Download, RefreshCcw } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { message } from "antd";
 import {
   tldwClient,
   type WorldBookProcessDiagnostic,
@@ -345,6 +346,16 @@ export const LorebookDebugPanel: React.FC<Props> = ({
         type: "application/json;charset=utf-8",
       });
       downloadBlob(blob, `lorebook-diagnostics-${serverChatId}.json`);
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error ? err.message : "Unknown error";
+      console.error(
+        "[handleExportDiagnostics] Failed during tldwClient.getChatLorebookDiagnostics / downloadBlob:",
+        err,
+      );
+      message.error(
+        `Failed to export lorebook diagnostics: ${errorMessage}`,
+      );
     } finally {
       setIsExporting(false);
     }
