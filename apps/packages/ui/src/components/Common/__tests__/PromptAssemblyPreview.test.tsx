@@ -8,6 +8,10 @@ import {
 } from "../Settings/PromptAssemblyPreview"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 
+vi.mock("@tanstack/react-query", () => ({
+  useQuery: vi.fn()
+}))
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, options?: { defaultValue?: string }) =>

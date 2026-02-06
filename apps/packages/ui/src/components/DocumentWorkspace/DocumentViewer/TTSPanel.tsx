@@ -39,13 +39,16 @@ export const TTSPanel: React.FC<TTSPanelProps> = ({ defaultText }) => {
     setSpeed
   } = useDocumentTTS()
 
+  const textToSpeak = defaultText || state.lastSpokenText
+  const canPlay = !!(textToSpeak || state.currentText)
+
   const handlePlayPause = () => {
     if (state.isPlaying) {
       pause()
     } else if (state.isPaused) {
       resume()
-    } else if (defaultText) {
-      speak(defaultText)
+    } else if (textToSpeak) {
+      speak(textToSpeak)
     }
   }
 
@@ -63,7 +66,7 @@ export const TTSPanel: React.FC<TTSPanelProps> = ({ defaultText }) => {
         <Tooltip title={state.isPlaying ? t("common:pause", "Pause") : t("common:play", "Play")}>
           <button
             onClick={handlePlayPause}
-            disabled={state.isLoading || (!defaultText && !state.currentText)}
+            disabled={state.isLoading || !canPlay}
             className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-white hover:bg-primary/90 disabled:bg-gray-300 disabled:cursor-not-allowed"
           >
             {state.isLoading ? (
@@ -88,11 +91,19 @@ export const TTSPanel: React.FC<TTSPanelProps> = ({ defaultText }) => {
       </div>
 
       {/* Current text preview */}
-      {state.currentText && (
+      {state.currentText ? (
         <div className="rounded border border-border bg-surface-hover p-2 text-xs text-text-secondary line-clamp-2">
           "{state.currentText}"
         </div>
-      )}
+      ) : !canPlay ? (
+        <div className="rounded border border-border bg-surface-hover p-2 text-xs text-text-muted text-center">
+          {t("option:documentWorkspace.ttsSelectHint", "Select text in the document to listen")}
+        </div>
+      ) : state.lastSpokenText ? (
+        <div className="rounded border border-border bg-surface-hover p-2 text-xs text-text-secondary line-clamp-2">
+          {t("option:documentWorkspace.ttsReplay", "Replay:")} "{state.lastSpokenText}"
+        </div>
+      ) : null}
 
       {/* Error message */}
       {state.error && (
@@ -163,7 +174,7 @@ export const TTSPanel: React.FC<TTSPanelProps> = ({ defaultText }) => {
           {isActive ? (
             <Volume2 className="h-4 w-4" />
           ) : (
-            <Volume2 className="h-4 w-4" />
+            <VolumeX className="h-4 w-4" />
           )}
         </button>
       </Tooltip>

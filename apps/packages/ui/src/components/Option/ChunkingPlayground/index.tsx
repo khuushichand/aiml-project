@@ -1035,7 +1035,7 @@ export const ChunkingPlayground: React.FC<ChunkingPlaygroundProps> = ({
                   : setOptionValue(name, v)
               }
               options={selectOptions}
-              allowClear
+              allowClear={resolved.default === undefined}
               disabled={disabled}
             />
           </Form.Item>

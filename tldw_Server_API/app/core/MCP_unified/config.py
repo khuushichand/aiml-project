@@ -8,8 +8,10 @@ No hardcoded secrets allowed.
 import json
 import os
 import secrets
+from ipaddress import ip_address, ip_network
 from functools import lru_cache
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from pydantic import Field, SecretStr
 
@@ -70,6 +72,84 @@ def _parse_env_list(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [str(item).strip() for item in value if str(item).strip()]
     return value
+
+
+def _is_loopback_origin(origin: str) -> bool:
+    """Return True when origin points to a loopback host."""
+    if not origin:
+        return False
+
+    raw = origin.strip()
+    if not raw or raw == "*":
+        return False
+
+    candidate = raw if "://" in raw else f"http://{raw}"
+    try:
+        parsed = urlparse(candidate)
+    except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS:
+        return False
+
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+
+    try:
+        return ip_address(host).is_loopback
+    except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS:
+        return False
+
+
+def _is_loopback_ip_entry(entry: str) -> bool:
+    """Return True when an IP/CIDR entry is loopback-only."""
+    if not entry:
+        return False
+
+    token = entry.strip()
+    if not token:
+        return False
+
+    network = token
+    if "/" not in token:
+        network = f"{token}/128" if ":" in token else f"{token}/32"
+    try:
+        return ip_network(network, strict=False).is_loopback
+    except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS:
+        return False
+
+
+def _is_local_only_safe_profile(config: "MCPConfig") -> bool:
+    """
+    Check whether MCP is constrained to a local-only safe profile.
+
+    This profile is intended for first-run development:
+    - Loopback-only IP allowlist
+    - Localhost/loopback WS + CORS origins
+    - No trust of forwarded headers
+    """
+    allowed_ips = list(config.allowed_client_ips or [])
+    if not allowed_ips:
+        return False
+    if not all(_is_loopback_ip_entry(entry) for entry in allowed_ips):
+        return False
+
+    ws_origins = list(config.ws_allowed_origins or [])
+    if not ws_origins:
+        return False
+    if not all(_is_loopback_origin(origin) for origin in ws_origins):
+        return False
+
+    cors_origins = list(config.cors_origins or [])
+    if not cors_origins:
+        return False
+    if not all(_is_loopback_origin(origin) for origin in cors_origins):
+        return False
+
+    if bool(config.trust_x_forwarded_for):
+        return False
+
+    return True
 
 
 class MCPConfig(BaseSettings):
@@ -453,14 +533,24 @@ def validate_config() -> bool:
             logger.error("API key salt not configured!")
             return False
 
-        # Require explicit secrets in production (avoid auto-generated defaults)
+        # In non-debug/non-test contexts, allow generated secrets only when
+        # MCP is constrained to local-only safe defaults.
         if not config.debug_mode and not test_mode:
-            if not _field_was_set(config, "jwt_secret_key"):
-                logger.error("MCP_JWT_SECRET must be set explicitly in production")
-                return False
-            if not _field_was_set(config, "api_key_salt"):
-                logger.error("MCP_API_KEY_SALT must be set explicitly in production")
-                return False
+            jwt_secret_explicit = _field_was_set(config, "jwt_secret_key")
+            api_salt_explicit = _field_was_set(config, "api_key_salt")
+            if not (jwt_secret_explicit and api_salt_explicit):
+                if _is_local_only_safe_profile(config):
+                    logger.warning(
+                        "MCP_JWT_SECRET/MCP_API_KEY_SALT are not explicitly set; "
+                        "using process-local generated secrets under local-only safe profile. "
+                        "Set explicit secrets for shared or production deployments."
+                    )
+                else:
+                    if not jwt_secret_explicit:
+                        logger.error("MCP_JWT_SECRET must be set explicitly when MCP is not local-only")
+                    if not api_salt_explicit:
+                        logger.error("MCP_API_KEY_SALT must be set explicitly when MCP is not local-only")
+                    return False
 
         # Validate database connection
         if not config.database_url:

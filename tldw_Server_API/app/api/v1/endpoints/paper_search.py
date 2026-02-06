@@ -24,6 +24,8 @@ try:
 except ImportError:
     aiohttp = None
 
+import contextlib
+
 from tldw_Server_API.app.api.v1.API_Deps.backpressure import guard_backpressure_and_quota
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
@@ -171,7 +173,7 @@ async def _download_pdf_bytes(
                         pass
                 data_b = getattr(_resp, "content", b"") or b""
                 if not isinstance(data_b, (bytes, bytearray)) or not data_b:
-                    raise HTTPException(status_code=502, detail="PDF download returned empty content")
+                    raise HTTPException(status_code=502, detail="PDF download returned empty content")  # noqa: TRY301
                 return bytes(data_b)
     except HTTPException:
         raise
@@ -187,10 +189,8 @@ async def _download_pdf_bytes(
         try:
             ctype = (r.headers.get("content-type") or "").lower()
         finally:
-            try:
+            with contextlib.suppress(_PAPER_SEARCH_NONCRITICAL_EXCEPTIONS):
                 await r.aclose()
-            except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
-                pass
         if ctype:
             is_pdf = ("application/pdf" in ctype) or ctype.endswith("/pdf")
             if enforce_pdf and not is_pdf:
@@ -202,9 +202,8 @@ async def _download_pdf_bytes(
         logger.debug(f"Preflight GET Range failed for {url}: {e}")
 
     # 2) Stream download to a temp path, then read bytes
-    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-    dest_path = Path(tmp.name)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        dest_path = Path(tmp.name)
     try:
         await _http_adownload(url=url, dest=dest_path, headers=headers or {}, timeout=timeout, retry=_RetryPolicy())
         data = dest_path.read_bytes()
@@ -303,7 +302,7 @@ async def paper_search_biorxiv(
         if error_message:
             _handle_provider_error(error_message)
         if items is None:
-            raise HTTPException(status_code=500, detail="BioRxiv search failed to return data.")
+            raise HTTPException(status_code=500, detail="BioRxiv search failed to return data.")  # noqa: TRY301
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -360,7 +359,7 @@ async def paper_search_medrxiv_by_doi(
         if error_message:
             _handle_provider_error(error_message)
         if not item:
-            raise HTTPException(status_code=404, detail="Paper not found for DOI")
+            raise HTTPException(status_code=404, detail="Paper not found for DOI")  # noqa: TRY301
         return BioRxivPaper(**item)
     except HTTPException:
         raise
@@ -485,10 +484,10 @@ async def pmc_oai_identify():
         if error_message:
             logger.error(f"PMC OAI Identify error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if info is None:
-            raise HTTPException(status_code=500, detail="PMC OAI Identify returned no data.")
+            raise HTTPException(status_code=500, detail="PMC OAI Identify returned no data.")  # noqa: TRY301
         return PMCOAIIdentifyResponse(info=info)
     except HTTPException:
         raise
@@ -503,15 +502,15 @@ async def pmc_oai_identify():
     summary="PMC OAI-PMH ListSets",
     tags=["paper-search"],
 )
-async def pmc_oai_list_sets(resumptionToken: Optional[str] = Query(None)):
+async def pmc_oai_list_sets(resumptionToken: Optional[str] = Query(None)):  # noqa: N803
     loop = asyncio.get_running_loop()
     try:
         items, next_token, error_message = await loop.run_in_executor(None, PMC_OAI.pmc_oai_list_sets, resumptionToken)
         if error_message:
             logger.error(f"PMC OAI ListSets error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if items is None:
             items = []
         return PMCOAIListSetsResponse(query_echo={"resumptionToken": resumptionToken}, items=[
@@ -534,11 +533,11 @@ async def pmc_oai_list_sets(resumptionToken: Optional[str] = Query(None)):
     tags=["paper-search"],
 )
 async def pmc_oai_list_identifiers(
-    metadataPrefix: str = Query("oai_dc"),
+    metadataPrefix: str = Query("oai_dc"),  # noqa: N803
     from_date: Optional[str] = Query(None, alias="from"),
     until_date: Optional[str] = Query(None, alias="until"),
     set_name: Optional[str] = Query(None, alias="set"),
-    resumptionToken: Optional[str] = Query(None),
+    resumptionToken: Optional[str] = Query(None),  # noqa: N803
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -548,8 +547,8 @@ async def pmc_oai_list_identifiers(
         if error_message:
             logger.error(f"PMC OAI ListIdentifiers error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if items is None:
             items = []
         return PMCOAIIdentifiersResponse(
@@ -571,11 +570,11 @@ async def pmc_oai_list_identifiers(
     tags=["paper-search"],
 )
 async def pmc_oai_list_records(
-    metadataPrefix: str = Query("oai_dc"),
+    metadataPrefix: str = Query("oai_dc"),  # noqa: N803
     from_date: Optional[str] = Query(None, alias="from"),
     until_date: Optional[str] = Query(None, alias="until"),
     set_name: Optional[str] = Query(None, alias="set"),
-    resumptionToken: Optional[str] = Query(None),
+    resumptionToken: Optional[str] = Query(None),  # noqa: N803
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -585,8 +584,8 @@ async def pmc_oai_list_records(
         if error_message:
             logger.error(f"PMC OAI ListRecords error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if items is None:
             items = []
         return PMCOAIListResponse(
@@ -607,17 +606,17 @@ async def pmc_oai_list_records(
     summary="PMC OAI-PMH GetRecord",
     tags=["paper-search"],
 )
-async def pmc_oai_get_record(identifier: str = Query(...), metadataPrefix: str = Query("oai_dc")):
+async def pmc_oai_get_record(identifier: str = Query(...), metadataPrefix: str = Query("oai_dc")):  # noqa: N803
     loop = asyncio.get_running_loop()
     try:
         item, error_message = await loop.run_in_executor(None, PMC_OAI.pmc_oai_get_record, identifier, metadataPrefix)
         if error_message:
             logger.error(f"PMC OAI GetRecord error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if not item:
-            raise HTTPException(status_code=404, detail="Record not found")
+            raise HTTPException(status_code=404, detail="Record not found")  # noqa: TRY301
         return PMCOAIRecord(**item)
     except HTTPException:
         raise
@@ -641,10 +640,10 @@ async def pmc_oa_identify():
         if error_message:
             logger.error(f"PMC OA Identify error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if info is None:
-            raise HTTPException(status_code=500, detail="PMC OA Identify returned no data.")
+            raise HTTPException(status_code=500, detail="PMC OA Identify returned no data.")  # noqa: TRY301
         return PMCOAIdentifyResponse(info=info)
     except HTTPException:
         raise
@@ -663,7 +662,7 @@ async def pmc_oa_query(
     from_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
     until_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
     format: Optional[str] = Query(None, description="'pdf' or 'tgz'"),
-    resumptionToken: Optional[str] = Query(None),
+    resumptionToken: Optional[str] = Query(None),  # noqa: N803
     id: Optional[str] = Query(None, description="PMC ID like PMC5334499"),
     pdf_only: bool = Query(False, description="Filter results to those with PDF links"),
     license_contains: Optional[str] = Query(None, description="Case-insensitive substring match on license"),
@@ -674,8 +673,8 @@ async def pmc_oa_query(
         if error_message:
             logger.error(f"PMC OA query error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if items is None:
             items = []
         # Server-side filters
@@ -701,9 +700,10 @@ async def pmc_oa_query(
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
 
-import io
+import contextlib  # noqa: E402, F811
+import io  # noqa: E402
 
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse  # noqa: E402, F811
 
 
 @router.get(
@@ -718,18 +718,18 @@ async def pmc_oa_fetch_pdf(pmcid: str = Query(..., description="PMCID numeric or
         if error_message:
             logger.error(f"PMC OA fetch-pdf error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
             if "http error" in error_message.lower():
                 nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
                 code = nums[0] if nums else 502
-                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if not content:
-            raise HTTPException(status_code=404, detail="PDF not found for PMCID")
+            raise HTTPException(status_code=404, detail="PDF not found for PMCID")  # noqa: TRY301
         stream = io.BytesIO(content)
         resp = StreamingResponse(stream, media_type="application/pdf")
         resp.headers["Content-Disposition"] = f"attachment; filename=\"{filename or 'article.pdf'}\""
-        return resp
+        return resp  # noqa: TRY300
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -777,14 +777,14 @@ async def pmc_oa_ingest_pdf(
         if error_message:
             logger.error(f"PMC OA download error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
             if "http error" in error_message.lower():
                 nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
                 code = nums[0] if nums else 502
-                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if not content:
-            raise HTTPException(status_code=404, detail="PDF not found for PMCID")
+            raise HTTPException(status_code=404, detail="PDF not found for PMCID")  # noqa: TRY301
 
         # 2) Process PDF bytes
         # Import locally to ease testing/monkeypatching
@@ -857,7 +857,7 @@ async def pmc_oa_ingest_pdf(
         combined_keywords = set(kw_list or [])
         if isinstance(extracted_keywords, list):
             combined_keywords.update(k.strip().lower() for k in extracted_keywords if k and isinstance(k, str))
-        final_keywords = sorted(list(combined_keywords))
+        final_keywords = sorted(combined_keywords)
 
         db_id = None
         media_uuid = None
@@ -954,10 +954,8 @@ def _http_session():
     Uses the shared http_client factory (trust_env=False) and sets basic headers.
     """
     client = _create_http_client(timeout=30)
-    try:
+    with contextlib.suppress(_PAPER_SEARCH_NONCRITICAL_EXCEPTIONS):
         client.headers.update({"Accept-Encoding": "gzip, deflate"})
-    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
-        pass
     return client
 
 
@@ -1040,7 +1038,7 @@ async def arxiv_ingest(
         # Persist with safe_metadata
         content_for_db = result.get('transcript') or result.get('content')
         if not content_for_db:
-            raise HTTPException(status_code=500, detail="Processing did not produce content")
+            raise HTTPException(status_code=500, detail="Processing did not produce content")  # noqa: TRY301
         from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
         sm = normalize_safe_metadata({
             "arxiv_id": arxiv_id,
@@ -1109,7 +1107,7 @@ async def arxiv_ingest(
                 chunks=chunks_for_sql,
             )
         )
-        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}  # noqa: TRY300
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -1187,7 +1185,7 @@ async def eartharxiv_ingest(
         )
         content_for_db = result.get('transcript') or result.get('content') or result.get('text')
         if not content_for_db:
-            raise HTTPException(status_code=500, detail="Processing did not produce content")
+            raise HTTPException(status_code=500, detail="Processing did not produce content")  # noqa: TRY301
 
         from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
         sm = normalize_safe_metadata({
@@ -1256,7 +1254,7 @@ async def eartharxiv_ingest(
                 chunks=chunks_for_sql,
             )
         )
-        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}  # noqa: TRY300
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -1305,15 +1303,15 @@ async def pubmed_ingest(
         """
         meta, err = PubMed.get_pubmed_by_id(pmid)
         if err:
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if not meta:
-            raise HTTPException(status_code=404, detail="PMID not found")
+            raise HTTPException(status_code=404, detail="PMID not found")  # noqa: TRY301
         pmcid = meta.get('pmcid')
         if not pmcid:
-            raise HTTPException(status_code=400, detail="No PMC Open Access PMCID available for this PMID")
+            raise HTTPException(status_code=400, detail="No PMC Open Access PMCID available for this PMID")  # noqa: TRY301
         content, filename, d_err = await loop.run_in_executor(None, PMC_OA.download_pmc_pdf, pmcid)
         if d_err or not content:
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
 
         from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
         kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
@@ -1341,7 +1339,7 @@ async def pubmed_ingest(
         )
         content_for_db = result.get('transcript') or result.get('content')
         if not content_for_db:
-            raise HTTPException(status_code=500, detail="Processing did not produce content")
+            raise HTTPException(status_code=500, detail="Processing did not produce content")  # noqa: TRY301
         from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
         sm = normalize_safe_metadata({
             "pmid": pmid,
@@ -1414,7 +1412,7 @@ async def pubmed_ingest(
                 chunks=chunks_for_sql,
             )
         )
-        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}  # noqa: TRY300
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -1458,13 +1456,13 @@ async def s2_ingest(
         """
         meta, err = Semantic_Scholar.get_paper_details_semantic_scholar(paper_id)
         if err:
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if not meta:
-            raise HTTPException(status_code=404, detail="paperId not found")
+            raise HTTPException(status_code=404, detail="paperId not found")  # noqa: TRY301
         oap = meta.get('openAccessPdf') or {}
         pdf_url = oap.get('url')
         if not pdf_url:
-            raise HTTPException(status_code=400, detail="No open access PDF available for this paper")
+            raise HTTPException(status_code=400, detail="No open access PDF available for this paper")  # noqa: TRY301
         content = await _download_pdf_bytes(pdf_url)
 
         from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
@@ -1493,7 +1491,7 @@ async def s2_ingest(
         )
         content_for_db = result.get('transcript') or result.get('content')
         if not content_for_db:
-            raise HTTPException(status_code=500, detail="Processing did not produce content")
+            raise HTTPException(status_code=500, detail="Processing did not produce content")  # noqa: TRY301
         from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
         sm = normalize_safe_metadata({
             "s2_paper_id": paper_id,
@@ -1527,7 +1525,7 @@ async def s2_ingest(
                 chunk_options={"method": chunk_method or "sentences", "max_size": chunk_size, "overlap": chunk_overlap} if perform_chunking else None,
             )
         )
-        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}  # noqa: TRY300
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -1557,13 +1555,13 @@ async def paper_search_biorxiv_by_doi(
         if error_message:
             logger.error(f"BioRxiv DOI provider error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
             # Map 404 style errors if provided
             if "HTTP Error: 404" in error_message or "HTTP Error: 400" in error_message:
-                raise HTTPException(status_code=404, detail="Paper not found for DOI")
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=404, detail="Paper not found for DOI")  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if not item:
-            raise HTTPException(status_code=404, detail="Paper not found for DOI")
+            raise HTTPException(status_code=404, detail="Paper not found for DOI")  # noqa: TRY301
         return BioRxivPaper(**item)
     except HTTPException:
         raise
@@ -1604,15 +1602,15 @@ async def paper_search_semantic_scholar(
         if error_message:
             logger.error(f"Semantic Scholar provider error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
             if "HTTP Error" in error_message:
                 # Try to extract status code from error string
                 nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
                 code = nums[0] if nums else 502
-                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if api_response_data is None or "data" not in api_response_data:
-            raise HTTPException(status_code=500, detail="Semantic Scholar search returned invalid data.")
+            raise HTTPException(status_code=500, detail="Semantic Scholar search returned invalid data.")  # noqa: TRY301
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -1683,10 +1681,10 @@ async def paper_search_biorxiv_pubs(
         if error_message:
             logger.error(f"BioRxiv pubs error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if items is None:
-            raise HTTPException(status_code=500, detail="BioRxiv pubs search failed to return data.")
+            raise HTTPException(status_code=500, detail="BioRxiv pubs search failed to return data.")  # noqa: TRY301
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -1749,15 +1747,15 @@ async def paper_search_pubmed(
         if error_message:
             logger.error(f"PubMed provider error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
             if "http error" in error_message.lower():
                 # Try to extract status code
                 nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
                 code = nums[0] if nums else 502
-                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if items is None:
-            raise HTTPException(status_code=500, detail="PubMed search failed to return data.")
+            raise HTTPException(status_code=500, detail="PubMed search failed to return data.")  # noqa: TRY301
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -1805,9 +1803,9 @@ async def paper_search_biorxiv_pubs_by_doi(
         if error_message:
             logger.error(f"BioRxiv pubs by-doi error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
         if not item:
-            raise HTTPException(status_code=404, detail="Published record not found for DOI")
+            raise HTTPException(status_code=404, detail="Published record not found for DOI")  # noqa: TRY301
         if not include_abstracts and isinstance(item, dict):
             item["preprint_abstract"] = None
         return BioRxivPublishedRecord(**item)
@@ -1848,10 +1846,10 @@ async def paper_search_biorxiv_publisher(
         if err:
             logger.error(f"BioRxiv publisher error: {err}")
             if "timed out" in err.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if items is None:
-            raise HTTPException(status_code=500, detail="BioRxiv publisher search failed to return data.")
+            raise HTTPException(status_code=500, detail="BioRxiv publisher search failed to return data.")  # noqa: TRY301
         total_pages = math.ceil(total / search_params.results_per_page) if search_params.results_per_page > 0 else 0
         if total == 0:
             total_pages = 0
@@ -1901,10 +1899,10 @@ async def paper_search_biorxiv_pub(
         if err:
             logger.error(f"BioRxiv pub error: {err}")
             if "timed out" in err.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if items is None:
-            raise HTTPException(status_code=500, detail="BioRxiv pub search failed to return data.")
+            raise HTTPException(status_code=500, detail="BioRxiv pub search failed to return data.")  # noqa: TRY301
         total_pages = math.ceil(total / search_params.results_per_page) if search_params.results_per_page > 0 else 0
         if total == 0:
             total_pages = 0
@@ -1956,10 +1954,10 @@ async def paper_search_biorxiv_funder(
         if err:
             logger.error(f"BioRxiv funder error: {err}")
             if "timed out" in err.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if items is None:
-            raise HTTPException(status_code=500, detail="BioRxiv funder search failed to return data.")
+            raise HTTPException(status_code=500, detail="BioRxiv funder search failed to return data.")  # noqa: TRY301
         total_pages = math.ceil(total / search_params.results_per_page) if search_params.results_per_page > 0 else 0
         if total == 0:
             total_pages = 0
@@ -2001,8 +1999,8 @@ async def paper_search_biorxiv_summary(
         if err:
             logger.error(f"BioRxiv summary error: {err}")
             if "timed out" in err.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if items is None:
             items = []
         return BioRxivSummaryResponse(query_echo={"interval": search_params.interval}, items=items)  # type: ignore[arg-type]
@@ -2028,8 +2026,8 @@ async def paper_search_biorxiv_usage(
         if err:
             logger.error(f"BioRxiv usage error: {err}")
             if "timed out" in err.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if items is None:
             items = []
         return BioRxivUsageResponse(query_echo={"interval": search_params.interval}, items=items)  # type: ignore[arg-type]
@@ -2219,7 +2217,7 @@ async def biorxiv_raw_usage(
 
 # -------------------- Additional Provider Endpoints (Scaffold) --------------------
 
-from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
+from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (  # noqa: E402
     ChemRxivSearchRequestForm,
     DOIRequestForm,
     GenericPaper,
@@ -2231,21 +2229,21 @@ from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
     IngestBatchResultItem,
     SimpleVenueSearchForm,
 )
-from tldw_Server_API.app.core.Third_Party import HAL as HAL
-from tldw_Server_API.app.core.Third_Party import IACR as IACR
-from tldw_Server_API.app.core.Third_Party import OSF as OSF
-from tldw_Server_API.app.core.Third_Party import ChemRxiv as ChemRxiv
-from tldw_Server_API.app.core.Third_Party import Crossref as Crossref
-from tldw_Server_API.app.core.Third_Party import EarthRxiv as EarthRxiv
-from tldw_Server_API.app.core.Third_Party import Elsevier_Scopus as Elsevier_Scopus
-from tldw_Server_API.app.core.Third_Party import Figshare as Figshare
-from tldw_Server_API.app.core.Third_Party import IEEE_Xplore as IEEE_Xplore
-from tldw_Server_API.app.core.Third_Party import OpenAlex as OpenAlex
-from tldw_Server_API.app.core.Third_Party import RePEc as RePEc
-from tldw_Server_API.app.core.Third_Party import Springer_Nature as Springer_Nature
-from tldw_Server_API.app.core.Third_Party import Unpaywall as Unpaywall
-from tldw_Server_API.app.core.Third_Party import Vixra as Vixra
-from tldw_Server_API.app.core.Third_Party import Zenodo as Zenodo
+from tldw_Server_API.app.core.Third_Party import HAL as HAL  # noqa: E402
+from tldw_Server_API.app.core.Third_Party import IACR as IACR  # noqa: E402
+from tldw_Server_API.app.core.Third_Party import OSF as OSF  # noqa: E402
+from tldw_Server_API.app.core.Third_Party import ChemRxiv as ChemRxiv  # noqa: E402
+from tldw_Server_API.app.core.Third_Party import Crossref as Crossref  # noqa: E402
+from tldw_Server_API.app.core.Third_Party import EarthRxiv as EarthRxiv  # noqa: E402
+from tldw_Server_API.app.core.Third_Party import Elsevier_Scopus as Elsevier_Scopus  # noqa: E402
+from tldw_Server_API.app.core.Third_Party import Figshare as Figshare  # noqa: E402
+from tldw_Server_API.app.core.Third_Party import IEEE_Xplore as IEEE_Xplore  # noqa: E402
+from tldw_Server_API.app.core.Third_Party import OpenAlex as OpenAlex  # noqa: E402
+from tldw_Server_API.app.core.Third_Party import RePEc as RePEc  # noqa: E402
+from tldw_Server_API.app.core.Third_Party import Springer_Nature as Springer_Nature  # noqa: E402
+from tldw_Server_API.app.core.Third_Party import Unpaywall as Unpaywall  # noqa: E402
+from tldw_Server_API.app.core.Third_Party import Vixra as Vixra  # noqa: E402
+from tldw_Server_API.app.core.Third_Party import Zenodo as Zenodo  # noqa: E402
 
 
 def _extract_http_status(err: str) -> Optional[int]:
@@ -2320,7 +2318,7 @@ def _handle_provider_error(err: str) -> None:
 
 # ---------------- RePEc / CitEc Endpoints ----------------
 
-from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (
+from tldw_Server_API.app.api.v1.schemas.paper_search_schemas import (  # noqa: E402
     RepecCitationsResponse,
 )
 
@@ -2342,7 +2340,7 @@ async def repec_by_handle(handle: str = Query(..., min_length=8)):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="RePEc handle not found")
+            raise HTTPException(status_code=404, detail="RePEc handle not found")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -2364,7 +2362,7 @@ async def repec_citations(handle: str = Query(..., min_length=8)):
         if err:
             _handle_provider_error(err)
         if not data:
-            raise HTTPException(status_code=404, detail="CitEc record not found for handle")
+            raise HTTPException(status_code=404, detail="CitEc record not found for handle")  # noqa: TRY301
         return RepecCitationsResponse(**data)
     except HTTPException:
         raise
@@ -2397,7 +2395,7 @@ async def paper_search_ieee(search_params: IEEESearchRequestForm = Depends()):
         if err:
             _handle_provider_error(err)
         if items is None:
-            raise HTTPException(status_code=500, detail="IEEE search failed to return data.")
+            raise HTTPException(status_code=500, detail="IEEE search failed to return data.")  # noqa: TRY301
         total_pages = math.ceil(total / search_params.results_per_page) if search_params.results_per_page > 0 else 0
         if total == 0:
             total_pages = 0
@@ -2435,7 +2433,7 @@ async def paper_search_ieee_by_doi(params: DOIRequestForm = Depends()):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="IEEE paper not found for DOI")
+            raise HTTPException(status_code=404, detail="IEEE paper not found for DOI")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -2457,7 +2455,7 @@ async def paper_search_ieee_by_id(article_number: str = Query(...)):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="IEEE paper not found for article number")
+            raise HTTPException(status_code=404, detail="IEEE paper not found for article number")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -2489,7 +2487,7 @@ async def paper_search_springer(search_params: SimpleVenueSearchForm = Depends()
         if err:
             _handle_provider_error(err)
         if items is None:
-            raise HTTPException(status_code=500, detail="Springer search failed to return data.")
+            raise HTTPException(status_code=500, detail="Springer search failed to return data.")  # noqa: TRY301
         total_pages = math.ceil(total / search_params.results_per_page) if search_params.results_per_page > 0 else 0
         if total == 0:
             total_pages = 0
@@ -2526,7 +2524,7 @@ async def paper_search_springer_by_doi(params: DOIRequestForm = Depends()):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="Springer paper not found for DOI")
+            raise HTTPException(status_code=404, detail="Springer paper not found for DOI")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -2565,7 +2563,7 @@ async def paper_search_scopus(
         if err:
             _handle_provider_error(err)
         if items is None:
-            raise HTTPException(status_code=500, detail="Scopus search failed to return data.")
+            raise HTTPException(status_code=500, detail="Scopus search failed to return data.")  # noqa: TRY301
         total_pages = math.ceil(total / results_per_page) if results_per_page > 0 else 0
         if total == 0:
             total_pages = 0
@@ -2602,7 +2600,7 @@ async def paper_search_scopus_by_doi(params: DOIRequestForm = Depends()):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="Scopus record not found for DOI")
+            raise HTTPException(status_code=404, detail="Scopus record not found for DOI")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -2673,7 +2671,7 @@ async def paper_search_acm_by_doi(params: DOIRequestForm = Depends()):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="ACM record not found for DOI")
+            raise HTTPException(status_code=404, detail="ACM record not found for DOI")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -2743,7 +2741,7 @@ async def paper_search_wiley_by_doi(params: DOIRequestForm = Depends()):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="Wiley record not found for DOI")
+            raise HTTPException(status_code=404, detail="Wiley record not found for DOI")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -2794,7 +2792,7 @@ async def ingest_by_doi(
         if err:
             _handle_provider_error(err)
         if not pdf_url:
-            raise HTTPException(status_code=404, detail="No Open Access PDF found for DOI")
+            raise HTTPException(status_code=404, detail="No Open Access PDF found for DOI")  # noqa: TRY301
 
         # 2) Download PDF (HEAD check + atomic download)
         content = await _download_pdf_bytes(pdf_url)
@@ -2899,7 +2897,7 @@ async def ingest_by_doi(
                 chunks=chunks_for_sql,
             )
         )
-        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid, "source_pdf": pdf_url}
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid, "source_pdf": pdf_url}  # noqa: TRY300
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -3337,7 +3335,7 @@ async def ingest_batch(
         except TypeError:
             encoded_item = jsonable_encoder(it)
             if not isinstance(encoded_item, dict):
-                raise HTTPException(status_code=400, detail="Invalid batch ingest payload")
+                raise HTTPException(status_code=400, detail="Invalid batch ingest payload")  # noqa: B904
             item_dict = encoded_item
         results.append(await _process_one(item_dict))
 
@@ -3374,7 +3372,7 @@ async def chemrxiv_items(search: ChemRxivSearchRequestForm = Depends()):
         if err:
             _handle_provider_error(err)
         if items is None:
-            raise HTTPException(status_code=500, detail="ChemRxiv search failed to return data.")
+            raise HTTPException(status_code=500, detail="ChemRxiv search failed to return data.")  # noqa: TRY301
         page = (search.skip // max(1, search.limit)) + 1
         total_pages = math.ceil(total / search.limit) if search.limit > 0 else 0
         return GenericSearchResponse(
@@ -3404,14 +3402,14 @@ async def chemrxiv_items(search: ChemRxivSearchRequestForm = Depends()):
     summary="Get ChemRxiv item by ID",
     tags=["paper-search"],
 )
-async def chemrxiv_item_by_id(itemId: str = Query(..., min_length=3)):
+async def chemrxiv_item_by_id(itemId: str = Query(..., min_length=3)):  # noqa: N803
     loop = asyncio.get_running_loop()
     try:
         item, err = await loop.run_in_executor(None, ChemRxiv.get_item_by_id, itemId)
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="ChemRxiv item not found")
+            raise HTTPException(status_code=404, detail="ChemRxiv item not found")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -3433,7 +3431,7 @@ async def chemrxiv_item_by_doi(doi: str = Query(..., min_length=3)):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="ChemRxiv item not found for DOI")
+            raise HTTPException(status_code=404, detail="ChemRxiv item not found for DOI")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -3489,10 +3487,10 @@ async def chemrxiv_version():
 async def chemrxiv_oai(
     verb: str = Query(..., description="OAI verb"),
     identifier: Optional[str] = Query(None),
-    metadataPrefix: Optional[str] = Query(None),
+    metadataPrefix: Optional[str] = Query(None),  # noqa: N803
     from_date: Optional[str] = Query(None, alias="from"),
     until_date: Optional[str] = Query(None, alias="until"),
-    resumptionToken: Optional[str] = Query(None),
+    resumptionToken: Optional[str] = Query(None),  # noqa: N803
     set_name: Optional[str] = Query(None, alias="set"),
 ):
     loop = asyncio.get_running_loop()
@@ -3574,7 +3572,7 @@ async def earthrxiv_search(
         if err:
             _handle_provider_error(err)
         if items is None:
-            raise HTTPException(status_code=500, detail="EarthArXiv search failed to return data.")
+            raise HTTPException(status_code=500, detail="EarthArXiv search failed to return data.")  # noqa: TRY301
         total_pages = math.ceil(total / results_per_page) if results_per_page > 0 else 0
         return GenericSearchResponse(
             query_echo={"term": term, "from_date": from_date},
@@ -3604,7 +3602,7 @@ async def earthrxiv_by_id(osf_id: str = Query(..., min_length=3)):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="EarthArXiv item not found")
+            raise HTTPException(status_code=404, detail="EarthArXiv item not found")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -3626,7 +3624,7 @@ async def earthrxiv_by_doi(doi: str = Query(..., min_length=3)):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="EarthArXiv item not found for DOI")
+            raise HTTPException(status_code=404, detail="EarthArXiv item not found for DOI")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -3658,7 +3656,7 @@ async def osf_search(search: OSFSearchRequestForm = Depends()):
         if err:
             _handle_provider_error(err)
         if items is None:
-            raise HTTPException(status_code=500, detail="OSF search failed to return data.")
+            raise HTTPException(status_code=500, detail="OSF search failed to return data.")  # noqa: TRY301
         total_pages = math.ceil(total / search.results_per_page) if search.results_per_page > 0 else 0
         return GenericSearchResponse(
             query_echo={
@@ -3692,7 +3690,7 @@ async def osf_by_id(osf_id: str = Query(..., min_length=3)):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="OSF preprint not found")
+            raise HTTPException(status_code=404, detail="OSF preprint not found")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -3714,7 +3712,7 @@ async def osf_by_doi(doi: str = Query(..., min_length=3)):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="OSF preprint not found for DOI")
+            raise HTTPException(status_code=404, detail="OSF preprint not found for DOI")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -3757,7 +3755,7 @@ async def osf_ingest(
         if perr:
             _handle_provider_error(perr)
         if not pdf_url:
-            raise HTTPException(status_code=404, detail="No primary file download URL found for this preprint")
+            raise HTTPException(status_code=404, detail="No primary file download URL found for this preprint")  # noqa: TRY301
 
         content = await _download_pdf_bytes(pdf_url)
 
@@ -3794,7 +3792,7 @@ async def osf_ingest(
 
         content_for_db = result.get('transcript') or result.get('content')
         if not content_for_db:
-            raise HTTPException(status_code=500, detail="Processing did not produce content")
+            raise HTTPException(status_code=500, detail="Processing did not produce content")  # noqa: TRY301
 
         # Safe metadata
         from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
@@ -3865,7 +3863,7 @@ async def osf_ingest(
                 chunks=chunks_for_sql,
             )
         )
-        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}  # noqa: TRY300
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -3944,7 +3942,7 @@ async def zenodo_search(
         if err:
             _handle_provider_error(err)
         if items is None:
-            raise HTTPException(status_code=500, detail="Zenodo search failed to return data.")
+            raise HTTPException(status_code=500, detail="Zenodo search failed to return data.")  # noqa: TRY301
         total_pages = math.ceil(total / results_per_page) if results_per_page > 0 else 0
         return GenericSearchResponse(
             query_echo={"q": q, "type": type, "subtype": subtype, "communities": communities},
@@ -3974,7 +3972,7 @@ async def zenodo_by_id(record_id: str = Query(..., min_length=1)):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="Zenodo record not found")
+            raise HTTPException(status_code=404, detail="Zenodo record not found")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -3996,7 +3994,7 @@ async def zenodo_by_doi(doi: str = Query(..., min_length=3)):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="Zenodo record not found for DOI")
+            raise HTTPException(status_code=404, detail="Zenodo record not found for DOI")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -4013,10 +4011,10 @@ async def zenodo_by_doi(doi: str = Query(..., min_length=3)):
 async def zenodo_oai(
     verb: str = Query(..., description="OAI verb"),
     identifier: Optional[str] = Query(None),
-    metadataPrefix: Optional[str] = Query(None),
+    metadataPrefix: Optional[str] = Query(None),  # noqa: N803
     from_date: Optional[str] = Query(None, alias="from"),
     until_date: Optional[str] = Query(None, alias="until"),
-    resumptionToken: Optional[str] = Query(None),
+    resumptionToken: Optional[str] = Query(None),  # noqa: N803
     set_name: Optional[str] = Query(None, alias="set"),
 ):
     loop = asyncio.get_running_loop()
@@ -4080,7 +4078,7 @@ async def zenodo_ingest(
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="Zenodo record not found")
+            raise HTTPException(status_code=404, detail="Zenodo record not found")  # noqa: TRY301
         title_meta = item.get('title')
         doi_meta = item.get('doi')
         pdf_url = item.get('pdf_url')
@@ -4092,7 +4090,7 @@ async def zenodo_ingest(
             if raw and isinstance(raw, dict):
                 pdf_url = Zenodo.extract_pdf_from_raw(raw)
         if not pdf_url:
-            raise HTTPException(status_code=404, detail="No PDF link found for this Zenodo record")
+            raise HTTPException(status_code=404, detail="No PDF link found for this Zenodo record")  # noqa: TRY301
 
         # 2) Download PDF
         content = await _download_pdf_bytes(pdf_url)
@@ -4124,7 +4122,7 @@ async def zenodo_ingest(
         )
         content_for_db = result.get('transcript') or result.get('content') or result.get('text')
         if not content_for_db:
-            raise HTTPException(status_code=500, detail="Processing did not produce content")
+            raise HTTPException(status_code=500, detail="Processing did not produce content")  # noqa: TRY301
 
         from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
         sm = normalize_safe_metadata({
@@ -4193,7 +4191,7 @@ async def zenodo_ingest(
                 chunks=chunks_for_sql,
             )
         )
-        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}  # noqa: TRY300
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -4224,7 +4222,7 @@ async def figshare_search(
         if err:
             _handle_provider_error(err)
         if items is None:
-            raise HTTPException(status_code=500, detail="Figshare search failed to return data.")
+            raise HTTPException(status_code=500, detail="Figshare search failed to return data.")  # noqa: TRY301
         total_pages = math.ceil(total / results_per_page) if results_per_page > 0 else 0
         return GenericSearchResponse(
             query_echo={"q": q, "search_for": search_for, "order": order, "order_direction": order_direction},
@@ -4254,7 +4252,7 @@ async def figshare_by_id(article_id: str = Query(..., min_length=1)):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="Figshare article not found")
+            raise HTTPException(status_code=404, detail="Figshare article not found")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -4276,7 +4274,7 @@ async def figshare_by_doi(doi: str = Query(..., min_length=3)):
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="Figshare item not found for DOI")
+            raise HTTPException(status_code=404, detail="Figshare item not found for DOI")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -4293,10 +4291,10 @@ async def figshare_by_doi(doi: str = Query(..., min_length=3)):
 async def figshare_oai(
     verb: str = Query(..., description="OAI verb"),
     identifier: Optional[str] = Query(None),
-    metadataPrefix: Optional[str] = Query(None),
+    metadataPrefix: Optional[str] = Query(None),  # noqa: N803
     from_date: Optional[str] = Query(None, alias="from"),
     until_date: Optional[str] = Query(None, alias="until"),
-    resumptionToken: Optional[str] = Query(None),
+    resumptionToken: Optional[str] = Query(None),  # noqa: N803
     set_name: Optional[str] = Query(None, alias="set"),
 ):
     loop = asyncio.get_running_loop()
@@ -4355,12 +4353,12 @@ async def figshare_ingest(
         if err:
             _handle_provider_error(err)
         if not raw:
-            raise HTTPException(status_code=404, detail="Figshare article not found")
+            raise HTTPException(status_code=404, detail="Figshare article not found")  # noqa: TRY301
         pdf_url = Figshare.extract_pdf_download_url(raw)
         title_meta = raw.get("title")
         doi_meta = raw.get("doi")
         if not pdf_url:
-            raise HTTPException(status_code=404, detail="No PDF link found for this Figshare article")
+            raise HTTPException(status_code=404, detail="No PDF link found for this Figshare article")  # noqa: TRY301
 
         # 2) Download PDF
         content = await _download_pdf_bytes(pdf_url)
@@ -4392,7 +4390,7 @@ async def figshare_ingest(
         )
         content_for_db = result.get('transcript') or result.get('content') or result.get('text')
         if not content_for_db:
-            raise HTTPException(status_code=500, detail="Processing did not produce content")
+            raise HTTPException(status_code=500, detail="Processing did not produce content")  # noqa: TRY301
 
         from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
         sm = normalize_safe_metadata({
@@ -4461,7 +4459,7 @@ async def figshare_ingest(
                 chunks=chunks_for_sql,
             )
         )
-        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}  # noqa: TRY300
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -4504,7 +4502,7 @@ async def figshare_ingest_by_doi(
         if err:
             _handle_provider_error(err)
         if not item or not item.get("id"):
-            raise HTTPException(status_code=404, detail="Figshare item not found for DOI")
+            raise HTTPException(status_code=404, detail="Figshare item not found for DOI")  # noqa: TRY301
         # Reuse ingestion logic using article_id
         article_id = str(item["id"])  # normalized GenericPaper id is a string
 
@@ -4513,12 +4511,12 @@ async def figshare_ingest_by_doi(
         if err2:
             _handle_provider_error(err2)
         if not raw:
-            raise HTTPException(status_code=404, detail="Figshare article not found")
+            raise HTTPException(status_code=404, detail="Figshare article not found")  # noqa: TRY301
         pdf_url = Figshare.extract_pdf_download_url(raw)
         title_meta = raw.get("title")
         doi_meta = raw.get("doi")
         if not pdf_url:
-            raise HTTPException(status_code=404, detail="No PDF link found for this Figshare article")
+            raise HTTPException(status_code=404, detail="No PDF link found for this Figshare article")  # noqa: TRY301
 
         content = await _download_pdf_bytes(pdf_url)
 
@@ -4548,7 +4546,7 @@ async def figshare_ingest_by_doi(
         )
         content_for_db = result.get('transcript') or result.get('content') or result.get('text')
         if not content_for_db:
-            raise HTTPException(status_code=500, detail="Processing did not produce content")
+            raise HTTPException(status_code=500, detail="Processing did not produce content")  # noqa: TRY301
 
         from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
         sm = normalize_safe_metadata({
@@ -4616,7 +4614,7 @@ async def figshare_ingest_by_doi(
                 chunks=chunks_for_sql,
             )
         )
-        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}  # noqa: TRY300
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -4649,7 +4647,7 @@ async def hal_search(
         if err:
             _handle_provider_error(err)
         if items is None:
-            raise HTTPException(status_code=500, detail="HAL search failed to return data.")
+            raise HTTPException(status_code=500, detail="HAL search failed to return data.")  # noqa: TRY301
         total_pages = math.ceil(total / results_per_page) if results_per_page > 0 else 0
         return GenericSearchResponse(
             query_echo={"q": q, "fl": fl, "fq": fqs, "sort": sort, "scope": scope},
@@ -4713,7 +4711,7 @@ async def hal_by_id(docid: str = Query(..., min_length=1), scope: Optional[str] 
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="HAL doc not found")
+            raise HTTPException(status_code=404, detail="HAL doc not found")  # noqa: TRY301
         return GenericPaper(**item)
     except HTTPException:
         raise
@@ -4756,13 +4754,13 @@ async def hal_ingest(
         if err:
             _handle_provider_error(err)
         if not item:
-            raise HTTPException(status_code=404, detail="HAL doc not found")
+            raise HTTPException(status_code=404, detail="HAL doc not found")  # noqa: TRY301
         raw_item = item  # already normalized includes pdf_url best-effort
         pdf_url = (raw_item or {}).get("pdf_url") or None
         title_meta = (raw_item or {}).get("title")
         doi_meta = (raw_item or {}).get("doi")
         if not pdf_url:
-            raise HTTPException(status_code=404, detail="No PDF link found for this HAL document")
+            raise HTTPException(status_code=404, detail="No PDF link found for this HAL document")  # noqa: TRY301
 
         content = await _download_pdf_bytes(pdf_url)
 
@@ -4792,7 +4790,7 @@ async def hal_ingest(
         )
         content_for_db = result.get('transcript') or result.get('content') or result.get('text')
         if not content_for_db:
-            raise HTTPException(status_code=500, detail="Processing did not produce content")
+            raise HTTPException(status_code=500, detail="Processing did not produce content")  # noqa: TRY301
 
         from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
         sm = normalize_safe_metadata({
@@ -4860,7 +4858,7 @@ async def hal_ingest(
                 chunks=chunks_for_sql,
             )
         )
-        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}  # noqa: TRY300
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -4919,7 +4917,7 @@ async def vixra_ingest(
         if err:
             _handle_provider_error(err)
         if not item or not item.get('pdf_url'):
-            raise HTTPException(status_code=404, detail="viXra PDF not found for ID")
+            raise HTTPException(status_code=404, detail="viXra PDF not found for ID")  # noqa: TRY301
         pdf_url = item['pdf_url']
         # Download PDF (set Accept header to prefer PDF)
         content = await _download_pdf_bytes(pdf_url, headers={"Accept": "application/pdf, */*"})
@@ -4951,7 +4949,7 @@ async def vixra_ingest(
         )
         content_for_db = result.get('transcript') or result.get('content') or result.get('text')
         if not content_for_db:
-            raise HTTPException(status_code=500, detail="Processing did not produce content")
+            raise HTTPException(status_code=500, detail="Processing did not produce content")  # noqa: TRY301
         from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
         sm = normalize_safe_metadata({
             "vixra_id": vid,
@@ -5017,7 +5015,7 @@ async def vixra_ingest(
                 chunks=chunks_for_sql,
             )
         )
-        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
+        return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}  # noqa: TRY300
     except HTTPException:
         raise
     except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS as e:
@@ -5073,10 +5071,10 @@ async def paper_search_arxiv_by_id(
         if error_message:
             logger.error(f"arXiv by-id provider error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if not item:
-            raise HTTPException(status_code=404, detail="Paper not found for arXiv ID")
+            raise HTTPException(status_code=404, detail="Paper not found for arXiv ID")  # noqa: TRY301
         return ArxivPaper(**item)
     except HTTPException:
         raise
@@ -5104,14 +5102,14 @@ async def paper_search_semantic_scholar_by_id(
         if error_message:
             logger.error(f"Semantic Scholar by-id provider error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
             if "HTTP Error" in error_message:
                 nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
                 code = nums[0] if nums else 502
-                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if not data:
-            raise HTTPException(status_code=404, detail="Paper not found for paperId")
+            raise HTTPException(status_code=404, detail="Paper not found for paperId")  # noqa: TRY301
         if data.get("openAccessPdf") is None:
             data.pop("openAccessPdf", None)
         return SemanticScholarPaper(**data)
@@ -5141,13 +5139,13 @@ async def paper_search_pubmed_by_id(
         if error_message:
             logger.error(f"PubMed by-id provider error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)  # noqa: TRY301
             if "http error" in error_message.lower():
                 nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
                 code = nums[0] if nums else 502
-                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
+                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)  # noqa: TRY301
         if not item:
-            raise HTTPException(status_code=404, detail="Record not found for PMID")
+            raise HTTPException(status_code=404, detail="Record not found for PMID")  # noqa: TRY301
         return PubMedPaper(**item)
     except HTTPException:
         raise

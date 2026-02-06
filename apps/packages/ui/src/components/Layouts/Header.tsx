@@ -4,7 +4,6 @@ import { useNavigate } from "react-router-dom"
 import { isMac } from "@/hooks/keyboard/useKeyboardShortcuts"
 import { getTitleById, updateHistory } from "@/db"
 import { useMessageOption } from "~/hooks/useMessageOption"
-import { useTimelineStore } from "@/store/timeline"
 import { useSetting } from "@/hooks/useSetting"
 import { HEADER_SHORTCUTS_EXPANDED_SETTING } from "@/services/settings/ui-settings"
 import { ChatHeader } from "./ChatHeader"
@@ -29,15 +28,11 @@ export const Header: React.FC<Props> = ({
   const [headerShortcutsExpanded, setHeaderShortcutsExpanded] = useSetting(
     HEADER_SHORTCUTS_EXPANDED_SETTING
   )
-  const { clearChat, streaming, historyId, temporaryChat } = useMessageOption()
-  const openTimeline = useTimelineStore((state) => state.openTimeline)
+  const { clearChat, historyId, temporaryChat } = useMessageOption()
   const navigate = useNavigate()
   const [chatTitle, setChatTitle] = React.useState("")
   const [isEditingTitle, setIsEditingTitle] = React.useState(false)
   const [ttsClipsOpen, setTtsClipsOpen] = React.useState(false)
-
-  const canOpenTimeline = Boolean(historyId) && !temporaryChat && historyId !== "temp"
-  const showTimelineButton = canOpenTimeline && !streaming
 
   React.useEffect(() => {
     ;(async () => {
@@ -61,11 +56,6 @@ export const Header: React.FC<Props> = ({
       console.error("Failed to update chat title", e)
     }
   }
-
-  const handleOpenTimeline = React.useCallback(() => {
-    if (!historyId || temporaryChat || historyId === "temp") return
-    void openTimeline(historyId)
-  }, [historyId, openTimeline, temporaryChat])
 
   const openCommandPalette = React.useCallback(() => {
     if (typeof window === "undefined") return
@@ -113,10 +103,7 @@ export const Header: React.FC<Props> = ({
         onOpenCommandPalette={openCommandPalette}
         onOpenShortcutsModal={openShortcutsModal}
         onOpenSettings={() => navigate("/settings/tldw")}
-        onOpenTtsClips={() => setTtsClipsOpen(true)}
         onClearChat={clearChat}
-        showTimelineButton={showTimelineButton}
-        onOpenTimeline={handleOpenTimeline}
         shortcutsExpanded={headerShortcutsExpanded}
         onToggleShortcuts={toggleHeaderShortcuts}
         commandKeyLabel={cmdKey}

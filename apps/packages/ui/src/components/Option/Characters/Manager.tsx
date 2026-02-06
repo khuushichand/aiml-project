@@ -425,34 +425,33 @@ const applyCharacterMetadataToExtensions = (
   return undefined
 }
 
-const hasAdvancedData = (record: any, extensionsValue: string): boolean =>
-  (() => {
-    const normalizedRecord = {
-      ...record,
-      extensions: record?.extensions ?? extensionsValue
-    }
-    const defaultAuthorNote = readDefaultAuthorNoteFromRecord(normalizedRecord)
-    const generationSettings = readGenerationSettingsFromRecord(normalizedRecord)
-    const hasGenerationSettings =
-      typeof generationSettings.temperature !== "undefined" ||
-      typeof generationSettings.top_p !== "undefined" ||
-      typeof generationSettings.repetition_penalty !== "undefined" ||
-      (Array.isArray(generationSettings.stop) &&
-        generationSettings.stop.length > 0)
-    return !!(
-      record.personality ||
-      record.scenario ||
-      record.post_history_instructions ||
-      record.message_example ||
-      record.creator_notes ||
-      (record.alternate_greetings && record.alternate_greetings.length > 0) ||
-      record.creator ||
-      record.character_version ||
-      hasGenerationSettings ||
-      defaultAuthorNote ||
-      extensionsValue
-    )
-  })()
+const hasAdvancedData = (record: any, extensionsValue: string): boolean => {
+  const normalizedRecord = {
+    ...record,
+    extensions: record?.extensions ?? extensionsValue
+  }
+  const defaultAuthorNote = readDefaultAuthorNoteFromRecord(normalizedRecord)
+  const generationSettings = readGenerationSettingsFromRecord(normalizedRecord)
+  const hasGenerationSettings =
+    typeof generationSettings.temperature !== "undefined" ||
+    typeof generationSettings.top_p !== "undefined" ||
+    typeof generationSettings.repetition_penalty !== "undefined" ||
+    (Array.isArray(generationSettings.stop) &&
+      generationSettings.stop.length > 0)
+  return !!(
+    record.personality ||
+    record.scenario ||
+    record.post_history_instructions ||
+    record.message_example ||
+    record.creator_notes ||
+    (record.alternate_greetings && record.alternate_greetings.length > 0) ||
+    record.creator ||
+    record.character_version ||
+    hasGenerationSettings ||
+    defaultAuthorNote ||
+    extensionsValue
+  )
+}
 
 const buildCharacterPayload = (values: any): Record<string, any> => {
   const payload: Record<string, any> = {
@@ -2569,50 +2568,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                           name
                         })}
                         onClick={(e) => {
-                          lastEditTriggerRef.current = e.currentTarget
-                          setEditId(record.id || record.slug || record.name)
-                          setEditVersion(record?.version ?? null)
-                          const ex = record.extensions
-                          const extensionsValue =
-                            ex && typeof ex === "object" && !Array.isArray(ex)
-                              ? JSON.stringify(ex, null, 2)
-                              : typeof ex === "string"
-                                ? ex
-                                : ""
-                          const promptPreset = readPromptPresetFromExtensions(record.extensions)
-                          const defaultAuthorNote = readDefaultAuthorNoteFromRecord(record)
-                          const generationSettings = readGenerationSettingsFromRecord(record)
-                          editForm.setFieldsValue({
-                            name: record.name,
-                            description: record.description,
-                            avatar: createAvatarValue(record.avatar_url, record.image_base64),
-                            tags: record.tags,
-                            greeting:
-                              record.greeting ||
-                              record.first_message ||
-                              record.greet,
-                            system_prompt: record.system_prompt,
-                            personality: record.personality,
-                            scenario: record.scenario,
-                            post_history_instructions:
-                              record.post_history_instructions,
-                            message_example: record.message_example,
-                            creator_notes: record.creator_notes,
-                            alternate_greetings: normalizeAlternateGreetings(
-                              record.alternate_greetings
-                            ),
-                            creator: record.creator,
-                            character_version: record.character_version,
-                            prompt_preset: promptPreset,
-                            default_author_note: defaultAuthorNote,
-                            generation_temperature: generationSettings.temperature,
-                            generation_top_p: generationSettings.top_p,
-                            generation_repetition_penalty: generationSettings.repetition_penalty,
-                            generation_stop_strings: generationSettings.stop?.join("\n") || "",
-                            extensions: extensionsValue
-                          })
-                          setShowEditAdvanced(hasAdvancedData(record, extensionsValue))
-                          setOpenEdit(true)
+                          handleEdit(record, e.currentTarget)
                         }}>
                         <Pen className="w-4 h-4" />
                         <span className="hidden sm:inline text-xs font-medium">
@@ -2679,49 +2635,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                             key: 'duplicate',
                             icon: <Copy className="w-4 h-4" />,
                             label: duplicateLabel,
-                            onClick: () => {
-                              const ex = record.extensions
-                              const extensionsValue =
-                                ex && typeof ex === "object" && !Array.isArray(ex)
-                                  ? JSON.stringify(ex, null, 2)
-                                  : typeof ex === "string"
-                                    ? ex
-                                    : ""
-                              const promptPreset = readPromptPresetFromExtensions(record.extensions)
-                              const defaultAuthorNote = readDefaultAuthorNoteFromRecord(record)
-                              const generationSettings = readGenerationSettingsFromRecord(record)
-                              createForm.setFieldsValue({
-                                name: `${record.name || ""} (copy)`,
-                                description: record.description,
-                                avatar: createAvatarValue(record.avatar_url, record.image_base64),
-                                tags: record.tags,
-                                greeting:
-                                  record.greeting ||
-                                  record.first_message ||
-                                  record.greet,
-                                system_prompt: record.system_prompt,
-                                personality: record.personality,
-                                scenario: record.scenario,
-                                post_history_instructions:
-                                  record.post_history_instructions,
-                                message_example: record.message_example,
-                                creator_notes: record.creator_notes,
-                                alternate_greetings: normalizeAlternateGreetings(
-                                  record.alternate_greetings
-                                ),
-                                creator: record.creator,
-                                character_version: record.character_version,
-                                prompt_preset: promptPreset,
-                                default_author_note: defaultAuthorNote,
-                                generation_temperature: generationSettings.temperature,
-                                generation_top_p: generationSettings.top_p,
-                                generation_repetition_penalty: generationSettings.repetition_penalty,
-                                generation_stop_strings: generationSettings.stop?.join("\n") || "",
-                                extensions: extensionsValue
-                              })
-                              setShowCreateAdvanced(hasAdvancedData(record, extensionsValue))
-                              setOpen(true)
-                            }
+                            onClick: () => handleDuplicate(record)
                           },
                           { type: 'divider' as const },
                           {

@@ -23,8 +23,10 @@ Sources:
 - `POST /sources`
 - `GET /sources`
 - `GET /sources/{source_id}`
+- `GET /sources/{source_id}/seen` (dedup/seen counters + optional recent keys)
 - `PATCH /sources/{source_id}`
 - `DELETE /sources/{source_id}`
+- `DELETE /sources/{source_id}/seen` (clear dedup/seen state, optional backoff reset)
 - `POST /sources/{source_id}/test` (preview without ingestion)
 - `POST /sources/bulk` (bulk create)
 - `GET /sources/export` (OPML)
@@ -196,6 +198,24 @@ Filter semantics for OPML export:
 - Repeated `group` values are OR-ed.
 - `tag` + `group` are combined with AND semantics.
 - Unknown `group` ids return HTTP 200 with an empty OPML source list.
+
+## Dedup/seen tools
+
+Inspect per-source seen state:
+```bash
+curl "$BASE/api/v1/watchlists/sources/123/seen?keys_limit=20" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Clear seen state for a source (also clears source backoff by default):
+```bash
+curl -X DELETE "$BASE/api/v1/watchlists/sources/123/seen?clear_backoff=true" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Admin-only inspect/reset for another user:
+- Add `target_user_id=<user_id>` query param.
+- Non-admin calls with `target_user_id` return `403` (`watchlists_admin_required_for_target_user`).
 
 ## Ingestion and persistence
 

@@ -213,8 +213,9 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
         if (!cancelled) {
           updatePageMetrics({ height: viewport.height, width: viewport.width })
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
+          console.warn('[PdfDocument] Failed to compute initial page metrics', error)
           updatePageMetrics({ height: 0, width: 0 })
         }
       }
@@ -223,7 +224,7 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
     return () => {
       cancelled = true
     }
-  }, [pdfInstance, zoomLevel])
+  }, [pdfInstance, zoomLevel, updatePageMetrics])
 
   const scale = zoomLevel / 100
   const pageGap = 16

@@ -1491,6 +1491,50 @@ class WatchlistsDatabase:
                 keys.append(k)
         return keys
 
+    def get_seen_item_stats(self, source_id: int) -> dict[str, Any]:
+        row = self.backend.execute(
+            "SELECT COUNT(*) AS seen_count, MAX(last_seen_at) AS latest_seen_at "
+            "FROM source_seen_items WHERE source_id = ?",
+            (source_id,),
+        ).first
+        if not row:
+            return {"seen_count": 0, "latest_seen_at": None}
+        try:
+            count_val = int(row.get("seen_count") or 0)
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
+            count_val = 0
+        latest_seen_at = None
+        try:
+            latest_seen_at = row.get("latest_seen_at")
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
+            latest_seen_at = None
+        return {"seen_count": count_val, "latest_seen_at": latest_seen_at}
+
+    def clear_seen_items(self, source_id: int) -> int:
+        row = self.backend.execute(
+            "SELECT COUNT(*) AS cnt FROM source_seen_items WHERE source_id = ?",
+            (source_id,),
+        ).first
+        try:
+            before_count = int((row or {}).get("cnt") or 0)
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
+            before_count = 0
+        self.backend.execute(
+            "DELETE FROM source_seen_items WHERE source_id = ?",
+            (source_id,),
+        )
+        return before_count
+
+    def reset_source_backoff_state(self, source_id: int) -> bool:
+        result = self.backend.execute(
+            "UPDATE sources SET defer_until = NULL, consec_not_modified = 0 WHERE id = ? AND user_id = ?",
+            (source_id, self.user_id),
+        )
+        try:
+            return int(getattr(result, "rowcount", 0) or 0) > 0
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
+            return False
+
     # ------------------------
     # Claim cluster subscriptions
     # ------------------------

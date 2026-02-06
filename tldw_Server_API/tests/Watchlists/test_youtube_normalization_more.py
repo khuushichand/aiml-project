@@ -328,3 +328,93 @@ def test_channel_http_no_www_normalizes_to_https(client_with_user: TestClient):
     assert r.status_code == 200, r.text
     assert r.headers.get("X-YouTube-Normalized") == "1"
     assert r.headers.get("X-YouTube-Canonical-URL") == "https://www.youtube.com/feeds/videos.xml?channel_id=UC123NO"
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "https://www.youtube.com/@somehandle",
+        "https://www.youtube.com/c/SomeVanity",
+    ],
+)
+def test_update_rejects_handle_and_vanity_urls(client_with_user: TestClient, bad_url: str):
+    c = client_with_user
+    created = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Baseline RSS",
+            "url": "https://example.com/base.xml",
+            "source_type": "rss",
+        },
+    )
+    assert created.status_code == 200, created.text
+    sid = created.json()["id"]
+
+    r = c.patch(
+        f"/api/v1/watchlists/sources/{sid}",
+        json={"source_type": "rss", "url": bad_url},
+    )
+    assert r.status_code == 400
+    assert "invalid_youtube_rss_url" in r.text
+
+
+def test_bulk_rejects_handle_and_vanity_urls_per_entry(client_with_user: TestClient):
+    c = client_with_user
+    payload = {
+        "sources": [
+            {
+                "name": "Handle",
+                "url": "https://www.youtube.com/@somehandle",
+                "source_type": "rss",
+            },
+            {
+                "name": "Vanity",
+                "url": "https://www.youtube.com/c/SomeVanity",
+                "source_type": "rss",
+            },
+            {
+                "name": "Channel OK",
+                "url": "https://www.youtube.com/channel/UCEDGE",
+                "source_type": "rss",
+            },
+        ]
+    }
+    r = c.post("/api/v1/watchlists/sources/bulk", json=payload)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["total"] == 3
+    assert data["created"] == 1
+    assert data["errors"] == 2
+    by_name = {it.get("name"): it for it in data.get("items", [])}
+    assert by_name["Handle"]["status"] == "error"
+    assert "invalid_youtube_rss_url" in (by_name["Handle"].get("error") or "")
+    assert by_name["Vanity"]["status"] == "error"
+    assert "invalid_youtube_rss_url" in (by_name["Vanity"].get("error") or "")
+    assert by_name["Channel OK"]["status"] == "created"
+    assert by_name["Channel OK"]["url"] == "https://www.youtube.com/feeds/videos.xml?channel_id=UCEDGE"
+
+
+def test_opml_import_rejects_handle_and_vanity_urls(client_with_user: TestClient):
+    c = client_with_user
+    opml = """<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head><title>YT Handle/Vanity</title></head>
+  <body>
+    <outline text="Handle URL" xmlUrl="https://www.youtube.com/@somehandle" />
+    <outline text="Vanity URL" xmlUrl="https://www.youtube.com/c/SomeVanity" />
+    <outline text="Playlist URL" xmlUrl="https://www.youtube.com/playlist?list=PLSAFE" />
+  </body>
+</opml>
+"""
+    r = c.post(
+        "/api/v1/watchlists/sources/import",
+        files={"file": ("watchlists.opml", opml.encode("utf-8"), "text/xml")},
+    )
+    assert r.status_code == 200, r.text
+    by_name = {it.get("name"): it for it in r.json().get("items", [])}
+    assert by_name["Handle URL"]["status"] == "error"
+    assert "invalid_youtube_rss_url" in (by_name["Handle URL"].get("error") or "")
+    assert by_name["Vanity URL"]["status"] == "error"
+    assert "invalid_youtube_rss_url" in (by_name["Vanity URL"].get("error") or "")
+    assert by_name["Playlist URL"]["status"] == "created"
+    assert by_name["Playlist URL"]["url"] == "https://www.youtube.com/feeds/videos.xml?playlist_id=PLSAFE"

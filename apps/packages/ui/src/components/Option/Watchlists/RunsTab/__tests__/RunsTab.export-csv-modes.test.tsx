@@ -3,15 +3,16 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { RunsTab } from "../RunsTab"
 
-const fetchJobRunsMock = vi.fn()
-const exportRunsCsvMock = vi.fn()
-const fetchWatchlistJobsMock = vi.fn()
-const fetchWatchlistRunsMock = vi.fn()
-const messageSuccessMock = vi.fn()
-const messageWarningMock = vi.fn()
-const messageErrorMock = vi.fn()
-
-let storeState: Record<string, any> = {}
+const mockState = vi.hoisted(() => ({
+  fetchJobRunsMock: vi.fn(),
+  exportRunsCsvMock: vi.fn(),
+  fetchWatchlistJobsMock: vi.fn(),
+  fetchWatchlistRunsMock: vi.fn(),
+  messageSuccessMock: vi.fn(),
+  messageWarningMock: vi.fn(),
+  messageErrorMock: vi.fn(),
+  storeStateRef: { current: {} as Record<string, any> },
+}))
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -74,9 +75,9 @@ vi.mock("antd", () => {
     Space,
     Tag,
     message: {
-      success: messageSuccessMock,
-      warning: messageWarningMock,
-      error: messageErrorMock,
+      success: mockState.messageSuccessMock,
+      warning: mockState.messageWarningMock,
+      error: mockState.messageErrorMock,
     },
   }
 })
@@ -86,14 +87,15 @@ vi.mock("@/utils/dateFormatters", () => ({
 }))
 
 vi.mock("@/services/watchlists", () => ({
-  fetchJobRuns: (...args: any[]) => fetchJobRunsMock(...args),
-  exportRunsCsv: (...args: any[]) => exportRunsCsvMock(...args),
-  fetchWatchlistJobs: (...args: any[]) => fetchWatchlistJobsMock(...args),
-  fetchWatchlistRuns: (...args: any[]) => fetchWatchlistRunsMock(...args)
+  fetchJobRuns: (...args: any[]) => mockState.fetchJobRunsMock(...args),
+  exportRunsCsv: (...args: any[]) => mockState.exportRunsCsvMock(...args),
+  fetchWatchlistJobs: (...args: any[]) => mockState.fetchWatchlistJobsMock(...args),
+  fetchWatchlistRuns: (...args: any[]) => mockState.fetchWatchlistRunsMock(...args)
 }))
 
 vi.mock("@/store/watchlists", () => ({
-  useWatchlistsStore: (selector: (state: any) => unknown) => selector(storeState)
+  useWatchlistsStore: (selector: (state: any) => unknown) =>
+    selector(mockState.storeStateRef.current)
 }))
 
 vi.mock("@/components/Option/Watchlists/RunsTab/RunDetailDrawer", () => ({
@@ -126,11 +128,11 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
 describe("RunsTab CSV export modes", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    storeState = baseState()
-    fetchWatchlistRunsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
-    fetchJobRunsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
-    fetchWatchlistJobsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
-    exportRunsCsvMock.mockResolvedValue("filter_key,count\nkw:alpha,2\n")
+    mockState.storeStateRef.current = baseState()
+    mockState.fetchWatchlistRunsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
+    mockState.fetchJobRunsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
+    mockState.fetchWatchlistJobsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
+    mockState.exportRunsCsvMock.mockResolvedValue("filter_key,count\nkw:alpha,2\n")
 
     if (typeof URL.createObjectURL !== "function") {
       Object.defineProperty(URL, "createObjectURL", {
@@ -159,7 +161,7 @@ describe("RunsTab CSV export modes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Export CSV" }))
 
     await waitFor(() => {
-      expect(exportRunsCsvMock).toHaveBeenCalledWith(
+      expect(mockState.exportRunsCsvMock).toHaveBeenCalledWith(
         expect.objectContaining({
           scope: "global",
           include_tallies: true,
@@ -170,8 +172,8 @@ describe("RunsTab CSV export modes", () => {
   })
 
   it("requests per-run tallies CSV for job scope when per-run mode is selected", async () => {
-    storeState = baseState({ runsJobFilter: 42 })
-    exportRunsCsvMock.mockResolvedValue(
+    mockState.storeStateRef.current = baseState({ runsJobFilter: 42 })
+    mockState.exportRunsCsvMock.mockResolvedValue(
       "id,job_id,status,started_at,finished_at,items_found,items_ingested,filters_include,filters_exclude,filters_flag,filter_tallies_json\n"
     )
 
@@ -183,7 +185,7 @@ describe("RunsTab CSV export modes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Export CSV" }))
 
     await waitFor(() => {
-      expect(exportRunsCsvMock).toHaveBeenCalledWith(
+      expect(mockState.exportRunsCsvMock).toHaveBeenCalledWith(
         expect.objectContaining({
           scope: "job",
           job_id: 42,
@@ -194,4 +196,3 @@ describe("RunsTab CSV export modes", () => {
     })
   })
 })
-

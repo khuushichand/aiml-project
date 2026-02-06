@@ -7,20 +7,58 @@ import {
 
 async function dismissWelcomeOverlay(page: import('@playwright/test').Page) {
   const welcomeHeading = page.getByText(/Welcome to tldw Assistant/i).first()
-  const appeared = await welcomeHeading
-    .waitFor({ state: 'visible', timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false)
+  const isTimeoutError = (err: unknown): err is Error =>
+    err instanceof Error && err.name === 'TimeoutError'
+
+  let appeared = true
+  try {
+    await welcomeHeading.waitFor({ state: 'visible', timeout: 3_000 })
+  } catch (err) {
+    if (isTimeoutError(err)) {
+      appeared = false
+    } else {
+      throw new Error('Failed waiting for welcome overlay to appear', { cause: err })
+    }
+  }
   if (!appeared) return
 
   const dialog = page.locator('[role="dialog"]').filter({ has: welcomeHeading }).first()
   const closeButton = dialog.getByRole('button', { name: /close/i }).first()
-  if (await closeButton.isVisible().catch(() => false)) {
-    await closeButton.click()
-  } else {
-    await page.keyboard.press('Escape').catch(() => undefined)
+
+  let closeVisible = false
+  try {
+    closeVisible = await closeButton.isVisible()
+  } catch (err) {
+    if (!isTimeoutError(err)) {
+      throw new Error('Failed checking welcome overlay close button visibility', { cause: err })
+    }
   }
-  await welcomeHeading.waitFor({ state: 'hidden', timeout: 8_000 }).catch(() => undefined)
+
+  if (closeVisible) {
+    try {
+      await closeButton.click()
+    } catch (err) {
+      if (!isTimeoutError(err)) {
+        throw new Error('Failed clicking welcome overlay close button', { cause: err })
+      }
+    }
+  } else {
+    try {
+      await page.keyboard.press('Escape')
+    } catch (err) {
+      if (!isTimeoutError(err)) {
+        throw new Error('Failed pressing Escape to dismiss welcome overlay', { cause: err })
+      }
+    }
+  }
+
+  try {
+    await welcomeHeading.waitFor({ state: 'hidden', timeout: 8_000 })
+  } catch (err) {
+    if (!isTimeoutError(err)) {
+      throw new Error('Failed waiting for welcome overlay to hide', { cause: err })
+    }
+  }
 }
 
 test.describe('Knowledge RAG workspace UX', () => {
@@ -41,7 +79,14 @@ test.describe('Knowledge RAG workspace UX', () => {
       .locator('[role="dialog"]')
       .filter({ has: page.getByText(/What would you like to do/i).first() })
       .first()
-    const dialogAlreadyOpen = await workflowDialog.isVisible().catch(() => false)
+    let dialogAlreadyOpen = false
+    try {
+      dialogAlreadyOpen = await workflowDialog.isVisible()
+    } catch (error) {
+      if (!(error instanceof Error && error.name === 'TimeoutError')) {
+        throw new Error('Failed checking workflow dialog visibility', { cause: error })
+      }
+    }
     if (!dialogAlreadyOpen) {
       const workflowButton = page.getByTestId('workflow-button').first()
       await expect(workflowButton).toBeVisible()
@@ -87,9 +132,14 @@ test.describe('Knowledge RAG workspace UX', () => {
     const ragUnsupportedCallout = page.getByText(
       /RAG search is not available on this server/i
     )
-    const calloutVisible = await ragUnsupportedCallout
-      .isVisible()
-      .catch(() => false)
+    let calloutVisible = false
+    try {
+      calloutVisible = await ragUnsupportedCallout.isVisible()
+    } catch (error) {
+      if (!(error instanceof Error && error.name === 'TimeoutError')) {
+        throw new Error('Failed checking RAG unsupported callout visibility', { cause: error })
+      }
+    }
 
     if (!calloutVisible) {
       // Auto-RAG toggle should be visible and wired to chatMode
@@ -151,12 +201,24 @@ test.describe('Knowledge RAG workspace UX', () => {
         '[data-playground-knowledge-trigger="true"], button[aria-label*="Search & Context"], button[title*="Search & Context"]'
       )
       .first()
-    const triggerAlreadyVisible = await contextButton
-      .isVisible()
-      .catch(() => false)
+    let triggerAlreadyVisible = false
+    try {
+      triggerAlreadyVisible = await contextButton.isVisible()
+    } catch (error) {
+      if (!(error instanceof Error && error.name === 'TimeoutError')) {
+        throw new Error('Failed checking Search & Context trigger visibility', { cause: error })
+      }
+    }
     if (!triggerAlreadyVisible) {
       const startChatCard = page.getByText(/Start Chatting/i).first()
-      const startChatVisible = await startChatCard.isVisible().catch(() => false)
+      let startChatVisible = false
+      try {
+        startChatVisible = await startChatCard.isVisible()
+      } catch (error) {
+        if (!(error instanceof Error && error.name === 'TimeoutError')) {
+          throw new Error('Failed checking Start Chatting card visibility', { cause: error })
+        }
+      }
       if (startChatVisible) {
         await startChatCard.click()
       }

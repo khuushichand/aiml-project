@@ -8,10 +8,8 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - Docs updated (API: runs/tallies/OPML examples/gating table; Product PRD; Ops runbook). 410 shim for legacy Subscriptions is live.
 
 ## Remaining To-Do (v1 sign-off)
-- Runs role gating verified end-to-end against real auth user objects (API + UI), with server enforcement toggle support (`WATCHLISTS_RUNS_REQUIRE_ADMIN`, fallback `NEXT_PUBLIC_RUNS_REQUIRE_ADMIN`).
-- Optional: widen YouTube normalization edge tests (keep policy of 400 for handles/vanity).
-- Optional: add include_tallies aggregation mode to global runs CSV if admins need it.
-- Optional: deterministic rate-limit header assertions under a non-test configuration for OPML import and filters endpoints.
+- No additional v1 sign-off blockers tracked in this plan.
+- Ongoing work remains under Stage 5 (scale/reliability).
 
 ## Stage 1: QA, Deprecations, and Docs Finalization
 **Goal**: Ship Phase B wrap-up with hardened inputs, finalized docs, and visible metrics.
@@ -89,7 +87,7 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - Optional: TTS brief generated and attached when item count below threshold.
   - tldw_Server_API/tests/Watchlists/test_tts_brief_optional.py
 
-**Status**: In Progress (template version history + version-aware rendering landed; regenerate now supports template version selection; delivery status is surfaced in outputs UI; optional TTS remains future work)
+**Status**: Completed (template version history + version-aware rendering landed; regenerate supports template version selection; delivery status is surfaced in outputs UI; optional small-run TTS brief auto-generation is covered by integration tests)
 
 ---
 
@@ -111,7 +109,10 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - Rate-limit headers deterministic under non-test mode with configured backend.
   - tldw_Server_API/tests/Watchlists/test_rate_limit_headers_strict.py
 
-**Status**: In Progress (scheduler/dedup tooling are broader platform items)
+**Status**: In Progress (dedup/seen inspect-reset API + DB support shipped; scheduler controls and perf sanity tests added; broader scale validation remains)
+
+Stage 5 scale target matrix is tracked in:
+- `Docs/Plans/IMPLEMENTATION_PLAN_watchlists_scale_validation_dedup_ui.md` (Stage 1 complete with concrete latency/throughput/memory/error budgets and endpoint validation matrix)
 
 ---
 
@@ -128,4 +129,7 @@ Checklist (quick)
 - [x] Preview endpoint tests (RSS + site; include-only on/off)
 - [x] Rate-limit headers strict test (non-test mode via monkeypatch)
 - [x] Verify Runs role gating against real user object (or disable via env)
-- [ ] Optional: CSV include_tallies aggregation mode (API + UI)
+- [x] Optional: CSV include_tallies aggregation mode (API + UI)
+- [x] Stage 5: scheduler controls focused tests (`test_scheduler_controls.py`)
+- [x] Stage 5: dedup/seen inspect-reset tools + tests (`test_dedup_seen_tools.py`)
+- [x] Stage 5: performance sanity test scaffold (`test_perf_scenarios.py`)

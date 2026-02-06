@@ -32,6 +32,10 @@ type LorebookDebugData = {
   diagnostics: LorebookDiagnosticRow[];
 };
 
+const EXPORT_DIAGNOSTICS_PAGE_SIZE = 200;
+const EXPORT_DIAGNOSTICS_MAX_PAGES = 500;
+const EXPORT_DIAGNOSTICS_CONCURRENCY = 4;
+
 const normalizeCharacterId = (value: unknown): number | null => {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -139,7 +143,7 @@ export const LorebookDebugPanel: React.FC<Props> = ({
         text: scanText,
         character_id: characterId,
         scan_depth: 3,
-        token_budget: 420,
+        token_budget: DEFAULT_LOREBOOK_TOKEN_BUDGET,
         recursive_scanning: true,
       });
 
@@ -176,7 +180,7 @@ export const LorebookDebugPanel: React.FC<Props> = ({
 
       return {
         entriesMatched: Number(
-          response?.entries_matched || diagnostics.length || 0,
+          response?.entries_matched ?? diagnostics.length ?? 0,
         ),
         tokensUsed: Number(response?.tokens_used || 0),
         booksUsed: Number(response?.books_used || 0),
@@ -217,54 +221,114 @@ export const LorebookDebugPanel: React.FC<Props> = ({
 
     setIsExporting(true);
     try {
-      const pageSize = 200;
-      let page = 1;
       let totalTurnsWithDiagnostics = 0;
       let characterId: string | null = null;
+      let turnsTruncated = false;
       const turns: Array<Record<string, unknown>> = [];
-
-      while (true) {
-        const response = await tldwClient.getChatLorebookDiagnostics(
-          serverChatId,
-          {
-            page,
-            size: pageSize,
-            order: "asc",
-          },
-        );
-
-        if (page === 1) {
-          totalTurnsWithDiagnostics = Number(
-            response?.total_turns_with_diagnostics || 0,
-          );
-          characterId =
-            response?.character_id !== undefined &&
-            response?.character_id !== null
-              ? String(response.character_id)
-              : null;
-        }
-
-        const batch = Array.isArray(response?.turns) ? response.turns : [];
+      const toExportTurn = (turn: any): Record<string, unknown> => ({
+        turn_index: turn.turn_number,
+        assistant_message_id: turn.message_id,
+        assistant_created_at: turn.timestamp || null,
+        assistant_preview: turn.message_preview,
+        entries_matched: Array.isArray(turn.diagnostics)
+          ? turn.diagnostics.length
+          : 0,
+        diagnostics: Array.isArray(turn.diagnostics) ? turn.diagnostics : [],
+      });
+      const appendBatch = (batch: any[]) => {
         for (const turn of batch) {
-          turns.push({
-            turn_index: turn.turn_number,
-            assistant_message_id: turn.message_id,
-            assistant_created_at: turn.timestamp || null,
-            assistant_preview: turn.message_preview,
-            entries_matched: Array.isArray(turn.diagnostics)
-              ? turn.diagnostics.length
-              : 0,
-            diagnostics: Array.isArray(turn.diagnostics) ? turn.diagnostics : [],
-          });
+          turns.push(toExportTurn(turn));
+        }
+      };
+
+      const firstPageResponse = await tldwClient.getChatLorebookDiagnostics(
+        serverChatId,
+        {
+          page: 1,
+          size: EXPORT_DIAGNOSTICS_PAGE_SIZE,
+          order: "asc",
+        },
+      );
+
+      totalTurnsWithDiagnostics = Number(
+        firstPageResponse?.total_turns_with_diagnostics || 0,
+      );
+      characterId =
+        firstPageResponse?.character_id !== undefined &&
+        firstPageResponse?.character_id !== null
+          ? String(firstPageResponse.character_id)
+          : null;
+      const firstBatch = Array.isArray(firstPageResponse?.turns)
+        ? firstPageResponse.turns
+        : [];
+      appendBatch(firstBatch);
+
+      if (totalTurnsWithDiagnostics > 0) {
+        const totalPages = Math.ceil(
+          totalTurnsWithDiagnostics / EXPORT_DIAGNOSTICS_PAGE_SIZE,
+        );
+        const cappedTotalPages = Math.min(
+          totalPages,
+          EXPORT_DIAGNOSTICS_MAX_PAGES,
+        );
+        if (totalPages > EXPORT_DIAGNOSTICS_MAX_PAGES) {
+          turnsTruncated = true;
         }
 
-        if (batch.length === 0) break;
-        if (totalTurnsWithDiagnostics > 0 && turns.length >= totalTurnsWithDiagnostics) {
-          break;
+        for (
+          let startPage = 2;
+          startPage <= cappedTotalPages;
+          startPage += EXPORT_DIAGNOSTICS_CONCURRENCY
+        ) {
+          const endPage = Math.min(
+            startPage + EXPORT_DIAGNOSTICS_CONCURRENCY - 1,
+            cappedTotalPages,
+          );
+          const pageWindow = Array.from(
+            { length: endPage - startPage + 1 },
+            (_, offset) => startPage + offset,
+          );
+          const windowResponses = await Promise.all(
+            pageWindow.map((page) =>
+              tldwClient.getChatLorebookDiagnostics(serverChatId, {
+                page,
+                size: EXPORT_DIAGNOSTICS_PAGE_SIZE,
+                order: "asc",
+              }),
+            ),
+          );
+
+          for (const windowResponse of windowResponses) {
+            const batch = Array.isArray(windowResponse?.turns)
+              ? windowResponse.turns
+              : [];
+            appendBatch(batch);
+          }
         }
-        if (batch.length < pageSize) break;
-        page += 1;
-        if (page > 500) break;
+
+        if (turns.length > totalTurnsWithDiagnostics) {
+          turns.length = totalTurnsWithDiagnostics;
+        }
+      } else {
+        let page = 2;
+        while (page <= EXPORT_DIAGNOSTICS_MAX_PAGES) {
+          const response = await tldwClient.getChatLorebookDiagnostics(
+            serverChatId,
+            {
+              page,
+              size: EXPORT_DIAGNOSTICS_PAGE_SIZE,
+              order: "asc",
+            },
+          );
+          const batch = Array.isArray(response?.turns) ? response.turns : [];
+          if (batch.length === 0) break;
+          appendBatch(batch);
+          if (batch.length < EXPORT_DIAGNOSTICS_PAGE_SIZE) break;
+          page += 1;
+        }
+        if (page > EXPORT_DIAGNOSTICS_MAX_PAGES) {
+          turnsTruncated = true;
+        }
       }
 
       const exportPayload = {
@@ -273,7 +337,7 @@ export const LorebookDebugPanel: React.FC<Props> = ({
         character_id: characterId,
         turns_total_with_diagnostics: totalTurnsWithDiagnostics,
         turns_exported: turns.length,
-        turns_truncated: false,
+        turns_truncated: turnsTruncated,
         turns,
       };
 

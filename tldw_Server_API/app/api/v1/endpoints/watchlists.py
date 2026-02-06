@@ -132,6 +132,8 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
     ScrapedItemUpdateRequest,
     Source,
     SourceCreateRequest,
+    SourceSeenResetResponse,
+    SourceSeenStats,
     SourcesBulkCreateItem,
     SourcesBulkCreateRequest,
     SourcesBulkCreateResponse,
@@ -181,6 +183,7 @@ router = APIRouter(prefix="/watchlists", tags=["watchlists"])
 
 DEFAULT_OUTPUT_TTL_SECONDS = int(os.getenv("WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS", "0") or 0)
 TEMP_OUTPUT_TTL_SECONDS = int(os.getenv("WATCHLIST_OUTPUT_TEMP_TTL_SECONDS", "86400") or 86400)
+DEFAULT_TTS_BRIEF_MAX_ITEMS = int(os.getenv("WATCHLIST_OUTPUT_TTS_BRIEF_MAX_ITEMS", "10") or 10)
 
 _TEMPLATE_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
@@ -248,6 +251,26 @@ def _safe_int(value: Any, fallback: int) -> int:
         return fallback
 
 
+def _safe_float(
+    value: Any,
+    fallback: float | None = None,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float | None:
+    try:
+        if value is None:
+            return fallback
+        parsed = float(value)
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+        return fallback
+    if minimum is not None and parsed < minimum:
+        return fallback
+    if maximum is not None and parsed > maximum:
+        return fallback
+    return parsed
+
+
 def _deep_merge_dict(base: dict[str, Any] | None, override: dict[str, Any] | None) -> dict[str, Any]:
     result: dict[str, Any] = dict(base or {})
     for key, value in (override or {}).items():
@@ -308,6 +331,34 @@ def _enforce_runs_admin_if_configured(current_user: User) -> None:
     if _is_runs_admin_user(current_user):
         return
     raise HTTPException(status_code=403, detail="watchlists_runs_admin_required")
+
+
+def _resolve_target_watchlists_user_id(current_user: User, target_user_id: int | None) -> int:
+    current_user_id = _safe_int(getattr(current_user, "id", None), -1)
+    if current_user_id <= 0:
+        raise HTTPException(status_code=500, detail="watchlists_invalid_user")
+    if target_user_id is None or int(target_user_id) == current_user_id:
+        return current_user_id
+    if not _is_runs_admin_user(current_user):
+        raise HTTPException(status_code=403, detail="watchlists_admin_required_for_target_user")
+    return int(target_user_id)
+
+
+def _resolve_watchlists_db_for_target_user(
+    current_user: User,
+    current_db: WatchlistsDatabase,
+    target_user_id: int,
+) -> WatchlistsDatabase:
+    current_user_id = _safe_int(getattr(current_user, "id", None), -1)
+    if target_user_id == current_user_id:
+        return current_db
+    try:
+        db = WatchlistsDatabase.for_user(target_user_id)
+        db.ensure_schema()
+        return db
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"watchlists.resolve_target_db failed for user={target_user_id}: {exc}")
+        raise HTTPException(status_code=500, detail="watchlists_db_unavailable")
 
 
 def _build_email_bodies(content: str | None, fmt: str, title: str, preferred: str = "auto") -> tuple[str, str]:
@@ -1135,6 +1186,85 @@ async def get_source(
     )
 
 
+@router.get(
+    "/sources/{source_id}/seen",
+    response_model=SourceSeenStats,
+    summary="Get per-source dedup/seen state",
+)
+async def get_source_seen_stats(
+    source_id: int = Path(..., ge=1),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: inspect seen state for another user ID.",
+    ),
+    keys_limit: int = Query(
+        0,
+        ge=0,
+        le=200,
+        description="Include up to N recent seen keys (0 disables key list).",
+    ),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    resolved_user_id = _resolve_target_watchlists_user_id(current_user, target_user_id)
+    target_db = _resolve_watchlists_db_for_target_user(current_user, db, resolved_user_id)
+    try:
+        src = target_db.get_source(source_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="source_not_found")
+    stats = target_db.get_seen_item_stats(source_id)
+    recent_keys: list[str] = []
+    if keys_limit > 0:
+        recent_keys = target_db.list_seen_item_keys(source_id, limit=keys_limit)
+    return SourceSeenStats(
+        source_id=int(source_id),
+        user_id=int(resolved_user_id),
+        seen_count=int(stats.get("seen_count") or 0),
+        latest_seen_at=stats.get("latest_seen_at"),
+        defer_until=getattr(src, "defer_until", None),
+        consec_not_modified=getattr(src, "consec_not_modified", None),
+        recent_keys=recent_keys,
+    )
+
+
+@router.delete(
+    "/sources/{source_id}/seen",
+    response_model=SourceSeenResetResponse,
+    summary="Clear per-source dedup/seen state",
+)
+async def clear_source_seen_state(
+    source_id: int = Path(..., ge=1),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: clear seen state for another user ID.",
+    ),
+    clear_backoff: bool = Query(
+        True,
+        description="Also clear source defer/backoff state when true.",
+    ),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    resolved_user_id = _resolve_target_watchlists_user_id(current_user, target_user_id)
+    target_db = _resolve_watchlists_db_for_target_user(current_user, db, resolved_user_id)
+    try:
+        target_db.get_source(source_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="source_not_found")
+    cleared = target_db.clear_seen_items(source_id)
+    cleared_backoff = False
+    if clear_backoff:
+        cleared_backoff = target_db.reset_source_backoff_state(source_id)
+    return SourceSeenResetResponse(
+        source_id=int(source_id),
+        user_id=int(resolved_user_id),
+        cleared=int(cleared),
+        cleared_backoff=bool(cleared_backoff),
+    )
+
+
 @router.post("/sources/{source_id}/test", response_model=PreviewResponse, summary="Test source and preview items")
 async def test_source(
     source_id: int = Path(..., ge=1),
@@ -1652,7 +1782,7 @@ async def create_job(
             )
             db.set_job_schedule_id(row.id, sid)
             row = db.get_job(row.id)
-    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as e:
+    except Exception as e:
         logger.debug(f"Watchlists: schedule registration via service failed, falling back: {e}")
         # Fallback: create a persisted schedule row directly so admin can inspect linkage
         try:
@@ -1679,7 +1809,7 @@ async def create_job(
                 )
                 db.set_job_schedule_id(row.id, sid)
                 row = db.get_job(row.id)
-        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as _e:
+        except Exception as _e:
             logger.debug(f"Watchlists: schedule DB fallback failed: {_e}")
 
     output_prefs = _normalize_output_prefs(getattr(row, "output_prefs_json", None))
@@ -2045,7 +2175,7 @@ async def update_job(
                     )
                     db.set_job_schedule_id(r.id, sid)
                     r = db.get_job(r.id)
-                except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as _e:
+                except Exception as _e:
                     logger.debug(f"Watchlists: schedule create during update failed, fallback: {_e}")
                     try:
                         from uuid import uuid4
@@ -2070,9 +2200,9 @@ async def update_job(
                         )
                         db.set_job_schedule_id(r.id, sid)
                         r = db.get_job(r.id)
-                    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as __e:
+                    except Exception as __e:
                         logger.debug(f"Watchlists: schedule DB fallback during update failed: {__e}")
-    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as e:
+    except Exception as e:
         logger.debug(f"Watchlists: schedule sync skipped: {e}")
     output_prefs = _normalize_output_prefs(getattr(r, "output_prefs_json", None))
     ingest_prefs = output_prefs.get("ingest") if isinstance(output_prefs, dict) else None
@@ -2823,6 +2953,11 @@ async def create_output(
     job_temp_retention = _safe_int(retention_spec.get("temporary_seconds"), TEMP_OUTPUT_TTL_SECONDS)
     template_defaults = job_prefs.get("template") or {}
     delivery_defaults = job_prefs.get("deliveries") or {}
+    tts_brief_defaults = {}
+    if isinstance(job_prefs.get("tts_brief"), dict):
+        tts_brief_defaults = job_prefs.get("tts_brief") or {}
+    elif isinstance(job_prefs.get("audio_brief"), dict):
+        tts_brief_defaults = job_prefs.get("audio_brief") or {}
 
     job_id = run.job_id
     items: list[Any]
@@ -2839,6 +2974,43 @@ async def create_output(
         raise HTTPException(status_code=400, detail="no_items_available")
 
     item_models = [_row_to_scraped_item(it) for it in items]
+    tts_generate_explicit = "generate_tts" in payload.model_fields_set
+    tts_brief_enabled = bool(tts_brief_defaults.get("enabled", False))
+    tts_brief_max_items = _safe_int(tts_brief_defaults.get("max_items"), DEFAULT_TTS_BRIEF_MAX_ITEMS)
+    if tts_brief_max_items < 0:
+        tts_brief_max_items = 0
+    effective_generate_tts = bool(payload.generate_tts)
+    tts_brief_auto = False
+    if (
+        not tts_generate_explicit
+        and tts_brief_enabled
+        and tts_brief_max_items > 0
+        and len(item_models) <= tts_brief_max_items
+    ):
+        effective_generate_tts = True
+        tts_brief_auto = True
+
+    configured_tts_template_name = tts_brief_defaults.get("template_name")
+    configured_tts_model = tts_brief_defaults.get("model")
+    configured_tts_voice = tts_brief_defaults.get("voice")
+    configured_tts_speed = tts_brief_defaults.get("speed")
+
+    effective_tts_template_name = payload.tts_template_name
+    if not effective_tts_template_name and isinstance(configured_tts_template_name, str):
+        effective_tts_template_name = configured_tts_template_name.strip() or None
+
+    effective_tts_model = payload.tts_model
+    if not effective_tts_model and isinstance(configured_tts_model, str):
+        effective_tts_model = configured_tts_model.strip() or None
+
+    effective_tts_voice = payload.tts_voice
+    if not effective_tts_voice and isinstance(configured_tts_voice, str):
+        effective_tts_voice = configured_tts_voice.strip() or None
+
+    effective_tts_speed = payload.tts_speed
+    if effective_tts_speed is None:
+        effective_tts_speed = _safe_float(configured_tts_speed, None, minimum=0.25, maximum=4.0)
+
     version = _next_output_version_for_run(collections_db, payload.run_id)
     job_name = getattr(job, "name", None) or f"Job-{job.id}"
     default_title = f"{job_name}-Output-{version}"
@@ -2949,6 +3121,9 @@ async def create_output(
             metadata["template_description"] = template_record.description
     metadata["version"] = version
     metadata["origin"] = "watchlists"
+    if tts_brief_auto:
+        metadata["tts_brief_auto"] = True
+        metadata["tts_brief_max_items"] = tts_brief_max_items
 
     delivery_override = (
         payload.deliveries.model_dump(exclude_none=True) if payload.deliveries else {}
@@ -3035,9 +3210,9 @@ async def create_output(
             await _write_tts_audio_file(
                 rendered=output_content or "",
                 path=path,
-                tts_model=payload.tts_model,
-                tts_voice=payload.tts_voice,
-                tts_speed=payload.tts_speed,
+                tts_model=effective_tts_model,
+                tts_voice=effective_tts_voice,
+                tts_speed=effective_tts_speed,
                 template_row=tpl,
             )
         else:
@@ -3146,12 +3321,12 @@ async def create_output(
                 template_id_override=None,
             )
 
-        if payload.generate_tts:
+        if effective_generate_tts:
             tts_tpl = None
             tts_rendered = None
-            if payload.tts_template_name:
+            if effective_tts_template_name:
                 try:
-                    tts_tpl = collections_db.get_output_template_by_name(payload.tts_template_name)
+                    tts_tpl = collections_db.get_output_template_by_name(effective_tts_template_name)
                 except KeyError:
                     raise HTTPException(status_code=404, detail="tts_template_not_found")
                 if tts_tpl.type != "tts_audio":

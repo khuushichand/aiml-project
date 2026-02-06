@@ -20,8 +20,8 @@ export const FiguresTab: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
   const activeDocumentId = useDocumentWorkspaceStore((s) => s.activeDocumentId)
   const activeDocumentType = useDocumentWorkspaceStore((s) => s.activeDocumentType)
-  const activeDocument = useDocumentWorkspaceStore((s) =>
-    s.openDocuments.find((doc) => doc.id === s.activeDocumentId)
+  const documentUrl = useDocumentWorkspaceStore(
+    (s) => s.openDocuments.find((doc) => doc.id === s.activeDocumentId)?.url
   )
   const currentPage = useDocumentWorkspaceStore((s) => s.currentPage)
   const setCurrentPage = useDocumentWorkspaceStore((s) => s.setCurrentPage)
@@ -30,7 +30,6 @@ export const FiguresTab: React.FC = () => {
   const [numPages, setNumPages] = React.useState<number>(0)
   const [loadError, setLoadError] = React.useState<string | null>(null)
 
-  const documentUrl = activeDocument?.url
   // Prefer the locally loaded page count from this tab's Document instance.
   const pageCount = numPages > 0 ? numPages : totalPages
 
@@ -109,6 +108,15 @@ export const FiguresTab: React.FC = () => {
 
   return (
     <div className="h-full overflow-auto p-3">
+      {loadError ? (
+        <Alert
+          className="mb-3"
+          type="error"
+          message={t("option:documentWorkspace.figuresError", "Failed to load document")}
+          description={loadError || t("common:unknownError", "An unknown error occurred")}
+          showIcon
+        />
+      ) : null}
       <Document
         file={documentUrl}
         onLoadSuccess={(pdf) => {
@@ -124,14 +132,6 @@ export const FiguresTab: React.FC = () => {
             <Skeleton.Image active className="!w-full !h-24" />
             <Skeleton.Image active className="!w-full !h-24" />
           </div>
-        }
-        error={
-          <Alert
-            type="error"
-            message={t("option:documentWorkspace.figuresError", "Failed to load document")}
-            description={loadError || t("common:unknownError", "An unknown error occurred")}
-            showIcon
-          />
         }
       >
         {pageCount > 0 ? (

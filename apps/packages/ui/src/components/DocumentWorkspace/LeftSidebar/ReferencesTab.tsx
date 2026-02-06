@@ -508,6 +508,7 @@ export const ReferencesTab: React.FC = () => {
         response
       )
     } catch (err) {
+      console.error("Failed to enrich reference:", err)
       message.error(
         t(
           "option:documentWorkspace.enrichReferenceFailed",

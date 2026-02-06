@@ -5,9 +5,9 @@ import type { Book, Rendition, NavItem } from "epubjs"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import { TextSelectionPopover } from "../TextSelectionPopover"
 import { EpubSearch } from "./EpubSearch"
-import { EPUB_THEMES } from "@/hooks/document-workspace/useEpubSettings"
+import { EPUB_THEMES, FONT_FAMILY_CSS } from "@/hooks/document-workspace/useEpubSettings"
 import type { EpubLocation } from "@/hooks/document-workspace/useEpubReader"
-import type { TocItem, Annotation, AnnotationColor, EpubTheme, EpubScrollMode } from "../../types"
+import type { TocItem, Annotation, AnnotationColor, EpubTheme, EpubScrollMode, EpubSpreadMode, EpubFontFamily } from "../../types"
 
 // Color mapping for EPUB highlights
 const HIGHLIGHT_COLORS: Record<AnnotationColor, string> = {
@@ -60,6 +60,20 @@ function convertNavToTocItems(nav: NavItem[], level: number = 0): TocItem[] {
   }))
 }
 
+/**
+ * Build theme body overrides from typography settings
+ */
+const buildTypographyOverrides = (
+  fontFamily: EpubFontFamily,
+  fontSize: number,
+  lineHeight: number
+): Record<string, string> => ({
+  "font-family": FONT_FAMILY_CSS[fontFamily],
+  "font-size": fontSize === 100 ? "1em" : `${fontSize}%`,
+  "line-height": String(lineHeight),
+  "padding": "20px"
+})
+
 interface EpubViewerProps {
   url: string
   documentId: number
@@ -108,6 +122,10 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
   const annotations = useDocumentWorkspaceStore((s) => s.annotations)
   const epubTheme = useDocumentWorkspaceStore((s) => s.epubTheme)
   const epubScrollMode = useDocumentWorkspaceStore((s) => s.epubScrollMode)
+  const epubSpreadMode = useDocumentWorkspaceStore((s) => s.epubSpreadMode)
+  const epubFontSize = useDocumentWorkspaceStore((s) => s.epubFontSize)
+  const epubFontFamily = useDocumentWorkspaceStore((s) => s.epubFontFamily)
+  const epubLineHeight = useDocumentWorkspaceStore((s) => s.epubLineHeight)
 
   // Dispatch loading event when starting
   useEffect(() => {
@@ -150,15 +168,20 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
           return
         }
 
-        // Get initial scroll mode from store
-        const initialScrollMode = useDocumentWorkspaceStore.getState().epubScrollMode
-        const initialTheme = useDocumentWorkspaceStore.getState().epubTheme
+        // Get initial settings from store
+        const initialState = useDocumentWorkspaceStore.getState()
+        const initialScrollMode = initialState.epubScrollMode
+        const initialTheme = initialState.epubTheme
+        const initialSpreadMode = initialState.epubSpreadMode
+        const initialFontSize = initialState.epubFontSize
+        const initialFontFamily = initialState.epubFontFamily
+        const initialLineHeight = initialState.epubLineHeight
 
-        // Create rendition with current scroll mode
+        // Create rendition with current scroll mode and spread
         const rendition = book.renderTo(containerRef.current, {
           width: "100%",
           height: "100%",
-          spread: "none",
+          spread: initialSpreadMode,
           flow: initialScrollMode === "continuous" ? "scrolled" : "paginated"
         })
 
@@ -216,7 +239,8 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
           let chapterIndex: number | undefined
 
           const spine = book.spine as any
-          const chapter = spine?.get?.(location?.start?.href)
+          const href = location?.start?.href
+          const chapter = href ? spine?.get?.(href) : null
           if (chapter) {
             chapterIndex = chapter.index
           }
@@ -279,15 +303,14 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
           setSelection(null)
         })
 
-        // Register all themes
+        // Register all themes with typography overrides
+        const typographyOverrides = buildTypographyOverrides(initialFontFamily, initialFontSize, initialLineHeight)
         Object.entries(EPUB_THEMES).forEach(([name, styles]) => {
           rendition.themes.register(name, {
             ...styles,
             body: {
               ...styles.body,
-              "font-family": "'Inter', system-ui, sans-serif",
-              "line-height": "1.6",
-              "padding": "20px"
+              ...typographyOverrides
             }
           })
         })
@@ -296,8 +319,8 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
         rendition.themes.select(initialTheme)
 
         setIsLoading(false)
-          const spineCount = (book.spine as any)?.length ?? 0
-          onLoadSuccess?.({
+        const spineCount = (book.spine as any)?.length ?? 0
+        onLoadSuccess?.({
           chapterCount: spineCount,
           toc: navigation.toc
         })
@@ -466,7 +489,8 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
     rendition.themes.select(epubTheme)
   }, [epubTheme, isLoading])
 
-  // Handle scroll mode changes - requires re-rendering the book
+  // Handle layout changes that require re-rendering the book
+  // (scroll mode, spread mode, font size, font family, line height)
   useEffect(() => {
     const book = bookRef.current
     const rendition = renditionRef.current
@@ -479,25 +503,24 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
     // Destroy current rendition
     rendition.destroy()
 
-    // Create new rendition with updated flow
+    // Create new rendition with updated settings
     const newRendition = book.renderTo(containerRef.current, {
       width: "100%",
       height: "100%",
-      spread: "none",
+      spread: epubSpreadMode,
       flow: epubScrollMode === "continuous" ? "scrolled" : "paginated"
     })
 
     renditionRef.current = newRendition
 
-    // Re-register themes
+    // Re-register themes with current typography
+    const typographyOverrides = buildTypographyOverrides(epubFontFamily, epubFontSize, epubLineHeight)
     Object.entries(EPUB_THEMES).forEach(([name, styles]) => {
       newRendition.themes.register(name, {
         ...styles,
         body: {
           ...styles.body,
-          "font-family": "'Inter', system-ui, sans-serif",
-          "line-height": "1.6",
-          "padding": "20px"
+          ...typographyOverrides
         }
       })
     })
@@ -541,7 +564,7 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
     newRendition.on("click", () => {
       setSelection(null)
     })
-  }, [epubScrollMode]) // Only re-run when scroll mode changes
+  }, [epubScrollMode, epubSpreadMode, epubFontSize, epubFontFamily, epubLineHeight])
 
   const clearSelection = useCallback(() => {
     setSelection(null)

@@ -146,6 +146,7 @@ export const NotesDockPanel: React.FC = () => {
   const dockRef = useRef<HTMLDivElement | null>(null)
   const dragStateRef = useRef<DragState | null>(null)
   const searchTimeoutRef = useRef<number | null>(null)
+  const fetchRequestIdRef = useRef(0)
 
   const hasDirtyNotes = useMemo(
     () => notes.some((note) => note.isDirty),
@@ -222,6 +223,7 @@ export const NotesDockPanel: React.FC = () => {
 
   const fetchNotesList = useCallback(
     async (query: string) => {
+      const requestId = ++fetchRequestIdRef.current
       if (editorDisabled) {
         setLoadingList(false)
         setNotesList([])
@@ -243,16 +245,20 @@ export const NotesDockPanel: React.FC = () => {
             method: "GET"
           })
         }
+        if (requestId !== fetchRequestIdRef.current) return
         const normalized = pickNotesArray(response).map((note) => ({
           ...note,
           keywords: extractKeywords(note)
         }))
         setNotesList(normalized)
       } catch (error) {
+        if (requestId !== fetchRequestIdRef.current) return
         setNotesList([])
         message.error(t("option:notesDock.loadError", "Failed to load notes"))
       } finally {
-        setLoadingList(false)
+        if (requestId === fetchRequestIdRef.current) {
+          setLoadingList(false)
+        }
       }
     },
     [editorDisabled, message, t]

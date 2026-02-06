@@ -549,6 +549,12 @@ semantic_cache_enabled = true
 cache_similarity_threshold = 0.85
 enable_reranking = true
 rerank_top_k = 10
+# FlashRank reranker model cache directory.
+# Relative paths resolve from repo root in server code.
+# Recommended: keep bundled FlashRank model files under models/flashrank/<model_name>/
+flashrank_cache_dir = models/flashrank
+# FlashRank model family name (directory name under cache_dir)
+flashrank_model_name = ms-marco-TinyBERT-L-2-v2
 llm_reranker_provider = openai
 llm_reranker_model =
 llama_reranker_binary = llama-embedding

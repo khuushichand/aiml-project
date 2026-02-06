@@ -23,21 +23,22 @@ This module encapsulates raw SQL per project guidelines.
 Implements soft delete, archive, versioning, and FTS5 search.
 """
 
-import json
-import os
-import sqlite3
-import threading
-import uuid as uuid_module
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Any
+import contextlib  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import sqlite3  # noqa: E402
+import threading  # noqa: E402
+import uuid as uuid_module  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Any  # noqa: E402
 
-from loguru import logger
+from loguru import logger  # noqa: E402
 
-from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths, _is_test_context
-from tldw_Server_API.app.core.DB_Management.kanban_vector_search import create_kanban_vector_search
-from tldw_Server_API.app.core.exceptions import StorageUnavailableError
+from tldw_Server_API.app.core.config import settings  # noqa: E402
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths, _is_test_context  # noqa: E402
+from tldw_Server_API.app.core.DB_Management.kanban_vector_search import create_kanban_vector_search  # noqa: E402
+from tldw_Server_API.app.core.exceptions import StorageUnavailableError  # noqa: E402
 
 _KANBAN_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -84,7 +85,7 @@ def _normalize_db_path(
 ) -> tuple[str, bool]:
     """Normalize db_path and always enforce user directory containment."""
     if not db_path or not str(db_path).strip():
-        raise InputError("db_path is required")
+        raise InputError("db_path is required")  # noqa: TRY003
 
     if db_path == ":memory:":
         return db_path, True
@@ -92,7 +93,7 @@ def _normalize_db_path(
     try:
         resolved = Path(db_path).expanduser().resolve()
     except (OSError, RuntimeError) as exc:
-        raise InputError(f"Invalid db_path: {db_path}") from exc
+        raise InputError(f"Invalid db_path: {db_path}") from exc  # noqa: TRY003
 
     # Always enforce that the database path stays within the user's base directory
     # when a user_id is provided. This guards against directory traversal or use
@@ -107,7 +108,7 @@ def _normalize_db_path(
         try:
             resolved.relative_to(user_dir)
         except ValueError as exc:
-            raise InputError("db_path must be within the user database directory") from exc
+            raise InputError("db_path must be within the user database directory") from exc  # noqa: TRY003
 
     return str(resolved), False
 
@@ -144,9 +145,7 @@ def _kanban_card_indexable(
                     expected_version = int(expected_version)
                 except (TypeError, ValueError):
                     expected_version = None
-            if expected_version is not None and int(card.get("version") or 0) != expected_version:
-                return False
-            return True
+            return not (expected_version is not None and int(card.get("version") or 0) != expected_version)
         finally:
             try:
                 db.close()
@@ -262,7 +261,7 @@ class KanbanDB:
         """
         raw_user_id = str(user_id)
         if not raw_user_id.strip():
-            raise InputError("user_id is required")
+            raise InputError("user_id is required")  # noqa: TRY003
         self.user_id = _normalize_user_id_for_records(raw_user_id)
         self._lock = threading.RLock()
         self.db_path, self._is_memory_db = _normalize_db_path(
@@ -337,7 +336,7 @@ class KanbanDB:
                 conn.execute(statement)
             except sqlite3.Error as e:
                 logger.error(f"Failed to set critical PRAGMA option {statement}: {e}")
-                raise KanbanDBError(
+                raise KanbanDBError(  # noqa: TRY003
                     f"Failed to set critical PRAGMA option {statement}: {e}"
                 ) from e
 
@@ -391,7 +390,7 @@ class KanbanDB:
                 logger.debug("Kanban schema ensured")
             except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to ensure schema: {e}")
-                raise KanbanDBError(f"Schema creation failed: {e}") from e
+                raise KanbanDBError(f"Schema creation failed: {e}") from e  # noqa: TRY003
             finally:
                 conn.close()
 
@@ -673,12 +672,12 @@ END;
         """
         # Validate inputs
         if not name or not name.strip():
-            raise InputError("Board name is required")
+            raise InputError("Board name is required")  # noqa: TRY003
         name = name.strip()
         if len(name) > 255:
-            raise InputError("Board name must be 255 characters or less")
+            raise InputError("Board name must be 255 characters or less")  # noqa: TRY003
         if not client_id or not client_id.strip():
-            raise InputError("client_id is required")
+            raise InputError("client_id is required")  # noqa: TRY003
         client_id = client_id.strip()
 
         board_uuid = _generate_uuid()
@@ -695,7 +694,7 @@ END;
                 )
                 count = cur.fetchone()["cnt"]
                 if count >= self.MAX_BOARDS_PER_USER:
-                    raise InputError(f"Maximum boards ({self.MAX_BOARDS_PER_USER}) reached")
+                    raise InputError(f"Maximum boards ({self.MAX_BOARDS_PER_USER}) reached")  # noqa: TRY003
 
                 # Insert board
                 cur = conn.execute(
@@ -723,12 +722,12 @@ END;
 
             except sqlite3.IntegrityError as e:
                 if "UNIQUE constraint" in str(e) and "client_id" in str(e):
-                    raise ConflictError(
+                    raise ConflictError(  # noqa: B904, TRY003
                         f"Board with client_id '{client_id}' already exists",
                         entity="board",
                         entity_id=client_id
                     )
-                raise KanbanDBError(f"Database error: {e}") from e
+                raise KanbanDBError(f"Database error: {e}") from e  # noqa: TRY003
             finally:
                 conn.close()
 
@@ -935,11 +934,11 @@ END;
                 # Get current board
                 board = self._get_board_by_id(conn, board_id)
                 if not board:
-                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)
+                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)  # noqa: TRY003
 
                 # Check version if provided
                 if expected_version is not None and board["version"] != expected_version:
-                    raise ConflictError(
+                    raise ConflictError(  # noqa: TRY003
                         f"Version mismatch: expected {expected_version}, got {board['version']}",
                         entity="board",
                         entity_id=board_id
@@ -951,10 +950,10 @@ END;
 
                 if name is not None:
                     if not name.strip():
-                        raise InputError("Board name cannot be empty")
+                        raise InputError("Board name cannot be empty")  # noqa: TRY003
                     name = name.strip()
                     if len(name) > 255:
-                        raise InputError("Board name must be 255 characters or less")
+                        raise InputError("Board name must be 255 characters or less")  # noqa: TRY003
                     updates.append("name = ?")
                     params.append(name)
 
@@ -964,7 +963,7 @@ END;
 
                 if activity_retention_days is not None:
                     if activity_retention_days < 7 or activity_retention_days > 365:
-                        raise InputError("activity_retention_days must be between 7 and 365")
+                        raise InputError("activity_retention_days must be between 7 and 365")  # noqa: TRY003
                     updates.append("activity_retention_days = ?")
                     params.append(activity_retention_days)
 
@@ -1015,7 +1014,7 @@ END;
             try:
                 board = self._get_board_by_id(conn, board_id)
                 if not board:
-                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)
+                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)  # noqa: TRY003
 
                 now = _utcnow_iso()
                 archived_at = now if archive else None
@@ -1225,9 +1224,9 @@ END;
             try:
                 board = self._get_board_by_id(conn, board_id, include_deleted=True)
                 if not board:
-                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)
+                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)  # noqa: TRY003
                 if not board["deleted"]:
-                    raise InputError("Board is not deleted")
+                    raise InputError("Board is not deleted")  # noqa: TRY003
 
                 now = _utcnow_iso()
                 list_rows = conn.execute(
@@ -1332,12 +1331,12 @@ END;
             The created list.
         """
         if not name or not name.strip():
-            raise InputError("List name is required")
+            raise InputError("List name is required")  # noqa: TRY003
         name = name.strip()
         if len(name) > 255:
-            raise InputError("List name must be 255 characters or less")
+            raise InputError("List name must be 255 characters or less")  # noqa: TRY003
         if not client_id or not client_id.strip():
-            raise InputError("client_id is required")
+            raise InputError("client_id is required")  # noqa: TRY003
         client_id = client_id.strip()
 
         list_uuid = _generate_uuid()
@@ -1349,7 +1348,7 @@ END;
                 # Verify board exists and belongs to user
                 board = self._get_board_by_id(conn, board_id)
                 if not board:
-                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)
+                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)  # noqa: TRY003
 
                 # Check list limit
                 cur = conn.execute(
@@ -1358,7 +1357,7 @@ END;
                 )
                 count = cur.fetchone()["cnt"]
                 if count >= self.MAX_LISTS_PER_BOARD:
-                    raise InputError(f"Maximum lists ({self.MAX_LISTS_PER_BOARD}) per board reached")
+                    raise InputError(f"Maximum lists ({self.MAX_LISTS_PER_BOARD}) per board reached")  # noqa: TRY003
 
                 # Get next position if not provided
                 if position is None:
@@ -1391,12 +1390,12 @@ END;
 
             except sqlite3.IntegrityError as e:
                 if "UNIQUE constraint" in str(e) and "client_id" in str(e):
-                    raise ConflictError(
+                    raise ConflictError(  # noqa: B904, TRY003
                         f"List with client_id '{client_id}' already exists in this board",
                         entity="list",
                         entity_id=client_id
                     )
-                raise KanbanDBError(f"Database error: {e}") from e
+                raise KanbanDBError(f"Database error: {e}") from e  # noqa: TRY003
             finally:
                 conn.close()
 
@@ -1478,7 +1477,7 @@ END;
                 # Verify board exists and belongs to user
                 board = self._get_board_by_id(conn, board_id)
                 if not board:
-                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)
+                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)  # noqa: TRY003
                 if board["archived"] and not include_archived:
                     return []
 
@@ -1519,14 +1518,14 @@ END;
             try:
                 lst = self._get_list_by_id(conn, list_id)
                 if not lst:
-                    raise NotFoundError("List not found", entity="list", entity_id=list_id)
+                    raise NotFoundError("List not found", entity="list", entity_id=list_id)  # noqa: TRY003
 
                 board = self._get_board_by_id(conn, lst["board_id"])
                 if not board:
-                    raise NotFoundError("Board not found", entity="board", entity_id=lst["board_id"])
+                    raise NotFoundError("Board not found", entity="board", entity_id=lst["board_id"])  # noqa: TRY003
 
                 if expected_version is not None and lst["version"] != expected_version:
-                    raise ConflictError(
+                    raise ConflictError(  # noqa: TRY003
                         f"Version mismatch: expected {expected_version}, got {lst['version']}",
                         entity="list",
                         entity_id=list_id
@@ -1537,10 +1536,10 @@ END;
 
                 if name is not None:
                     if not name.strip():
-                        raise InputError("List name cannot be empty")
+                        raise InputError("List name cannot be empty")  # noqa: TRY003
                     name = name.strip()
                     if len(name) > 255:
-                        raise InputError("List name must be 255 characters or less")
+                        raise InputError("List name must be 255 characters or less")  # noqa: TRY003
                     updates.append("name = ?")
                     params.append(name)
 
@@ -1588,7 +1587,7 @@ END;
                 # Verify board exists
                 board = self._get_board_by_id(conn, board_id)
                 if not board:
-                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)
+                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)  # noqa: TRY003
 
                 # Verify all lists exist and belong to the board
                 cur = conn.execute(
@@ -1599,7 +1598,7 @@ END;
 
                 if len(existing_ids) != len(list_ids):
                     missing = set(list_ids) - existing_ids
-                    raise InputError(f"Lists not found or don't belong to board: {missing}")
+                    raise InputError(f"Lists not found or don't belong to board: {missing}")  # noqa: TRY003
 
                 # Update positions
                 now = _utcnow_iso()
@@ -1631,7 +1630,7 @@ END;
             try:
                 lst = self._get_list_by_id(conn, list_id)
                 if not lst:
-                    raise NotFoundError("List not found", entity="list", entity_id=list_id)
+                    raise NotFoundError("List not found", entity="list", entity_id=list_id)  # noqa: TRY003
 
                 now = _utcnow_iso()
                 archived_at = now if archive else None
@@ -1768,9 +1767,9 @@ END;
             try:
                 lst = self._get_list_by_id(conn, list_id, include_deleted=True)
                 if not lst:
-                    raise NotFoundError("List not found", entity="list", entity_id=list_id)
+                    raise NotFoundError("List not found", entity="list", entity_id=list_id)  # noqa: TRY003
                 if not lst["deleted"]:
-                    raise InputError("List is not deleted")
+                    raise InputError("List is not deleted")  # noqa: TRY003
 
                 now = _utcnow_iso()
                 card_rows = conn.execute(
@@ -1860,16 +1859,16 @@ END;
             The created card.
         """
         if not title or not title.strip():
-            raise InputError("Card title is required")
+            raise InputError("Card title is required")  # noqa: TRY003
         title = title.strip()
         if len(title) > 500:
-            raise InputError("Card title must be 500 characters or less")
+            raise InputError("Card title must be 500 characters or less")  # noqa: TRY003
         if not client_id or not client_id.strip():
-            raise InputError("client_id is required")
+            raise InputError("client_id is required")  # noqa: TRY003
         client_id = client_id.strip()
 
         if priority and priority not in ('low', 'medium', 'high', 'urgent'):
-            raise InputError("priority must be one of: low, medium, high, urgent")
+            raise InputError("priority must be one of: low, medium, high, urgent")  # noqa: TRY003
 
         card_uuid = _generate_uuid()
         now = _utcnow_iso()
@@ -1882,7 +1881,7 @@ END;
                 # Get list and board_id
                 lst = self._get_list_by_id(conn, list_id)
                 if not lst:
-                    raise NotFoundError("List not found", entity="list", entity_id=list_id)
+                    raise NotFoundError("List not found", entity="list", entity_id=list_id)  # noqa: TRY003
 
                 board_id = lst["board_id"]
 
@@ -1893,7 +1892,7 @@ END;
                 )
                 board_count = cur.fetchone()["cnt"]
                 if board_count >= self.MAX_CARDS_PER_BOARD:
-                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_BOARD}) per board reached")
+                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_BOARD}) per board reached")  # noqa: TRY003
 
                 # Check list limit
                 cur = conn.execute(
@@ -1902,7 +1901,7 @@ END;
                 )
                 count = cur.fetchone()["cnt"]
                 if count >= self.MAX_CARDS_PER_LIST:
-                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_LIST}) per list reached")
+                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_LIST}) per list reached")  # noqa: TRY003
 
                 # Get next position if not provided
                 if position is None:
@@ -1937,12 +1936,12 @@ END;
 
             except sqlite3.IntegrityError as e:
                 if "UNIQUE constraint" in str(e) and "client_id" in str(e):
-                    raise ConflictError(
+                    raise ConflictError(  # noqa: B904, TRY003
                         f"Card with client_id '{client_id}' already exists in this board",
                         entity="card",
                         entity_id=client_id
                     )
-                raise KanbanDBError(f"Database error: {e}") from e
+                raise KanbanDBError(f"Database error: {e}") from e  # noqa: TRY003
             finally:
                 conn.close()
 
@@ -2350,13 +2349,13 @@ END;
                 # Verify list exists and belongs to user's board
                 lst = self._get_list_by_id(conn, list_id)
                 if not lst:
-                    raise NotFoundError("List not found", entity="list", entity_id=list_id)
+                    raise NotFoundError("List not found", entity="list", entity_id=list_id)  # noqa: TRY003
                 if not include_archived:
                     if lst["archived"]:
                         return []
                     board = self._get_board_by_id(conn, lst["board_id"])
                     if not board:
-                        raise NotFoundError("Board not found", entity="board", entity_id=lst["board_id"])
+                        raise NotFoundError("Board not found", entity="board", entity_id=lst["board_id"])  # noqa: TRY003
                     if board["archived"]:
                         return []
 
@@ -2483,10 +2482,10 @@ END;
             try:
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 if expected_version is not None and card["version"] != expected_version:
-                    raise ConflictError(
+                    raise ConflictError(  # noqa: TRY003
                         f"Version mismatch: expected {expected_version}, got {card['version']}",
                         entity="card",
                         entity_id=card_id
@@ -2497,10 +2496,10 @@ END;
 
                 if title is not None:
                     if not title.strip():
-                        raise InputError("Card title cannot be empty")
+                        raise InputError("Card title cannot be empty")  # noqa: TRY003
                     title = title.strip()
                     if len(title) > 500:
-                        raise InputError("Card title must be 500 characters or less")
+                        raise InputError("Card title must be 500 characters or less")  # noqa: TRY003
                     updates.append("title = ?")
                     params.append(title)
 
@@ -2522,7 +2521,7 @@ END;
 
                 if priority is not None:
                     if priority and priority not in ('low', 'medium', 'high', 'urgent'):
-                        raise InputError("priority must be one of: low, medium, high, urgent")
+                        raise InputError("priority must be one of: low, medium, high, urgent")  # noqa: TRY003
                     updates.append("priority = ?")
                     params.append(priority if priority else None)
 
@@ -2599,15 +2598,15 @@ END;
             try:
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 target_list = self._get_list_by_id(conn, target_list_id)
                 if not target_list:
-                    raise NotFoundError("Target list not found", entity="list", entity_id=target_list_id)
+                    raise NotFoundError("Target list not found", entity="list", entity_id=target_list_id)  # noqa: TRY003
 
                 # Verify target list is in the same board
                 if target_list["board_id"] != card["board_id"]:
-                    raise InputError("Cannot move card to a list in a different board")
+                    raise InputError("Cannot move card to a list in a different board")  # noqa: TRY003
 
                 # Get target position
                 if position is None:
@@ -2677,15 +2676,15 @@ END;
             try:
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 target_list = self._get_list_by_id(conn, target_list_id)
                 if not target_list:
-                    raise NotFoundError("Target list not found", entity="list", entity_id=target_list_id)
+                    raise NotFoundError("Target list not found", entity="list", entity_id=target_list_id)  # noqa: TRY003
 
                 # Verify target list is in the same board
                 if target_list["board_id"] != card["board_id"]:
-                    raise InputError("Cannot copy card to a list in a different board")
+                    raise InputError("Cannot copy card to a list in a different board")  # noqa: TRY003
 
                 # Enforce board and list limits
                 cur = conn.execute(
@@ -2694,7 +2693,7 @@ END;
                 )
                 board_count = cur.fetchone()["cnt"]
                 if board_count >= self.MAX_CARDS_PER_BOARD:
-                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_BOARD}) per board reached")
+                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_BOARD}) per board reached")  # noqa: TRY003
 
                 cur = conn.execute(
                     "SELECT COUNT(*) as cnt FROM kanban_cards WHERE list_id = ? AND deleted = 0",
@@ -2702,7 +2701,7 @@ END;
                 )
                 list_count = cur.fetchone()["cnt"]
                 if list_count >= self.MAX_CARDS_PER_LIST:
-                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_LIST}) per list reached")
+                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_LIST}) per list reached")  # noqa: TRY003
 
                 # Generate title if not provided
                 if new_title is None:
@@ -2761,12 +2760,12 @@ END;
 
             except sqlite3.IntegrityError as e:
                 if "UNIQUE constraint" in str(e) and "client_id" in str(e):
-                    raise ConflictError(
+                    raise ConflictError(  # noqa: B904, TRY003
                         f"Card with client_id '{new_client_id}' already exists",
                         entity="card",
                         entity_id=new_client_id
                     )
-                raise KanbanDBError(f"Database error: {e}") from e
+                raise KanbanDBError(f"Database error: {e}") from e  # noqa: TRY003
             finally:
                 conn.close()
 
@@ -2791,7 +2790,7 @@ END;
                 # Verify list exists
                 lst = self._get_list_by_id(conn, list_id)
                 if not lst:
-                    raise NotFoundError("List not found", entity="list", entity_id=list_id)
+                    raise NotFoundError("List not found", entity="list", entity_id=list_id)  # noqa: TRY003
 
                 # Verify all cards exist and belong to the list
                 cur = conn.execute(
@@ -2802,7 +2801,7 @@ END;
 
                 if len(existing_ids) != len(card_ids):
                     missing = set(card_ids) - existing_ids
-                    raise InputError(f"Cards not found or don't belong to list: {missing}")
+                    raise InputError(f"Cards not found or don't belong to list: {missing}")  # noqa: TRY003
 
                 # Update positions
                 now = _utcnow_iso()
@@ -2833,7 +2832,7 @@ END;
             try:
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 now = _utcnow_iso() if archive else None
                 conn.execute(
@@ -2909,9 +2908,9 @@ END;
             try:
                 card = self._get_card_by_id(conn, card_id, include_deleted=True)
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
                 if not card["deleted"]:
-                    raise InputError("Card is not deleted")
+                    raise InputError("Card is not deleted")  # noqa: TRY003
 
                 conn.execute(
                     """
@@ -2970,7 +2969,7 @@ END;
             Tuple of (list of search result cards with enriched data, total count).
         """
         if not query or not query.strip():
-            raise InputError("Search query is required")
+            raise InputError("Search query is required")  # noqa: TRY003
 
         with self._lock:
             conn = self._connect()
@@ -3290,7 +3289,7 @@ END;
         offset: int = 0,
     ) -> tuple[list[dict[str, Any]], int]:
         if limit < 1 or offset < 0:
-            raise InputError("limit must be positive and offset must be non-negative")
+            raise InputError("limit must be positive and offset must be non-negative")  # noqa: TRY003
         conditions = ["board_id = ?"]
         params: list[Any] = [board_id]
 
@@ -3387,17 +3386,17 @@ END;
                 # Verify board belongs to user
                 board = self._get_board_by_id(conn, board_id)
                 if not board:
-                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)
+                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)  # noqa: TRY003
 
                 if list_id is not None:
                     lst = self._get_list_by_id(conn, list_id)
                     if not lst or lst["board_id"] != board_id:
-                        raise NotFoundError("List not found for board", entity="list", entity_id=list_id)
+                        raise NotFoundError("List not found for board", entity="list", entity_id=list_id)  # noqa: TRY003
 
                 if card_id is not None:
                     card = self._get_card_by_id(conn, card_id, include_deleted=True)
                     if not card or card["board_id"] != board_id:
-                        raise NotFoundError("Card not found for board", entity="card", entity_id=card_id)
+                        raise NotFoundError("Card not found for board", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 return self._fetch_activities(
                     conn=conn,
@@ -3445,7 +3444,7 @@ END;
             try:
                 lst = self._get_list_by_id(conn, list_id, include_deleted=True)
                 if not lst:
-                    raise NotFoundError("List not found", entity="list", entity_id=list_id)
+                    raise NotFoundError("List not found", entity="list", entity_id=list_id)  # noqa: TRY003
 
                 return self._fetch_activities(
                     conn=conn,
@@ -3491,7 +3490,7 @@ END;
             try:
                 card = self._get_card_by_id(conn, card_id, include_deleted=True)
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 return self._fetch_activities(
                     conn=conn,
@@ -3718,13 +3717,13 @@ END;
         """
         # Validate inputs
         if not name or not name.strip():
-            raise InputError("Label name is required")
+            raise InputError("Label name is required")  # noqa: TRY003
         name = name.strip()
         if len(name) > 50:
-            raise InputError("Label name must be 50 characters or less")
+            raise InputError("Label name must be 50 characters or less")  # noqa: TRY003
 
         if not color or color.lower() not in self.LABEL_COLORS:
-            raise InputError(f"Invalid color. Must be one of: {', '.join(sorted(self.LABEL_COLORS))}")
+            raise InputError(f"Invalid color. Must be one of: {', '.join(sorted(self.LABEL_COLORS))}")  # noqa: TRY003
         color = color.lower()
 
         label_uuid = _generate_uuid()
@@ -3736,7 +3735,7 @@ END;
                 # Verify board exists and belongs to user
                 board = self._get_board_by_id(conn, board_id)
                 if not board:
-                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)
+                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)  # noqa: TRY003
 
                 # Check label limit
                 cur = conn.execute(
@@ -3745,7 +3744,7 @@ END;
                 )
                 count = cur.fetchone()["cnt"]
                 if count >= self.MAX_LABELS_PER_BOARD:
-                    raise InputError(f"Maximum labels ({self.MAX_LABELS_PER_BOARD}) per board reached")
+                    raise InputError(f"Maximum labels ({self.MAX_LABELS_PER_BOARD}) per board reached")  # noqa: TRY003
 
                 # Insert label
                 cur = conn.execute(
@@ -3836,7 +3835,7 @@ END;
                 # Verify board exists and belongs to user
                 board = self._get_board_by_id(conn, board_id)
                 if not board:
-                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)
+                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)  # noqa: TRY003
 
                 sql = """
                     SELECT l.id, l.uuid, l.board_id, l.name, l.color, l.created_at, l.updated_at
@@ -3865,23 +3864,23 @@ END;
             try:
                 label = self._get_label_by_id(conn, label_id)
                 if not label:
-                    raise NotFoundError("Label not found", entity="label", entity_id=label_id)
+                    raise NotFoundError("Label not found", entity="label", entity_id=label_id)  # noqa: TRY003
 
                 updates = []
                 params: list[Any] = []
 
                 if name is not None:
                     if not name.strip():
-                        raise InputError("Label name cannot be empty")
+                        raise InputError("Label name cannot be empty")  # noqa: TRY003
                     name = name.strip()
                     if len(name) > 50:
-                        raise InputError("Label name must be 50 characters or less")
+                        raise InputError("Label name must be 50 characters or less")  # noqa: TRY003
                     updates.append("name = ?")
                     params.append(name)
 
                 if color is not None:
                     if color.lower() not in self.LABEL_COLORS:
-                        raise InputError(f"Invalid color. Must be one of: {', '.join(sorted(self.LABEL_COLORS))}")
+                        raise InputError(f"Invalid color. Must be one of: {', '.join(sorted(self.LABEL_COLORS))}")  # noqa: TRY003
                     updates.append("color = ?")
                     params.append(color.lower())
 
@@ -3984,16 +3983,16 @@ END;
                 # Get card
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 # Get label
                 label = self._get_label_by_id(conn, label_id)
                 if not label:
-                    raise NotFoundError("Label not found", entity="label", entity_id=label_id)
+                    raise NotFoundError("Label not found", entity="label", entity_id=label_id)  # noqa: TRY003
 
                 # Verify label belongs to the same board as the card
                 if label["board_id"] != card["board_id"]:
-                    raise InputError("Label does not belong to the card's board")
+                    raise InputError("Label does not belong to the card's board")  # noqa: TRY003
 
                 # Insert (ignore if already exists)
                 now = _utcnow_iso()
@@ -4041,7 +4040,7 @@ END;
                 # Verify card belongs to user
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 # Get label info for activity log
                 label = self._get_label_by_id(conn, label_id)
@@ -4077,7 +4076,7 @@ END;
             try:
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 sql = """
                     SELECT l.id, l.uuid, l.board_id, l.name, l.color, l.created_at, l.updated_at
@@ -4116,10 +4115,10 @@ END;
         """
         # Validate inputs
         if not name or not name.strip():
-            raise InputError("Checklist name is required")
+            raise InputError("Checklist name is required")  # noqa: TRY003
         name = name.strip()
         if len(name) > 255:
-            raise InputError("Checklist name must be 255 characters or less")
+            raise InputError("Checklist name must be 255 characters or less")  # noqa: TRY003
 
         checklist_uuid = _generate_uuid()
         now = _utcnow_iso()
@@ -4131,7 +4130,7 @@ END;
                 # Verify card exists and belongs to user
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 # Check checklist limit
                 cur = conn.execute(
@@ -4140,7 +4139,7 @@ END;
                 )
                 count = cur.fetchone()["cnt"]
                 if count >= self.MAX_CHECKLISTS_PER_CARD:
-                    raise InputError(f"Maximum checklists ({self.MAX_CHECKLISTS_PER_CARD}) per card reached")
+                    raise InputError(f"Maximum checklists ({self.MAX_CHECKLISTS_PER_CARD}) per card reached")  # noqa: TRY003
 
                 # Get next position if not provided
                 if position is None:
@@ -4232,7 +4231,7 @@ END;
                 # Verify card exists and belongs to user
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 sql = """
                     SELECT ch.id, ch.uuid, ch.card_id, ch.name, ch.position, ch.created_at, ch.updated_at
@@ -4261,7 +4260,7 @@ END;
             try:
                 checklist = self._get_checklist_by_id(conn, checklist_id)
                 if not checklist:
-                    raise NotFoundError("Checklist not found", entity="checklist", entity_id=checklist_id)
+                    raise NotFoundError("Checklist not found", entity="checklist", entity_id=checklist_id)  # noqa: TRY003
 
                 # Get the card for activity logging
                 card = self._get_card_by_id(conn, checklist["card_id"])
@@ -4271,10 +4270,10 @@ END;
 
                 if name is not None:
                     if not name.strip():
-                        raise InputError("Checklist name cannot be empty")
+                        raise InputError("Checklist name cannot be empty")  # noqa: TRY003
                     name = name.strip()
                     if len(name) > 255:
-                        raise InputError("Checklist name must be 255 characters or less")
+                        raise InputError("Checklist name must be 255 characters or less")  # noqa: TRY003
                     updates.append("name = ?")
                     params.append(name)
 
@@ -4328,7 +4327,7 @@ END;
                 # Verify card exists
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 # Verify all checklists exist and belong to the card
                 cur = conn.execute(
@@ -4339,7 +4338,7 @@ END;
 
                 if len(existing_ids) != len(checklist_ids):
                     missing = set(checklist_ids) - existing_ids
-                    raise InputError(f"Checklists not found or don't belong to card: {missing}")
+                    raise InputError(f"Checklists not found or don't belong to card: {missing}")  # noqa: TRY003
 
                 # Update positions
                 now = _utcnow_iso()
@@ -4427,10 +4426,10 @@ END;
         """
         # Validate inputs
         if not name or not name.strip():
-            raise InputError("Checklist item name is required")
+            raise InputError("Checklist item name is required")  # noqa: TRY003
         name = name.strip()
         if len(name) > 500:
-            raise InputError("Checklist item name must be 500 characters or less")
+            raise InputError("Checklist item name must be 500 characters or less")  # noqa: TRY003
 
         item_uuid = _generate_uuid()
         now = _utcnow_iso()
@@ -4443,7 +4442,7 @@ END;
                 # Verify checklist exists and belongs to user
                 checklist = self._get_checklist_by_id(conn, checklist_id)
                 if not checklist:
-                    raise NotFoundError("Checklist not found", entity="checklist", entity_id=checklist_id)
+                    raise NotFoundError("Checklist not found", entity="checklist", entity_id=checklist_id)  # noqa: TRY003
 
                 # Check item limit
                 cur = conn.execute(
@@ -4452,7 +4451,7 @@ END;
                 )
                 count = cur.fetchone()["cnt"]
                 if count >= self.MAX_CHECKLIST_ITEMS_PER_CHECKLIST:
-                    raise InputError(f"Maximum items ({self.MAX_CHECKLIST_ITEMS_PER_CHECKLIST}) per checklist reached")
+                    raise InputError(f"Maximum items ({self.MAX_CHECKLIST_ITEMS_PER_CHECKLIST}) per checklist reached")  # noqa: TRY003
 
                 # Get next position if not provided
                 if position is None:
@@ -4553,7 +4552,7 @@ END;
                 # Verify checklist exists and belongs to user
                 checklist = self._get_checklist_by_id(conn, checklist_id)
                 if not checklist:
-                    raise NotFoundError("Checklist not found", entity="checklist", entity_id=checklist_id)
+                    raise NotFoundError("Checklist not found", entity="checklist", entity_id=checklist_id)  # noqa: TRY003
 
                 sql = """
                     SELECT ci.id, ci.uuid, ci.checklist_id, ci.name, ci.position, ci.checked, ci.checked_at, ci.created_at, ci.updated_at
@@ -4583,7 +4582,7 @@ END;
             try:
                 item = self._get_checklist_item_by_id(conn, item_id)
                 if not item:
-                    raise NotFoundError("Checklist item not found", entity="checklist_item", entity_id=item_id)
+                    raise NotFoundError("Checklist item not found", entity="checklist_item", entity_id=item_id)  # noqa: TRY003
 
                 updates = []
                 params: list[Any] = []
@@ -4591,10 +4590,10 @@ END;
 
                 if name is not None:
                     if not name.strip():
-                        raise InputError("Checklist item name cannot be empty")
+                        raise InputError("Checklist item name cannot be empty")  # noqa: TRY003
                     name = name.strip()
                     if len(name) > 500:
-                        raise InputError("Checklist item name must be 500 characters or less")
+                        raise InputError("Checklist item name must be 500 characters or less")  # noqa: TRY003
                     updates.append("name = ?")
                     params.append(name)
 
@@ -4665,7 +4664,7 @@ END;
                 # Verify checklist exists
                 checklist = self._get_checklist_by_id(conn, checklist_id)
                 if not checklist:
-                    raise NotFoundError("Checklist not found", entity="checklist", entity_id=checklist_id)
+                    raise NotFoundError("Checklist not found", entity="checklist", entity_id=checklist_id)  # noqa: TRY003
 
                 # Verify all items exist and belong to the checklist
                 cur = conn.execute(
@@ -4676,7 +4675,7 @@ END;
 
                 if len(existing_ids) != len(item_ids):
                     missing = set(item_ids) - existing_ids
-                    raise InputError(f"Items not found or don't belong to checklist: {missing}")
+                    raise InputError(f"Items not found or don't belong to checklist: {missing}")  # noqa: TRY003
 
                 # Update positions
                 now = _utcnow_iso()
@@ -4770,10 +4769,10 @@ END;
         """
         # Validate inputs
         if not content or not content.strip():
-            raise InputError("Comment content is required")
+            raise InputError("Comment content is required")  # noqa: TRY003
         content = content.strip()
         if len(content) > self.MAX_COMMENT_SIZE:
-            raise InputError(f"Comment must be {self.MAX_COMMENT_SIZE} characters or less")
+            raise InputError(f"Comment must be {self.MAX_COMMENT_SIZE} characters or less")  # noqa: TRY003
 
         comment_uuid = _generate_uuid()
         now = _utcnow_iso()
@@ -4784,7 +4783,7 @@ END;
                 # Verify card exists and belongs to user
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 # Check comment limit
                 cur = conn.execute(
@@ -4793,7 +4792,7 @@ END;
                 )
                 count = cur.fetchone()["cnt"]
                 if count >= self.MAX_COMMENTS_PER_CARD:
-                    raise InputError(f"Maximum comments ({self.MAX_COMMENTS_PER_CARD}) per card reached")
+                    raise InputError(f"Maximum comments ({self.MAX_COMMENTS_PER_CARD}) per card reached")  # noqa: TRY003
 
                 # Insert comment
                 cur = conn.execute(
@@ -4888,14 +4887,14 @@ END;
             Tuple of (comments list, total count).
         """
         if limit < 1 or offset < 0:
-            raise InputError("limit must be positive and offset must be non-negative")
+            raise InputError("limit must be positive and offset must be non-negative")  # noqa: TRY003
         with self._lock:
             conn = self._connect()
             try:
                 # Verify card exists and belongs to user
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 conditions = ["cm.card_id = ?"]
                 params: list[Any] = [card_id]
@@ -4936,21 +4935,21 @@ END;
         """Update a comment."""
         # Validate inputs
         if not content or not content.strip():
-            raise InputError("Comment content is required")
+            raise InputError("Comment content is required")  # noqa: TRY003
         content = content.strip()
         if len(content) > self.MAX_COMMENT_SIZE:
-            raise InputError(f"Comment must be {self.MAX_COMMENT_SIZE} characters or less")
+            raise InputError(f"Comment must be {self.MAX_COMMENT_SIZE} characters or less")  # noqa: TRY003
 
         with self._lock:
             conn = self._connect()
             try:
                 comment = self._get_comment_by_id(conn, comment_id)
                 if not comment:
-                    raise NotFoundError("Comment not found", entity="comment", entity_id=comment_id)
+                    raise NotFoundError("Comment not found", entity="comment", entity_id=comment_id)  # noqa: TRY003
 
                 # Only the comment author can edit
                 if comment["user_id"] != self.user_id:
-                    raise InputError("You can only edit your own comments")
+                    raise InputError("You can only edit your own comments")  # noqa: TRY003
 
                 # Get the card for activity logging
                 card = self._get_card_by_id(conn, comment["card_id"])
@@ -5040,7 +5039,7 @@ END;
                 # Get the board
                 board = self._get_board_by_id(conn, board_id, include_deleted=include_deleted)
                 if not board:
-                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)
+                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)  # noqa: TRY003
 
                 # Build export structure
                 export_data = {
@@ -5187,7 +5186,7 @@ END;
             # Trello format detection
             result = self._import_trello_format(data, board_name, board_client_id)
         else:
-            raise InputError("Unrecognized import format. Must be tldw_kanban_v1 or Trello JSON format.")
+            raise InputError("Unrecognized import format. Must be tldw_kanban_v1 or Trello JSON format.")  # noqa: TRY003
 
         try:
             self.optimize_fts()
@@ -5199,7 +5198,7 @@ END;
         """Run FTS5 maintenance commands (optimize or rebuild)."""
         action_norm = str(action).strip().lower()
         if action_norm not in {"optimize", "rebuild"}:
-            raise InputError("Unsupported FTS maintenance action. Use 'optimize' or 'rebuild'.")
+            raise InputError("Unsupported FTS maintenance action. Use 'optimize' or 'rebuild'.")  # noqa: TRY003
         with self._lock:
             conn = self._connect()
             try:
@@ -5210,7 +5209,7 @@ END;
                 conn.commit()
             except _KANBAN_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Kanban FTS {action_norm} failed: {e}")
-                raise KanbanDBError(f"FTS {action_norm} failed: {e}") from e
+                raise KanbanDBError(f"FTS {action_norm} failed: {e}") from e  # noqa: TRY003
             finally:
                 conn.close()
 
@@ -5231,7 +5230,7 @@ END;
         """Import from tldw_kanban_v1 format."""
         board_data = data.get("board", {})
         if not board_data:
-            raise InputError("Invalid tldw_kanban_v1 format: missing 'board' data")
+            raise InputError("Invalid tldw_kanban_v1 format: missing 'board' data")  # noqa: TRY003
 
         # Create the board
         new_board = self.create_board(
@@ -5297,10 +5296,8 @@ END;
                         # Assign labels
                         for label_uuid in card_data.get("label_uuids", []):
                             if label_uuid in label_uuid_to_id:
-                                try:
+                                with contextlib.suppress(_KANBAN_NONCRITICAL_EXCEPTIONS):
                                     self.assign_label_to_card(new_card["id"], label_uuid_to_id[label_uuid])
-                                except _KANBAN_NONCRITICAL_EXCEPTIONS:
-                                    pass
 
                         # Import checklists
                         for checklist_data in card_data.get("checklists", []):
@@ -5482,10 +5479,8 @@ END;
                 # Assign labels
                 for label_id in card_data.get("idLabels", []):
                     if label_id in label_id_map:
-                        try:
+                        with contextlib.suppress(_KANBAN_NONCRITICAL_EXCEPTIONS):
                             self.assign_label_to_card(new_card["id"], label_id_map[label_id])
-                        except _KANBAN_NONCRITICAL_EXCEPTIONS:
-                            pass
 
                 # Import checklists
                 for checklist_id in card_data.get("idChecklists", []):
@@ -5564,7 +5559,7 @@ END;
                 # Verify target list exists
                 target_list = self._get_list_by_id(conn, target_list_id)
                 if not target_list:
-                    raise NotFoundError("Target list not found", entity="list", entity_id=target_list_id)
+                    raise NotFoundError("Target list not found", entity="list", entity_id=target_list_id)  # noqa: TRY003
 
                 board_id = target_list["board_id"]
 
@@ -5582,12 +5577,12 @@ END;
                 if len(cards) != len(card_ids):
                     found_ids = {c["id"] for c in cards}
                     missing = set(card_ids) - found_ids
-                    raise NotFoundError(f"Cards not found: {missing}", entity="card")
+                    raise NotFoundError(f"Cards not found: {missing}", entity="card")  # noqa: TRY003
 
                 # Verify all cards are from the same board as target list
                 for card in cards:
                     if card["board_id"] != board_id:
-                        raise InputError(f"Card {card['id']} is not in the same board as the target list")
+                        raise InputError(f"Card {card['id']} is not in the same board as the target list")  # noqa: TRY003
 
                 # Determine starting position
                 if start_position is None:
@@ -5668,14 +5663,14 @@ END;
                 if len(cards) != len(card_ids):
                     found_ids = {c["id"] for c in cards}
                     missing = set(card_ids) - found_ids
-                    raise NotFoundError(f"Cards not found: {missing}", entity="card")
+                    raise NotFoundError(f"Cards not found: {missing}", entity="card")  # noqa: TRY003
 
                 # Verify all cards belong to the same user (same board check)
                 board_ids = {c["board_id"] for c in cards}
                 for bid in board_ids:
                     board = self._get_board_by_id(conn, bid)
                     if not board or board["user_id"] != self.user_id:
-                        raise NotFoundError("Board not found or access denied", entity="board")
+                        raise NotFoundError("Board not found or access denied", entity="board")  # noqa: TRY003
 
                 # Archive/unarchive cards
                 now = _utcnow_iso()
@@ -5739,14 +5734,14 @@ END;
                 if len(cards) != len(card_ids):
                     found_ids = {c["id"] for c in cards}
                     missing = set(card_ids) - found_ids
-                    raise NotFoundError(f"Cards not found: {missing}", entity="card")
+                    raise NotFoundError(f"Cards not found: {missing}", entity="card")  # noqa: TRY003
 
                 # Verify all cards belong to the same user
                 board_ids = {c["board_id"] for c in cards}
                 for bid in board_ids:
                     board = self._get_board_by_id(conn, bid)
                     if not board or board["user_id"] != self.user_id:
-                        raise NotFoundError("Board not found or access denied", entity="board")
+                        raise NotFoundError("Board not found or access denied", entity="board")  # noqa: TRY003
 
                 now = _utcnow_iso()
 
@@ -5828,7 +5823,7 @@ END;
                 if len(cards) != len(card_ids):
                     found_ids = {c["id"] for c in cards}
                     missing = set(card_ids) - found_ids
-                    raise NotFoundError(f"Cards not found: {missing}", entity="card")
+                    raise NotFoundError(f"Cards not found: {missing}", entity="card")  # noqa: TRY003
 
                 # Get unique board IDs
                 board_ids = {c["board_id"] for c in cards}
@@ -5845,9 +5840,9 @@ END;
 
                     for label_id in all_label_ids:
                         if label_id not in labels:
-                            raise NotFoundError(f"Label {label_id} not found", entity="label", entity_id=label_id)
+                            raise NotFoundError(f"Label {label_id} not found", entity="label", entity_id=label_id)  # noqa: TRY003
                         if labels[label_id]["board_id"] not in board_ids:
-                            raise InputError(f"Label {label_id} does not belong to the same board as the cards")
+                            raise InputError(f"Label {label_id} does not belong to the same board as the cards")  # noqa: TRY003
 
                 now = _utcnow_iso()
                 updated_count = 0
@@ -5956,7 +5951,7 @@ END;
                 # Verify board exists and belongs to user
                 board = self._get_board_by_id(conn, board_id)
                 if not board:
-                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)
+                    raise NotFoundError("Board not found", entity="board", entity_id=board_id)  # noqa: TRY003
                 if board["archived"] and not include_archived:
                     return [], 0
 
@@ -6080,12 +6075,12 @@ END;
                 # Get the checklist
                 checklist = self.get_checklist(checklist_id)
                 if not checklist:
-                    raise NotFoundError("Checklist not found", entity="checklist", entity_id=checklist_id)
+                    raise NotFoundError("Checklist not found", entity="checklist", entity_id=checklist_id)  # noqa: TRY003
 
                 # Get the card to verify ownership and get board_id
                 card = self._get_card_by_id(conn, checklist["card_id"])
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=checklist["card_id"])
+                    raise NotFoundError("Card not found", entity="card", entity_id=checklist["card_id"])  # noqa: TRY003
 
                 now = _utcnow_iso()
 
@@ -6160,15 +6155,15 @@ END;
             try:
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)
+                    raise NotFoundError("Card not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 target_list = self._get_list_by_id(conn, target_list_id)
                 if not target_list:
-                    raise NotFoundError("Target list not found", entity="list", entity_id=target_list_id)
+                    raise NotFoundError("Target list not found", entity="list", entity_id=target_list_id)  # noqa: TRY003
 
                 # Verify target list is in the same board
                 if target_list["board_id"] != card["board_id"]:
-                    raise InputError("Cannot copy card to a list in a different board")
+                    raise InputError("Cannot copy card to a list in a different board")  # noqa: TRY003
 
                 # Enforce board and list limits
                 cur = conn.execute(
@@ -6177,7 +6172,7 @@ END;
                 )
                 board_count = cur.fetchone()["cnt"]
                 if board_count >= self.MAX_CARDS_PER_BOARD:
-                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_BOARD}) per board reached")
+                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_BOARD}) per board reached")  # noqa: TRY003
 
                 cur = conn.execute(
                     "SELECT COUNT(*) as cnt FROM kanban_cards WHERE list_id = ? AND deleted = 0",
@@ -6185,7 +6180,7 @@ END;
                 )
                 list_count = cur.fetchone()["cnt"]
                 if list_count >= self.MAX_CARDS_PER_LIST:
-                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_LIST}) per list reached")
+                    raise InputError(f"Maximum cards ({self.MAX_CARDS_PER_LIST}) per list reached")  # noqa: TRY003
 
                 # Generate title if not provided
                 if new_title is None:
@@ -6290,12 +6285,12 @@ END;
 
             except sqlite3.IntegrityError as e:
                 if "UNIQUE constraint" in str(e) and "client_id" in str(e):
-                    raise ConflictError(
+                    raise ConflictError(  # noqa: B904, TRY003
                         f"Card with client_id '{new_client_id}' already exists",
                         entity="card",
                         entity_id=new_client_id
                     )
-                raise KanbanDBError(f"Database error: {e}") from e
+                raise KanbanDBError(f"Database error: {e}") from e  # noqa: TRY003
             finally:
                 conn.close()
 
@@ -6330,7 +6325,7 @@ END;
             ConflictError: If the link already exists.
         """
         if linked_type not in ("media", "note"):
-            raise InputError(f"Invalid linked_type: {linked_type}. Must be 'media' or 'note'.")
+            raise InputError(f"Invalid linked_type: {linked_type}. Must be 'media' or 'note'.")  # noqa: TRY003
 
         with self._lock:
             conn = self._connect()
@@ -6338,7 +6333,7 @@ END;
                 # Verify card exists and belongs to user
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)
+                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 link_uuid = _generate_uuid()
                 now = _utcnow_iso()
@@ -6361,7 +6356,7 @@ END;
 
                 conn.commit()
 
-                return {
+                return {  # noqa: TRY300
                     "id": link_id,
                     "card_id": card_id,
                     "linked_type": linked_type,
@@ -6371,11 +6366,11 @@ END;
 
             except sqlite3.IntegrityError as e:
                 if "UNIQUE constraint" in str(e):
-                    raise ConflictError(
+                    raise ConflictError(  # noqa: B904, TRY003
                         f"Link already exists from card {card_id} to {linked_type}:{linked_id}",
                         entity="card_link"
                     )
-                raise KanbanDBError(f"Database error: {e}") from e
+                raise KanbanDBError(f"Database error: {e}") from e  # noqa: TRY003
             finally:
                 conn.close()
 
@@ -6403,7 +6398,7 @@ END;
                 # Verify card exists and belongs to user
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)
+                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 if linked_type:
                     cur = conn.execute(
@@ -6450,7 +6445,7 @@ END;
                 # Verify card exists and belongs to user
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)
+                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 cur = conn.execute(
                     """
@@ -6497,7 +6492,7 @@ END;
                 # Verify card exists and belongs to user
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)
+                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 cur = conn.execute(
                     """
@@ -6629,7 +6624,7 @@ END;
         # Validate all linked_types first
         for link in links:
             if link.get("linked_type") not in ("media", "note"):
-                raise InputError(
+                raise InputError(  # noqa: TRY003
                     f"Invalid linked_type: {link.get('linked_type')}. Must be 'media' or 'note'."
                 )
 
@@ -6639,7 +6634,7 @@ END;
                 # Verify card exists and belongs to user
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)
+                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 added_links = []
                 skipped_count = 0
@@ -6713,7 +6708,7 @@ END;
                 # Verify card exists and belongs to user
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
-                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)
+                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)  # noqa: TRY003
 
                 removed_count = 0
 

@@ -1,6 +1,7 @@
 import React from "react"
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { useQuery } from "@tanstack/react-query"
 import { ConversationTab } from "../Settings/tabs/ConversationTab"
 import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
 
@@ -116,9 +117,20 @@ vi.mock("antd", () => {
 
 describe("ConversationTab generation override controls", () => {
   const updateSettings = vi.fn().mockResolvedValue(undefined)
+  const buildQueryResult = (overrides: Record<string, unknown> = {}) =>
+    ({
+      data: [],
+      isLoading: false,
+      isError: false,
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+      ...overrides
+    }) as any
 
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(useQuery).mockReturnValue(buildQueryResult())
     vi.mocked(useChatSettingsRecord).mockReturnValue({
       settings: {
         chatGenerationOverride: {
@@ -192,5 +204,31 @@ describe("ConversationTab generation override controls", () => {
         })
       )
     })
+  })
+
+  it("shows an inline warning when characters fail to load", async () => {
+    vi.mocked(useQuery)
+      .mockReturnValueOnce(buildQueryResult({ isError: true }))
+      .mockReturnValueOnce(buildQueryResult())
+
+    renderConversationTab()
+
+    expect(
+      await screen.findByText(
+        "Failed to load character list. Participant options may be incomplete."
+      )
+    ).toBeInTheDocument()
+  })
+
+  it("shows an inline warning when pinned messages fail to load", async () => {
+    vi.mocked(useQuery)
+      .mockReturnValueOnce(buildQueryResult())
+      .mockReturnValueOnce(buildQueryResult({ isError: true }))
+
+    renderConversationTab()
+
+    expect(
+      await screen.findByText("Failed to load pinned messages.")
+    ).toBeInTheDocument()
   })
 })

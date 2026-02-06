@@ -308,6 +308,10 @@ uv.lock
 !/models/Whisper/
 !/models/Whisper/.gitkeep
 !/models/Whisper/.gitignore
+!/models/flashrank/
+!/models/flashrank/.gitkeep
+!/models/flashrank/README.md
+!/models/flashrank/**
 /cache
 /.tmp
 /tldw_Server_API/Test_Cache

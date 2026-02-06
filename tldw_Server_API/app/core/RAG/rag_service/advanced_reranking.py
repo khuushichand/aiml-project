@@ -18,6 +18,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 from fnmatch import fnmatch
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
@@ -72,6 +73,58 @@ def _hf_trusts_remote_code(model_name: str, patterns: Optional[Iterable[Any]]) -
         if fnmatch(model_name, pat) or fnmatch(model_l, str(pat).lower()):
             return True
     return False
+
+
+def _repo_root_dir() -> Path:
+    """
+    Resolve repository root from this module location.
+
+    advanced_reranking.py is at:
+    tldw_Server_API/app/core/RAG/rag_service/advanced_reranking.py
+    so repo root is parents[5].
+    """
+    try:
+        return Path(__file__).resolve().parents[5]
+    except Exception:  # noqa: BLE001 - fallback to current working dir
+        return Path.cwd()
+
+
+def _resolve_flashrank_cache_dir(raw_value: Optional[str]) -> str:
+    """Resolve flashrank cache dir, defaulting to repo-local models/flashrank."""
+    repo_root = _repo_root_dir()
+    default_dir = repo_root / "models" / "flashrank"
+    if raw_value is None:
+        return str(default_dir)
+
+    normalized = str(raw_value).strip()
+    if not normalized:
+        return str(default_dir)
+    candidate = Path(normalized).expanduser()
+    if not candidate.is_absolute():
+        candidate = repo_root / candidate
+    return str(candidate)
+
+
+def _load_flashrank_defaults_from_config() -> tuple[str, Optional[str]]:
+    """Load FlashRank model/cache defaults from env/config."""
+    model_name = os.getenv("RAG_FLASHRANK_MODEL_NAME")
+    cache_dir = os.getenv("RAG_FLASHRANK_CACHE_DIR")
+
+    if model_name and cache_dir:
+        return model_name, cache_dir
+
+    try:
+        from tldw_Server_API.app.core.config import load_comprehensive_config
+        cp = load_comprehensive_config()
+        if cp and hasattr(cp, "has_section") and cp.has_section("RAG"):
+            if not model_name:
+                model_name = cp.get("RAG", "flashrank_model_name", fallback=None)
+            if not cache_dir:
+                cache_dir = cp.get("RAG", "flashrank_cache_dir", fallback=None)
+    except Exception:  # noqa: BLE001 - best effort lookup
+        pass
+
+    return (model_name or "ms-marco-TinyBERT-L-2-v2"), cache_dir
 
 
 class LlamaEmbeddingError(RuntimeError):
@@ -205,13 +258,41 @@ class FlashRankReranker(BaseReranker):
         """Initialize FlashRank reranker."""
         super().__init__(config)
         self._ranker = None
+        default_model_name, default_cache_dir = _load_flashrank_defaults_from_config()
+        self._flashrank_model_name = default_model_name
+        self._flashrank_cache_dir = _resolve_flashrank_cache_dir(None)
 
         try:
             from flashrank import Ranker
-            self._ranker = Ranker()
-            logger.info("FlashRank reranker initialized")
+            configured_model = (
+                config.model_name
+                or default_model_name
+            )
+            configured_cache = default_cache_dir
+            resolved_cache_dir = _resolve_flashrank_cache_dir(configured_cache)
+            os.makedirs(resolved_cache_dir, exist_ok=True)
+
+            self._ranker = Ranker(
+                model_name=str(configured_model),
+                cache_dir=resolved_cache_dir
+            )
+            self._flashrank_model_name = str(configured_model)
+            self._flashrank_cache_dir = resolved_cache_dir
+            logger.info(
+                "FlashRank reranker initialized (model='{}', cache_dir='{}')",
+                self._flashrank_model_name,
+                self._flashrank_cache_dir,
+            )
         except ImportError:
             logger.warning("FlashRank not available")
+        except Exception as e:  # noqa: BLE001 - fallback should not fail request
+            logger.warning(
+                "FlashRank initialization failed (model='{}', cache_dir='{}'): {}. "
+                "Falling back to retrieval order.",
+                self._flashrank_model_name,
+                self._flashrank_cache_dir,
+                e,
+            )
 
     async def rerank(
         self,

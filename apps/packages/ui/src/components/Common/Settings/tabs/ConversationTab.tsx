@@ -225,19 +225,24 @@ const normalizeTurnTakingMode = (value: unknown): "single" | "round_robin" => {
   return "single"
 }
 
+const normalizeCharacterIdValue = (value: unknown): string | null => {
+  const text = String(value ?? "").trim()
+  if (!text) return null
+  if (/^\d+$/.test(text)) {
+    return text
+  }
+  return text
+}
+
 const normalizeParticipantCharacterIds = (value: unknown): string[] => {
   const normalizedIds: string[] = []
   const seen = new Set<string>()
 
   const append = (candidate: unknown) => {
-    const text = String(candidate ?? "").trim()
-    if (!text) return
-    const parsed = Number.parseInt(text, 10)
-    if (!Number.isFinite(parsed) || parsed <= 0) return
-    const key = String(parsed)
-    if (seen.has(key)) return
-    seen.add(key)
-    normalizedIds.push(key)
+    const normalizedId = normalizeCharacterIdValue(candidate)
+    if (!normalizedId || seen.has(normalizedId)) return
+    seen.add(normalizedId)
+    normalizedIds.push(normalizedId)
   }
 
   if (Array.isArray(value)) {
@@ -268,11 +273,7 @@ const normalizeParticipantCharacterIds = (value: unknown): string[] => {
 }
 
 const normalizeDirectedCharacterId = (value: unknown): string | null => {
-  const text = String(value ?? "").trim()
-  if (!text) return null
-  const parsed = Number.parseInt(text, 10)
-  if (!Number.isFinite(parsed) || parsed <= 0) return null
-  return String(parsed)
+  return normalizeCharacterIdValue(value)
 }
 
 const normalizeCharacterMemoryById = (
@@ -281,21 +282,23 @@ const normalizeCharacterMemoryById = (
   if (!value || typeof value !== "object") return {}
   const normalized: Record<string, { note: string; updatedAt?: string }> = {}
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    const parsedId = Number.parseInt(String(key), 10)
-    if (!Number.isFinite(parsedId) || parsedId <= 0) continue
+    const normalizedId = normalizeCharacterIdValue(key)
+    if (!normalizedId) continue
     if (entry && typeof entry === "object") {
       const note = String((entry as { note?: unknown }).note ?? "").trim()
       if (!note) continue
       const updatedAt = (entry as { updatedAt?: unknown }).updatedAt
-      normalized[String(parsedId)] = {
+      const normalizedUpdatedAt =
+        typeof updatedAt === "string" ? updatedAt.trim() : ""
+      normalized[normalizedId] = {
         note,
-        updatedAt: typeof updatedAt === "string" ? updatedAt : undefined
+        updatedAt: normalizedUpdatedAt || undefined
       }
       continue
     }
     const note = String(entry ?? "").trim()
     if (!note) continue
-    normalized[String(parsedId)] = { note }
+    normalized[normalizedId] = { note }
   }
   return normalized
 }
@@ -440,23 +443,29 @@ export function ConversationTab({
   const participantCharacterIdsValue = normalizeParticipantCharacterIds(
     chatSettings?.participantCharacterIds
   )
-  const { data: availableCharacters = [] } = useQuery<CharacterLite[]>({
+  const {
+    data: availableCharacters = [],
+    isError: isAvailableCharactersError
+  } = useQuery<CharacterLite[]>({
     queryKey: ["tldw:listCharacters", "conversation-tab"],
     queryFn: async () => {
-      await tldwClient.initialize().catch(() => null)
+      await tldwClient.initialize()
       const list = await tldwClient.listCharacters({ limit: 200 })
       return Array.isArray(list) ? (list as CharacterLite[]) : []
     },
     staleTime: 60_000
   })
-  const { data: pinnedMessages = [] } = useQuery<
+  const {
+    data: pinnedMessages = [],
+    isError: isPinnedMessagesError
+  } = useQuery<
     Array<{ id: string; role: string; content: string }>
   >({
     queryKey: ["conversation-tab:pinned-messages", serverChatId],
     enabled: Boolean(serverChatId),
     queryFn: async () => {
       if (!serverChatId) return []
-      await tldwClient.initialize().catch(() => null)
+      await tldwClient.initialize()
       const list = await tldwClient.listChatMessages(serverChatId, {
         include_deleted: "false",
         include_metadata: "true"
@@ -1278,22 +1287,32 @@ export function ConversationTab({
             "Select additional characters for multi-character chats. The chat's primary character remains included."
         })}
       >
-        <Select
-          mode="multiple"
-          allowClear
-          showSearch
-          value={participantCharacterIdsValue}
-          options={participantCharacterOptions}
-          placeholder={t("playground:composer.participants.placeholder", {
-            defaultValue: "Select additional characters"
-          })}
-          onChange={(values) => {
-            const nextValues = Array.isArray(values)
-              ? values.map((value) => String(value))
-              : []
-            void persistParticipantCharacterIds(nextValues)
-          }}
-        />
+        <div className="space-y-1">
+          <Select
+            mode="multiple"
+            allowClear
+            showSearch
+            value={participantCharacterIdsValue}
+            options={participantCharacterOptions}
+            placeholder={t("playground:composer.participants.placeholder", {
+              defaultValue: "Select additional characters"
+            })}
+            onChange={(values) => {
+              const nextValues = Array.isArray(values)
+                ? values.map((value) => String(value))
+                : []
+              void persistParticipantCharacterIds(nextValues)
+            }}
+          />
+          {isAvailableCharactersError && (
+            <p className="text-[11px] text-danger">
+              {t("playground:composer.participants.loadError", {
+                defaultValue:
+                  "Failed to load character list. Participant options may be incomplete."
+              })}
+            </p>
+          )}
+        </div>
       </Form.Item>
 
       <Form.Item
@@ -1450,7 +1469,14 @@ export function ConversationTab({
         })}
       >
         <div className="space-y-2 max-h-40 overflow-y-auto rounded-md border border-border/60 bg-surface2/30 p-2">
-          {pinnedMessages.length === 0 ? (
+          {isPinnedMessagesError && (
+            <div className="text-xs text-danger">
+              {t("playground:composer.pinnedMessages.loadError", {
+                defaultValue: "Failed to load pinned messages."
+              })}
+            </div>
+          )}
+          {!isPinnedMessagesError && pinnedMessages.length === 0 ? (
             <div className="text-xs text-text-muted">
               {t("playground:composer.pinnedMessages.empty", {
                 defaultValue: "No pinned messages in this chat."

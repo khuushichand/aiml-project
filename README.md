@@ -232,8 +232,9 @@ pip install -e ".[otel]"          # OpenTelemetry metrics/tracing
 # macOS: brew install portaudio && pip install pyaudio
 ```
 
-MCP secrets (`MCP_JWT_SECRET`, `MCP_API_KEY_SALT`) are auto-generated for quickstart.
-For production, set these explicitly and rotate regularly.
+MCP secrets (`MCP_JWT_SECRET`, `MCP_API_KEY_SALT`) default to safe process-local generation
+when running with local-only MCP defaults (loopback IP/origin restrictions).
+For shared or production deployments, set these explicitly and rotate regularly.
 </details>
 
 ### Next Steps by Goal

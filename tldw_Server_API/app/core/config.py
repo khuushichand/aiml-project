@@ -1483,6 +1483,18 @@ def load_settings():
         ))(),
         "IMPLICIT_FEEDBACK_ENABLED": implicit_feedback_enabled(default=True),
 
+        # RAG FlashRank reranker cache/model configuration
+        "RAG_FLASHRANK_CACHE_DIR": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'flashrank_cache_dir', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_FLASHRANK_CACHE_DIR'), load_comprehensive_config()),
+        "RAG_FLASHRANK_MODEL_NAME": (lambda _env, _cp: (
+            _env if _env is not None else (
+                _cp.get('RAG', 'flashrank_model_name', fallback=None) if _cp and hasattr(_cp, 'get') and _cp.has_section('RAG') else None
+            )
+        ))(os.getenv('RAG_FLASHRANK_MODEL_NAME'), load_comprehensive_config()),
+
         # RAG LLM reranker configuration (provider/model)
         "RAG_LLM_RERANKER_PROVIDER": (lambda _env, _cp: (
             _env if _env is not None else (

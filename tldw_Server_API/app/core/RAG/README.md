@@ -652,6 +652,8 @@ print(result.metadata.get("reranking_calibration"))
 Environment defaults (tunable):
 
 - `RAG_TRANSFORMERS_RERANKER_MODEL` cross-encoder model id (default `BAAI/bge-reranker-v2-m3`)
+- `RAG_FLASHRANK_CACHE_DIR` FlashRank model cache root (default repo-local `models/flashrank`)
+- `RAG_FLASHRANK_MODEL_NAME` FlashRank model family/directory (default `ms-marco-TinyBERT-L-2-v2`)
 - `RAG_LLM_RERANK_TIMEOUT_SEC` per-doc LLM scoring timeout (default 10)
 - `RAG_LLM_RERANK_TOTAL_BUDGET_SEC` total budget cap (default 20)
 - `RAG_LLM_RERANK_MAX_DOCS` max docs scored by LLM (default 20)

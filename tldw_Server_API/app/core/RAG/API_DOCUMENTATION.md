@@ -396,6 +396,8 @@ Notes:
 
 Environment variables (optional):
 - `RAG_TRANSFORMERS_RERANKER_MODEL` (default `BAAI/bge-reranker-v2-m3`)
+- `RAG_FLASHRANK_CACHE_DIR` (default repo-local `models/flashrank`)
+- `RAG_FLASHRANK_MODEL_NAME` (default `ms-marco-TinyBERT-L-2-v2`)
 - `RAG_LLM_RERANK_TIMEOUT_SEC`, `RAG_LLM_RERANK_TOTAL_BUDGET_SEC`, `RAG_LLM_RERANK_MAX_DOCS`
 - Calibration weights: `RAG_RERANK_CALIB_BIAS`, `RAG_RERANK_CALIB_W_ORIG`, `RAG_RERANK_CALIB_W_CE`, `RAG_RERANK_CALIB_W_LLM`
 - Gating: `RAG_MIN_RELEVANCE_PROB`, `RAG_SENTINEL_MARGIN`

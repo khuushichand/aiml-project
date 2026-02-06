@@ -12,6 +12,8 @@ import type {
   SearchResult,
   EpubTheme,
   EpubScrollMode,
+  EpubSpreadMode,
+  EpubFontFamily,
   InsightDetailLevel
 } from "@/components/DocumentWorkspace/types"
 import {
@@ -74,6 +76,10 @@ export const useDocumentWorkspaceStore = create<DocumentWorkspaceStore>(
     currentChapterTitle: null,
     epubTheme: "light",
     epubScrollMode: "paginated",
+    epubSpreadMode: "none",
+    epubFontSize: 100,
+    epubFontFamily: "inter",
+    epubLineHeight: 1.6,
     insightDetailLevel: "standard",
     searchOpen: false,
     searchQuery: "",
@@ -335,6 +341,44 @@ export const useDocumentWorkspaceStore = create<DocumentWorkspaceStore>(
       }
     },
 
+    setEpubSpreadMode: (mode: EpubSpreadMode) => {
+      set({ epubSpreadMode: mode })
+      try {
+        localStorage.setItem("epub-spread-mode", mode)
+      } catch (e) {
+        // Ignore storage errors
+      }
+    },
+
+    setEpubFontSize: (size: number) => {
+      const clamped = Math.max(50, Math.min(200, size))
+      set({ epubFontSize: clamped })
+      try {
+        localStorage.setItem("epub-font-size", String(clamped))
+      } catch (e) {
+        // Ignore storage errors
+      }
+    },
+
+    setEpubFontFamily: (family: EpubFontFamily) => {
+      set({ epubFontFamily: family })
+      try {
+        localStorage.setItem("epub-font-family", family)
+      } catch (e) {
+        // Ignore storage errors
+      }
+    },
+
+    setEpubLineHeight: (height: number) => {
+      const clamped = Math.max(1.0, Math.min(2.5, height))
+      set({ epubLineHeight: clamped })
+      try {
+        localStorage.setItem("epub-line-height", String(clamped))
+      } catch (e) {
+        // Ignore storage errors
+      }
+    },
+
     setInsightDetailLevel: (level: InsightDetailLevel) => {
       set({ insightDetailLevel: level })
       // Persist to localStorage
@@ -441,6 +485,10 @@ export const useDocumentWorkspaceStore = create<DocumentWorkspaceStore>(
         currentChapterTitle: null,
         epubTheme: "light",
         epubScrollMode: "paginated",
+        epubSpreadMode: "none",
+        epubFontSize: 100,
+        epubFontFamily: "inter",
+        epubLineHeight: 1.6,
         insightDetailLevel: "standard",
         searchOpen: false,
         searchQuery: "",
@@ -470,6 +518,28 @@ if (typeof window !== "undefined") {
     }
     if (savedDetailLevel && ["brief", "standard", "detailed"].includes(savedDetailLevel)) {
       useDocumentWorkspaceStore.setState({ insightDetailLevel: savedDetailLevel as InsightDetailLevel })
+    }
+    const savedSpreadMode = localStorage.getItem("epub-spread-mode")
+    if (savedSpreadMode && ["none", "auto", "always"].includes(savedSpreadMode)) {
+      useDocumentWorkspaceStore.setState({ epubSpreadMode: savedSpreadMode as EpubSpreadMode })
+    }
+    const savedFontSize = localStorage.getItem("epub-font-size")
+    if (savedFontSize) {
+      const size = parseInt(savedFontSize, 10)
+      if (size >= 50 && size <= 200) {
+        useDocumentWorkspaceStore.setState({ epubFontSize: size })
+      }
+    }
+    const savedFontFamily = localStorage.getItem("epub-font-family")
+    if (savedFontFamily && ["inter", "georgia", "merriweather", "system"].includes(savedFontFamily)) {
+      useDocumentWorkspaceStore.setState({ epubFontFamily: savedFontFamily as EpubFontFamily })
+    }
+    const savedLineHeight = localStorage.getItem("epub-line-height")
+    if (savedLineHeight) {
+      const height = parseFloat(savedLineHeight)
+      if (height >= 1.0 && height <= 2.5) {
+        useDocumentWorkspaceStore.setState({ epubLineHeight: height })
+      }
     }
   } catch (e) {
     // Ignore storage errors

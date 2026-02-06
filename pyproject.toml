@@ -675,6 +675,10 @@ exclude = []
 
 [tool.ruff.lint.per-file-ignores]
 "tldw_Server_API/app/api/v1/endpoints/*.py" = ["B008"]
+"tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB.py" = ["N999"]
+"tldw_Server_API/app/core/DB_Management/Kanban_DB.py" = ["N999"]
+"tldw_Server_API/app/core/DB_Management/Media_DB_v2.py" = ["N999"]
+"tldw_Server_API/app/core/DB_Management/PromptStudioDatabase.py" = ["N999"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["tldw_Server_API"]

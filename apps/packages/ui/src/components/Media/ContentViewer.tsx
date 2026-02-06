@@ -590,7 +590,9 @@ export function ContentViewer({
       }
     ] : []),
     // Copy group
-    { type: 'divider' as const },
+    ...(!isNote && (onChatWithMedia || onChatAboutMedia || onCreateNoteWithContent)
+      ? [{ type: 'divider' as const }]
+      : []),
     {
       key: 'group-copy',
       type: 'group' as const,

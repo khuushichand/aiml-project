@@ -209,14 +209,18 @@ export const PlaygroundMessage = (props: Props) => {
   const wasStreamingRef = useRef(false)
   const [streamingComplete, setStreamingComplete] = useState(false)
   useEffect(() => {
-    if (props.isBot && isLastMessage) {
-      if (wasStreamingRef.current && !props.isStreaming && !props.isProcessing) {
-        setStreamingComplete(true)
-        const timer = setTimeout(() => setStreamingComplete(false), 2000)
-        return () => clearTimeout(timer)
-      }
-      wasStreamingRef.current = props.isStreaming || props.isProcessing
+    if (!props.isBot || !isLastMessage) {
+      wasStreamingRef.current = false
+      setStreamingComplete(false)
+      return
     }
+
+    if (wasStreamingRef.current && !props.isStreaming && !props.isProcessing) {
+      setStreamingComplete(true)
+      const timer = setTimeout(() => setStreamingComplete(false), 2000)
+      return () => clearTimeout(timer)
+    }
+    wasStreamingRef.current = props.isStreaming || props.isProcessing
   }, [props.isBot, isLastMessage, props.isStreaming, props.isProcessing])
 
   const errorPayload = decodeChatErrorPayload(props.message)
@@ -838,6 +842,23 @@ export const PlaygroundMessage = (props: Props) => {
 
   const compareLabel = t("playground:composer.compareTag", "Compare")
   const systemLabel = t("playground:systemPrompt", "System prompt")
+  const messageRole = isSystemMessage
+    ? "system"
+    : props.isBot
+      ? "assistant"
+      : "user"
+  const messageRoleLabel =
+    messageRole === "system"
+      ? t("message.role.system", "System")
+      : messageRole === "assistant"
+        ? t("message.role.assistant", "Assistant")
+        : t("message.role.user", "User")
+  const messageAriaLabel = t("message.ariaLabel", {
+    defaultValue: "{{role}} message {{current}} of {{total}}",
+    role: messageRoleLabel,
+    current: props.currentMessageIndex + 1,
+    total: props.totalMessages
+  }) as string
 
   if (isUserChatBubble && !props.isBot) {
     return (
@@ -863,12 +884,12 @@ export const PlaygroundMessage = (props: Props) => {
   return (
     <article
       data-testid="chat-message"
-      data-role={isSystemMessage ? "system" : props.isBot ? "assistant" : "user"}
+      data-role={messageRole}
       data-message-type={props.message_type}
       data-index={props.currentMessageIndex}
       data-message-id={props.messageId}
       data-server-message-id={props.serverMessageId}
-      aria-label={`${isSystemMessage ? "System" : props.isBot ? "Assistant" : "User"} message ${props.currentMessageIndex + 1} of ${props.totalMessages}`}
+      aria-label={messageAriaLabel}
       aria-busy={props.isStreaming && isLastMessage ? true : undefined}
       className={`group relative flex w-full max-w-3xl flex-col items-end justify-center text-text ${
         isProMode ? "pb-3 md:px-5" : "pb-2 md:px-4"

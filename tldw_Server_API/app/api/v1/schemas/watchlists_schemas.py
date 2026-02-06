@@ -83,6 +83,23 @@ class SourcesListResponse(BaseModel):
     total: int
 
 
+class SourceSeenStats(BaseModel):
+    source_id: int
+    user_id: int
+    seen_count: int = 0
+    latest_seen_at: str | None = None
+    defer_until: str | None = None
+    consec_not_modified: int | None = None
+    recent_keys: list[str] = Field(default_factory=list)
+
+
+class SourceSeenResetResponse(BaseModel):
+    source_id: int
+    user_id: int
+    cleared: int
+    cleared_backoff: bool
+
+
 class SourcesBulkCreateRequest(BaseModel):
     sources: list[SourceCreateRequest]
 

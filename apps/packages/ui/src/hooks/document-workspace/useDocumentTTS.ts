@@ -33,6 +33,8 @@ export interface TTSState {
   isLoading: boolean
   error: string | null
   currentText: string | null
+  /** Last text that was spoken, persists after playback ends for replay */
+  lastSpokenText: string | null
 }
 
 /**
@@ -86,7 +88,8 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
     isPaused: false,
     isLoading: false,
     error: null,
-    currentText: null
+    currentText: null,
+    lastSpokenText: null
   })
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -151,13 +154,14 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
       audioUrlRef.current = null
     }
 
-    setState({
+    setState((prev) => ({
       isPlaying: false,
       isPaused: false,
       isLoading: true,
       error: null,
-      currentText: text
-    })
+      currentText: text,
+      lastSpokenText: text
+    }))
 
     try {
       // Call TTS API
@@ -193,7 +197,8 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
           ...prev,
           isPlaying: false,
           isPaused: false,
-          currentText: null
+          currentText: null,
+          lastSpokenText: prev.lastSpokenText
         }))
       }
 
@@ -228,13 +233,14 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
       await audio.play()
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "TTS failed"
-      setState({
+      setState((prev) => ({
         isPlaying: false,
         isPaused: false,
         isLoading: false,
         error: errorMessage,
-        currentText: null
-      })
+        currentText: null,
+        lastSpokenText: prev.lastSpokenText
+      }))
     }
   }, [voice, speed])
 
@@ -263,13 +269,14 @@ export function useDocumentTTS(): UseDocumentTTSReturn {
       URL.revokeObjectURL(audioUrlRef.current)
       audioUrlRef.current = null
     }
-    setState({
+    setState((prev) => ({
       isPlaying: false,
       isPaused: false,
       isLoading: false,
       error: null,
-      currentText: null
-    })
+      currentText: null,
+      lastSpokenText: prev.lastSpokenText
+    }))
   }, [])
 
   // Set voice with persistence

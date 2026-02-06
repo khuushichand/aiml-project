@@ -173,6 +173,8 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
         type="button"
         className="flex w-full items-center justify-between px-3 py-2 text-left"
         onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-controls="prompt-assembly-preview-panel"
       >
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-text">
@@ -201,7 +203,10 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
       </button>
 
       {open && (
-        <div className="border-t border-border/60 px-3 py-3 text-xs">
+        <div
+          id="prompt-assembly-preview-panel"
+          className="border-t border-border/60 px-3 py-3 text-xs"
+        >
           {!serverChatId && (
             <p className="text-text-muted">
               {t("playground:composer.promptPreview.serverBackedOnly", {

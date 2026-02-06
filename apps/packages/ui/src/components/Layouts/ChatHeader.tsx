@@ -19,10 +19,7 @@ type ChatHeaderProps = {
   onOpenCommandPalette: () => void
   onOpenShortcutsModal: () => void
   onOpenSettings: () => void
-  onOpenTtsClips?: () => void
   onClearChat: () => void
-  showTimelineButton?: boolean
-  onOpenTimeline?: () => void
   shortcutsExpanded: boolean
   onToggleShortcuts: (next?: boolean) => void
   commandKeyLabel: string
@@ -42,10 +39,7 @@ export function ChatHeader({
   onOpenCommandPalette,
   onOpenShortcutsModal,
   onOpenSettings,
-  onOpenTtsClips,
   onClearChat,
-  showTimelineButton = false,
-  onOpenTimeline,
   shortcutsExpanded,
   onToggleShortcuts,
   commandKeyLabel
@@ -62,7 +56,6 @@ export function ChatHeader({
     ? t("option:header.hideShortcuts", "Hide shortcuts")
     : t("option:header.showShortcuts", "Show shortcuts")
   const canEditTitle = !temporaryChat && historyId && historyId !== "temp"
-  const timelineLabel = t("option:header.timeline", "Timeline")
 
   return (
     <header

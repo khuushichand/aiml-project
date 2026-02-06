@@ -200,7 +200,7 @@ export function MessageActionsBar({
         />
       )
     }
-    if (isBot && !hideContinue && isLastMessage) {
+    if (isBot && !hideContinue && isLastMessage && onContinue) {
       items.push(
         <OverflowMenuItem
           key="continue"
