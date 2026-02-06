@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sqlite3
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from html import escape
@@ -25,6 +26,17 @@ from tldw_Server_API.app.services.outputs_service import (
 READING_DIGEST_DOMAIN = "reading"
 READING_DIGEST_JOB_TYPE = "reading_digest"
 LOGGER = logger.bind(module="reading_digest_jobs")
+_READING_DIGEST_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    sqlite3.Error,
+    json.JSONDecodeError,
+)
 
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
@@ -382,13 +394,13 @@ def _build_reading_items_context(rows: list[Any]) -> list[dict[str, Any]]:
             items[idx]["notes"] = getattr(row, "notes", None) or ""
             items[idx]["read_at"] = getattr(row, "read_at", None)
             items[idx]["updated_at"] = getattr(row, "updated_at", None)
-        except Exception as exc:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as exc:
             row_id = None
             try:
                 row_id = getattr(row, "id", None) or getattr(row, "pk", None)
                 if row_id is None and isinstance(row, dict):
                     row_id = row.get("id") or row.get("pk")
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 row_id = None
             logger.debug(
                 "reading_digest: failed to enrich item context idx={} row_id={}: {}",
@@ -424,7 +436,7 @@ async def handle_reading_digest_job(job: dict[str, Any]) -> dict[str, Any]:
             last_run_at=datetime.now(timezone.utc).isoformat(),
             last_status="running",
         )
-    except Exception as exc:
+    except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "reading_digest: failed to mark schedule as running (schedule_id={}, user_id={}): {}",
             schedule.id,
@@ -438,7 +450,7 @@ async def handle_reading_digest_job(job: dict[str, Any]) -> dict[str, Any]:
         if isinstance(schedule.filters_json, str):
             try:
                 filters = json.loads(schedule.filters_json) if schedule.filters_json else {}
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 filters = {}
 
         status = filters.get("status")
@@ -500,12 +512,12 @@ async def handle_reading_digest_job(job: dict[str, Any]) -> dict[str, Any]:
         if schedule.template_id is not None:
             try:
                 output_template = collections_db.get_output_template(int(schedule.template_id))
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 output_template = None
         if output_template is None and schedule.template_name:
             try:
                 output_template = collections_db.get_output_template_by_name(str(schedule.template_name))
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 output_template = None
 
         output_format = (schedule.format or "").lower() or (getattr(output_template, "format", "") or "md")
@@ -520,7 +532,7 @@ async def handle_reading_digest_job(job: dict[str, Any]) -> dict[str, Any]:
             fallback_type = "newsletter_html" if output_format == "html" else "newsletter_markdown"
             try:
                 output_template = collections_db.get_default_output_template_by_type(fallback_type)
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 output_template = None
 
         context: dict[str, Any] = {
@@ -630,7 +642,7 @@ async def handle_reading_digest_job(job: dict[str, Any]) -> dict[str, Any]:
                     path,
                     cleanup_exc,
                 )
-            except Exception as cleanup_exc:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as cleanup_exc:
                 logger.debug(
                     "reading_digest: cleanup unlink failed after db insert failure "
                     "(schedule_id={}, job_id={}, path={}): {}",
@@ -644,7 +656,7 @@ async def handle_reading_digest_job(job: dict[str, Any]) -> dict[str, Any]:
 
         try:
             collections_db.set_reading_digest_history(schedule.id, last_status="succeeded")
-        except Exception:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
             logger.exception(
                 "reading_digest: failed to call set_reading_digest_history for schedule {}",
                 schedule.id,
@@ -658,7 +670,7 @@ async def handle_reading_digest_job(job: dict[str, Any]) -> dict[str, Any]:
     except Exception:
         try:
             collections_db.set_reading_digest_history(schedule.id, last_status="error")
-        except Exception as inner_exc:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as inner_exc:
             logger.debug(
                 "reading_digest: failed to mark schedule error (schedule_id={}, user_id={}): {}",
                 schedule.id,

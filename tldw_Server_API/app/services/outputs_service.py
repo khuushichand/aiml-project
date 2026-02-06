@@ -10,6 +10,7 @@ from pathlib import Path as PathlibPath
 from typing import Any
 
 from fastapi import HTTPException
+from jinja2 import TemplateError
 from jinja2.sandbox import SandboxedEnvironment
 from loguru import logger
 
@@ -21,6 +22,23 @@ from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
 
 _OUTPUT_TEMPLATE_ENV = SandboxedEnvironment(autoescape=True, enable_async=False)
 _OUTPUT_TEMPLATE_ENV.filters["markdown_link"] = lambda text, url: f"[{text}]({url})" if url else text
+
+_OUTPUTS_JSON_PARSE_EXCEPTIONS = (TypeError, ValueError, json.JSONDecodeError)
+_OUTPUTS_DB_FALLBACK_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+_OUTPUTS_TEMPLATE_EXCEPTIONS = (
+    KeyError,
+    TemplateError,
+    TypeError,
+    ValueError,
+)
 
 
 def _normalize_template_syntax(template_str: str) -> str:
@@ -48,7 +66,7 @@ def _extract_output_byte_size(metadata_json: str | None) -> int | None:
         return None
     try:
         payload = json.loads(metadata_json)
-    except Exception:
+    except _OUTPUTS_JSON_PARSE_EXCEPTIONS:
         return None
     if not isinstance(payload, dict):
         return None
@@ -70,7 +88,7 @@ def _sum_audiobook_output_bytes_for_ids(cdb, user_id: int, ids: list[int]) -> in
             f"SELECT id, type, metadata_json, storage_path, deleted FROM outputs WHERE user_id = ? AND id IN ({placeholders})",
             tuple([user_id] + list(ids)),
         ).rows
-    except Exception as exc:
+    except _OUTPUTS_DB_FALLBACK_EXCEPTIONS as exc:
         logger.warning("outputs_service: audiobook quota lookup failed: %s", exc)
         return 0
     outputs_dir = _outputs_dir_for_user(user_id)
@@ -106,7 +124,7 @@ def render_output_template(template_str: str, context: dict[str, Any]) -> str:
         normalized = _normalize_template_syntax(template_str)
         template = _OUTPUT_TEMPLATE_ENV.from_string(normalized)
         return template.render(**context)
-    except Exception as exc:
+    except _OUTPUTS_TEMPLATE_EXCEPTIONS as exc:
         logger.error("outputs: template render failed: %s", exc)
         return template_str
 
@@ -279,7 +297,7 @@ def _extract_tts_defaults(template_row) -> tuple[str | None, str | None, float |
         return None, None, None
     try:
         tpl_md = json.loads(template_row.metadata_json) if template_row.metadata_json else None
-    except Exception:
+    except _OUTPUTS_JSON_PARSE_EXCEPTIONS:
         tpl_md = None
     if not isinstance(tpl_md, dict):
         return None, None, None
@@ -288,7 +306,7 @@ def _extract_tts_defaults(template_row) -> tuple[str | None, str | None, float |
     tpl_speed = tpl_md.get("tts_default_speed")
     try:
         tpl_speed_val = float(tpl_speed) if tpl_speed is not None else None
-    except Exception:
+    except (TypeError, ValueError):
         tpl_speed_val = None
     return (
         str(tpl_model) if tpl_model is not None else None,
@@ -452,7 +470,7 @@ def find_outputs_to_purge(
             for row in cur.rows:
                 rid = int(row["id"]) if isinstance(row, dict) else int(row[0])
                 paths[rid] = row["storage_path"] if isinstance(row, dict) else row[1]
-        except Exception as e:
+        except _OUTPUTS_DB_FALLBACK_EXCEPTIONS as e:
             logger.warning(f"outputs_service.purge: retention scan failed: {e}")
     # Soft-deleted grace candidates
     try:
@@ -463,7 +481,7 @@ def find_outputs_to_purge(
         for row in cur2.rows:
             rid = int(row["id"]) if isinstance(row, dict) else int(row[0])
             paths[rid] = row["storage_path"] if isinstance(row, dict) else row[1]
-    except Exception as e:
+    except _OUTPUTS_DB_FALLBACK_EXCEPTIONS as e:
         logger.warning(f"outputs_service.purge: soft-deleted scan failed: {e}")
     return paths
 
@@ -482,7 +500,7 @@ def delete_outputs_by_ids(cdb, user_id: int, ids: list[int]) -> int:
         if audiobook_bytes:
             try:
                 cdb.update_audiobook_output_usage(-audiobook_bytes)
-            except Exception as exc:
+            except _OUTPUTS_DB_FALLBACK_EXCEPTIONS as exc:
                 logger.warning("outputs_service: failed to decrement audiobook usage: %s", exc)
         return len(ids)
     except Exception as e:

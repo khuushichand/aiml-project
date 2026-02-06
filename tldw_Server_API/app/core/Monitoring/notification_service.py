@@ -71,7 +71,7 @@ class NotificationService:
         self._lock = threading.RLock()
         try:
             Path(self.file_path).parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
+        except OSError:
             pass
 
     @staticmethod
@@ -93,13 +93,13 @@ class NotificationService:
                     from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
                     root = Path(_gpr()).resolve()
                     fp = root / fp
-                except Exception:
+                except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError):
                     root = _find_project_root(Path(__file__).resolve())
                     if root is None:
                         root = Path(__file__).resolve().parent
                     fp = root / fp
             return str(fp)
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             fallback_root = _find_project_root(Path(__file__).resolve()) or Path(__file__).resolve().parent
             return str(fallback_root / str(raw_file))
 
@@ -155,7 +155,7 @@ class NotificationService:
                 resolved = self._resolve_file_path(file)
                 Path(resolved).parent.mkdir(parents=True, exist_ok=True)
                 self.file_path = resolved
-            except Exception as e:
+            except (OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(f"Failed to update MONITORING_NOTIFY_FILE: {e}")
         if webhook_url is not None:
             self.webhook_url = webhook_url
@@ -181,7 +181,7 @@ class NotificationService:
         sev = (severity or "info").lower()
         try:
             return _SEVERITY_ORDER.get(sev, 0) >= _SEVERITY_ORDER.get(self.min_severity, 2)
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             return False
 
     def notify(self, alert: TopicAlert) -> str:
@@ -215,21 +215,21 @@ class NotificationService:
         try:
             with self._lock, open(self.file_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
             file_written = False
             logger.warning(f"Notification file sink failed: {e}")
         # Best-effort asynchronous sends (non-blocking)
         try:
             if self.webhook_url:
                 threading.Thread(target=self._send_webhook_safe, args=(payload,), daemon=True).start()
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             logger.debug(f"Webhook thread start failed: {e}")
         try:
             # Email optional and only if SMTP configured and recipients provided
             recipients = self._parse_email_recipients(self.email_to)
             if recipients and self.smtp_host and self.email_from:
                 threading.Thread(target=self._send_email_safe, args=(alert,), daemon=True).start()
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             logger.debug(f"Email thread start failed: {e}")
         return "logged" if file_written else "failed"
 
@@ -248,7 +248,7 @@ class NotificationService:
     def _send_webhook_safe(self, payload: dict[str, Any]) -> None:
         try:
             self._send_webhook(payload)
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
             logger.info(f"Webhook notify failed: {e}")
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=False)
@@ -275,7 +275,7 @@ class NotificationService:
             if self.smtp_starttls:
                 try:
                     server.starttls()
-                except Exception:
+                except (OSError, RuntimeError, smtplib.SMTPException):
                     pass
             if self.smtp_user:
                 server.login(self.smtp_user, self.smtp_password or "")
@@ -284,7 +284,7 @@ class NotificationService:
     def _send_email_safe(self, alert: TopicAlert) -> None:
         try:
             self._send_email(alert)
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError, smtplib.SMTPException) as e:
             logger.info(f"Email notify failed: {e}")
 
 

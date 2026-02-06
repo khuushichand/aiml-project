@@ -12,6 +12,17 @@ from typing import Any, Optional
 
 from loguru import logger
 
+_RATE_LIMITER_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 #######################################################################################################################
 #
 # Types:
@@ -319,7 +330,7 @@ class ConversationRateLimiter:
             )
         except NameError:
             rg_decision = None
-        except Exception as exc:  # pragma: no cover - defensive
+        except _RATE_LIMITER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
             logger.debug("Chat RG enforcement failed: {}", exc)
             rg_decision = None
 
@@ -555,7 +566,7 @@ def initialize_rate_limiter(config: Optional[RateLimitConfig] = None) -> Convers
                     config.per_user_tokens_per_minute = max(1, int(tokens_per_min))
                 # Default burst to 1.0 in TEST_MODE to make 429s deterministic on the N+1th call
                 config.burst_multiplier = float(burst_mult) if burst_mult is not None else 1.0
-        except Exception:
+        except (TypeError, ValueError):
             # Ignore env parse errors and use defaults
             pass
         _rate_limiter = ConversationRateLimiter(config)
@@ -578,7 +589,7 @@ def _rg_chat_context() -> dict[str, str]:
     )
     try:
         policy_path_resolved = os.path.abspath(policy_path)
-    except Exception:
+    except (OSError, TypeError, ValueError):
         policy_path_resolved = policy_path
     return {
         "backend": os.getenv("RG_BACKEND", "memory"),
@@ -635,7 +646,7 @@ try:  # pragma: no cover - RG is optional
         PolicyReloadConfig,
         default_policy_loader,
     )
-except Exception:  # pragma: no cover - safe fallback when RG not installed
+except ImportError:  # pragma: no cover - safe fallback when RG not installed
     MemoryResourceGovernor = None  # type: ignore
     RedisResourceGovernor = None  # type: ignore
     RGRequest = None  # type: ignore
@@ -650,7 +661,7 @@ def _rg_chat_enabled() -> bool:
     if rg_enabled is not None:
         try:
             return bool(rg_enabled(True))  # type: ignore[func-returns-value]
-        except Exception:
+        except _RATE_LIMITER_NONCRITICAL_EXCEPTIONS:
             return False
     return False
 
@@ -702,7 +713,7 @@ async def _get_chat_rg_governor():
                 gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
             _rg_chat_governor = gov
             return gov
-        except Exception as exc:  # pragma: no cover - optional path
+        except _RATE_LIMITER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - optional path
             _log_rg_chat_init_failure(exc)
             return None
 
@@ -731,7 +742,7 @@ async def _maybe_enforce_with_rg_chat(
     try:
         try:
             tokens_units = int(estimated_tokens or 0)
-        except Exception:
+        except (TypeError, ValueError):
             tokens_units = 0
         tokens_units = max(0, tokens_units)
 
@@ -764,7 +775,7 @@ async def _maybe_enforce_with_rg_chat(
                     if tokens_units > 0:
                         actuals["tokens"] = tokens_units
                     await gov.commit(handle, actuals=actuals, op_id=op_id)
-                except Exception:
+                except _RATE_LIMITER_NONCRITICAL_EXCEPTIONS:
                     logger.debug("Chat RG commit failed", exc_info=True)
             return {"allowed": True, "retry_after": None, "policy_id": policy_id}
         return {
@@ -772,6 +783,6 @@ async def _maybe_enforce_with_rg_chat(
             "retry_after": decision.retry_after or 1,
             "policy_id": policy_id,
         }
-    except Exception as exc:
+    except _RATE_LIMITER_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Chat RG reserve failed; falling back to legacy limiter: {}", exc)
         return None

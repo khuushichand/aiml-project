@@ -113,6 +113,26 @@ DEFAULT_NEUTTS_VOICE_PATH = (
 )
 DEFAULT_NEUTTS_VOICE_TEXT_PATH = DEFAULT_NEUTTS_VOICE_PATH.with_suffix(".txt")
 
+_VOICE_IO_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    UnicodeError,
+)
+
+_VOICE_METADATA_EXCEPTIONS = _VOICE_IO_EXCEPTIONS + (
+    json.JSONDecodeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+)
+
+_VOICE_NONCRITICAL_EXCEPTIONS = _VOICE_METADATA_EXCEPTIONS + (
+    StorageError,
+    QuotaExceededError,
+    asyncio.TimeoutError,
+)
+
 
 class VoiceUploadRequest(BaseModel):
     """Request model for voice upload"""
@@ -386,7 +406,7 @@ class VoiceManager:
                 raw = await f.read()
             data = json.loads(raw)
             return VoiceReferenceMetadata(**data)
-        except Exception as e:
+        except _VOICE_METADATA_EXCEPTIONS as e:
             logger.warning(f"Failed to read voice metadata {path}: {e}")
             return None
 
@@ -400,7 +420,7 @@ class VoiceManager:
             payload = model_dump_compat(metadata)
             async with aiofiles.open(path, "w") as f:
                 await f.write(json.dumps(payload, ensure_ascii=True, indent=2, default=str))
-        except Exception as e:
+        except _VOICE_METADATA_EXCEPTIONS as e:
             logger.warning(f"Failed to write voice metadata {path}: {e}")
 
     async def ensure_default_voice(self, user_id: int) -> Optional[VoiceInfo]:
@@ -452,7 +472,7 @@ class VoiceManager:
                 try:
                     async with aiofiles.open(DEFAULT_NEUTTS_VOICE_TEXT_PATH) as f:
                         reference_text = (await f.read()).strip() or None
-                except Exception as e:
+                except _VOICE_IO_EXCEPTIONS as e:
                     logger.warning(f"Failed to read default voice reference text: {e}")
 
             if reference_text:
@@ -473,7 +493,7 @@ class VoiceManager:
                     logger.warning(f"Default NeuTTS auto-encode failed: {e}")
 
             return voice_info
-        except Exception as e:
+        except _VOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to register default NeuTTS voice: {e}")
             return None
 
@@ -492,7 +512,7 @@ class VoiceManager:
         try:
             with open(audio_path, "rb") as f:
                 file_hash = hashlib.sha256(f.read()).hexdigest()
-        except Exception:
+        except _VOICE_IO_EXCEPTIONS:
             file_hash = ""
         return VoiceInfo(
             voice_id=voice_id,
@@ -736,7 +756,7 @@ class VoiceManager:
             if "processed_path" in locals() and processed_path.exists():
                 processed_path.unlink()
             raise
-        except Exception as e:
+        except _VOICE_NONCRITICAL_EXCEPTIONS as e:
             # Clean up on error
             if upload_path.exists():
                 upload_path.unlink()
@@ -841,7 +861,7 @@ class VoiceManager:
                 proc.kill()
                 try:
                     await proc.communicate()
-                except Exception:
+                except _VOICE_NONCRITICAL_EXCEPTIONS:
                     pass
                 logger.error(f"ffprobe timed out for {file_path}")
                 return 0.0
@@ -860,7 +880,7 @@ class VoiceManager:
         except FileNotFoundError as e:
             logger.error(f"ffprobe not found while getting audio duration: {e}")
             return 0.0
-        except Exception as e:
+        except _VOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error getting audio duration for {file_path}: {e}")
             return 0.0
 
@@ -899,7 +919,7 @@ class VoiceManager:
                 proc.kill()
                 try:
                     await proc.communicate()
-                except Exception:
+                except _VOICE_NONCRITICAL_EXCEPTIONS:
                     pass
                 logger.error(f"FFmpeg conversion timed out for {input_path}")
                 shutil.copy2(input_path, output_path)
@@ -914,7 +934,7 @@ class VoiceManager:
                 logger.info(f"Converted audio to {target_format} at {target_sr}Hz")
 
             return output_path
-        except Exception as e:
+        except _VOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Audio conversion failed: {e}")
             # Fall back to copying original
             shutil.copy2(input_path, output_path)
@@ -977,7 +997,7 @@ class VoiceManager:
                         # Register in memory
                         await self.registry.register_voice(user_id, voice_info)
 
-                    except Exception as e:
+                    except _VOICE_NONCRITICAL_EXCEPTIONS as e:
                         logger.error(f"Error scanning voice file {voice_file}: {e}")
 
         return voices
@@ -1038,7 +1058,7 @@ class VoiceManager:
                                     temp_file.unlink()
                                     logger.debug(f"Cleaned up temp file: {temp_file}")
 
-        except Exception as e:
+        except _VOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error during temp file cleanup: {e}")
 
     async def start_background_tasks(self):
@@ -1053,7 +1073,7 @@ class VoiceManager:
             try:
                 await asyncio.sleep(self.cleanup_interval)
                 await self.cleanup_temp_files()
-            except Exception as e:
+            except _VOICE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Cleanup worker error: {e}")
 
 

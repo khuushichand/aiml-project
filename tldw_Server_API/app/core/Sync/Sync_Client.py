@@ -40,6 +40,17 @@ DATABASE_PATH = f"./client_dbs/{CLIENT_ID}_media.db" # Example: One DB per clien
 SYNC_BATCH_SIZE = 50 # How many changes to send/receive at once
 SYNC_INTERVAL_SECONDS = 60 # How often to run the sync cycle automatically
 
+SYNC_RUNTIME_ERRORS = (
+    DatabaseError,
+    sqlite3.Error,
+    ValueError,
+    TypeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    json.JSONDecodeError,
+)
+
 
 def _extract_http_status_error(exc: Exception) -> Optional[tuple[int, str]]:
     resp = getattr(exc, "response", None)
@@ -130,16 +141,13 @@ class ClientSyncEngine:
         except (NetworkError, RetryExhaustedError, EgressPolicyError) as e:
             logger.error(f"Network error during push phase: {e}")
             network_error = True # Don't proceed to pull if push failed due to network
-        except Exception as e:
+        except SYNC_RUNTIME_ERRORS as e:
             # Treat centralized NetworkError as network error as well
-            try:
-                http_err = _extract_http_status_error(e)
-                if http_err:
-                    status, text = http_err
-                    logger.error(f"HTTP error during push phase: {status} - {text}")
-                else:
-                    logger.error(f"Unexpected error during push phase: {e}", exc_info=True)
-            except Exception:
+            http_err = _extract_http_status_error(e)
+            if http_err:
+                status, text = http_err
+                logger.error(f"HTTP error during push phase: {status} - {text}")
+            else:
                 logger.error(f"Unexpected error during push phase: {e}", exc_info=True)
             # Decide if we should attempt pull phase even if push had non-network error
 
@@ -150,7 +158,7 @@ class ClientSyncEngine:
 
             except (NetworkError, RetryExhaustedError, EgressPolicyError) as e:
                 logger.error(f"Network error during pull phase: {e}")
-            except Exception as e:
+            except SYNC_RUNTIME_ERRORS as e:
                 http_err = _extract_http_status_error(e)
                 if http_err:
                     status, text = http_err
@@ -219,7 +227,7 @@ class ClientSyncEngine:
             self._save_sync_state()
             logger.info(f"Successfully pushed {len(client_changes)} changes. Last sent ID updated to {new_last_sent}.")
 
-        except Exception as e:
+        except SYNC_RUNTIME_ERRORS as e:
             http_err = _extract_http_status_error(e)
             if http_err:
                 status, text = http_err
@@ -330,7 +338,7 @@ class ClientSyncEngine:
         except (DatabaseError, sqlite3.Error, ConflictError) as e:
             logger.error(f"Transaction rolled back while applying remote changes batch: {e}")
             all_applied_or_skipped = False
-        except Exception as e:
+        except (ValueError, TypeError, KeyError, OSError, RuntimeError, json.JSONDecodeError) as e:
              logger.error(f"Unexpected error during remote changes batch application: {e}", exc_info=True)
              all_applied_or_skipped = False
 
@@ -440,7 +448,7 @@ class ClientSyncEngine:
                 # Skip applying the remote change; local state is kept
                 return True # Resolved by skipping remote change
 
-        except Exception as e:
+        except (DatabaseError, sqlite3.Error, ConflictError, ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
             logger.error(f"Error during LWW conflict resolution for {entity} {entity_uuid}: {e}", exc_info=True)
             return False # Resolution failed
 
@@ -789,7 +797,7 @@ if __name__ == "__main__":
             # Use the Database instance methods directly for local changes
             db.add_keyword("test_sync_keyword") # 'db' is guaranteed to be Database object here if no exception occurred above
             logger.info("Local change presumably made and logged by sync_log trigger.")
-        except Exception as e:
+        except (DatabaseError, sqlite3.Error, ValueError, TypeError) as e:
             logger.error(f"Error making simulated local change: {e}")
 
 
@@ -807,7 +815,19 @@ if __name__ == "__main__":
         # time.sleep(SYNC_INTERVAL_SECONDS)
         # if engine: engine.run_sync_cycle()
 
-    except Exception as main_err:
+    except (
+        DatabaseError,
+        sqlite3.Error,
+        ValueError,
+        TypeError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        json.JSONDecodeError,
+        NetworkError,
+        RetryExhaustedError,
+        EgressPolicyError,
+    ) as main_err:
         logger.error(f"Critical error during client sync setup or execution: {main_err}", exc_info=True)
 
     finally:
@@ -817,7 +837,7 @@ if __name__ == "__main__":
              try:
                   db.close_connection() # Close the connection for this main thread
                   logger.info("Closed main thread DB connection.")
-             except Exception as close_err:
+             except (DatabaseError, sqlite3.Error, OSError, RuntimeError, ValueError) as close_err:
                   logger.error(f"Error closing DB connection: {close_err}")
         else:
             logger.warning("DB object was not successfully initialized, no connection to close.")

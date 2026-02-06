@@ -76,6 +76,19 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- Ensure adherence to specified format\n"
     "- Do not reference these instructions in your response."
 )
+_SUMMARIZATION_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _resolve_default_system_prompt() -> str:
@@ -104,7 +117,7 @@ def _resolve_adapter_timeout(provider: str, app_config: dict[str, Any]) -> Optio
         if raw is not None:
             try:
                 return float(raw)
-            except Exception:
+            except (TypeError, ValueError):
                 return None
     return None
 
@@ -154,20 +167,20 @@ def _summarize_via_adapter(
                         return
                     if text_chunk:
                         yield text_chunk
-            except Exception as exc:
+            except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS as exc:
                 logging.error(f"Error during adapter streaming for {provider}: {exc}", exc_info=True)
                 yield f"Error during streaming: {exc}"
             finally:
                 try:
                     if gen is not None and hasattr(gen, "close"):
                         gen.close()
-                except Exception:
+                except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS:
                     pass
         return stream_generator()
     try:
         response = adapter.chat(request, timeout=timeout)
         return extract_response_content(response) or str(response)
-    except Exception as exc:
+    except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS as exc:
         logging.error(f"Error during adapter summarization for {provider}: {exc}", exc_info=True)
         return f"Error calling API {api_name}: {exc}"
 
@@ -265,7 +278,7 @@ def recursive_summarize_chunks(
             current_summary = step_result
             logging.debug(f"Chunk {i+1} processed. Current summary length: {len(current_summary)}")
 
-        except Exception as e:
+        except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS as e:
             logging.exception(f"Unexpected error calling summarize_func during recursive step {i+1}: {e}", exc_info=True)
             return f"Error: Unexpected failure during recursive step {i+1}: {e}"
 
@@ -291,7 +304,7 @@ def extract_text_from_input(input_data: Any) -> str:
                 except json.JSONDecodeError:
                     logging.debug("File content is not JSON, returning raw text.")
                     return content.strip()
-            except Exception as e:
+            except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS as e:
                 logging.error(f"Error reading file {input_data}: {e}")
                 return ""
         # Check if it's a JSON string
@@ -329,7 +342,7 @@ def extract_text_from_input(input_data: Any) -> str:
             logging.warning("No specific text field found in dict, converting entire dict to string.")
             try:
                 return json.dumps(input_data, indent=2)
-            except Exception:
+            except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS:
                  return str(input_data) # Final fallback
 
     elif isinstance(input_data, list):
@@ -377,7 +390,7 @@ def _dispatch_to_api(
             return error_msg
         return adapter_result
 
-    except Exception as e:
+    except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error during dispatch to API '{api_name}': {str(e)}", exc_info=True)
         return f"Error calling API {api_name}: {str(e)}"
 
@@ -458,7 +471,7 @@ def analyze(
                     final_string = "".join(result_list)
                     logging.debug("Generator consumed.")
                     return final_string
-                except Exception as e:
+                except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS as e:
                      logging.error(f"Error consuming generator: {e}", exc_info=True)
                      return f"Error consuming stream: {e}"
             return gen # Return as is if not a generator
@@ -587,7 +600,7 @@ def analyze(
                 logging.error(f"Unexpected final result type after processing: {type(final_string_summary)}")
                 return f"Error: Unexpected result type {type(final_string_summary)}"
 
-    except Exception as e:
+    except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Critical error in summarize function: {str(e)}", exc_info=True)
         return f"Error: An unexpected error occurred during summarization: {str(e)}"
 

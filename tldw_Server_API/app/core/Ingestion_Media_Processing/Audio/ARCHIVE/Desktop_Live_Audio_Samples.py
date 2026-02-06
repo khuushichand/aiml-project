@@ -36,19 +36,45 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcripti
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram, timeit
 from tldw_Server_API.app.core.Utils.Utils import logging
 
+_DESKTOP_AUDIO_OPTIONAL_IMPORT_EXCEPTIONS = (
+    ImportError,
+    OSError,
+    RuntimeError,
+)
+
+_DESKTOP_AUDIO_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+)
+
+_DESKTOP_AUDIO_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 try:  # Optional desktop deps
     import pyaudio  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
+except _DESKTOP_AUDIO_OPTIONAL_IMPORT_EXCEPTIONS:  # pragma: no cover - optional dependency
     pyaudio = None  # type: ignore
 
 try:
     import sounddevice as sd  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
+except _DESKTOP_AUDIO_OPTIONAL_IMPORT_EXCEPTIONS:  # pragma: no cover - optional dependency
     sd = None  # type: ignore
 
 try:
     import wave  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
+except _DESKTOP_AUDIO_OPTIONAL_IMPORT_EXCEPTIONS:  # pragma: no cover - optional dependency
     wave = None  # type: ignore
 
 
@@ -113,7 +139,7 @@ class PartialTranscriptionThread(threading.Thread):
                     if isinstance(text, str) and not is_transcription_error_message(text):
                         self.partial_text_state["text"] = text
                     last_transcription_time = now
-        except BaseException as exc:
+        except _DESKTOP_AUDIO_NONCRITICAL_EXCEPTIONS as exc:
             self.exception_encountered = exc
 
 
@@ -172,7 +198,7 @@ def record_audio_to_disk(
                 data = stream.read(CHUNK, exception_on_overflow=False)
                 wf.writeframes(data)
                 audio_queue.put(data)
-            except Exception as e:
+            except _DESKTOP_AUDIO_NONCRITICAL_EXCEPTIONS as e:
                 logging.error(f"Recording error: {e}")
                 break
     finally:
@@ -180,12 +206,12 @@ def record_audio_to_disk(
             try:
                 stream.stop_stream()
                 stream.close()
-            except Exception as e:  # pragma: no cover - best-effort cleanup
+            except _DESKTOP_AUDIO_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover - best-effort cleanup
                 logging.debug(f"Failed to stop/close audio stream during cleanup: error={e}")
         if "wf" in locals():
             try:
                 wf.close()
-            except Exception as e:  # pragma: no cover
+            except _DESKTOP_AUDIO_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover
                 logging.debug(f"Failed to close wav file during cleanup: error={e}")
         p.terminate()
 
@@ -228,7 +254,7 @@ def parse_device_id(selected_device_text: str) -> int | None:
     try:
         parts = selected_device_text.split(":", 1)
         return int(parts[0].strip())
-    except Exception as e:
+    except _DESKTOP_AUDIO_COERCE_EXCEPTIONS as e:
         logging.error(f"Could not parse device from '{selected_device_text}': {e}")
         return None
 
@@ -342,7 +368,7 @@ class LiveAudioStreamer:
                                 logging.error(f"LiveAudioStreamer STT error sentinel: {user_text}")
                             else:
                                 self.handle_transcribed_text(user_text)
-                        except Exception as _cb_exc:
+                        except _DESKTOP_AUDIO_NONCRITICAL_EXCEPTIONS as _cb_exc:
                             logging.error(f"LiveAudioStreamer handle_transcribed_text error: {_cb_exc}")
                         self.silence_start_time = None
             else:
@@ -382,7 +408,7 @@ def test_device_availability(device_id: int | None) -> bool:
         )
         stream.close()
         return True
-    except Exception as e:
+    except _DESKTOP_AUDIO_NONCRITICAL_EXCEPTIONS as e:
         logging.debug(f"Device {device_id} not available: {e}")
         return False
     finally:
@@ -463,7 +489,7 @@ def save_audio_temp(audio_data: Any, sample_rate: int = 16000) -> str | None:
 
     try:
         import torch  # Local import to avoid hard dependency when unused
-    except Exception:  # pragma: no cover
+    except _DESKTOP_AUDIO_OPTIONAL_IMPORT_EXCEPTIONS:  # pragma: no cover
         torch = None  # type: ignore
 
     try:
@@ -481,7 +507,7 @@ def save_audio_temp(audio_data: Any, sample_rate: int = 16000) -> str | None:
             wavfile.write(temp_file.name, sample_rate, audio_int16)
             log_counter("save_audio_temp_success")
             return temp_file.name
-    except Exception as e:
+    except _DESKTOP_AUDIO_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error saving temp audio: {str(e)}")
         log_counter("save_audio_temp_error")
         return None
@@ -530,7 +556,7 @@ def get_system_audio_devices() -> list[dict[str, Any]]:
                 )
 
         devices.sort(key=lambda x: (not x.get("is_loopback"), x["name"]))
-    except Exception as e:
+    except _DESKTOP_AUDIO_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error enumerating audio devices: {e}")
 
     return devices

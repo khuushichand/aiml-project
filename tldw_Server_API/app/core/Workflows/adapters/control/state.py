@@ -21,6 +21,19 @@ from tldw_Server_API.app.core.Workflows.adapters.control._config import (
     RetryConfig,
 )
 
+_STATE_ADAPTER_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_STATE_JSON_EXCEPTIONS = (TypeError, ValueError, json.JSONDecodeError)
+
 
 @registry.register(
     "batch",
@@ -105,13 +118,13 @@ async def run_cache_result_adapter(config: dict[str, Any], context: dict[str, An
         cache_collection_name = "workflow_cache"
         try:
             collection = client.get_or_create_collection(name=cache_collection_name)
-        except Exception:
+        except _STATE_ADAPTER_EXCEPTIONS:
             return {"cached": False, "data": data, "error": "cache_collection_error"}
 
         if action == "invalidate":
             try:
                 collection.delete(ids=[cache_key])
-            except Exception:
+            except _STATE_ADAPTER_EXCEPTIONS:
                 pass
             return {"invalidated": True, "key": cache_key}
 
@@ -126,10 +139,10 @@ async def run_cache_result_adapter(config: dict[str, Any], context: dict[str, An
                         if isinstance(cached_data, str):
                             try:
                                 cached_data = json.loads(cached_data)
-                            except Exception:
+                            except _STATE_JSON_EXCEPTIONS:
                                 pass
                         return {"cached": True, "data": cached_data, "key": cache_key, "age_seconds": int(time.time() - cached_at)}
-            except Exception:
+            except _STATE_ADAPTER_EXCEPTIONS:
                 pass
 
         if action in ("set", "get_or_set"):
@@ -141,12 +154,12 @@ async def run_cache_result_adapter(config: dict[str, Any], context: dict[str, An
                     metadatas=[{"data": data_str, "cached_at": time.time()}],
                 )
                 return {"cached": False, "stored": True, "data": data, "key": cache_key}
-            except Exception as e:
+            except _STATE_ADAPTER_EXCEPTIONS as e:
                 return {"cached": False, "data": data, "error": f"cache_store_error: {e}"}
 
         return {"cached": False, "data": data}
 
-    except Exception as e:
+    except _STATE_ADAPTER_EXCEPTIONS as e:
         logger.exception(f"Cache result error: {e}")
         return {"cached": False, "data": data, "error": str(e)}
 
@@ -212,7 +225,7 @@ async def run_retry_adapter(config: dict[str, Any], context: dict[str, Any]) -> 
 
             return {"result": result, "attempts": attempt + 1, "success": True}
 
-        except Exception as e:
+        except _STATE_ADAPTER_EXCEPTIONS as e:
             last_error = str(e)
             if attempt < max_retries:
                 delay = min(backoff_base ** attempt, backoff_max)
@@ -276,6 +289,6 @@ async def run_checkpoint_adapter(config: dict[str, Any], context: dict[str, Any]
 
         return {"checkpoint_id": checkpoint_id, "saved": True, "run_id": run_id}
 
-    except Exception as e:
+    except _STATE_ADAPTER_EXCEPTIONS as e:
         logger.exception(f"Checkpoint error: {e}")
         return {"error": str(e), "checkpoint_id": checkpoint_id, "saved": False}

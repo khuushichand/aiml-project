@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
@@ -16,8 +17,33 @@ from tldw_Server_API.app.api.v1.schemas.items_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Collections_DB import ContentItemRow
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import DatabaseError, InputError
 
 router = APIRouter(prefix="/items", tags=["items"])
+
+_ITEMS_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
+_ITEMS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    DatabaseError,
+    ImportError,
+    InputError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _domain_from_url(url: str | None) -> str:
@@ -26,7 +52,7 @@ def _domain_from_url(url: str | None) -> str:
     try:
         from urllib.parse import urlparse
         return urlparse(url).hostname or ""
-    except Exception:
+    except _ITEMS_COERCE_EXCEPTIONS:
         return ""
 
 
@@ -73,7 +99,7 @@ async def list_items(
             date_from_iso = start_dt.isoformat()
         if end_dt:
             date_to_iso = end_dt.isoformat()
-    except Exception:
+    except _ITEMS_COERCE_EXCEPTIONS:
         raise HTTPException(status_code=422, detail="invalid_date_range")
 
     # Query collections layer first
@@ -93,7 +119,7 @@ async def list_items(
             page=page,
             size=size,
         )
-    except Exception as e:
+    except _ITEMS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"collections items query failed: {e}")
         raise HTTPException(status_code=500, detail="items_query_failed")
 
@@ -124,7 +150,7 @@ async def list_items(
             include_trash=False,
             include_deleted=False,
         )
-    except Exception as e:
+    except _ITEMS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"items list failed: {e}")
         raise HTTPException(status_code=500, detail="items_query_failed")
 
@@ -150,7 +176,7 @@ async def get_item(
         return _content_item_to_schema(row)
     except KeyError:
         pass
-    except Exception as e:
+    except _ITEMS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"collections item fetch failed: {e}")
         raise HTTPException(status_code=500, detail="item_fetch_failed")
 
@@ -159,7 +185,7 @@ async def get_item(
         return _content_item_to_schema(row)
     except KeyError:
         pass
-    except Exception as e:
+    except _ITEMS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"collections item fetch by media_id failed: {e}")
         raise HTTPException(status_code=500, detail="item_fetch_failed")
 
@@ -178,7 +204,7 @@ async def get_item(
             include_trash=False,
             include_deleted=False,
         )
-    except Exception as e:
+    except _ITEMS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"media item fetch failed: {e}")
         raise HTTPException(status_code=500, detail="item_fetch_failed")
 
@@ -199,7 +225,7 @@ def _content_item_to_schema(row: ContentItemRow) -> Item:
             try:
                 import json as _json
                 metadata = _json.loads(row.metadata_json)
-            except Exception:
+            except _ITEMS_COERCE_EXCEPTIONS:
                 metadata = {}
         summary = metadata.get("summary")
     item_id = row.media_id if row.media_id is not None else row.id
@@ -226,7 +252,7 @@ def _media_row_to_item(row, *, db, domain_filter: str | None) -> Item | None:
     try:
         from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import fetch_keywords_for_media, get_document_version
         tag_list = fetch_keywords_for_media(media_id=int(row.get("id")), db_instance=db)
-    except Exception:
+    except _ITEMS_NONCRITICAL_EXCEPTIONS:
         tag_list = []
 
     # Derive summary/published_at best-effort
@@ -241,11 +267,11 @@ def _media_row_to_item(row, *, db, domain_filter: str | None) -> Item | None:
                 import json as _json
                 try:
                     sm = _json.loads(sm)
-                except Exception:
+                except _ITEMS_COERCE_EXCEPTIONS:
                     sm = None
             if isinstance(sm, dict):
                 published_at = sm.get("published_at") or sm.get("date")
-    except Exception:
+    except _ITEMS_NONCRITICAL_EXCEPTIONS:
         pass
     if not summary:
         content = row.get("content") or ""
@@ -341,7 +367,7 @@ async def bulk_update_items(
         except HTTPException as exc:
             results.append(ItemsBulkResult(item_id=item_id, success=False, error=str(exc.detail)))
             failed += 1
-        except Exception as exc:
+        except _ITEMS_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"bulk_update_items failed for {item_id}: {exc}")
             results.append(ItemsBulkResult(item_id=item_id, success=False, error="update_failed"))
             failed += 1

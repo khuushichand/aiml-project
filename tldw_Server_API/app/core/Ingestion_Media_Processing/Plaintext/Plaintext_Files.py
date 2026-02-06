@@ -20,7 +20,7 @@ try:
     from defusedxml import ElementTree as DET  # type: ignore
     from defusedxml.common import DefusedXmlException  # type: ignore
     _DEFUSED_AVAILABLE = True
-except Exception:  # pragma: no cover - defusedxml optional dependency
+except ImportError:  # pragma: no cover - defusedxml optional dependency
     DET = None  # type: ignore
     _DEFUSED_AVAILABLE = False
     DefusedXmlException = Exception  # type: ignore
@@ -42,6 +42,18 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 
 class PandocMissing(Exception): # Custom exception for Pandoc not found
     pass
+
+
+_PLAINTEXT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _ensure_secure_xml_support() -> None:
@@ -228,18 +240,18 @@ def convert_document_to_text(
                     for t in soup.find_all(tag_name):
                         try:
                             t.decompose()
-                        except Exception:
+                        except (AttributeError, TypeError, ValueError):
                             try:
                                 t.extract()
-                            except Exception:
+                            except (AttributeError, TypeError, ValueError):
                                 pass
                 for c in soup.find_all(string=lambda s: isinstance(s, Comment)):
                     try:
                         c.extract()
-                    except Exception:
+                    except (AttributeError, TypeError, ValueError):
                         pass
                 sanitized_html = str(soup)
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 # Fallback: use original content if BeautifulSoup fails
                 sanitized_html = html_content
             content = h.handle(sanitized_html) # Convert to Markdown
@@ -462,7 +474,7 @@ def process_document_content( # Renamed from _process_single_document for clarit
                      logging.info(f"Total chunks created: {len(processed_chunks)}")
                      log_histogram("document_chunks_created", len(processed_chunks), labels={"file_path": str(doc_path)})
 
-            except Exception as chunk_err:
+            except _PLAINTEXT_NONCRITICAL_EXCEPTIONS as chunk_err:
                 logging.error(f"Chunking failed for {doc_path}: {chunk_err}", exc_info=True)
                 result["warnings"].append(f"Chunking failed: {chunk_err}")
                 processed_chunks = [{'text': text_content, 'metadata': {'chunk_index': 0, 'total_chunks': 1, 'error': f"Chunking failed: {chunk_err}"}}]
@@ -513,7 +525,7 @@ def process_document_content( # Renamed from _process_single_document for clarit
                         else:
                             current_chunk_metadata['analysis'] = None
                             logging.debug(f"Analysis yielded empty result for chunk {i+1}/{len(processed_chunks)} of {doc_path}.")
-                    except Exception as summ_err:
+                    except _PLAINTEXT_NONCRITICAL_EXCEPTIONS as summ_err:
                         logging.warning(f"Analysis failed for chunk {i+1}/{len(processed_chunks)} of {doc_path}: {summ_err}", exc_info=False)
                         current_chunk_metadata['analysis'] = f"[Analysis Error: {str(summ_err)}]"
                         result["warnings"].append(f"Analysis failed for chunk {i+1}: {str(summ_err)}")
@@ -545,7 +557,7 @@ def process_document_content( # Renamed from _process_single_document for clarit
                          else:
                              log_counter("document_recursive_analysis_success", labels={"file_path": str(doc_path)})
 
-                    except Exception as rec_summ_err:
+                    except _PLAINTEXT_NONCRITICAL_EXCEPTIONS as rec_summ_err:
                          logging.error(f"Recursive analysis failed for {doc_path}: {rec_summ_err}", exc_info=True)
                          final_analysis_text = f"[Recursive Analysis Error: {str(rec_summ_err)}]\n\n" + "\n\n---\n\n".join(chunk_summaries)
                          result["warnings"].append(f"Recursive analysis failed: {str(rec_summ_err)}")
@@ -585,7 +597,7 @@ def process_document_content( # Renamed from _process_single_document for clarit
         result["status"] = "Error"
         result["error"] = str(pm_err) # Include specific message
         log_counter("document_processing_error", labels={"file_path": str(doc_path), "error": "PandocMissing"})
-    except Exception as e:
+    except _PLAINTEXT_NONCRITICAL_EXCEPTIONS as e:
         logging.exception(f"Unexpected error processing document {doc_path}: {str(e)}")
         result["status"] = "Error"
         result["error"] = f"Unexpected processing error: {str(e)}"

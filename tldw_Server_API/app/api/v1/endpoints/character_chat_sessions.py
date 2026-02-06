@@ -5,9 +5,11 @@ Provides CRUD operations for chat sessions and character-specific completions.
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import random
+import re
 import time
 import uuid
 from collections import deque
@@ -32,6 +34,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 
 # Schemas
 from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
+    AuthorNoteInfoResponse,
     CharacterChatCompletionPrepRequest,
     CharacterChatCompletionPrepResponse,
     CharacterChatCompletionV2Request,
@@ -44,7 +47,18 @@ from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
     ChatSessionListResponse,
     ChatSessionResponse,
     ChatSessionUpdate,
+    DiagnosticTurnEntry,
+    GreetingItem,
+    GreetingListResponse,
+    GreetingSelectRequest,
+    GreetingSelectResponse,
+    LorebookDiagnosticExportResponse,
     MessageResponse,
+    PresetCreate,
+    PresetDetail,
+    PresetListResponse,
+    PresetTokenInfo,
+    PresetUpdate,
 )
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
@@ -60,6 +74,7 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
 )
 from tldw_Server_API.app.core.Character_Chat.modules.character_prompt_presets import (
     build_character_system_prompt,
+    resolve_character_prompt_preset,
 )
 from tldw_Server_API.app.core.Character_Chat.modules.character_generation_presets import (
     resolve_character_generation_settings,
@@ -396,6 +411,13 @@ def _validate_chat_settings_payload(settings: dict[str, Any]) -> None:
                 detail=f"Invalid {key}. Allowed values: {allowed_display}"
             )
 
+    chat_preset_override = settings.get("chatPresetOverrideId")
+    if chat_preset_override is not None and not isinstance(chat_preset_override, str):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid chatPresetOverrideId. Expected string or null",
+        )
+
     schema_version = settings.get("schemaVersion")
     if schema_version is not None and (not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version < 1):
         raise HTTPException(
@@ -451,26 +473,65 @@ def _validate_chat_settings_payload(settings: dict[str, Any]) -> None:
                 detail=f"Invalid characterMemoryById.{character_id}. Expected object, string, or null"
             )
 
-    generation_override = settings.get("chatGenerationOverride")
-    if generation_override is not None:
-        if not isinstance(generation_override, dict):
+    def _validate_generation_override_object(value: Any, key_name: str) -> None:
+        if value is None:
+            return
+        if not isinstance(value, dict):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Invalid chatGenerationOverride. Expected object"
+                detail=f"Invalid {key_name}. Expected object",
             )
-        stop = generation_override.get("stop")
-        if stop is not None:
-            if not isinstance(stop, list) or any(not isinstance(item, str) for item in stop):
+
+        enabled = value.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid {key_name}.enabled. Expected boolean",
+            )
+
+        numeric_fields: tuple[tuple[str, float, float], ...] = (
+            ("temperature", 0.0, 2.0),
+            ("top_p", 0.0, 1.0),
+            ("repetition_penalty", 0.0, 3.0),
+        )
+        for numeric_key, min_value, max_value in numeric_fields:
+            numeric_value = value.get(numeric_key)
+            if numeric_value is None:
+                continue
+            if isinstance(numeric_value, bool) or not isinstance(numeric_value, (int, float)):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Invalid chatGenerationOverride.stop. Expected array of strings"
+                    detail=(
+                        f"Invalid {key_name}.{numeric_key}. "
+                        f"Expected number between {min_value} and {max_value}"
+                    ),
                 )
-        override_updated_at = generation_override.get("updatedAt")
+            if numeric_value < min_value or numeric_value > max_value:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        f"Invalid {key_name}.{numeric_key}. "
+                        f"Expected number between {min_value} and {max_value}"
+                    ),
+                )
+
+        stop = value.get("stop")
+        if stop is not None and (not isinstance(stop, list) or any(not isinstance(item, str) for item in stop)):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid {key_name}.stop. Expected array of strings",
+            )
+
+        override_updated_at = value.get("updatedAt")
         if override_updated_at is not None and _parse_iso_timestamp(override_updated_at) is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Invalid chatGenerationOverride.updatedAt. Expected ISO timestamp string"
+                detail=f"Invalid {key_name}.updatedAt. Expected ISO timestamp string",
             )
+
+    _validate_generation_override_object(settings.get("chatGenerationOverride"), "chatGenerationOverride")
+    # Backward-compat: accept prior key spelling while clients migrate.
+    _validate_generation_override_object(settings.get("generationOverrides"), "generationOverrides")
 
     summary_settings = settings.get("summary")
     if summary_settings is not None:
@@ -761,6 +822,72 @@ def _extract_settings(settings_row: Any) -> dict[str, Any]:
     return {}
 
 
+def _resolve_effective_prompt_preset(
+    settings: dict[str, Any],
+    character: dict[str, Any],
+    *,
+    request_preset: Any = None,
+) -> str:
+    """Resolve prompt formatting preset with scope-aware precedence.
+
+    Precedence:
+    1) request override (single-turn)
+    2) chat override when presetScope=chat
+    3) character preset when presetScope=character
+    4) global default
+    """
+
+    from tldw_Server_API.app.core.Character_Chat.modules.character_prompt_presets import (
+        DEFAULT_PROMPT_PRESET,
+        _VALID_PROMPT_PRESETS,
+    )
+
+    def _coerce_preset_id(value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        preset = value.strip()
+        if not preset or preset not in _VALID_PROMPT_PRESETS:
+            return None
+        return preset
+
+    request_override = _coerce_preset_id(request_preset)
+    if request_override:
+        return request_override
+
+    scope = _normalize_preset_scope(settings)
+    chat_override = (
+        _coerce_preset_id(settings.get("chatPresetOverrideId"))
+        or _coerce_preset_id(settings.get("promptPreset"))
+        or _coerce_preset_id(settings.get("prompt_preset"))
+    )
+
+    if scope == "chat":
+        return chat_override or DEFAULT_PROMPT_PRESET
+
+    character_preset = _coerce_preset_id(resolve_character_prompt_preset(character))
+    return character_preset or DEFAULT_PROMPT_PRESET
+
+
+def _resolve_effective_generation_settings(
+    settings: dict[str, Any],
+    character: dict[str, Any],
+) -> dict[str, Any]:
+    """Resolve generation parameters: chat override > character > None."""
+    base = resolve_character_generation_settings(character)
+    overrides = settings.get("chatGenerationOverride")
+    if not isinstance(overrides, dict):
+        # Backward-compat for earlier key spelling.
+        overrides = settings.get("generationOverrides")
+    if not isinstance(overrides, dict):
+        return base
+    if overrides.get("enabled") is False:
+        return base
+    for key in ("temperature", "top_p", "repetition_penalty", "stop"):
+        if key in overrides and overrides[key] is not None:
+            base[key] = overrides[key]
+    return base
+
+
 def _normalize_sender_aliases(names: list[str]) -> set[str]:
     aliases: set[str] = set()
     for name in names:
@@ -944,6 +1071,34 @@ def _collect_character_greeting_texts(character: dict[str, Any]) -> list[str]:
     return greetings
 
 
+def _compute_greetings_checksum(character: dict[str, Any]) -> str:
+    """Compute a stable checksum over all greeting texts for staleness detection."""
+    greetings = _collect_character_greeting_texts(character)
+    joined = "\n---\n".join(greetings)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
+
+
+def _check_greeting_staleness(
+    settings: dict[str, Any],
+    character: dict[str, Any],
+) -> Optional[str]:
+    """Return a staleness warning if character greetings changed since chat creation.
+
+    Returns ``None`` when no staleness is detected or when no checksum was
+    persisted (pre-existing chats).
+    """
+    stored = settings.get("greetingsChecksum")
+    if not isinstance(stored, str) or not stored:
+        return None
+    current = _compute_greetings_checksum(character)
+    if current != stored:
+        return (
+            "Character greetings have changed since this chat was created. "
+            "The stored greeting selection may be stale."
+        )
+    return None
+
+
 def _parse_greeting_selection_index(selection_id: Any) -> Optional[int]:
     if not isinstance(selection_id, str):
         return None
@@ -1057,17 +1212,28 @@ def _should_inject_character_scoped_greeting(
     turn_context: dict[str, Any],
     history_messages: list[dict[str, Any]],
 ) -> bool:
+    """Decide whether a greeting should be injected for the active turn.
+
+    Scope behavior:
+    - chat: inject once for the conversation (first assistant turn)
+    - character: inject on each speaking character's first assistant turn
+    """
     if settings.get("greetingEnabled") is False:
         return False
 
     greeting_scope = _normalize_greeting_scope(settings)
-    if greeting_scope != "character":
-        return False
-
-    participants = turn_context.get("participants") or []
     primary_character_name = str(turn_context.get("primary_character_name") or "")
     active_character_name = str(turn_context.get("active_character_name") or "")
     participant_aliases = turn_context.get("participant_aliases") or set()
+    participants = turn_context.get("participants") or []
+
+    # Chat scope always behaves as chat-first regardless of participant count.
+    if greeting_scope == "chat":
+        return not _has_prior_assistant_reply(
+            history_messages=history_messages,
+            primary_character_name=primary_character_name,
+            participant_aliases=participant_aliases,
+        )
 
     if len(participants) <= 1:
         # Edge-case rule: one participant should behave like chat-first.
@@ -1146,14 +1312,22 @@ def _inject_character_scoped_greeting_from_settings(
     return [*messages[:insert_idx], greeting_message, *messages[insert_idx:]]
 
 
-def _resolve_author_note_text(settings: dict[str, Any], character: dict[str, Any]) -> str:
+def _resolve_author_note_text(
+    settings: dict[str, Any],
+    character: dict[str, Any],
+    *,
+    for_prompt: bool = True,
+) -> str:
     # Optional toggles reserved for Stage D2 behavior; defaults keep note enabled.
     if settings.get("authorNoteEnabled") is False:
         return ""
-    if settings.get("authorNoteGmOnly") is True:
-        return ""
-    if settings.get("authorNoteExcludeFromPrompt") is True:
-        return ""
+    # GM-only and exclude-from-prompt flags suppress injection into LLM context
+    # but the note text should still be resolvable for UI display (for_prompt=False).
+    if for_prompt:
+        if settings.get("authorNoteGmOnly") is True:
+            return ""
+        if settings.get("authorNoteExcludeFromPrompt") is True:
+            return ""
 
     shared_note = _normalize_note_text(settings.get("authorNote"))
     character_note = _extract_character_memory_note(settings, character.get("id"))
@@ -1808,6 +1982,16 @@ async def create_chat_session(
                 seed_status = "failed"
                 logger.warning(f"Failed to seed first message for chat {created_id}: {_seed_err}")
 
+        # Persist a greetings checksum so staleness can be detected later.
+        try:
+            checksum = _compute_greetings_checksum(character)
+            db.upsert_conversation_settings(
+                created_id,
+                {"greetingsChecksum": checksum},
+            )
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            pass  # best-effort; staleness detection degrades gracefully
+
         if response is not None and seed_status is not None:
             try:
                 response.headers["X-Chat-Seed-Status"] = seed_status
@@ -1828,6 +2012,209 @@ async def create_chat_session(
             detail="An unexpected error occurred while creating chat session"
         )
 
+
+# ========================================================================
+# Preset Editor Endpoints (PRD 2 Stage B2)
+# NOTE: These must be registered BEFORE /{chat_id} to avoid path capture.
+# ========================================================================
+
+# Template tokens available in custom presets
+_PRESET_TEMPLATE_TOKENS = [
+    PresetTokenInfo(token="{{char}}", description="Character name"),
+    PresetTokenInfo(token="{{user}}", description="User/player name"),
+    PresetTokenInfo(token="{{description}}", description="Character description field"),
+    PresetTokenInfo(token="{{personality}}", description="Character personality field"),
+    PresetTokenInfo(token="{{scenario}}", description="Character scenario field"),
+    PresetTokenInfo(token="{{system_prompt}}", description="Character system prompt field"),
+    PresetTokenInfo(token="{{message_example}}", description="Character example messages"),
+    PresetTokenInfo(token="{{post_history}}", description="Post-history instructions"),
+]
+
+# Built-in preset metadata (non-deletable)
+_BUILTIN_PRESETS = [
+    PresetDetail(
+        preset_id="default",
+        name="Default",
+        builtin=True,
+        section_order=["identity", "description", "personality", "scenario", "system_prompt"],
+        section_templates={
+            "identity": "You are {{char}}.",
+            "description": "{{description}}",
+            "personality": "{{personality}}",
+            "scenario": "{{scenario}}",
+            "system_prompt": "{{system_prompt}}",
+        },
+    ),
+    PresetDetail(
+        preset_id="st_default",
+        name="SillyTavern Default",
+        builtin=True,
+        section_order=["identity", "system_prompt", "description", "personality", "scenario", "message_example", "post_history"],
+        section_templates={
+            "identity": "You are {{char}}.",
+            "system_prompt": "{{system_prompt}}",
+            "description": "Description:\n{{description}}",
+            "personality": "Personality:\n{{personality}}",
+            "scenario": "Scenario:\n{{scenario}}",
+            "message_example": "Example dialogue:\n{{message_example}}",
+            "post_history": "Post-history instructions:\n{{post_history}}",
+        },
+    ),
+]
+
+
+@router.get(
+    "/presets/tokens",
+    summary="List available template tokens for custom presets",
+    tags=["Presets"],
+)
+async def list_preset_tokens(
+    current_user: User = Depends(get_request_user),
+):
+    """Return the list of template tokens that can be used in custom preset templates."""
+    return {"tokens": _PRESET_TEMPLATE_TOKENS}
+
+
+@router.get(
+    "/presets",
+    response_model=PresetListResponse,
+    summary="List prompt presets",
+    tags=["Presets"],
+)
+async def list_presets(
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Return built-in and user-defined prompt presets."""
+    all_presets: list[PresetDetail] = list(_BUILTIN_PRESETS)
+
+    # Load user-defined presets from DB
+    try:
+        rows = db.list_prompt_presets()
+        for row in rows:
+            all_presets.append(PresetDetail(
+                preset_id=row["preset_id"],
+                name=row["name"],
+                builtin=False,
+                section_order=row.get("section_order", []),
+                section_templates=row.get("section_templates", {}),
+                created_at=row.get("created_at"),
+                updated_at=row.get("updated_at"),
+            ))
+    except Exception as exc:
+        logger.debug("Could not load user presets (table may not exist yet): {}", exc)
+
+    return PresetListResponse(presets=all_presets)
+
+
+@router.post(
+    "/presets",
+    response_model=PresetDetail,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a custom prompt preset",
+    tags=["Presets"],
+)
+async def create_preset(
+    body: PresetCreate = Body(...),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Create a new user-defined prompt preset."""
+    db.upsert_prompt_preset(
+        preset_id=body.preset_id,
+        name=body.name,
+        section_order=body.section_order,
+        section_templates=body.section_templates,
+    )
+    return PresetDetail(
+        preset_id=body.preset_id,
+        name=body.name,
+        builtin=False,
+        section_order=body.section_order,
+        section_templates=body.section_templates,
+    )
+
+
+@router.put(
+    "/presets/{preset_id}",
+    response_model=PresetDetail,
+    summary="Update a custom prompt preset",
+    tags=["Presets"],
+)
+async def update_preset(
+    preset_id: str = Path(..., description="Preset identifier"),
+    body: PresetUpdate = Body(...),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Update an existing user-defined prompt preset. Cannot modify built-in presets."""
+    if preset_id in ("default", "st_default"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot modify built-in presets",
+        )
+
+    existing = db.get_prompt_preset(preset_id)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Preset '{preset_id}' not found",
+        )
+
+    name = body.name if body.name is not None else existing["name"]
+    section_order = body.section_order if body.section_order is not None else existing.get("section_order", [])
+    section_templates = body.section_templates if body.section_templates is not None else existing.get("section_templates", {})
+
+    db.upsert_prompt_preset(
+        preset_id=preset_id,
+        name=name,
+        section_order=section_order,
+        section_templates=section_templates,
+    )
+    updated = db.get_prompt_preset(preset_id)
+    return PresetDetail(
+        preset_id=preset_id,
+        name=updated["name"],
+        builtin=False,
+        section_order=updated.get("section_order", []),
+        section_templates=updated.get("section_templates", {}),
+        created_at=updated.get("created_at"),
+        updated_at=updated.get("updated_at"),
+    )
+
+
+@router.delete(
+    "/presets/{preset_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a custom prompt preset",
+    tags=["Presets"],
+)
+async def delete_preset(
+    preset_id: str = Path(..., description="Preset identifier"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Delete a user-defined preset. Cannot delete built-in presets."""
+    if preset_id in ("default", "st_default"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot delete built-in presets",
+        )
+
+    existing = db.get_prompt_preset(preset_id)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Preset '{preset_id}' not found",
+        )
+
+    db.delete_prompt_preset(preset_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ========================================================================
+# Chat Session Detail Endpoints
+# ========================================================================
 
 @router.get("/{chat_id}", response_model=ChatSessionResponse,
             summary="Get chat session details", tags=["Chat Sessions"])
@@ -2102,9 +2489,16 @@ async def prepare_chat_completion(
             user_name=user_name,
         )
 
+        prep_settings = _extract_settings(settings_row)
+        effective_preset = _resolve_effective_prompt_preset(
+            prep_settings,
+            character,
+            request_preset=body.prompt_preset,
+        )
+
         formatted: list[dict[str, Any]] = []
         if include_ctx and character and offset == 0:
-            sys_text = build_character_system_prompt(character, char_label, user_name)
+            sys_text = build_character_system_prompt(character, char_label, user_name, preset=effective_preset)
             if sys_text.strip():
                 formatted.append({"role": "system", "content": sys_text.strip()})
         if summary_content:
@@ -2164,6 +2558,358 @@ async def prepare_chat_completion(
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error preparing completion for {chat_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while preparing completion")
+
+
+# ── Token budget constants for supplemental prompt sections ──────────
+_TOKEN_BUDGET_TOTAL = 1200
+_TOKEN_BUDGET_GREETING = 120
+_TOKEN_BUDGET_AUTHOR_NOTE = 240
+_TOKEN_BUDGET_PRESET = 180
+_TOKEN_BUDGET_STEERING = 120
+_TOKEN_BUDGET_LOREBOOK = 420
+_TOKEN_BUDGET_WORLD_BOOK = 240
+
+# Priority order for truncation (highest priority first)
+_TRUNCATION_PRIORITY = [
+    "preset",
+    "author_note",
+    "message_steering",
+    "lorebook",
+    "world_book",
+    "greeting",
+]
+
+_PREVIEW_CONFLICT_EXAMPLES = [
+    "Preset sets temperature=0.7; later section sets temperature=0.2 -> effective temperature=0.2.",
+    'Preset directive "Speak tersely"; later directive "Be verbose" -> later directive replaces earlier.',
+    "Appendable source blocks concatenate only when both sides are appendable.",
+]
+
+_CONTRADICTORY_DIRECTIVE_PAIRS: tuple[tuple[str, str, str], ...] = (
+    ("speak tersely", "be verbose", "Conflicting directives detected (terse vs verbose)."),
+    ("concise", "detailed", "Conflicting directives detected (concise vs detailed)."),
+    ("formal", "casual", "Conflicting directives detected (formal vs casual)."),
+)
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate: ~4 chars per token for English text."""
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
+
+
+def _truncate_to_budget(text: str, token_budget: int) -> str:
+    """Truncate text to fit within a token budget (approximate)."""
+    if not text:
+        return text
+    estimated = _estimate_tokens(text)
+    if estimated <= token_budget:
+        return text
+    # Rough truncation: 4 chars per token
+    max_chars = token_budget * 4
+    return text[:max_chars] + "..."
+
+
+def _extract_scalar_conflicts(texts: list[str]) -> list[dict[str, str]]:
+    by_key: dict[str, set[str]] = {}
+    pattern = re.compile(
+        r"\b(temperature|top_p|top[\s-]?p|repetition_penalty|repetition[\s-]?penalty)\b\s*[:=]\s*(-?\d+(?:\.\d+)?)",
+        re.IGNORECASE,
+    )
+    for text in texts:
+        for match in pattern.finditer(text or ""):
+            raw_key = (match.group(1) or "").lower()
+            key = "top_p" if "top" in raw_key else raw_key.replace(" ", "_").replace("-", "_")
+            value = match.group(2) or ""
+            by_key.setdefault(key, set()).add(value)
+
+    conflicts: list[dict[str, str]] = []
+    for key, values in by_key.items():
+        if len(values) <= 1:
+            continue
+        joined_values = ", ".join(sorted(values))
+        conflicts.append(
+            {
+                "type": "scalar_conflict",
+                "message": f"Overlapping values detected for {key}: {joined_values}",
+            }
+        )
+    return conflicts
+
+
+def _extract_directive_conflicts(text: str) -> list[dict[str, str]]:
+    lower = (text or "").lower()
+    conflicts: list[dict[str, str]] = []
+    for left, right, message in _CONTRADICTORY_DIRECTIVE_PAIRS:
+        if left in lower and right in lower:
+            conflicts.append({"type": "directive_conflict", "message": message})
+    return conflicts
+
+
+@router.post(
+    "/{chat_id}/prompt-preview",
+    summary="Preview assembled prompt with token budget breakdown",
+    tags=["Chat Sessions"],
+)
+async def prompt_assembly_preview(
+    chat_id: str = Path(..., description="Chat session ID"),
+    body: CharacterChatCompletionPrepRequest = None,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Preview the full assembled prompt for a chat, including per-section token counts
+    and budget enforcement.
+
+    Returns the prompt sections (system prompt, greeting, author note, lorebook entries)
+    with token estimates, budget caps, and truncation warnings.
+    """
+    try:
+        body = body or CharacterChatCompletionPrepRequest()
+
+        conversation = db.get_conversation_by_id(chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+        user_name = conversation.get("user_name", "User")
+        include_ctx = bool(body.include_character_context)
+        settings_row = db.get_conversation_settings(chat_id)
+        settings = _extract_settings(settings_row) if isinstance(settings_row, dict) else {}
+
+        messages = db.get_messages_for_conversation(chat_id, limit=body.limit, offset=body.offset) or []
+        messages = [m for m in messages if not m.get("deleted")]
+        history_messages = db.get_messages_for_conversation(chat_id, limit=1000, offset=0) or []
+        history_messages = [m for m in history_messages if not m.get("deleted")]
+
+        turn_context = _resolve_chat_turn_context(
+            db=db,
+            conversation=conversation,
+            settings_row=settings_row,
+            history_messages=history_messages,
+            directed_character_id=body.directed_character_id,
+        )
+        if (
+            body.directed_character_id is not None
+            and not turn_context.get("directed_character_applied")
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="directed_character_id must reference a selected participant in this chat",
+            )
+        character = turn_context.get("active_character") or {}
+        char_name = str(turn_context.get("active_character_name") or "Assistant")
+        participant_aliases = turn_context.get("participant_aliases") or set()
+        primary_character_name = str(turn_context.get("primary_character_name") or "")
+
+        paginated = messages
+        summary_content = ""
+        paginated, summary_content = _apply_auto_summary_to_prompt_messages(
+            db=db,
+            chat_id=chat_id,
+            settings_row=settings_row,
+            prompt_messages=paginated,
+            offset=body.offset,
+            primary_character_name=primary_character_name,
+            participant_aliases=participant_aliases,
+            char_name=char_name,
+            user_name=user_name,
+        )
+
+        preview_preset = _resolve_effective_prompt_preset(
+            settings,
+            character,
+            request_preset=body.prompt_preset,
+        )
+
+        # Assemble prompt in the same order as completion-v2.
+        formatted: list[dict[str, Any]] = []
+        sys_text = ""
+        if include_ctx and character and body.offset == 0:
+            sys_text = build_character_system_prompt(character, char_name, user_name, preset=preview_preset)
+            if sys_text.strip():
+                formatted.append({"role": "system", "content": sys_text.strip()})
+        if summary_content:
+            formatted.append({"role": "system", "content": f"Conversation summary:\n{summary_content}"})
+
+        for msg in paginated:
+            formatted.append({
+                "role": _map_sender_to_role_with_participants(
+                    msg.get("sender"),
+                    primary_character_name,
+                    participant_aliases,
+                ),
+                "content": _safe_replace_placeholders(msg.get("content"), char_name, user_name),
+            })
+
+        if body.append_user_message:
+            formatted.append({"role": "user", "content": body.append_user_message})
+
+        greeting_text = ""
+        if _should_inject_character_scoped_greeting(
+            settings=settings,
+            turn_context=turn_context,
+            history_messages=history_messages,
+        ):
+            greeting_text = _resolve_character_scoped_greeting(
+                settings=settings,
+                character=character,
+                char_name=char_name,
+                user_name=user_name,
+            )
+        formatted = _inject_character_scoped_greeting_from_settings(
+            formatted,
+            settings_row=settings_row,
+            turn_context=turn_context,
+            history_messages=history_messages,
+            user_name=user_name,
+        )
+
+        note_text = _resolve_author_note_text(settings, character)
+        if note_text:
+            note_text = _safe_replace_placeholders(note_text, char_name, user_name).strip()
+        author_note_text = f"Author's note:\n{note_text}" if note_text else ""
+        formatted = _inject_author_note_from_settings(
+            formatted,
+            settings_row=settings_row,
+            character=character,
+            char_name=char_name,
+            user_name=user_name,
+        )
+
+        continue_flag, impersonate_flag, narrate_flag, steering_conflict = (
+            _resolve_message_steering_flags(
+                continue_as_user=body.continue_as_user,
+                impersonate_user=body.impersonate_user,
+                force_narrate=body.force_narrate,
+            )
+        )
+        steering_text = _build_message_steering_instruction(
+            continue_as_user=continue_flag,
+            impersonate_user=impersonate_flag,
+            force_narrate=narrate_flag,
+        )
+        formatted, _ = _inject_message_steering_instruction(
+            formatted,
+            continue_as_user=body.continue_as_user,
+            impersonate_user=body.impersonate_user,
+            force_narrate=body.force_narrate,
+        )
+
+        lorebook_text = ""
+        lorebook_diagnostics: list[dict[str, Any]] = []
+        try:
+            from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService
+
+            wb_manager = WorldBookService(db)
+            recent_text = " ".join(
+                str(m.get("content", "")) for m in formatted if m.get("role") in ("user", "assistant")
+            )[-2000:]
+            if recent_text.strip():
+                wb_result = wb_manager.process_context(
+                    text=recent_text,
+                    character_id=conversation.get("character_id"),
+                    include_diagnostics=True,
+                )
+                if isinstance(wb_result, dict):
+                    wb_context = wb_result.get("processed_context", "")
+                    lorebook_diagnostics = wb_result.get("diagnostics") or []
+                    if wb_context and wb_context.strip():
+                        lorebook_text = f"World info:\n{wb_context.strip()}"
+                        insert_pos = 0
+                        for idx, msg in enumerate(formatted):
+                            role = str(msg.get("role", "")).strip().lower()
+                            if role == "system":
+                                insert_pos = idx + 1
+                            else:
+                                break
+                        formatted.insert(
+                            insert_pos,
+                            {"role": "system", "content": lorebook_text},
+                        )
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            pass
+
+        sections_raw: list[tuple[str, str, int]] = [
+            ("preset", sys_text, _TOKEN_BUDGET_PRESET),
+            ("author_note", author_note_text, _TOKEN_BUDGET_AUTHOR_NOTE),
+            ("message_steering", steering_text, _TOKEN_BUDGET_STEERING),
+            ("greeting", greeting_text, _TOKEN_BUDGET_GREETING),
+            ("lorebook", lorebook_text, _TOKEN_BUDGET_LOREBOOK),
+        ]
+        sections: list[dict[str, Any]] = []
+        total_supplemental_tokens = 0
+        total_supplemental_effective_tokens = 0
+        for name, content, budget in sections_raw:
+            text = str(content or "").strip()
+            estimated_tokens = _estimate_tokens(text)
+            truncated_text = _truncate_to_budget(text, budget) if text else ""
+            effective_tokens = _estimate_tokens(truncated_text)
+            total_supplemental_tokens += estimated_tokens
+            total_supplemental_effective_tokens += effective_tokens
+            section_payload: dict[str, Any] = {
+                "name": name,
+                "content": truncated_text,
+                "tokens_estimated": estimated_tokens,
+                "tokens_effective": effective_tokens,
+                "budget": budget,
+                "truncated": bool(text) and truncated_text != text,
+            }
+            if name == "lorebook" and lorebook_diagnostics:
+                section_payload["diagnostics"] = lorebook_diagnostics
+            sections.append(section_payload)
+
+        message_tokens = sum(_estimate_tokens(str(m.get("content", ""))) for m in messages)
+        warnings: list[str] = []
+        budget_status = "ok"
+        if total_supplemental_effective_tokens > _TOKEN_BUDGET_TOTAL:
+            budget_status = "error"
+            warnings.append(
+                f"Total supplemental tokens ({total_supplemental_effective_tokens}) exceed budget ({_TOKEN_BUDGET_TOTAL}). "
+                f"Sections may be truncated in priority order: {', '.join(_TRUNCATION_PRIORITY)}."
+            )
+        elif total_supplemental_effective_tokens > int(_TOKEN_BUDGET_TOTAL * 0.9):
+            budget_status = "caution"
+            warnings.append(
+                f"Total supplemental tokens ({total_supplemental_effective_tokens}) are at "
+                f"{total_supplemental_effective_tokens * 100 // _TOKEN_BUDGET_TOTAL}% of budget ({_TOKEN_BUDGET_TOTAL})."
+            )
+
+        staleness = _check_greeting_staleness(settings, character)
+        if staleness:
+            warnings.append(staleness)
+        if steering_conflict:
+            warnings.append(
+                "Steering conflict resolved: impersonate_user overrides continue_as_user."
+            )
+
+        conflict_source_sections = [str(content or "") for _, content, _ in sections_raw if str(content or "").strip()]
+        conflict_text = "\n".join(conflict_source_sections)
+        conflicts = _extract_scalar_conflicts(conflict_source_sections)
+        conflicts.extend(_extract_directive_conflicts(conflict_text))
+
+        return {
+            "chat_id": chat_id,
+            "character_id": turn_context.get("active_character_id") or conversation.get("character_id"),
+            "character_name": char_name,
+            "sections": sections,
+            "total_supplemental_tokens": total_supplemental_tokens,
+            "total_supplemental_effective_tokens": total_supplemental_effective_tokens,
+            "supplemental_budget": _TOKEN_BUDGET_TOTAL,
+            "budget_status": budget_status,
+            "message_tokens_estimated": message_tokens,
+            "message_count": len(messages),
+            "warnings": warnings or None,
+            "conflicts": conflicts or None,
+            "examples": _PREVIEW_CONFLICT_EXAMPLES,
+        }
+
+    except HTTPException:
+        raise
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Error generating prompt preview for {chat_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while generating prompt preview",
+        )
 
 
 @router.post(
@@ -2238,7 +2984,8 @@ async def character_chat_completion(
         char_label = active_character_name or "Assistant"
         participant_aliases = turn_context.get("participant_aliases") or set()
         primary_character_name = turn_context.get("primary_character_name")
-        character_generation_settings = resolve_character_generation_settings(character)
+        completion_settings = _extract_settings(settings_row)
+        character_generation_settings = _resolve_effective_generation_settings(completion_settings, character)
         resolved_temperature = (
             body.temperature
             if body.temperature is not None
@@ -2284,9 +3031,15 @@ async def character_chat_completion(
             user_name=user_name,
         )
 
+        completion_preset = _resolve_effective_prompt_preset(
+            completion_settings,
+            character,
+            request_preset=body.prompt_preset,
+        )
+
         formatted: list[dict[str, Any]] = []
         if include_ctx and character and offset == 0:
-            sys_text = build_character_system_prompt(character, char_label, user_name)
+            sys_text = build_character_system_prompt(character, char_label, user_name, preset=completion_preset)
             if sys_text.strip():
                 formatted.append({"role": "system", "content": sys_text.strip()})
         if summary_content:
@@ -2334,6 +3087,38 @@ async def character_chat_completion(
                 "Steering conflict resolved for chat {} in /complete-v2: impersonate_user overrides continue_as_user",
                 chat_id,
             )
+
+        # Inject world book context and capture diagnostics for this turn.
+        turn_lorebook_diagnostics: Optional[list[dict[str, Any]]] = None
+        try:
+            from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService
+            wb_manager = WorldBookService(db)
+            recent_text = " ".join(
+                str(m.get("content", "")) for m in formatted if m.get("role") in ("user", "assistant")
+            )[-2000:]
+            if recent_text.strip():
+                wb_result = wb_manager.process_context(
+                    text=recent_text,
+                    character_id=conversation.get("character_id"),
+                    include_diagnostics=True,
+                )
+                if isinstance(wb_result, dict):
+                    wb_context = wb_result.get("processed_context", "")
+                    turn_lorebook_diagnostics = wb_result.get("diagnostics") or None
+                    if wb_context and wb_context.strip():
+                        # Insert world book context as a system message after existing system messages.
+                        insert_pos = 0
+                        for idx, msg in enumerate(formatted):
+                            if str(msg.get("role", "")).strip().lower() == "system":
+                                insert_pos = idx + 1
+                            else:
+                                break
+                        formatted.insert(insert_pos, {
+                            "role": "system",
+                            "content": f"World info:\n{wb_context.strip()}",
+                        })
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            pass  # world book injection is best-effort
 
         # Determine provider/model with safe defaults for test/offline
         provider = (body.provider or os.getenv("CHAR_CHAT_PROVIDER") or "local-llm").strip()
@@ -2794,11 +3579,13 @@ async def character_chat_completion(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Failed to persist assistant message"
                 )
-            metadata_extra = {
+            metadata_extra: dict[str, Any] = {
                 "speaker_character_id": active_character_id,
                 "speaker_character_name": char_label,
                 "turn_taking_mode": turn_context.get("turn_taking_mode", "single"),
             }
+            if turn_lorebook_diagnostics:
+                metadata_extra["lorebook_diagnostics"] = turn_lorebook_diagnostics
             validated_tool_calls = (
                 _validate_and_truncate_tool_calls(assistant_tool_calls)
                 if assistant_tool_calls
@@ -2825,6 +3612,7 @@ async def character_chat_completion(
             assistant_content=assistant_text,
             speaker_character_id=active_character_id,
             speaker_character_name=char_label,
+            lorebook_diagnostics=turn_lorebook_diagnostics,
         )
 
     except HTTPException:
@@ -3027,10 +3815,46 @@ async def get_chat_settings(
         if not settings_row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat settings not found")
 
+        settings = settings_row.get("settings") or {}
+
+        # Normalize stored enum values so the client always gets valid scopes.
+        _SCOPE_DEFAULTS = {
+            "greetingScope": ("chat", {"chat", "character"}),
+            "presetScope": ("character", {"chat", "character"}),
+            "memoryScope": ("shared", {"shared", "character", "both"}),
+        }
+        for scope_key, (default_val, allowed) in _SCOPE_DEFAULTS.items():
+            raw = settings.get(scope_key)
+            if raw is not None:
+                normalized = raw.strip().lower() if isinstance(raw, str) else None
+                if normalized not in allowed:
+                    settings[scope_key] = default_val
+
+        # Normalize characterMemoryById string entries to dicts on read.
+        mem_by_id = settings.get("characterMemoryById")
+        if isinstance(mem_by_id, dict):
+            for cid, entry in mem_by_id.items():
+                if isinstance(entry, str):
+                    mem_by_id[cid] = {"note": entry}
+
+        # Check for greeting staleness if a character is associated.
+        warnings: list[str] = []
+        char_id = conversation.get("character_id") if conversation else None
+        if char_id is not None:
+            try:
+                character = db.get_character_card_by_id(char_id)
+                if character:
+                    staleness_warning = _check_greeting_staleness(settings, character)
+                    if staleness_warning:
+                        warnings.append(staleness_warning)
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+                pass  # best-effort
+
         return ChatSettingsResponse(
             conversation_id=chat_id,
-            settings=settings_row.get("settings") or {},
+            settings=settings,
             last_modified=settings_row.get("last_modified") or datetime.now(timezone.utc),
+            warnings=warnings or None,
         )
     except HTTPException:
         raise
@@ -3530,6 +4354,242 @@ async def persist_streamed_assistant_message(
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error persisting streamed assistant message for {chat_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to persist assistant message")
+
+
+# ========================================================================
+# Greeting List Picker Endpoints (PRD 1 Stage A2)
+# ========================================================================
+
+@router.get(
+    "/{chat_id}/greetings",
+    response_model=GreetingListResponse,
+    summary="List character greetings for this chat",
+    tags=["Chat Sessions"],
+)
+async def list_greetings(
+    chat_id: str = Path(..., description="Chat session ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Return all available greetings from the character card, current selection, and staleness info."""
+    conversation = db.get_conversation_by_id(chat_id)
+    _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+    character_id = conversation.get("character_id")
+    character = db.get_character_card_by_id(character_id) if character_id else {}
+    if not character:
+        character = {}
+
+    greetings_texts = _collect_character_greeting_texts(character)
+    greetings = [
+        GreetingItem(
+            index=i,
+            text=t,
+            preview=t[:120],
+        )
+        for i, t in enumerate(greetings_texts)
+    ]
+
+    settings_row = db.get_conversation_settings(chat_id)
+    settings = (settings_row or {}).get("settings") or {}
+    current_selection = _parse_greeting_selection_index(settings.get("greetingSelectionId"))
+    staleness = _check_greeting_staleness(settings, character)
+
+    return GreetingListResponse(
+        chat_id=chat_id,
+        character_id=str(character_id) if character_id is not None else None,
+        character_name=character.get("name"),
+        greetings=greetings,
+        current_selection=current_selection,
+        staleness_warning=staleness,
+    )
+
+
+@router.put(
+    "/{chat_id}/greetings/select",
+    response_model=GreetingSelectResponse,
+    summary="Select a greeting for this chat",
+    tags=["Chat Sessions"],
+)
+async def select_greeting(
+    chat_id: str = Path(..., description="Chat session ID"),
+    body: GreetingSelectRequest = Body(...),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Select a specific greeting by index and update the chat settings."""
+    conversation = db.get_conversation_by_id(chat_id)
+    _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+    character_id = conversation.get("character_id")
+    character = db.get_character_card_by_id(character_id) if character_id else {}
+    if not character:
+        character = {}
+
+    greetings_texts = _collect_character_greeting_texts(character)
+    if body.index < 0 or body.index >= len(greetings_texts):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Greeting index {body.index} out of range (0..{len(greetings_texts) - 1})",
+        )
+
+    settings_row = db.get_conversation_settings(chat_id)
+    settings = (settings_row or {}).get("settings") or {}
+    checksum = _compute_greetings_checksum(character)
+    settings["greetingSelectionId"] = f"greeting:{body.index}:selected"
+    settings["greetingsChecksum"] = checksum
+    db.upsert_conversation_settings(chat_id, settings)
+
+    return GreetingSelectResponse(
+        chat_id=chat_id,
+        selected_index=body.index,
+        greeting_preview=greetings_texts[body.index][:120],
+        checksum_updated=True,
+    )
+
+
+# ========================================================================
+# Author Note Info Endpoint (PRD 4 Stage D2)
+# ========================================================================
+
+@router.get(
+    "/{chat_id}/author-note/info",
+    response_model=AuthorNoteInfoResponse,
+    summary="Get author note token info",
+    tags=["Chat Sessions"],
+)
+async def get_author_note_info(
+    chat_id: str = Path(..., description="Chat session ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Return author note text, token estimates, budget, and toggle states."""
+    conversation = db.get_conversation_by_id(chat_id)
+    _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+    character_id = conversation.get("character_id")
+    character = db.get_character_card_by_id(character_id) if character_id else {}
+    if not character:
+        character = {}
+
+    settings_row = db.get_conversation_settings(chat_id)
+    settings = (settings_row or {}).get("settings") or {}
+
+    text_display = _resolve_author_note_text(settings, character, for_prompt=False)
+    text_prompt = _resolve_author_note_text(settings, character, for_prompt=True)
+
+    tokens_display = _estimate_tokens(text_display)
+    tokens_prompt = _estimate_tokens(text_prompt)
+
+    enabled = settings.get("authorNoteEnabled") is not False
+    gm_only = settings.get("authorNoteGmOnly") is True
+    exclude_from_prompt = settings.get("authorNoteExcludeFromPrompt") is True
+    scope = _normalize_memory_scope(settings)
+
+    # Determine source
+    shared_note = settings.get("authorNote")
+    has_settings_note = isinstance(shared_note, str) and shared_note.strip()
+    if has_settings_note:
+        source = "settings"
+    elif text_display:
+        source = "character_default"
+    else:
+        source = "none"
+
+    truncated = tokens_display > _TOKEN_BUDGET_AUTHOR_NOTE
+
+    warnings: list[str] = []
+    if truncated:
+        warnings.append(
+            f"Author note exceeds budget ({tokens_display} tokens > {_TOKEN_BUDGET_AUTHOR_NOTE} budget)"
+        )
+    if gm_only:
+        warnings.append("Note is GM-only: visible in UI but excluded from LLM prompt")
+
+    return AuthorNoteInfoResponse(
+        chat_id=chat_id,
+        text=text_display,
+        text_for_prompt=text_prompt,
+        tokens_estimated=tokens_display,
+        tokens_for_prompt=tokens_prompt,
+        budget=_TOKEN_BUDGET_AUTHOR_NOTE,
+        truncated=truncated,
+        enabled=enabled,
+        gm_only=gm_only,
+        exclude_from_prompt=exclude_from_prompt,
+        scope=scope,
+        source=source,
+        warnings=warnings,
+    )
+
+
+# ========================================================================
+# Lorebook Diagnostic Export Endpoint (PRD 6 Stage F2)
+# ========================================================================
+
+@router.get(
+    "/{chat_id}/diagnostics/lorebook",
+    response_model=LorebookDiagnosticExportResponse,
+    summary="Export lorebook diagnostics across turns",
+    tags=["Chat Sessions"],
+)
+async def export_lorebook_diagnostics(
+    chat_id: str = Path(..., description="Chat session ID"),
+    page: int = Query(1, ge=1, description="Page number"),
+    size: int = Query(50, ge=1, le=200, description="Page size"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Iterate assistant messages and collect lorebook_diagnostics from message metadata."""
+    conversation = db.get_conversation_by_id(chat_id)
+    _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+    character_id = conversation.get("character_id")
+
+    # Fetch all messages ordered by timestamp
+    messages = db.get_messages_for_conversation(chat_id, limit=10000, order_by_timestamp="ASC")
+
+    # Filter assistant messages that have lorebook diagnostics
+    turns_with_diags: list[DiagnosticTurnEntry] = []
+    turn_counter = 0
+    for msg in messages:
+        sender = (msg.get("sender") or "").lower()
+        if sender not in ("assistant", "char", "character"):
+            continue
+        turn_counter += 1
+
+        meta = db.get_message_metadata(msg["id"])
+        if not meta:
+            continue
+        extra = meta.get("extra")
+        if not isinstance(extra, dict):
+            continue
+        diags = extra.get("lorebook_diagnostics")
+        if not diags or not isinstance(diags, list):
+            continue
+
+        content = msg.get("content") or ""
+        turns_with_diags.append(DiagnosticTurnEntry(
+            message_id=msg["id"],
+            timestamp=msg.get("timestamp"),
+            turn_number=turn_counter,
+            message_preview=content[:120],
+            diagnostics=diags,
+        ))
+
+    # Pagination
+    total = len(turns_with_diags)
+    start = (page - 1) * size
+    page_items = turns_with_diags[start:start + size]
+
+    return LorebookDiagnosticExportResponse(
+        chat_id=chat_id,
+        character_id=str(character_id) if character_id is not None else None,
+        total_turns_with_diagnostics=total,
+        turns=page_items,
+        page=page,
+        size=size,
+    )
 
 
 #

@@ -885,6 +885,19 @@ def _reset_workflow_scheduler():
     except Exception:
         pass
 
+    # Ensure ChaCha executor threads are not reported as lingering non-daemon
+    # workers by the per-test scheduler reset diagnostics.
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
+            close_all_chacha_db_instances,
+            shutdown_chacha_executor,
+        )
+
+        close_all_chacha_db_instances()
+        shutdown_chacha_executor(wait=True)
+    except Exception:
+        pass
+
 
     # Log any lingering non-daemon threads with their stack frames to aid debugging hangs
     _cleanup_lingering_threads(_log, context="scheduler reset")

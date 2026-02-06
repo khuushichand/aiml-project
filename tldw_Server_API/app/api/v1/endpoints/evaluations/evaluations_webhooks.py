@@ -36,6 +36,26 @@ from tldw_Server_API.app.core.Evaluations.webhook_manager import (
 
 webhooks_router = APIRouter()
 
+_WEBHOOK_TESTMODE_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+_WEBHOOK_AWAIT_FALLBACK_EXCEPTIONS = (RuntimeError, TypeError, ValueError)
+_WEBHOOK_ENDPOINT_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    HTTPException,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
 
 def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
     # In tests, always route through the lazy proxy so patched methods
@@ -46,7 +66,7 @@ def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
             svc = get_unified_evaluation_service_for_user(user_id)
             svc.webhook_manager = webhook_manager
             return webhook_manager
-    except Exception as e:
+    except _WEBHOOK_TESTMODE_EXCEPTIONS as e:
         logger.debug(f"Test mode detection skipped: {e}")
     service = get_unified_evaluation_service_for_user(user_id)
     manager = getattr(service, "webhook_manager", None)
@@ -102,10 +122,10 @@ async def register_webhook(
         )
         try:
             result = await _res if inspect.isawaitable(_res) else _res
-        except Exception:
+        except _WEBHOOK_AWAIT_FALLBACK_EXCEPTIONS:
             result = _res
         return WebhookRegistrationResponse(**result)
-    except Exception as e:
+    except _WEBHOOK_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to register webhook: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -124,11 +144,11 @@ async def list_webhooks(
         _res = wm.get_webhook_status(user_id=webhook_user_id)
         try:
             records = await _res if inspect.isawaitable(_res) else _res
-        except Exception:
+        except _WEBHOOK_AWAIT_FALLBACK_EXCEPTIONS:
             records = _res
         normalized = [_normalize_webhook_status_record(w) for w in records]
         return [WebhookStatusResponse(**w) for w in normalized]
-    except Exception as e:
+    except _WEBHOOK_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to list webhooks: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -149,10 +169,10 @@ async def unregister_webhook(
         try:
             if inspect.isawaitable(_res):
                 await _res
-        except Exception:
+        except _WEBHOOK_AWAIT_FALLBACK_EXCEPTIONS:
             pass
         return {"status": "unregistered", "url": url}
-    except Exception as e:
+    except _WEBHOOK_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to unregister webhook: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -172,14 +192,14 @@ async def test_webhook(
         _res = wm.test_webhook(user_id=webhook_user_id, url=str(payload.url))
         try:
             result = await _res if inspect.isawaitable(_res) else _res
-        except Exception:
+        except _WEBHOOK_AWAIT_FALLBACK_EXCEPTIONS:
             result = _res
         if isinstance(result, WebhookTestResponse):
             return result
         if isinstance(result, dict):
             return WebhookTestResponse(**result)
         return WebhookTestResponse(success=bool(result))
-    except Exception as e:
+    except _WEBHOOK_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to test webhook: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

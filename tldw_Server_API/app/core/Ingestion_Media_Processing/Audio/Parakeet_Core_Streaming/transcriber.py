@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Union
@@ -28,6 +29,20 @@ from .buffer import AudioBuffer
 from .config import StreamingConfig
 
 DecodeFn = Callable[[np.ndarray, int], str]
+_PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    LookupError,
+    ModuleNotFoundError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+    binascii.Error,
+)
 
 
 def _variant_decode_fn(model: str, variant: str) -> DecodeFn | None:
@@ -62,7 +77,7 @@ def _variant_decode_fn(model: str, variant: str) -> DecodeFn | None:
                 return _tx_onnx(audio_np, sample_rate=sr)
 
             return _fn
-        except Exception as e:
+        except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("Failed to import ONNX backend: {}", e)
             return None
     elif v == "mlx":
@@ -81,7 +96,7 @@ def _variant_decode_fn(model: str, variant: str) -> DecodeFn | None:
                 return _tx_mlx(audio_np, sample_rate=sr)
 
             return _fn
-        except Exception as e:
+        except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("Failed to import MLX backend: {}", e)
             return None
     else:
@@ -105,7 +120,7 @@ def _variant_decode_fn(model: str, variant: str) -> DecodeFn | None:
                 return _tx_nemo(audio_np, sample_rate=sr, variant="standard")
 
             return _fn
-        except Exception as e:
+        except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("Failed to import standard Parakeet backend: {}", e)
             return None
 
@@ -195,7 +210,7 @@ class ParakeetCoreTranscriber:
                             postprocess_text_if_enabled as _cv_post,
                         )
                         text = _cv_post(text) or text
-                    except Exception as e:
+                    except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug("Custom vocabulary post-processing failed: {}", e)
                 self._last_partial_time = now
                 if text:
@@ -221,7 +236,7 @@ class ParakeetCoreTranscriber:
                             postprocess_text_if_enabled as _cv_post,
                         )
                         text = _cv_post(text) or text
-                    except Exception as e:
+                    except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug("Custom vocabulary post-processing failed: {}", e)
                 self.buffer.consume(self.config.chunk_duration, self.config.overlap_duration)
                 if text:
@@ -265,7 +280,7 @@ class ParakeetCoreTranscriber:
                     postprocess_text_if_enabled as _cv_post,
                 )
                 text = _cv_post(text) or text
-            except Exception as e:
+            except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug("Custom vocabulary post-processing failed: {}", e)
         if text:
             self._history.append(text)
@@ -309,7 +324,7 @@ class ParakeetCoreTranscriber:
                 if pad_len:
                     s = s + ("=" * pad_len)
                 raw = base64.b64decode(s, validate=True)
-            except Exception:
+            except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS:
                 return None
             # align to float32 sample size
             if (len(raw) % 4) != 0:
@@ -326,7 +341,7 @@ class ParakeetCoreTranscriber:
                     candidate = candidate + (b"=" * pad_len)
                 decoded = base64.b64decode(candidate, validate=True)
                 raw = decoded
-            except Exception:
+            except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS:
                 # Not valid base64: proceed with raw bytes
                 pass
             if (len(raw) % 4) != 0:
@@ -359,7 +374,7 @@ class ParakeetCoreTranscriber:
             return ""
         try:
             return str(self.decode_fn(audio_np, int(self.config.sample_rate)))
-        except Exception as e:
+        except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
             logger.opt(exception=True).warning("Decode failed: {}", e)
             return ""
 
@@ -379,7 +394,7 @@ class ParakeetCoreTranscriber:
             return ""
         try:
             return str(await asyncio.to_thread(self.decode_fn, audio_np, int(self.config.sample_rate)))
-        except Exception as e:
+        except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
             logger.opt(exception=True).warning("Decode failed (async): {}", e)
             return ""
 

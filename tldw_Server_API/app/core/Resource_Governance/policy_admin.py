@@ -131,7 +131,7 @@ class AuthNZPolicyAdmin:
                 return 1
             cur = int(row["version"] if isinstance(row, dict) else row[0] or 0)
             return max(1, cur + 1)
-        except Exception:
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
             return 1
 
     async def get_policy(self, policy_id: str) -> dict[str, Any] | None:
@@ -147,7 +147,7 @@ class AuthNZPolicyAdmin:
             if isinstance(payload, str):
                 try:
                     return json.loads(payload)
-                except Exception:
+                except (TypeError, ValueError, json.JSONDecodeError):
                     return {}
             if isinstance(payload, dict):
                 return payload
@@ -173,14 +173,14 @@ class AuthNZPolicyAdmin:
                 if isinstance(payload, str):
                     try:
                         payload = json.loads(payload)
-                    except Exception:
+                    except (TypeError, ValueError, json.JSONDecodeError):
                         payload = {}
                 upd = row.get("updated_at")
                 try:
                     # Normalize datetimes to ISO strings for JSON friendliness
                     if hasattr(upd, "isoformat"):
                         upd = upd.isoformat()
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     pass
                 return {
                     "id": row.get("id"),
@@ -195,7 +195,7 @@ class AuthNZPolicyAdmin:
             try:
                 if hasattr(upd, "isoformat"):
                     upd = upd.isoformat()
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 pass
             payload = row[3]
             if isinstance(payload, (bytes, bytearray)):
@@ -203,7 +203,7 @@ class AuthNZPolicyAdmin:
             if isinstance(payload, str):
                 try:
                     payload = json.loads(payload)
-                except Exception:
+                except (TypeError, ValueError, json.JSONDecodeError):
                     payload = {}
             return {"id": rid, "version": ver, "updated_at": upd, "payload": payload if isinstance(payload, dict) else {}}
         except Exception as e:
@@ -223,7 +223,7 @@ class AuthNZPolicyAdmin:
                 try:
                     if hasattr(upd, "isoformat"):
                         upd = upd.isoformat()
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     pass
                 out.append({
                     "id": rid,
@@ -267,7 +267,7 @@ class AuthNZPolicyAdmin:
             if isinstance(res, str) and res.startswith("DELETE"):
                 try:
                     return int(res.split(" ")[1])
-                except Exception:
+                except (IndexError, TypeError, ValueError):
                     return 0
             deleted = int(getattr(res, "rowcount", 0) or 0)
             return max(0, deleted)

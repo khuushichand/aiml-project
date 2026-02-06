@@ -39,6 +39,15 @@ _MODEL_LOCK = threading.Lock()
 # Global cache for forced aligner
 _ALIGNER_CACHE: dict[str, tuple[Any, Any]] = {}
 _ALIGNER_LOCK = threading.Lock()
+_QWEN3_ASR_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ImportError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -61,7 +70,7 @@ def _as_int(value: Any, default: int) -> int:
         return default
     try:
         return int(str(value).strip())
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -79,7 +88,7 @@ def _as_float(value: Any, default: float) -> float:
         return default
     try:
         return float(str(value).strip())
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -99,7 +108,7 @@ def _resolve_settings() -> dict[str, Any]:
     """Resolve Qwen3-ASR settings from config."""
     try:
         stt_cfg = get_stt_config() or {}
-    except Exception:
+    except _QWEN3_ASR_NONCRITICAL_EXCEPTIONS:
         stt_cfg = {}
 
     # Default model path points to 1.7B (production quality)
@@ -175,7 +184,7 @@ def _maybe_resample(audio_np: np.ndarray, sample_rate: int, target_sample_rate: 
         wav = torch.from_numpy(np.asarray(audio_np, dtype="float32")).unsqueeze(0)
         resampled = F.resample(wav, sample_rate, target_sample_rate)
         return resampled.squeeze(0).cpu().numpy().astype("float32"), target_sample_rate
-    except Exception as exc:
+    except _QWEN3_ASR_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(
             "Qwen3-ASR: resampling from %s Hz to %s Hz failed; proceeding at original rate. Error: %s",
             sample_rate,
@@ -205,7 +214,7 @@ def _resolve_device(requested_device: str) -> str:
     """Resolve device, falling back to CPU if CUDA unavailable."""
     try:
         import torch
-    except Exception:
+    except ImportError:
         return "cpu"
     dev = (requested_device or "cpu").strip().lower()
     if dev.startswith("cuda") and not torch.cuda.is_available():
@@ -342,7 +351,7 @@ def _run_forced_alignment(
     """Run forced alignment to get word-level timestamps."""
     try:
         aligner_processor, aligner_model = _load_forced_aligner(settings)
-    except Exception as exc:
+    except (BadRequestError, *_QWEN3_ASR_NONCRITICAL_EXCEPTIONS) as exc:
         logger.warning("Qwen3-ASR: forced aligner not available: %s", exc)
         return []
 
@@ -450,7 +459,7 @@ def _transcribe_local(
         try:
             metadata = processor.decode_with_metadata(generated_ids)
             detected_language = metadata.get("language")
-        except Exception:
+        except _QWEN3_ASR_NONCRITICAL_EXCEPTIONS:
             pass
 
     # Get word timestamps if requested
@@ -551,7 +560,7 @@ def _transcribe_vllm_http(
             audio_path,
             target_sample_rate=int(settings.get("sample_rate") or 16000),
         )
-    except Exception as exc:
+    except (BadRequestError, *_QWEN3_ASR_NONCRITICAL_EXCEPTIONS) as exc:
         logger.warning(f"Could not read audio for duration metadata: {exc}")
         duration_seconds = 0.0
 
@@ -626,7 +635,7 @@ def is_qwen3_asr_available() -> bool:
     try:
         import torch  # noqa: F401
         import transformers  # noqa: F401
-    except Exception:
+    except ImportError:
         return False
 
     return True

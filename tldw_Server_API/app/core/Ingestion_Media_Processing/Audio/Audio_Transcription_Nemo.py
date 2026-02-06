@@ -74,6 +74,17 @@ CANARY_SUPPORTED_LANG_CODES_STR = ", ".join(sorted(CANARY_SUPPORTED_LANG_CODES))
 # health checks to decide whether Parakeet/Canary are even eligible).
 _nemo_import_checked: bool = False
 _nemo_available: bool = False
+_NEMO_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 def _temp_wav_from_numpy(audio_np: np.ndarray, sample_rate: int) -> str:
@@ -100,7 +111,7 @@ def is_nemo_available() -> bool:
     try:
         import nemo.collections.asr  # type: ignore  # noqa: F401
         _nemo_available = True
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         _nemo_available = False
     return _nemo_available
 
@@ -148,7 +159,7 @@ def _get_cache_dir() -> Path:
     """Get the cache directory for Nemo models."""
     try:
         stt_cfg = get_stt_config()
-    except Exception:
+    except _NEMO_NONCRITICAL_EXCEPTIONS:
         stt_cfg = {}
     cache_dir = stt_cfg.get('nemo_cache_dir', './models/nemo')
 
@@ -190,7 +201,7 @@ def load_canary_model():
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         try:
             stt_cfg = get_stt_config()
-        except Exception:
+        except _NEMO_NONCRITICAL_EXCEPTIONS:
             stt_cfg = {}
         device = stt_cfg.get('nemo_device', device)
 
@@ -229,7 +240,7 @@ def load_parakeet_model(variant: str = 'standard'):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     try:
         stt_cfg = get_stt_config()
-    except Exception:
+    except _NEMO_NONCRITICAL_EXCEPTIONS:
         stt_cfg = {}
     device = stt_cfg.get('nemo_device', device)
 
@@ -462,7 +473,7 @@ def transcribe_with_canary(
         try:
             transcriptions = model.transcribe([audio_np], batch_size=1, **lang_kwargs)
             return _extract_result(transcriptions)
-        except Exception as direct_err:
+        except _NEMO_NONCRITICAL_EXCEPTIONS as direct_err:
             logging.debug(f"Canary direct numpy transcription failed, falling back to temp file: {direct_err}")
             audio_path = _temp_wav_from_numpy(audio_np, sample_rate)
             audio_source = audio_path
@@ -485,7 +496,7 @@ def transcribe_with_canary(
         if cleanup_temp and audio_path and os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
-            except Exception as rm_err:
+            except OSError as rm_err:
                 logging.debug(f"Failed to remove temp audio file (Canary): path={audio_path}, error={rm_err}")
 
 
@@ -515,7 +526,7 @@ def transcribe_with_parakeet(
     if variant == 'auto':
         try:
             stt_cfg = get_stt_config()
-        except Exception:
+        except _NEMO_NONCRITICAL_EXCEPTIONS:
             stt_cfg = {}
         variant = stt_cfg.get('nemo_model_variant', 'standard')
 
@@ -551,7 +562,7 @@ def transcribe_with_parakeet(
                     overlap_duration=overlap_duration,
                     chunk_callback=chunk_callback
                 )
-            except Exception as direct_err:
+            except _NEMO_NONCRITICAL_EXCEPTIONS as direct_err:
                 logging.debug(f"Parakeet direct numpy transcription failed, falling back to temp file: {direct_err}")
                 audio_path = _temp_wav_from_numpy(audio_np, sample_rate)
                 audio_source = audio_path
@@ -589,7 +600,7 @@ def transcribe_with_parakeet(
         if cleanup_temp and audio_path and os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
-            except Exception as rm_err:
+            except OSError as rm_err:
                 logging.debug(f"Failed to remove temp audio file (Parakeet): path={audio_path}, error={rm_err}")
 
 
@@ -645,7 +656,7 @@ def unload_nemo_models():
             if hasattr(model, 'cpu'):
                 model.cpu()
             del model
-        except Exception as free_err:
+        except _NEMO_NONCRITICAL_EXCEPTIONS as free_err:
             logging.debug(f"Failed to release Nemo model resources: key={key}, error={free_err}")
 
     _model_cache.clear()

@@ -67,6 +67,15 @@ _STAGE_JOB_TYPES = {
     "embedding": _EMBEDDINGS_EMBEDDING_JOB_TYPE,
     "storage": _EMBEDDINGS_STORAGE_JOB_TYPE,
 }
+_EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 class EmbeddingsJobError(RuntimeError):
@@ -128,7 +137,7 @@ def _update_root_job(
     jm = _jobs_manager()
     try:
         root = jm.get_job_by_uuid(str(root_uuid))
-    except Exception:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS:
         return
     if not root:
         return
@@ -157,7 +166,7 @@ def _load_media_content(media_id: int, user_id: str) -> dict[str, Any]:
             if latest and latest.get("content"):
                 media_item = dict(media_item)
                 media_item["content"] = latest["content"]
-    except Exception as exc:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to load fallback document content for media {media_id}: {exc}")
 
     if not media_item:
@@ -180,7 +189,7 @@ def _update_root_progress(
     jm = _jobs_manager()
     try:
         root = jm.get_job_by_uuid(str(root_uuid))
-    except Exception:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS:
         return
     if not root:
         return
@@ -202,14 +211,14 @@ def _update_root_result(
     jm = _jobs_manager()
     try:
         root = jm.get_job_by_uuid(str(root_uuid))
-    except Exception:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS:
         return
     if not root:
         return
     root_id = int(root.get("id"))
     try:
         jm.update_job_result(root_id, result=result, merge=True)
-    except Exception:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS:
         return
 
 
@@ -609,7 +618,7 @@ async def _handle_storage_job(
         media_item_meta = media_content.get("media_item", {})
         if isinstance(media_item_meta, dict):
             extra_metadata = media_item_meta.get("metadata") or {}
-    except Exception:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS:
         extra_metadata = {}
 
     for idx, chunk in enumerate(chunks):
@@ -644,7 +653,7 @@ async def _handle_storage_job(
 
     try:
         invalidate_rag_caches(None, namespaces=[user_id], media_id=int(media_id))
-    except Exception as exc:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(
             f"Failed to invalidate RAG caches after embeddings storage "
             f"(user_id={user_id}, media_id={media_id}): {exc}"
@@ -733,7 +742,7 @@ async def _handle_content_job(
 
     try:
         invalidate_rag_caches(None, namespaces=[user_id], media_id=int(media_id))
-    except Exception as exc:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(
             f"Failed to invalidate RAG caches after content embeddings "
             f"(user_id={user_id}, media_id={media_id}): {exc}"
@@ -867,7 +876,7 @@ async def _handle_custom_content_job(
 
     try:
         invalidate_rag_caches(None, namespaces=[user_id])
-    except Exception as exc:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to invalidate RAG caches for custom content (user={user_id}): {exc}")
 
     result = {

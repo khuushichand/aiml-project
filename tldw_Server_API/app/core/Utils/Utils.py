@@ -106,7 +106,7 @@ def cleanup_downloads():
             if os.path.exists(file_path):
                 os.remove(file_path)
                 logging.info(f"Cleaned up file: {file_path}")
-        except Exception as e:
+        except OSError as e:
             logging.error(f"Error cleaning up file {file_path}: {e}")
 
 #
@@ -273,7 +273,7 @@ def format_metadata_as_text(metadata):
                     hours, remainder = divmod(int(total_seconds), 3600)
                     minutes, seconds = divmod(remainder, 60)
                     formatted_value = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-                except Exception:
+                except (TypeError, ValueError):
                     formatted_value = str(value)
             else:
                 formatted_value = str(value)
@@ -428,7 +428,7 @@ def smart_download(url: str, tmp_dir: Path) -> Path:
             head = fetch(method="GET", url=url, allow_redirects=True, timeout=10, headers={"Range": "bytes=0-0"})
             ctype = head.headers.get("content-type", "")
             guessed_ext = mimetypes.guess_extension(ctype.split(";")[0].strip()) or ""
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             guessed_ext = ""
 
     # ---------- 3) final fallback  ------------------------------------------
@@ -457,7 +457,7 @@ def download_file(url, dest_path, expected_checksum=None, max_retries=3, delay=5
             try:
                 if os.path.exists(dest_path):
                     os.remove(dest_path)
-            except Exception as cleanup_error:
+            except OSError as cleanup_error:
                 logging.error(f"Failed to remove file after checksum mismatch: {cleanup_error}")
             raise ValueError("Downloaded file's checksum does not match the expected checksum")
         logging.info("Download complete and verified!")
@@ -509,7 +509,7 @@ def safe_read_file(file_path):
     except FileNotFoundError:
         logging.error(f"File not found: {file_path}")
         return f"File not found: {file_path}"
-    except Exception as e:
+    except (OSError, TypeError, ValueError) as e:
         logging.error(f"An error occurred while reading the file: {e}")
         return f"An error occurred while reading the file: {e}"
 
@@ -753,13 +753,13 @@ def get_db_config():
     try:
         from tldw_Server_API.app.core.DB_Management.DB_Manager import get_db_config as _dbm_get
         return _dbm_get()
-    except Exception as e:
+    except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         logging.error(f"Failed to delegate to DB_Manager.get_db_config: {e}")
         # Preserve a minimal, safe default
         try:
             from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
             default_sqlite = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
-        except Exception as exc:
+        except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logging.error(f"Failed to resolve default SQLite path via DatabasePaths: {exc}")
             raise
         return {
@@ -796,7 +796,7 @@ def save_temp_file(file):
     if hasattr(file, "seek"):
         try:
             file.seek(0)
-        except Exception:
+        except (OSError, RuntimeError, ValueError):
             pass
     data = file.read()
     if isinstance(data, str):
@@ -806,7 +806,7 @@ def save_temp_file(file):
     if hasattr(file, "seek"):
         try:
             file.seek(0)
-        except Exception:
+        except (OSError, RuntimeError, ValueError):
             pass
     temp_files.append(temp_path)
     return temp_path
@@ -818,7 +818,7 @@ def cleanup_temp_files():
             try:
                 os.remove(file_path)
                 logging.info(f"Removed temporary file: {file_path}")
-            except Exception as e:
+            except OSError as e:
                 logging.error(f"Failed to remove temporary file {file_path}: {e}")
     temp_files.clear()
 
@@ -975,7 +975,7 @@ class ZipValidator:
 
         except zipfile.BadZipFile:
             return False, "Invalid or corrupted zip file", []
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError, zipfile.LargeZipFile) as e:
             return False, f"Error processing zip file: {str(e)}", []
 
 def format_text_with_line_breaks(text):

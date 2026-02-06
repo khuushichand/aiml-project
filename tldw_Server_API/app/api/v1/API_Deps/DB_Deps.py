@@ -90,7 +90,7 @@ def _get_db_path_for_user(user_id: int) -> Path:
                 )
             # Set env so subsequent calls use the same directory
             os.environ.setdefault("USER_DB_BASE_DIR", base_dir_env)
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
             logger.warning(
                 "TESTING mode: failed to derive project-root user DB dir; falling back to temp dir. Error: %s",
                 e,
@@ -145,7 +145,7 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
             logger.warning(
                 f"TEST_MODE: DB_Deps cache {'hit' if db_instance else 'miss'} for user_id={user_id}"
             )
-    except Exception:
+    except (OSError, RuntimeError, TypeError, ValueError):
         pass
 
     if db_instance:
@@ -162,7 +162,7 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
                 if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
                     _dbp = getattr(db_instance, 'db_path_str', getattr(db_instance, 'db_path', '?'))
                     logger.warning(f"TEST_MODE: DB_Deps returning concurrently-created cached instance user_id={user_id} db_path={_dbp}")
-            except Exception:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 pass
             return db_instance
 
@@ -187,7 +187,7 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
                 if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
                     _dbp = getattr(db_instance, 'db_path_str', getattr(db_instance, 'db_path', '?'))
                     logger.warning(f"TEST_MODE: DB_Deps cached new instance user_id={user_id} db_path={_dbp} shared_backend={use_shared_backend}")
-            except Exception:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 pass
 
         except (DatabaseError, SchemaError) as e:
@@ -216,7 +216,7 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
         if scope:
             db_instance.default_org_id = scope.effective_org_id
             db_instance.default_team_id = scope.effective_team_id
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError, ValueError):
         pass
     return db_instance
 
@@ -239,7 +239,7 @@ async def get_media_db_for_user(
         try:
             if hasattr(db_instance, "release_context_connection"):
                 db_instance.release_context_connection()
-        except Exception:
+        except (DatabaseError, OSError, RuntimeError, TypeError, ValueError):
             pass
 
 
@@ -259,13 +259,13 @@ def reset_media_db_cache() -> None:
                         db.release_context_connection()
                     if hasattr(db, "close_connection"):
                         db.close_connection()
-                except Exception:
+                except (DatabaseError, OSError, RuntimeError, TypeError, ValueError):
                     pass
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
         try:
             _user_db_instances.clear()  # type: ignore[attr-defined]
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
 
 
@@ -286,7 +286,7 @@ async def try_get_media_db_for_user(
         logger.warning(f"Optional Media DB unavailable for user {getattr(current_user, 'id', '?')}: {e.detail}")
         yield None
         return
-    except Exception as e:
+    except (DatabaseError, OSError, RuntimeError, SchemaError, TypeError, ValueError) as e:
         logger.warning(
             f"Optional Media DB unexpected error for user {getattr(current_user, 'id', '?')}: {e}",
             exc_info=True
@@ -299,7 +299,7 @@ async def try_get_media_db_for_user(
         try:
             if db_instance and hasattr(db_instance, "release_context_connection"):
                 db_instance.release_context_connection()
-        except Exception:
+        except (DatabaseError, OSError, RuntimeError, TypeError, ValueError):
             pass
 
 #

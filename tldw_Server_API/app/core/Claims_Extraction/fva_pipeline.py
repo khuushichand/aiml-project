@@ -81,6 +81,28 @@ except ImportError:
         pass
 
 
+def _load_fva_config_from_settings() -> dict[str, Any]:
+    """Load FVA configuration from application settings."""
+    try:
+        from tldw_Server_API.app.core.config import settings
+    except ImportError:
+        return {}
+
+    return {
+        "enabled": settings.get("FVA_ENABLED", True),
+        "confidence_threshold": float(settings.get("FVA_CONFIDENCE_THRESHOLD", 0.7)),
+        "contested_threshold": float(settings.get("FVA_CONTESTED_THRESHOLD", 0.4)),
+        "max_concurrent_falsifications": int(settings.get("FVA_MAX_CONCURRENT", 5)),
+        "falsification_timeout_seconds": float(settings.get("FVA_TIMEOUT_SECONDS", 30.0)),
+        "max_budget_ratio_for_fva": float(settings.get("FVA_MAX_BUDGET_RATIO", 0.3)),
+        "min_confidence_for_skip": float(settings.get("FVA_MIN_CONFIDENCE_FOR_SKIP", 0.9)),
+        "force_falsification_claim_types": [
+            t.strip() for t in str(settings.get("FVA_FORCE_CLAIM_TYPES", "")).split(",")
+            if t.strip()
+        ],
+    }
+
+
 @dataclass
 class FVAConfig:
     """Configuration for Falsification-Verification Alignment pipeline."""
@@ -293,10 +315,28 @@ class FVAPipeline:
                         else:
                             increment_counter("fva_wasted_falsification_total")
 
+                            # Record adjudication scores
+                            observe_histogram(
+                                "fva_adjudication_scores",
+                                adjudication.support_score,
+                                labels={"score_type": "support"},
+                            )
+                            observe_histogram(
+                                "fva_adjudication_scores",
+                                adjudication.contradict_score,
+                                labels={"score_type": "contradict"},
+                            )
+                            observe_histogram(
+                                "fva_adjudication_scores",
+                                adjudication.contestation_score,
+                                labels={"score_type": "contestation"},
+                            )
+
                     except asyncio.TimeoutError:
                         logger.warning(
                             f"Falsification timeout for claim: {claim.text[:50]}..."
                         )
+                        increment_counter("fva_timeout_total")
                         # Keep original verification on timeout
                         final_verification = original_verification
 
@@ -310,6 +350,12 @@ class FVAPipeline:
             "fva_processing_duration_seconds",
             elapsed_ms / 1000,
             labels={"phase": "total"},
+        )
+
+        # Record claim processed with final status
+        increment_counter(
+            "fva_claims_processed_total",
+            labels={"final_status": final_verification.status.value},
         )
 
         return FVAResult(
@@ -483,4 +529,75 @@ def create_fva_pipeline(
         claims_engine=claims_engine,
         retriever=retriever,
         config=config,
+    )
+
+
+def create_fva_pipeline_from_settings(
+    claims_engine: ClaimsEngine,
+    retriever: "MultiDatabaseRetriever",
+    config_overrides: Optional[dict[str, Any]] = None,
+) -> FVAPipeline:
+    """
+    Factory function to create an FVA pipeline from application settings.
+
+    Loads configuration from config.txt [Claims] section FVA_* settings,
+    with optional overrides for specific parameters.
+
+    Args:
+        claims_engine: ClaimsEngine instance
+        retriever: MultiDatabaseRetriever for searching
+        config_overrides: Optional dict of config values to override settings
+
+    Returns:
+        Configured FVAPipeline instance using settings
+    """
+    # Load from settings
+    settings_config = _load_fva_config_from_settings()
+
+    # Apply overrides if provided
+    if config_overrides:
+        settings_config.update(config_overrides)
+
+    config = FVAConfig(
+        enabled=settings_config.get("enabled", True),
+        max_concurrent_falsifications=settings_config.get("max_concurrent_falsifications", 5),
+        falsification_timeout_seconds=settings_config.get("falsification_timeout_seconds", 30.0),
+        confidence_threshold=settings_config.get("confidence_threshold", 0.7),
+        contested_threshold=settings_config.get("contested_threshold", 0.4),
+        force_falsification_claim_types=settings_config.get("force_falsification_claim_types", []),
+        max_budget_ratio_for_fva=settings_config.get("max_budget_ratio_for_fva", 0.3),
+        min_confidence_for_skip=settings_config.get("min_confidence_for_skip", 0.9),
+    )
+
+    logger.debug(
+        f"Created FVA pipeline from settings: enabled={config.enabled}, "
+        f"confidence_threshold={config.confidence_threshold}, "
+        f"contested_threshold={config.contested_threshold}"
+    )
+
+    return FVAPipeline(
+        claims_engine=claims_engine,
+        retriever=retriever,
+        config=config,
+    )
+
+
+def get_fva_config_from_settings() -> FVAConfig:
+    """
+    Get FVA configuration from application settings.
+
+    Returns:
+        FVAConfig instance with values from settings
+    """
+    settings_config = _load_fva_config_from_settings()
+
+    return FVAConfig(
+        enabled=settings_config.get("enabled", True),
+        max_concurrent_falsifications=settings_config.get("max_concurrent_falsifications", 5),
+        falsification_timeout_seconds=settings_config.get("falsification_timeout_seconds", 30.0),
+        confidence_threshold=settings_config.get("confidence_threshold", 0.7),
+        contested_threshold=settings_config.get("contested_threshold", 0.4),
+        force_falsification_claim_types=settings_config.get("force_falsification_claim_types", []),
+        max_budget_ratio_for_fva=settings_config.get("max_budget_ratio_for_fva", 0.3),
+        min_confidence_for_skip=settings_config.get("min_confidence_for_skip", 0.9),
     )

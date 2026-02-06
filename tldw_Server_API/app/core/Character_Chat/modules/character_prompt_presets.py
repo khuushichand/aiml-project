@@ -111,3 +111,99 @@ def build_character_system_prompt(
         _safe_replace(character.get("system_prompt"), resolved_char, resolved_user),
     ]
     return "\n".join([p for p in parts if p]).strip()
+
+
+# ========================================================================
+# Template tokens for custom presets
+# ========================================================================
+
+PRESET_TEMPLATE_TOKENS: dict[str, str] = {
+    "{{char}}": "Character name",
+    "{{user}}": "User/player name",
+    "{{description}}": "Character description field",
+    "{{personality}}": "Character personality field",
+    "{{scenario}}": "Character scenario field",
+    "{{system_prompt}}": "Character system prompt field",
+    "{{message_example}}": "Character example messages",
+    "{{post_history}}": "Post-history instructions",
+}
+
+# Maps token placeholders to character dict field names
+_TOKEN_FIELD_MAP: dict[str, str] = {
+    "{{description}}": "description",
+    "{{personality}}": "personality",
+    "{{scenario}}": "scenario",
+    "{{system_prompt}}": "system_prompt",
+    "{{message_example}}": "message_example",
+    "{{post_history}}": "post_history_instructions",
+}
+
+
+def build_custom_system_prompt(
+    character: dict[str, Any],
+    char_name: str | None,
+    user_name: str | None,
+    section_order: list[str],
+    section_templates: dict[str, str],
+) -> str:
+    """Build a system prompt from a user-defined preset with custom section ordering."""
+    resolved_char = char_name or DEFAULT_CHARACTER_NAME
+    resolved_user = user_name or DEFAULT_USER_NAME
+
+    sections: list[str] = []
+    for section_key in section_order:
+        template = section_templates.get(section_key, "")
+        if not template:
+            continue
+
+        # Replace {{char}} and {{user}} first
+        rendered = template.replace("{{char}}", resolved_char).replace("{{user}}", resolved_user)
+
+        # Replace field tokens with character data
+        for token, field_name in _TOKEN_FIELD_MAP.items():
+            if token in rendered:
+                value = _safe_replace(character.get(field_name), resolved_char, resolved_user)
+                rendered = rendered.replace(token, value)
+
+        rendered = rendered.strip()
+        if rendered:
+            sections.append(rendered)
+
+    return "\n\n".join(sections).strip()
+
+
+def get_builtin_presets() -> list[dict[str, Any]]:
+    """Return metadata for the built-in presets."""
+    return [
+        {
+            "preset_id": DEFAULT_PROMPT_PRESET,
+            "name": "Default",
+            "builtin": True,
+            "section_order": ["identity", "description", "personality", "scenario", "system_prompt"],
+            "section_templates": {
+                "identity": "You are {{char}}.",
+                "description": "{{description}}",
+                "personality": "{{personality}}",
+                "scenario": "{{scenario}}",
+                "system_prompt": "{{system_prompt}}",
+            },
+        },
+        {
+            "preset_id": ST_DEFAULT_PROMPT_PRESET,
+            "name": "SillyTavern Default",
+            "builtin": True,
+            "section_order": [
+                "identity", "system_prompt", "description",
+                "personality", "scenario", "message_example", "post_history",
+            ],
+            "section_templates": {
+                "identity": "You are {{char}}.",
+                "system_prompt": "{{system_prompt}}",
+                "description": "Description:\n{{description}}",
+                "personality": "Personality:\n{{personality}}",
+                "scenario": "Scenario:\n{{scenario}}",
+                "message_example": "Example dialogue:\n{{message_example}}",
+                "post_history": "Post-history instructions:\n{{post_history}}",
+            },
+        },
+    ]

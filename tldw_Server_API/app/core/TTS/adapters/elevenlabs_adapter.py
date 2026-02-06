@@ -9,6 +9,10 @@ from typing import Any, Optional
 #
 # Third-party Imports
 from loguru import logger
+try:
+    import httpx
+except ImportError:  # pragma: no cover - optional import guard
+    httpx = None
 
 #
 # Local Imports
@@ -45,6 +49,23 @@ def _is_http_status_error(exc: Exception) -> bool:
     if not _is_httpx_exception(exc):
         return False
     return exc.__class__.__name__ == "HTTPStatusError"
+
+
+_ELEVENLABS_HTTP_EXCEPTIONS: tuple[type[BaseException], ...] = ()
+if httpx is not None:
+    _ELEVENLABS_HTTP_EXCEPTIONS = (httpx.HTTPError,)
+
+_ELEVENLABS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+) + _ELEVENLABS_HTTP_EXCEPTIONS
 
 class ElevenLabsAdapter(TTSAdapter):
     """Adapter for ElevenLabs TTS API"""
@@ -214,7 +235,7 @@ class ElevenLabsAdapter(TTSAdapter):
 
         except TTSProviderNotConfiguredError:
             return False
-        except Exception as e:
+        except _ELEVENLABS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name}: Initialization failed: {e}")
             self._status = ProviderStatus.ERROR
             raise TTSProviderInitializationError(
@@ -253,7 +274,7 @@ class ElevenLabsAdapter(TTSAdapter):
             else:
                 logger.warning(f"{self.provider_name}: Failed to fetch voices: {response.status_code}")
 
-        except Exception as e:
+        except _ELEVENLABS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name}: Error fetching voices: {e}")
 
     async def get_capabilities(self) -> TTSCapabilities:
@@ -351,7 +372,7 @@ class ElevenLabsAdapter(TTSAdapter):
 
         except (TTSProviderNotConfiguredError, TTSAuthenticationError, TTSRateLimitError, TTSQuotaExceededError, TTSValidationError):
             raise
-        except Exception as e:
+        except _ELEVENLABS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name} generation error: {e}")
             raise TTSGenerationError(
                 f"Failed to generate speech with {self.provider_name}",
@@ -524,7 +545,7 @@ class ElevenLabsAdapter(TTSAdapter):
         status = getattr(response, "status_code", None) if response is not None else None
         try:
             text = response.text if response is not None else None
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             text = None
         if status in (401, 403):
             raise TTSAuthenticationError(f"{self.provider_name} authentication failed", provider=self.provider_name, details={"status": status, "body": text})
@@ -544,7 +565,7 @@ class ElevenLabsAdapter(TTSAdapter):
                 await self.client.aclose()
                 self.client = None
                 logger.debug(f"{self.provider_name}: HTTP client closed")
-            except Exception as e:
+            except (AttributeError, OSError, RuntimeError) as e:
                 logger.warning(f"{self.provider_name}: Error closing HTTP client: {e}")
 
     def map_voice(self, voice_id: str) -> str:
@@ -778,7 +799,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             ):
                 if chunk:
                     yield chunk
-        except Exception as e:
+        except _ELEVENLABS_NONCRITICAL_EXCEPTIONS as e:
             if _is_http_status_error(e):
                 self._raise_mapped_http_error(e)
             raise
@@ -789,7 +810,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         status = getattr(response, "status_code", None) if response is not None else None
         try:
             data = response.json() if response is not None else {}
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             data = {}
         detail = data.get("detail", {}) if isinstance(data, dict) else {}
         code = detail.get("status") or detail.get("code")
@@ -803,13 +824,13 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             retry = None
             try:
                 retry = int((response.headers or {}).get("retry-after", "0")) if response is not None else None
-            except Exception:
+            except (TypeError, ValueError):
                 retry = None
             err = rate_limit_error(self._provider_simple, retry_after=retry)
             # Expose retry_after directly for tests
             try:
                 err.retry_after = retry
-            except Exception:
+            except (AttributeError, TypeError):
                 pass
             raise err
         if status and 400 <= status < 500 and code == "invalid_voice_id":
@@ -817,7 +838,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             message = None
             try:
                 message = (detail.get("message") if isinstance(detail, dict) else None) or "Invalid voice id"
-            except Exception:
+            except (AttributeError, TypeError):
                 message = "Invalid voice id"
             raise TTSValidationError(message, provider=self._provider_simple, details={"status": status})
 

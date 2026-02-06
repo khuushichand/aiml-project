@@ -38,7 +38,7 @@ class SlidesModule(BaseModule):
             from ....Slides.slides_db import SlidesDatabase
             _ = SlidesDatabase
             checks["driver_available"] = True
-        except Exception:
+        except (ImportError, AttributeError):
             checks["driver_available"] = False
         try:
             import os
@@ -46,12 +46,12 @@ class SlidesModule(BaseModule):
             try:
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root
                 base = Path(get_project_root())
-            except Exception:
+            except (ImportError, AttributeError, RuntimeError):
                 base = Path(__file__).resolve().parents[5]
             stat = os.statvfs(str(base))
             free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
             checks["disk_space"] = free_gb > 1
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             checks["disk_space"] = False
         return checks
 
@@ -487,7 +487,7 @@ class SlidesModule(BaseModule):
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
-        except Exception as ve:
+        except (ValueError, TypeError, KeyError) as ve:
             raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
 
         # Presentations CRUD
@@ -1334,7 +1334,7 @@ class SlidesModule(BaseModule):
                 return media.get("content") or media.get("transcript") or media.get("summary")
             finally:
                 db.close_all_connections()
-        except Exception as e:
+        except (ImportError, AttributeError, OSError, ValueError, TypeError, KeyError, RuntimeError) as e:
             logger.error(f"Failed to get media content: {e}")
             return None
 
@@ -1355,7 +1355,7 @@ class SlidesModule(BaseModule):
                 return "\n\n".join(contents) if contents else None
             finally:
                 db.close_all_connections()
-        except Exception as e:
+        except (ImportError, AttributeError, OSError, ValueError, TypeError, KeyError, RuntimeError) as e:
             logger.error(f"Failed to get notes content: {e}")
             return None
 
@@ -1379,7 +1379,7 @@ class SlidesModule(BaseModule):
                 return "\n\n".join(texts)
             finally:
                 db.close_all_connections()
-        except Exception as e:
+        except (ImportError, AttributeError, OSError, ValueError, TypeError, KeyError, RuntimeError) as e:
             logger.error(f"Failed to get chat content: {e}")
             return None
 
@@ -1413,7 +1413,7 @@ class SlidesModule(BaseModule):
             if not content and getattr(result, "generated_answer", None):
                 content = str(result.generated_answer)
             return content or None
-        except Exception as e:
+        except (ImportError, AttributeError, OSError, ValueError, TypeError, KeyError, RuntimeError) as e:
             logger.error(f"Failed to get RAG content: {e}")
             return None
 

@@ -44,6 +44,28 @@ from tldw_Server_API.app.core.Evaluations.webhook_security import (
 )
 from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 
+_WEBHOOK_MANAGER_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
+_WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
 #
 #
 #######################################################################################################################
@@ -188,7 +210,7 @@ class WebhookManager:
         if current_adapter is not None:
             try:
                 current_adapter.close()
-            except Exception as exc:
+            except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Failed to close existing webhook adapter: {exc}")
 
         self.db_adapter = adapter
@@ -345,7 +367,7 @@ class WebhookManager:
         except ValueError:
             # Re-raise validation errors
             raise
-        except Exception as e:
+        except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             # Log unexpected errors
             processing_time = asyncio.get_event_loop().time() - start_time
             self.metrics.record_webhook_delivery(
@@ -413,7 +435,7 @@ class WebhookManager:
 
                 return False
 
-        except Exception as e:
+        except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             log_webhook_unregistration(user_id=user_id, webhook_id=None, url=url, events=[], success=False, error=str(e))
 
             logger.error(f"Failed to unregister webhook: {e}")
@@ -611,7 +633,7 @@ class WebhookManager:
                             logger.error(f"Failed to resolve webhook hostname: {url}")
                             self._update_webhook_stats(webhook_id, success=False, error="DNS resolution failed")
                             return
-            except Exception as e:
+            except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"URL validation failed: {e}")
                 self._update_webhook_stats(webhook_id, success=False, error=f"URL validation failed: {str(e)}")
                 return
@@ -648,7 +670,7 @@ class WebhookManager:
 
                 try:
                     timeout = min(5, int(webhook.get("timeout_seconds", 30)))
-                except Exception:
+                except _WEBHOOK_MANAGER_COERCE_EXCEPTIONS:
                     timeout = 5
                 resp = await afetch(
                     method="POST",
@@ -680,7 +702,7 @@ class WebhookManager:
                     logger.info(f"Webhook delivered successfully: {delivery_id}")
                     break
                 error = f"status={status_code}"
-            except Exception as e:
+            except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS as e:
                 error = str(e)
                 logger.error(f"Webhook delivery error: {delivery_id} - {error}")
             finally:
@@ -1016,7 +1038,7 @@ class WebhookManager:
                 "success": False,
                 "error": "Request timeout"
             }
-        except Exception as e:
+        except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             return {
                 "success": False,
                 "error": str(e)
@@ -1063,7 +1085,7 @@ def shutdown_webhook_manager_if_initialized() -> None:
                     try:
                         # Best effort cancellation for asyncio Task
                         task.cancel()
-                    except Exception:
+                    except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS:
                         pass
                 # Close any underlying DB adapter to avoid leaking closed connections across tests
                 try:
@@ -1071,9 +1093,9 @@ def shutdown_webhook_manager_if_initialized() -> None:
                     if adapter is not None:
                         try:
                             adapter.close()
-                        except Exception:
+                        except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS:
                             pass
-                except Exception:
+                except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS:
                     pass
             finally:
                 try:
@@ -1082,11 +1104,11 @@ def shutdown_webhook_manager_if_initialized() -> None:
                     try:
                         from tldw_Server_API.app.core.Evaluations.db_adapter import close_database_adapter as _close_db
                         _close_db()
-                    except Exception:
+                    except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS:
                         pass
                     get_webhook_manager.cache_clear()  # type: ignore[attr-defined]
-                except Exception:
+                except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS:
                     pass
-    except Exception:
+    except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS:
         # Never raise during teardown
         pass

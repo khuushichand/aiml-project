@@ -82,7 +82,7 @@ def _load_custom_ner_model_map() -> dict[str, str]:
     if isinstance(raw, str) and raw.strip():
         try:
             parsed = json.loads(raw)
-        except Exception:
+        except (TypeError, ValueError, json.JSONDecodeError):
             return {}
         if isinstance(parsed, dict):
             return {str(k).lower(): str(v) for k, v in parsed.items() if v}
@@ -104,7 +104,7 @@ def resolve_ner_model_name(language: str | None) -> str:
 def get_spacy_pipeline(model_name: str, language: str) -> Any | None:
     try:
         import spacy  # type: ignore
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return None
 
     model_name = (model_name or "").strip()
@@ -113,21 +113,21 @@ def get_spacy_pipeline(model_name: str, language: str) -> Any | None:
     if model_name:
         try:
             return spacy.load(model_name)
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             pass
 
     try:
         nlp = spacy.blank(language)
-    except Exception:
+    except (AttributeError, KeyError, TypeError, ValueError):
         try:
             nlp = spacy.blank("xx")
-        except Exception:
+        except (AttributeError, KeyError, TypeError, ValueError):
             return None
 
     if not nlp.has_pipe("sentencizer"):
         try:
             nlp.add_pipe("sentencizer")
-        except Exception:
+        except (KeyError, RuntimeError, TypeError, ValueError):
             pass
     return nlp
 
@@ -140,7 +140,7 @@ def detect_claims_language(text: str | None, default: str | None = None) -> str:
         try:
             if re.search(pattern, text):
                 return lang
-        except Exception:
+        except (re.error, TypeError, ValueError):
             continue
     return fallback
 
@@ -166,7 +166,7 @@ def split_claims_sentences(
 
     try:
         parts = re.split(pattern, cleaned)
-    except Exception:
+    except (re.error, TypeError, ValueError):
         parts = [cleaned]
 
     threshold = min_length if min_length is not None else default_min

@@ -63,7 +63,7 @@ def _normalize_hostname(host: str) -> str:
         host = host.split("%", 1)[0]
     try:
         host = host.encode("idna").decode("ascii")
-    except Exception:
+    except UnicodeError:
         host = host.lower()
     return host.lower()
 
@@ -107,7 +107,7 @@ def _resolve_host_ips(host: str) -> list[str]:
             prev_timeout = socket.getdefaulttimeout()
             # Short timeout to avoid long blocks during DNS resolution
             socket.setdefaulttimeout(2.0)
-        except Exception:
+        except (OSError, TypeError, ValueError):
             prev_timeout = None
 
         try:
@@ -117,12 +117,12 @@ def _resolve_host_ips(host: str) -> list[str]:
                 family=socket.AF_UNSPEC,  # both IPv4 and IPv6
                 type=socket.SOCK_STREAM,
             )
-        except Exception:
+        except (OSError, ValueError):
             return []
         finally:
             try:
                 socket.setdefaulttimeout(prev_timeout)
-            except Exception:
+            except (OSError, TypeError, ValueError):
                 pass
 
         addrs: list[str] = []
@@ -131,11 +131,11 @@ def _resolve_host_ips(host: str) -> list[str]:
                 # sockaddr[0] is the IP for both AF_INET and AF_INET6
                 ip = sockaddr[0]
                 addrs.append(ip)
-            except Exception:
+            except (IndexError, TypeError):
                 continue
         # Preserve order but deduplicate
         return list(dict.fromkeys(addrs))
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return []
 
 
@@ -143,7 +143,7 @@ def _is_private_ip(ip: str) -> bool:
     try:
         addr = ipaddress.ip_address(ip)
         return any(addr in net for net in PRIVATE_RANGES)
-    except Exception:
+    except ValueError:
         # Treat parsing failures as private for safety
         return True
 
@@ -183,7 +183,7 @@ def evaluate_url_policy(
     """Evaluate whether a URL passes the egress policy."""
     try:
         parsed = urlparse(url)
-    except Exception:
+    except (TypeError, AttributeError, ValueError):
         return URLPolicyResult(False, "Invalid URL")
 
     scheme = (parsed.scheme or "").lower()
@@ -204,7 +204,7 @@ def evaluate_url_policy(
         for p in tokens:
             try:
                 out.append(int(p))
-            except Exception:
+            except ValueError:
                 continue
         return out or [80, 443]
 

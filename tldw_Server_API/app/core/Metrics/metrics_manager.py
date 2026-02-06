@@ -1404,6 +1404,80 @@ class MetricsRegistry:
             )
         )
 
+        # FVA (Falsification-Verification Alignment) metrics
+        self.register_metric(
+            MetricDefinition(
+                name="fva_falsification_triggered_total",
+                type=MetricType.COUNTER,
+                description="Total claims where falsification was triggered",
+                labels=["reason"],  # low_confidence, sparse_evidence, forced, uncertain
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_status_changes_total",
+                type=MetricType.COUNTER,
+                description="Total claim status changes after FVA adjudication",
+                labels=["from_status", "to_status"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_anti_context_docs",
+                type=MetricType.HISTOGRAM,
+                description="Number of anti-context documents retrieved per claim",
+                buckets=[0, 1, 2, 3, 5, 10, 20],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_processing_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="FVA pipeline processing duration",
+                unit="s",
+                labels=["phase"],  # total, retrieval, adjudication
+                buckets=[0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_wasted_falsification_total",
+                type=MetricType.COUNTER,
+                description="Falsifications that found no anti-context (wasted effort)",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_claims_processed_total",
+                type=MetricType.COUNTER,
+                description="Total claims processed through FVA pipeline",
+                labels=["final_status"],  # verified, contested, refuted, unverified
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_adjudication_scores",
+                type=MetricType.HISTOGRAM,
+                description="Adjudication score distribution",
+                labels=["score_type"],  # support, contradict, contestation
+                buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_timeout_total",
+                type=MetricType.COUNTER,
+                description="Total FVA falsification timeouts",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_budget_exhausted_total",
+                type=MetricType.COUNTER,
+                description="Total times FVA budget was exhausted",
+            )
+        )
+
     def register_metric(self, definition: MetricDefinition) -> bool:
         """
         Register a new metric definition.

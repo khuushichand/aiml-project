@@ -25,6 +25,17 @@ from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import (
     extract_claims_for_chunks,
     store_claims,
 )
+from tldw_Server_API.app.core.Claims_Extraction.fva_pipeline import (
+    create_fva_pipeline_from_settings,
+    FVAConfig,
+    FVAPipeline,
+    FVAResult,
+    FVABatchResult,
+    get_fva_config_from_settings,
+)
+from tldw_Server_API.app.api.v1.schemas.claims_schemas import (
+    FVAClaimResult,
+)
 from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     record_claims_provider_request,
     record_claims_rebuild_metrics,
@@ -56,4 +67,12 @@ __all__ = [
     "record_claims_provider_request",
     "record_claims_rebuild_metrics",
     "record_claims_review_metrics",
+    # FVA Pipeline
+    "create_fva_pipeline_from_settings",
+    "FVAClaimResult",
+    "FVAConfig",
+    "FVAPipeline",
+    "FVAResult",
+    "FVABatchResult",
+    "get_fva_config_from_settings",
 ]

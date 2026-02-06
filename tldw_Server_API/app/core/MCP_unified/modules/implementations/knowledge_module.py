@@ -24,7 +24,7 @@ def _iso_to_dt(s: Optional[str]) -> Optional[datetime]:
         return None
     try:
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -89,7 +89,7 @@ class KnowledgeModule(BaseModule):
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
-        except Exception as ve:
+        except (OverflowError, TypeError, ValueError) as ve:
             raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
         if tool_name == "knowledge.search":
             return await self._search(args, context)
@@ -114,7 +114,7 @@ class KnowledgeModule(BaseModule):
                 get_def = getattr(module, "get_tool_def", None)
                 if callable(get_def):
                     tool_def = await get_def(tool)
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 tool_def = None
             if tool_def is None:
                 try:
@@ -123,11 +123,11 @@ class KnowledgeModule(BaseModule):
                         if isinstance(_t, dict) and _t.get("name") == tool:
                             tool_def = _t
                             break
-                except Exception:
+                except (AttributeError, RuntimeError, TypeError, ValueError):
                     tool_def = None
             if tool_def is not None:
                 return module.is_write_tool_def(tool_def)
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             return None
         return None
 
@@ -147,7 +147,7 @@ class KnowledgeModule(BaseModule):
             module = await registry.find_module_for_tool(tool)
             is_write = await self._resolve_tool_write_flag(tool, module)
             return await protocol._has_tool_permission(context, tool, is_write=is_write)  # type: ignore[attr-defined]
-        except Exception:
+        except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError):
             return False
 
     def _tool_for_source(self, source: str, action: str) -> Optional[str]:
@@ -167,7 +167,7 @@ class KnowledgeModule(BaseModule):
             if context and getattr(context, "metadata", None):
                 if isinstance(context.metadata.get("seen_uris"), list):
                     seen.update([str(u) for u in context.metadata.get("seen_uris")])
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
         return seen
 
@@ -176,7 +176,7 @@ class KnowledgeModule(BaseModule):
             if context and getattr(context, "metadata", None):
                 arr = list(set([str(u) for u in (context.metadata.get("seen_uris") or [])] + new_uris))
                 context.metadata["seen_uris"] = arr
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
 
     def _combine_and_sort(self, buckets: list[list[dict[str, Any]]], order_by: str) -> list[dict[str, Any]]:
@@ -202,7 +202,7 @@ class KnowledgeModule(BaseModule):
                 sc = context.metadata.get("safe_config") or {}
                 if isinstance(sc, dict):
                     snippet_len = int(sc.get("snippet_length", snippet_len))
-        except Exception:
+        except (AttributeError, OverflowError, TypeError, ValueError):
             pass
 
         # Seed dedupe with session-persisted URIs if any
@@ -221,7 +221,7 @@ class KnowledgeModule(BaseModule):
                 try:
                     if context and getattr(context, "logger", None):
                         context.logger.debug("Knowledge source filtered by RBAC", source=src, tool=tool)
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     pass
         sources = allowed_sources
 
@@ -274,7 +274,7 @@ class KnowledgeModule(BaseModule):
             try:
                 if isinstance(r, dict) and isinstance(r.get("results"), list):
                     buckets.append(r.get("results"))
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 continue
 
         combined = self._combine_and_sort(buckets, order_by=order_by)

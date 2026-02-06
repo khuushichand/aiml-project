@@ -39,7 +39,7 @@ def normalize_filters(payload: Any) -> list[dict[str, Any]]:
         val = f.get("value") if isinstance(f.get("value"), dict) else {}
         try:
             pr = int(f.get("priority")) if f.get("priority") is not None else 0
-        except Exception:
+        except (TypeError, ValueError):
             pr = 0
         active = f.get("is_active")
         if active is None:
@@ -65,7 +65,7 @@ def _get_text_fields(candidate: dict[str, Any], names: Sequence[str]) -> list[st
             continue
         try:
             s = str(v)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if s:
             vals.append(s)
@@ -125,7 +125,7 @@ def _compile_regex(pattern: str, flags: str | None) -> re.Pattern[str] | None:
             f |= re.DOTALL
     try:
         return re.compile(pattern, f)
-    except Exception:
+    except (re.error, TypeError, ValueError):
         return None
 
 
@@ -142,7 +142,7 @@ def _match_regex(value: dict[str, Any], candidate: dict[str, Any]) -> bool:
         for name in fields:
             try:
                 hay = str(candidate.get(name) or "")
-            except Exception:
+            except (TypeError, ValueError):
                 continue
             if rx.search(hay):
                 return True
@@ -171,7 +171,7 @@ def _parse_iso(dt: str) -> datetime | None:
         if d.tzinfo is None:
             d = d.replace(tzinfo=timezone.utc)
         return d.astimezone(timezone.utc)
-    except Exception:
+    except (OverflowError, TypeError, ValueError):
         pass
     # Fallback email.utils
     try:
@@ -183,7 +183,7 @@ def _parse_iso(dt: str) -> datetime | None:
         if d.tzinfo is None:
             d = d.replace(tzinfo=timezone.utc)
         return d.astimezone(timezone.utc)
-    except Exception:
+    except (ImportError, TypeError, ValueError):
         return None
 
 
@@ -196,7 +196,7 @@ def _match_date_range(value: dict[str, Any], candidate: dict[str, Any]) -> bool:
     if max_age_days is not None and not isinstance(max_age_days, int):
         try:
             max_age_days = int(max_age_days)
-        except Exception:
+        except (TypeError, ValueError):
             return False
     pub = candidate.get("published_at")
     if not pub:
@@ -219,7 +219,7 @@ def _match_date_range(value: dict[str, Any], candidate: dict[str, Any]) -> bool:
             if until_dt is None or dt > until_dt:
                 return False
         return True
-    except Exception:
+    except (OverflowError, TypeError, ValueError):
         return False
 
 
@@ -252,5 +252,5 @@ def evaluate_filters(filters: list[dict[str, Any]], candidate: dict[str, Any]) -
         if matched:
             fid = f.get("id")
             key = f"id:{fid}" if fid is not None else f"idx:{idx}"
-            return f.get("action"), {"key": key}
+            return f.get("action"), {"key": key, "id": fid, "type": t}
     return None, {}

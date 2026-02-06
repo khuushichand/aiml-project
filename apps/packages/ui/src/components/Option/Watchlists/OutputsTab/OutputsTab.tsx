@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useState } from "react"
 import {
   Button,
+  InputNumber,
   Input,
   Modal,
   Select,
@@ -24,6 +25,13 @@ import {
 import type { WatchlistJob, WatchlistOutput, WatchlistTemplate } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { OutputPreviewDrawer } from "./OutputPreviewDrawer"
+import {
+  buildRegenerateOutputRequest,
+  getDeliveryStatusColor,
+  getOutputDeliveryStatuses,
+  getOutputTemplateName,
+  getOutputTemplateVersion
+} from "./outputMetadata"
 
 export const OutputsTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
@@ -53,8 +61,19 @@ export const OutputsTab: React.FC = () => {
   const [templates, setTemplates] = useState<WatchlistTemplate[]>([])
   const [templatesLoading, setTemplatesLoading] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null)
+  const [selectedTemplateVersion, setSelectedTemplateVersion] = useState<number | null>(null)
   const [customTitle, setCustomTitle] = useState("")
   const [regenLoading, setRegenLoading] = useState(false)
+
+  const selectedTemplateVersionOptions = useMemo(() => {
+    if (!selectedTemplate) return []
+    const template = templates.find((entry) => entry.name === selectedTemplate)
+    if (!template?.available_versions || !Array.isArray(template.available_versions)) return []
+    return [...template.available_versions]
+      .filter((value): value is number => Number.isInteger(value) && value > 0)
+      .sort((a, b) => b - a)
+      .map((value) => ({ label: `v${value}`, value }))
+  }, [selectedTemplate, templates])
 
   // Fetch outputs
   const loadOutputs = useCallback(async () => {
@@ -141,7 +160,8 @@ export const OutputsTab: React.FC = () => {
 
   const openRegenerate = (output: WatchlistOutput) => {
     setRegenOutput(output)
-    setSelectedTemplate(null)
+    setSelectedTemplate(getOutputTemplateName(output.metadata) || null)
+    setSelectedTemplateVersion(getOutputTemplateVersion(output.metadata) || null)
     setCustomTitle(output.title || "")
     setRegenOpen(true)
   }
@@ -150,12 +170,12 @@ export const OutputsTab: React.FC = () => {
     if (!regenOutput) return
     setRegenLoading(true)
     try {
-      await createWatchlistOutput({
-        run_id: regenOutput.run_id,
-        title: customTitle || undefined,
-        template_name: selectedTemplate || undefined,
-        type: regenOutput.type || undefined
+      const regeneratePayload = buildRegenerateOutputRequest(regenOutput, {
+        title: customTitle,
+        templateName: selectedTemplate,
+        templateVersion: selectedTemplateVersion
       })
+      await createWatchlistOutput(regeneratePayload)
       message.success(t("watchlists:outputs.regenerated", "Output regenerated"))
       setRegenOpen(false)
       loadOutputs()
@@ -226,6 +246,28 @@ export const OutputsTab: React.FC = () => {
           {formatRelativeTime(date, t)}
         </span>
       )
+    },
+    {
+      title: t("watchlists:outputs.columns.delivery", "Delivery"),
+      key: "delivery",
+      width: 220,
+      render: (_, record) => {
+        const deliveries = getOutputDeliveryStatuses(record.metadata)
+        if (deliveries.length === 0) {
+          return <span className="text-zinc-400">-</span>
+        }
+        return (
+          <Space size={[4, 4]} wrap>
+            {deliveries.map((delivery, index) => (
+              <Tooltip key={`${delivery.channel}-${delivery.status}-${index}`} title={delivery.detail}>
+                <Tag color={getDeliveryStatusColor(delivery.status)}>
+                  {delivery.channel}: {delivery.status}
+                </Tag>
+              </Tooltip>
+            ))}
+          </Space>
+        )
+      }
     },
     {
       title: t("watchlists:outputs.columns.expires", "Expires"),
@@ -360,7 +402,13 @@ export const OutputsTab: React.FC = () => {
             </div>
             <Select
               value={selectedTemplate ?? undefined}
-              onChange={(value) => setSelectedTemplate(value ?? null)}
+              onChange={(value) => {
+                const nextTemplate = value ?? null
+                if (nextTemplate !== selectedTemplate) {
+                  setSelectedTemplateVersion(null)
+                }
+                setSelectedTemplate(nextTemplate)
+              }}
               placeholder={t("watchlists:outputs.templatePlaceholder", "Select a template")}
               options={templates.map((template) => ({
                 label: template.name,
@@ -370,6 +418,38 @@ export const OutputsTab: React.FC = () => {
               allowClear
               className="w-full"
             />
+          </div>
+          <div>
+            <div className="text-xs font-medium text-zinc-500 mb-1">
+              {t("watchlists:outputs.templateVersionLabel", "Template version")}
+            </div>
+            {selectedTemplateVersionOptions.length > 0 ? (
+              <Select
+                value={selectedTemplateVersion ?? undefined}
+                onChange={(value) =>
+                  setSelectedTemplateVersion(typeof value === "number" ? value : null)
+                }
+                placeholder={t("watchlists:outputs.templateVersionPlaceholder", "Latest/default")}
+                options={selectedTemplateVersionOptions}
+                disabled={!selectedTemplate}
+                allowClear
+                className="w-full"
+              />
+            ) : (
+              <InputNumber
+                value={selectedTemplateVersion ?? undefined}
+                min={1}
+                precision={0}
+                onChange={(value) =>
+                  setSelectedTemplateVersion(
+                    typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null
+                  )
+                }
+                disabled={!selectedTemplate}
+                placeholder={t("watchlists:outputs.templateVersionPlaceholder", "Latest/default")}
+                className="w-full"
+              />
+            )}
           </div>
           <div>
             <div className="text-xs font-medium text-zinc-500 mb-1">

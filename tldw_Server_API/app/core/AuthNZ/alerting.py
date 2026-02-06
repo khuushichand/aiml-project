@@ -45,7 +45,7 @@ class SecurityAlertDispatcher:
             if not fp.is_absolute():
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
                 fp = Path(_gpr()) / fp
-        except Exception:
+        except (ImportError, AttributeError, OSError, RuntimeError, ValueError):
             # Anchor relative to package root if project resolution fails
             fp = Path(__file__).resolve().parents[5] / str(raw_fp)
         self.file_path = str(fp)
@@ -109,7 +109,7 @@ class SecurityAlertDispatcher:
         if self.file_path:
             try:
                 Path(self.file_path).parent.mkdir(parents=True, exist_ok=True)
-            except Exception as exc:
+            except OSError as exc:
                 logger.debug(f"Security alert log path setup failed: {exc}")
 
     @staticmethod
@@ -121,7 +121,7 @@ class SecurityAlertDispatcher:
             if not isinstance(parsed, dict):
                 raise ValueError("Headers must be a JSON object")
             return {str(k): str(v) for k, v in parsed.items()}
-        except Exception as exc:
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
             logger.warning(f"Invalid SECURITY_ALERT_WEBHOOK_HEADERS value: {exc}")
             return {}
 
@@ -181,7 +181,7 @@ class SecurityAlertDispatcher:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 with path.open("a", encoding="utf-8"):
                     pass
-            except Exception as exc:
+            except OSError as exc:
                 issues.append(f"File sink not writable: {exc}")
 
         if self.webhook_url:
@@ -270,7 +270,7 @@ class SecurityAlertDispatcher:
                     await self._write_file(record)
                     sink_status["file"] = True
                     self._clear_backoff("file")
-                except Exception as exc:
+                except (SecurityAlertFileError, OSError, RuntimeError, ValueError) as exc:
                     sink_status["file"] = False
                     sink_errors["file"] = str(exc)
                     errors.append(("file", exc))
@@ -287,7 +287,7 @@ class SecurityAlertDispatcher:
                     await self._send_webhook(record)
                     sink_status["webhook"] = True
                     self._clear_backoff("webhook")
-                except Exception as exc:
+                except (SecurityAlertWebhookError, OSError, RuntimeError, ValueError) as exc:
                     sink_status["webhook"] = False
                     sink_errors["webhook"] = str(exc)
                     errors.append(("webhook", exc))
@@ -304,7 +304,7 @@ class SecurityAlertDispatcher:
                     await self._send_email(record)
                     sink_status["email"] = True
                     self._clear_backoff("email")
-                except Exception as exc:
+                except (SecurityAlertEmailError, OSError, RuntimeError, ValueError) as exc:
                     sink_status["email"] = False
                     sink_errors["email"] = str(exc)
                     errors.append(("email", exc))
@@ -377,7 +377,7 @@ class SecurityAlertDispatcher:
         if resp.status_code >= 400:
             try:
                 body = (resp.text or "").strip()
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 body = "<unavailable>"
             if len(body) > 512:
                 body = body[:512] + "... (truncated)"

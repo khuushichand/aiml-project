@@ -21,6 +21,17 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import is_key_over_budget
 
+_AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 
 class AuthGovernor:
     """
@@ -51,7 +62,7 @@ class AuthGovernor:
             fail_open = env_val in {"1", "true", "yes", "on", "y"}
         try:
             result = await is_key_over_budget(api_key_id)
-        except Exception as exc:
+        except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"AuthGovernor: error during is_key_over_budget for key {api_key_id}: {exc}")
             if not fail_open:
                 return {
@@ -118,12 +129,12 @@ class AuthGovernor:
         if limiter is None:
             try:
                 limiter = get_rate_limiter()
-            except Exception:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS:
                 limiter = None
         if inspect.isawaitable(limiter):
             try:
                 limiter = await limiter
-            except Exception:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS:
                 limiter = None
 
         if limiter and getattr(limiter, "enabled", False):
@@ -132,7 +143,7 @@ class AuthGovernor:
                     return await limiter.check_lockout(identifier, attempt_type=attempt_type)
                 except TypeError:
                     return await limiter.check_lockout(identifier)
-            except Exception as exc:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"AuthGovernor lockout check failed for {identifier}: {exc}")
         return False, None
 
@@ -153,18 +164,18 @@ class AuthGovernor:
         if limiter is None:
             try:
                 limiter = get_rate_limiter()
-            except Exception:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS:
                 limiter = None
         if inspect.isawaitable(limiter):
             try:
                 limiter = await limiter
-            except Exception:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS:
                 limiter = None
 
         if limiter and getattr(limiter, "enabled", False):
             try:
                 return await limiter.record_failed_attempt(identifier=identifier, attempt_type=attempt_type)
-            except Exception as exc:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"AuthGovernor record failure failed for {identifier}: {exc}")
 
         return {"is_locked": False, "remaining_attempts": 5}
@@ -187,12 +198,12 @@ class AuthGovernor:
         if limiter is None:
             try:
                 limiter = get_rate_limiter()
-            except Exception:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS:
                 limiter = None
         if inspect.isawaitable(limiter):
             try:
                 limiter = await limiter
-            except Exception:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS:
                 limiter = None
 
         if limiter and getattr(limiter, "enabled", False):
@@ -205,7 +216,7 @@ class AuthGovernor:
                 )
             except TypeError:
                 return await limiter.check_rate_limit(identifier, endpoint)
-            except Exception as exc:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"AuthGovernor rate limit failed for {identifier}: {exc}")
 
         return True, {}

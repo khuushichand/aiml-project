@@ -50,6 +50,17 @@ async def wait_for_http_ready(*args, **kwargs):
     """Proxy readiness poller preserving test expectations."""
     return await http_utils.wait_for_http_ready(*args, **kwargs)
 
+_LLAMAFILE_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    subprocess.SubprocessError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 ########################################################################################################################
 #
 # Functions:
@@ -95,7 +106,7 @@ class LlamafileHandler(BaseLLMHandler):
             except ProcessLookupError:
                 if hasattr(process, "terminate"):
                     process.terminate()
-            except Exception:
+            except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
                 if hasattr(process, "terminate"):
                     process.terminate()
         try:
@@ -108,12 +119,12 @@ class LlamafileHandler(BaseLLMHandler):
                 try:
                     pgid = await asyncio.to_thread(os.getpgid, process.pid)
                     await asyncio.to_thread(os.killpg, pgid, signal.SIGKILL)
-                except Exception:
+                except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
                     if hasattr(process, "kill"):
                         process.kill()
             try:
                 await process.wait()
-            except Exception:
+            except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
                 pass
 
     async def _drain_stream(self, stream, label: str) -> None:
@@ -126,7 +137,7 @@ class LlamafileHandler(BaseLLMHandler):
                     break
         except asyncio.CancelledError:
             return
-        except Exception:
+        except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
             # Best-effort drain; ignore errors
             return
 
@@ -675,7 +686,7 @@ class LlamafileHandler(BaseLLMHandler):
                             except ProcessLookupError:
                                 self.logger.warning(
                                     f"Process {current_pid} already exited when attempting SIGKILL fallback.")
-                            except Exception as e_killpid:
+                            except _LLAMAFILE_NONCRITICAL_EXCEPTIONS as e_killpid:
                                 self.logger.debug(
                                     f"os.kill fallback failed for PID {current_pid}: {e_killpid}; "
                                     f"checking for process.kill() availability"
@@ -686,7 +697,7 @@ class LlamafileHandler(BaseLLMHandler):
                                         self.logger.info(
                                             f"Invoked process.kill() for PID {current_pid} (final fallback)."
                                         )
-                                    except Exception as e_pkill:
+                                    except _LLAMAFILE_NONCRITICAL_EXCEPTIONS as e_pkill:
                                         self.logger.warning(
                                             f"process.kill() failed for PID {current_pid}: {e_pkill}")
 
@@ -837,24 +848,24 @@ class LlamafileHandler(BaseLLMHandler):
 
                 except ProcessLookupError:
                     self._safe_log("warning", f"Process {pid} not found during termination, likely already exited.")
-                except Exception as e:
+                except _LLAMAFILE_NONCRITICAL_EXCEPTIONS as e:
                     self._safe_log("error", f"Error during cleanup of PID {pid}: {e}. Attempting kill.")
                     if proc.returncode is None:
                         if platform.system() == "Windows":
                             if hasattr(proc, "kill"):
                                 try:
                                     proc.kill()
-                                except Exception:
+                                except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
                                     pass
                         else:
                             try:
                                 pgid = os.getpgid(pid)
                                 os.killpg(pgid, signal.SIGKILL)
-                            except Exception:
+                            except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
                                 if hasattr(proc, "kill"):
                                     try:
                                         proc.kill()
-                                    except Exception:
+                                    except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
                                         pass
             if port in self._active_servers:
                 self._stop_stream_drainers(port)

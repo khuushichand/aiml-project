@@ -28,6 +28,20 @@ DEFAULT_CLEANUP_INTERVAL_SEC = 3600  # 1 hour
 DEFAULT_TRASH_RETENTION_DAYS = 30
 DEFAULT_BATCH_SIZE = 100
 
+_STORAGE_CLEANUP_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 
 def _safe_resolve_user_path(
     user_id: int | None,
@@ -65,7 +79,7 @@ def _mark_tts_history_artifact_deleted(user_id: int | None, file_id: int | None)
             )
         finally:
             db.close_connection()
-    except Exception as exc:
+    except _STORAGE_CLEANUP_EXCEPTIONS as exc:
         logger.debug(f"storage_cleanup: failed to update tts_history for file {file_id}: {exc}")
 
 
@@ -112,10 +126,10 @@ async def cleanup_expired_files(
                     resolved_path.unlink()
                     logger.debug(f"Deleted expired file: {resolved_path}")
 
-            except Exception as exc:
+            except _STORAGE_CLEANUP_EXCEPTIONS as exc:
                 logger.warning(f"Failed to cleanup expired file {file_id}: {exc}")
 
-    except Exception as exc:
+    except _STORAGE_CLEANUP_EXCEPTIONS as exc:
         logger.error(f"cleanup_expired_files failed: {exc}")
 
     return total_deleted
@@ -165,10 +179,10 @@ async def purge_old_trashed_files(
                 if file_category == FILE_CATEGORY_TTS_AUDIO:
                     _mark_tts_history_artifact_deleted(user_id, file_id)
 
-            except Exception as exc:
+            except _STORAGE_CLEANUP_EXCEPTIONS as exc:
                 logger.warning(f"Failed to purge trashed file {file_id}: {exc}")
 
-    except Exception as exc:
+    except _STORAGE_CLEANUP_EXCEPTIONS as exc:
         logger.error(f"purge_old_trashed_files failed: {exc}")
 
     return total_purged
@@ -191,7 +205,7 @@ async def recalculate_user_usage(
     try:
         usage = await files_repo.get_user_storage_usage(user_id)
         return usage
-    except Exception as exc:
+    except _STORAGE_CLEANUP_EXCEPTIONS as exc:
         logger.error(f"recalculate_user_usage failed for user {user_id}: {exc}")
         return {}
 
@@ -250,7 +264,7 @@ async def run_storage_cleanup_cycle(
                 f"purged {stats['trash_purged']} from trash"
             )
 
-    except Exception as exc:
+    except _STORAGE_CLEANUP_EXCEPTIONS as exc:
         logger.error(f"Storage cleanup cycle failed: {exc}")
         stats["errors"] += 1
         stats["completed_at"] = datetime.now(timezone.utc).isoformat()
@@ -298,7 +312,7 @@ async def run_storage_cleanup_loop(
                 batch_size=batch_size,
                 temp_retention_hours=temp_retention_hours,
             )
-        except Exception as exc:
+        except _STORAGE_CLEANUP_EXCEPTIONS as exc:
             logger.warning(f"Storage cleanup loop error: {exc}")
 
         # Wait for next cycle or stop event

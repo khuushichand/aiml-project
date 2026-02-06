@@ -26,6 +26,26 @@ BILLING_CACHE_TTL_SECONDS = float(os.environ.get("BILLING_CACHE_TTL_SECONDS", "6
 from tldw_Server_API.app.core.Billing.plan_limits import SOFT_LIMIT_PERCENT
 from tldw_Server_API.app.core.Billing.stripe_client import is_billing_enabled
 
+_BILLING_ENFORCEMENT_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+)
+
+_BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 
 class LimitCategory(str, Enum):
     """Categories of limits that can be enforced."""
@@ -122,7 +142,7 @@ class BillingEnforcer:
             limits = await service.get_org_limits(org_id)
             self._limits_cache[org_id] = (limits, now)
             return limits
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Failed to get org limits for {org_id}: {exc}")
             # Return permissive defaults on failure
             return {
@@ -176,7 +196,7 @@ class BillingEnforcer:
             # Cache the result
             self._usage_cache[org_id] = (summary, now)
 
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             # Log at ERROR level since this affects billing enforcement
             logger.error(f"Failed to get org usage for {org_id}: {exc}")
             # Try to return cached value if available (even if expired)
@@ -222,7 +242,7 @@ class BillingEnforcer:
                     result = row[0] if row else 0
 
                 return int(result or 0)
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to get API calls for org {org_id}: {exc}")
             return 0
 
@@ -312,7 +332,7 @@ class BillingEnforcer:
                     result = row[0] if row else 0
 
                 return int(result or 0)
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to get LLM tokens for org {org_id}: {exc}")
             return 0
 
@@ -343,7 +363,7 @@ class BillingEnforcer:
                 offset += batch_size
 
             return total_members
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to get team members for org {org_id}: {exc}")
             return 0
 
@@ -410,7 +430,7 @@ class BillingEnforcer:
                     continue
 
             return int(total_active)
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to get concurrent jobs for org {org_id}: {exc}")
             return 0
 
@@ -465,7 +485,7 @@ class BillingEnforcer:
 
             # Convert MB to bytes
             return int(total_mb * 1024 * 1024)
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to get storage for org {org_id}: {exc}")
             return 0
 
@@ -491,7 +511,7 @@ class BillingEnforcer:
             )
 
             return int(window.get("total", 0)) if window else 0
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to get transcription minutes for org {org_id}: {exc}")
             return 0
 
@@ -518,7 +538,7 @@ class BillingEnforcer:
             )
 
             return int(total or 0)
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to get RAG queries for org {org_id}: {exc}")
             return 0
 
@@ -561,7 +581,7 @@ class BillingEnforcer:
             if limit_value_raw is None or isinstance(limit_value_raw, bool):
                 raise TypeError("invalid limit value")
             limit_value = int(limit_value_raw)
-        except Exception:
+        except _BILLING_ENFORCEMENT_COERCE_EXCEPTIONS:
             logger.warning(
                 f"Invalid limit value for {category.value} (org_id={org_id}): "
                 f"{limit_value_raw!r}; treating as unlimited"
@@ -657,7 +677,7 @@ class BillingEnforcer:
         """
         try:
             delta = int(units)
-        except Exception:
+        except _BILLING_ENFORCEMENT_COERCE_EXCEPTIONS:
             return False
 
         if delta <= 0:
@@ -773,7 +793,7 @@ async def check_billing_with_rg(
         enforcer = get_billing_enforcer()
         result = await enforcer.check_limit(org_id, category, requested_units=units)
         return not result.should_block
-    except Exception as exc:
+    except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Billing RG check failed, allowing: {exc}")
         return True  # Fail open
 

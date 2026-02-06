@@ -495,6 +495,24 @@ max_models_in_memory = 3
 max_model_memory_gb = 8
 model_lru_ttl_seconds = 3600
 
+# FVA (Falsification-Verification Alignment) Settings
+# Enable FVA for enhanced claim verification with counter-evidence retrieval
+FVA_ENABLED = true
+# Confidence threshold below which falsification is triggered (0.0-1.0)
+FVA_CONFIDENCE_THRESHOLD = 0.7
+# Threshold for CONTESTED status when evidence is balanced (0.0-0.5)
+FVA_CONTESTED_THRESHOLD = 0.4
+# Maximum concurrent falsification operations
+FVA_MAX_CONCURRENT = 5
+# Timeout for falsification operations in seconds
+FVA_TIMEOUT_SECONDS = 30.0
+# Maximum budget ratio for FVA operations (0.0-1.0)
+FVA_MAX_BUDGET_RATIO = 0.3
+# Claim types that always trigger falsification (comma-separated)
+FVA_FORCE_CLAIM_TYPES =
+# Minimum confidence to skip falsification entirely (0.0-1.0)
+FVA_MIN_CONFIDENCE_FOR_SKIP = 0.9
+
 [ClaimsMonitoring]
 CLAIMS_MONITORING_ENABLED = false
 CLAIMS_ALERT_THRESHOLD_DEFAULT = 0.2

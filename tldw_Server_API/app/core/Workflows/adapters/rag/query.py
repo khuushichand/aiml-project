@@ -27,6 +27,32 @@ from tldw_Server_API.app.core.Workflows.adapters.rag._config import (
     SemanticCacheCheckConfig,
 )
 
+_QUERY_CONTEXT_EXCEPTIONS = (AttributeError, TypeError, ValueError)
+_QUERY_STRATEGY_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_QUERY_ADAPTER_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_QUERY_JSON_PARSE_EXCEPTIONS = (TypeError, ValueError, json.JSONDecodeError)
+
 
 @registry.register(
     "query_rewrite",
@@ -102,7 +128,7 @@ Return exactly {max_rewrites} rewritten queries, one per line. No numbering, no 
             "strategy": strategy,
         }
 
-    except Exception as e:
+    except _QUERY_ADAPTER_EXCEPTIONS as e:
         logger.exception(f"Query rewrite adapter error: {e}")
         return {"error": f"query_rewrite_error:{e}", "original_query": query, "rewritten_queries": []}
 
@@ -144,7 +170,7 @@ async def run_query_expand_adapter(config: dict[str, Any], context: dict[str, An
             last = context.get("prev") or context.get("last") or {}
             if isinstance(last, dict):
                 query = str(last.get("query") or last.get("text") or "")
-        except Exception:
+        except _QUERY_CONTEXT_EXCEPTIONS:
             pass
     query = query or ""
 
@@ -228,7 +254,7 @@ async def run_query_expand_adapter(config: dict[str, Any], context: dict[str, An
                         all_synonyms.update(result.synonyms)
                         all_keywords.extend(result.keywords)
                         all_entities.extend(result.entities)
-                    except Exception as strat_e:
+                    except _QUERY_STRATEGY_EXCEPTIONS as strat_e:
                         logger.debug(f"Query expansion strategy {strat_name} failed: {strat_e}")
 
         # Deduplicate
@@ -257,7 +283,7 @@ async def run_query_expand_adapter(config: dict[str, Any], context: dict[str, An
             "strategies_used": strategies,
         }
 
-    except Exception as e:
+    except _QUERY_ADAPTER_EXCEPTIONS as e:
         logger.exception(f"Query expand adapter error: {e}")
         return {"error": f"query_expand_error:{e}"}
 
@@ -336,7 +362,7 @@ Generate {num_hypothetical} hypothetical document(s). If multiple, separate with
             "document_type": document_type,
         }
 
-    except Exception as e:
+    except _QUERY_ADAPTER_EXCEPTIONS as e:
         logger.exception(f"HyDE generate adapter error: {e}")
         return {"error": f"hyde_error:{e}", "query": query, "hypothetical_documents": []}
 
@@ -391,7 +417,7 @@ async def run_semantic_cache_check_adapter(config: dict[str, Any], context: dict
                 name=cache_collection,
                 embedding_function=embedding_function_factory(),
             )
-        except Exception as e:
+        except _QUERY_ADAPTER_EXCEPTIONS as e:
             logger.debug(f"Semantic cache collection error: {e}")
             return {"cache_hit": False, "query": query, "error": "collection_error"}
 
@@ -421,7 +447,7 @@ async def run_semantic_cache_check_adapter(config: dict[str, Any], context: dict
                         if isinstance(cached_result, str):
                             try:
                                 cached_result = json.loads(cached_result)
-                            except Exception:
+                            except _QUERY_JSON_PARSE_EXCEPTIONS:
                                 pass
 
                         return {
@@ -434,7 +460,7 @@ async def run_semantic_cache_check_adapter(config: dict[str, Any], context: dict
 
         return {"cache_hit": False, "query": query}
 
-    except Exception as e:
+    except _QUERY_ADAPTER_EXCEPTIONS as e:
         logger.exception(f"Semantic cache check error: {e}")
         return {"cache_hit": False, "query": query, "error": str(e)}
 

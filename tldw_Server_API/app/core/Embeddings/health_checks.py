@@ -19,6 +19,20 @@ from tldw_Server_API.app.core.Embeddings.multi_tier_cache import get_multi_tier_
 from tldw_Server_API.app.core.Embeddings.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.Embeddings.simplified_config import get_config
 
+_HEALTH_CHECK_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 
 class HealthStatus(Enum):
     """Health status levels"""
@@ -174,7 +188,7 @@ class HealthChecker:
                     message="Check passed" if result else "Check failed",
                     latency_ms=latency
                 )
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name=name,
                 status=HealthStatus.UNHEALTHY,
@@ -226,7 +240,7 @@ class HealthChecker:
                 }
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="system",
                 status=HealthStatus.UNHEALTHY,
@@ -268,7 +282,7 @@ class HealthChecker:
                 metadata=provider_status
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="providers",
                 status=HealthStatus.UNHEALTHY,
@@ -300,7 +314,7 @@ class HealthChecker:
                 metadata=stats
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="cache",
                 status=HealthStatus.DEGRADED,
@@ -338,7 +352,7 @@ class HealthChecker:
                 metadata={'collection_count': len(collections), 'latency_ms': latency_ms}
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="database",
                 status=HealthStatus.UNHEALTHY,
@@ -367,7 +381,7 @@ class HealthChecker:
                 metadata=stats
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="rate_limiter",
                 status=HealthStatus.DEGRADED,
@@ -399,7 +413,7 @@ class HealthChecker:
                 metadata=stats
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="dlq",
                 status=HealthStatus.DEGRADED,
@@ -438,7 +452,7 @@ class HealthChecker:
                 metadata=all_stats
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="connection_pools",
                 status=HealthStatus.DEGRADED,
@@ -465,7 +479,7 @@ class HealthChecker:
                 metadata={'issues': issues}
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="config",
                 status=HealthStatus.UNHEALTHY,
@@ -512,7 +526,7 @@ class HealthChecker:
                 'threads': process.num_threads(),
                 'open_files': len(process.open_files())
             }
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Failed to collect process metrics: error={e}")
 
         # Get metrics from metrics module
@@ -582,7 +596,7 @@ async def liveness_probe() -> bool:
         # Just check if we can import and get config
         config = get_config()
         return config is not None
-    except Exception as e:
+    except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Liveness probe failed: error={e}")
         return False
 
@@ -598,7 +612,7 @@ async def readiness_probe() -> bool:
 
         # Service is ready if not critical
         return health['status'] != HealthStatus.CRITICAL.value
-    except Exception as e:
+    except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Readiness probe failed: error={e}")
         return False
 
@@ -672,7 +686,7 @@ async def monitor_health_periodic(interval_seconds: int = 60):
 
                 # Could trigger alerts here
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error in periodic health monitoring: {e}")
 
 

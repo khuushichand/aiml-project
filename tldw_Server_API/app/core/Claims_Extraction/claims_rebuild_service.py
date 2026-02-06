@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -22,6 +23,26 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 
+_CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    sqlite3.Error,
+)
+
+_TIMESTAMP_PARSE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    OSError,
+    OverflowError,
+    TypeError,
+    ValueError,
+)
+
 
 @dataclass
 class ClaimsRebuildTask:
@@ -32,7 +53,7 @@ class ClaimsRebuildTask:
 def _claims_monitoring_system_user_id() -> int:
     try:
         return int(settings.get("CLAIMS_MONITORING_SYSTEM_USER_ID", 0))
-    except Exception:
+    except (TypeError, ValueError):
         return 0
 
 
@@ -41,7 +62,7 @@ def _format_timestamp(ts: float | None) -> str | None:
         return None
     try:
         return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-    except Exception:
+    except _TIMESTAMP_PARSE_EXCEPTIONS:
         return None
 
 
@@ -79,7 +100,7 @@ class ClaimsRebuildService:
         for t in self._threads:
             try:
                 t.join(timeout=1.0)
-            except Exception:
+            except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS:
                 pass
         self._threads.clear()
         self._stop.clear()
@@ -111,7 +132,7 @@ class ClaimsRebuildService:
         db_path = None
         try:
             db_path = get_user_media_db_path(user_id)
-        except Exception as exc:
+        except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Claims rebuild health persistence skipped: %s", exc)
             return
         try:
@@ -119,7 +140,7 @@ class ClaimsRebuildService:
                 client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
                 db_path=db_path,
             )
-        except Exception as exc:
+        except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Claims rebuild health persistence DB init failed: %s", exc)
             return
         try:
@@ -127,7 +148,7 @@ class ClaimsRebuildService:
                 try:
                     db.initialize_db()
                     self._health_db_initialized = True
-                except Exception as exc:
+                except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug("Claims rebuild health persistence DB setup failed: %s", exc)
                     return
             last_failure_reason = None
@@ -144,12 +165,12 @@ class ClaimsRebuildService:
                 last_failure_at=last_failure_at,
                 last_failure_reason=last_failure_reason,
             )
-        except Exception as exc:
+        except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Claims rebuild health persistence failed: %s", exc)
         finally:
             try:
                 db.close_connection()
-            except Exception:
+            except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def _worker_loop(self) -> None:
@@ -180,7 +201,7 @@ class ClaimsRebuildService:
                     queue_size=self._queue.qsize(),
                 )
                 self._persist_health()
-            except Exception as e:
+            except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Claims rebuild failed for media_id={task.media_id}: {e}")
                 with self._stats_lock:
                     self._stats["failed"] += 1
@@ -238,7 +259,7 @@ class ClaimsRebuildService:
         finally:
             try:
                 db.close_connection()
-            except Exception:
+            except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def get_stats(self) -> dict[str, int]:

@@ -1113,6 +1113,128 @@ async def test_complete_v2_character_greeting_scope_injects_per_participant_firs
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_complete_v2_chat_greeting_scope_injects_once_for_group_chat(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="chacha_chat_greeting_scope_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        captured_payloads: list[list[dict[str, object]]] = []
+        call_count = {"value": 0}
+
+        import tldw_Server_API.app.api.v1.endpoints.character_chat_sessions as mod
+
+        def _stub_chat_api_call(api_endpoint, messages_payload, **kwargs):
+            call_count["value"] += 1
+            captured_payloads.append(messages_payload)
+            return {"choices": [{"message": {"content": f"ok-{call_count['value']}"}}]}
+
+        monkeypatch.setattr(mod, "perform_chat_api_call", _stub_chat_api_call)
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            primary_character = r.json()[0]
+            primary_character_id = primary_character["id"]
+            primary_character_version = primary_character["version"]
+
+            primary_greeting = "primary-chat-scope-greeting-token"
+            r = await client.put(
+                f"/api/v1/characters/{primary_character_id}",
+                headers=headers,
+                params={"expected_version": primary_character_version},
+                json={"first_message": primary_greeting},
+            )
+            assert r.status_code == 200
+
+            r = await client.post(
+                "/api/v1/characters/",
+                headers=headers,
+                json={"name": "Greeting Secondary Chat Scope"},
+            )
+            assert r.status_code == 201
+            secondary_character = r.json()
+            secondary_character_id = (
+                secondary_character.get("id") or secondary_character.get("character_id")
+            )
+            secondary_character_version = secondary_character.get("version")
+            assert secondary_character_id is not None
+            assert secondary_character_version is not None
+
+            secondary_greeting = "secondary-chat-scope-greeting-token"
+            r = await client.put(
+                f"/api/v1/characters/{secondary_character_id}",
+                headers=headers,
+                params={"expected_version": secondary_character_version},
+                json={"first_message": secondary_greeting},
+            )
+            assert r.status_code == 200
+
+            r = await client.post(
+                "/api/v1/chats/",
+                headers=headers,
+                json={"character_id": primary_character_id},
+            )
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            r = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json={
+                    "settings": {
+                        "schemaVersion": 2,
+                        "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        "greetingScope": "chat",
+                        "greetingEnabled": True,
+                        "turnTakingMode": "round_robin",
+                        "participantCharacterIds": [secondary_character_id],
+                    }
+                },
+            )
+            assert r.status_code == 200
+
+            for turn in ("turn-1", "turn-2"):
+                r = await client.post(
+                    f"/api/v1/chats/{chat_id}/complete-v2",
+                    headers=headers,
+                    json={
+                        "provider": "openai",
+                        "model": "gpt-x",
+                        "append_user_message": turn,
+                        "save_to_db": True,
+                    },
+                )
+                assert r.status_code == 200
+
+            first_call_assistant = [
+                str(message.get("content") or "")
+                for message in captured_payloads[0]
+                if message.get("role") == "assistant"
+            ]
+            second_call_assistant = [
+                str(message.get("content") or "")
+                for message in captured_payloads[1]
+                if message.get("role") == "assistant"
+            ]
+
+            assert any(primary_greeting in content for content in first_call_assistant)
+            assert not any(
+                primary_greeting in content or secondary_greeting in content
+                for content in second_call_assistant
+            )
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_complete_v2_character_greeting_scope_single_participant_injects_once(
     monkeypatch,
 ):
@@ -1295,6 +1417,399 @@ async def test_complete_v2_character_greeting_scope_respects_disabled_toggle(mon
                 greeting_token in str(message.get("content") or "")
                 for message in payload_messages
             )
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_complete_v2_applies_chat_generation_override(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="chacha_generation_override_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        captured_call_kwargs: dict[str, object] = {}
+
+        import tldw_Server_API.app.api.v1.endpoints.character_chat_sessions as mod
+
+        def _stub_chat_api_call(api_endpoint, messages_payload, **kwargs):
+            captured_call_kwargs.update(kwargs)
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+        monkeypatch.setattr(mod, "perform_chat_api_call", _stub_chat_api_call)
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            primary_character = r.json()[0]
+            primary_character_id = primary_character["id"]
+
+            r = await client.post(
+                "/api/v1/chats/",
+                headers=headers,
+                json={"character_id": primary_character_id},
+            )
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            r = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json={
+                    "settings": {
+                        "schemaVersion": 2,
+                        "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        "chatGenerationOverride": {
+                            "enabled": True,
+                            "temperature": 1.2,
+                            "top_p": 0.8,
+                            "repetition_penalty": 1.1,
+                            "stop": ["<END>"],
+                        },
+                    }
+                },
+            )
+            assert r.status_code == 200
+
+            r = await client.post(
+                f"/api/v1/chats/{chat_id}/complete-v2",
+                headers=headers,
+                json={
+                    "provider": "openai",
+                    "model": "gpt-x",
+                    "append_user_message": "turn-1",
+                    "save_to_db": False,
+                },
+            )
+            assert r.status_code == 200
+
+            assert captured_call_kwargs.get("temp") == 1.2
+            assert captured_call_kwargs.get("top_p") == 0.8
+            assert captured_call_kwargs.get("repetition_penalty") == 1.1
+            assert captured_call_kwargs.get("stop") == ["<END>"]
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_complete_v2_applies_preset_scope_chat_override(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="chacha_preset_scope_chat_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        captured_payloads: list[list[dict[str, object]]] = []
+
+        import tldw_Server_API.app.api.v1.endpoints.character_chat_sessions as mod
+
+        def _stub_chat_api_call(api_endpoint, messages_payload, **kwargs):
+            captured_payloads.append(messages_payload)
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+        monkeypatch.setattr(mod, "perform_chat_api_call", _stub_chat_api_call)
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            primary_character = r.json()[0]
+            primary_character_id = primary_character["id"]
+            primary_character_version = primary_character["version"]
+
+            r = await client.put(
+                f"/api/v1/characters/{primary_character_id}",
+                headers=headers,
+                params={"expected_version": primary_character_version},
+                json={"message_example": "preset-example-token"},
+            )
+            assert r.status_code == 200
+
+            r = await client.post(
+                "/api/v1/chats/",
+                headers=headers,
+                json={"character_id": primary_character_id},
+            )
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            r = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json={
+                    "settings": {
+                        "schemaVersion": 2,
+                        "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        "presetScope": "chat",
+                        "chatPresetOverrideId": "st_default",
+                    }
+                },
+            )
+            assert r.status_code == 200
+
+            r = await client.post(
+                f"/api/v1/chats/{chat_id}/complete-v2",
+                headers=headers,
+                json={
+                    "provider": "openai",
+                    "model": "gpt-x",
+                    "append_user_message": "turn-1",
+                    "save_to_db": False,
+                },
+            )
+            assert r.status_code == 200
+
+            first_payload = captured_payloads[-1]
+            first_system_message = next(
+                (
+                    str(message.get("content") or "")
+                    for message in first_payload
+                    if message.get("role") == "system"
+                ),
+                "",
+            )
+            assert "Example dialogue:" in first_system_message
+            assert "preset-example-token" in first_system_message
+
+            r = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json={
+                    "settings": {
+                        "schemaVersion": 2,
+                        "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        "presetScope": "character",
+                        "chatPresetOverrideId": "st_default",
+                    }
+                },
+            )
+            assert r.status_code == 200
+
+            r = await client.post(
+                f"/api/v1/chats/{chat_id}/complete-v2",
+                headers=headers,
+                json={
+                    "provider": "openai",
+                    "model": "gpt-x",
+                    "append_user_message": "turn-2",
+                    "save_to_db": False,
+                },
+            )
+            assert r.status_code == 200
+
+            second_payload = captured_payloads[-1]
+            second_system_message = next(
+                (
+                    str(message.get("content") or "")
+                    for message in second_payload
+                    if message.get("role") == "system"
+                ),
+                "",
+            )
+            assert "Example dialogue:" not in second_system_message
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_prompt_preview_reports_server_conflicts_and_steering_warning(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="chacha_prompt_preview_conflicts_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        transport = httpx.ASGITransport(app=app)
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            character_id = r.json()[0]["id"]
+
+            r = await client.post(
+                "/api/v1/chats/",
+                headers=headers,
+                json={"character_id": character_id},
+            )
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            r = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json={
+                    "settings": {
+                        "schemaVersion": 2,
+                        "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        "authorNote": (
+                            "temperature: 0.7. temperature: 0.2. "
+                            "Speak tersely and be verbose."
+                        ),
+                    }
+                },
+            )
+            assert r.status_code == 200
+
+            r = await client.post(
+                f"/api/v1/chats/{chat_id}/prompt-preview",
+                headers=headers,
+                json={
+                    "include_character_context": True,
+                    "continue_as_user": True,
+                    "impersonate_user": True,
+                    "force_narrate": False,
+                },
+            )
+            assert r.status_code == 200
+            payload = r.json()
+
+            sections = payload.get("sections") or []
+            assert sections
+            for section in sections:
+                assert "tokens_estimated" in section
+                assert "tokens_effective" in section
+                assert "budget" in section
+                assert "truncated" in section
+
+            by_name = {str(section.get("name")): section for section in sections}
+            assert "message_steering" in by_name
+            assert (by_name["message_steering"].get("tokens_effective") or 0) > 0
+
+            warnings = payload.get("warnings") or []
+            assert any(
+                "impersonate_user overrides continue_as_user" in str(item)
+                for item in warnings
+            )
+
+            conflicts = payload.get("conflicts") or []
+            conflict_types = {str(item.get("type")) for item in conflicts}
+            assert "scalar_conflict" in conflict_types
+            assert "directive_conflict" in conflict_types
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_prompt_preview_applies_preset_scope_chat_override(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="chacha_prompt_preview_preset_scope_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        transport = httpx.ASGITransport(app=app)
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            primary_character = r.json()[0]
+            character_id = primary_character["id"]
+            character_version = primary_character["version"]
+
+            example_token = "preview-preset-example-token"
+            r = await client.put(
+                f"/api/v1/characters/{character_id}",
+                headers=headers,
+                params={"expected_version": character_version},
+                json={"message_example": example_token},
+            )
+            assert r.status_code == 200
+
+            r = await client.post(
+                "/api/v1/chats/",
+                headers=headers,
+                json={"character_id": character_id},
+            )
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            r = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json={
+                    "settings": {
+                        "schemaVersion": 2,
+                        "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        "presetScope": "chat",
+                        "chatPresetOverrideId": "st_default",
+                    }
+                },
+            )
+            assert r.status_code == 200
+
+            r = await client.post(
+                f"/api/v1/chats/{chat_id}/prompt-preview",
+                headers=headers,
+                json={"include_character_context": True},
+            )
+            assert r.status_code == 200
+            preview_with_chat_scope = r.json()
+            preset_section_chat_scope = next(
+                (
+                    section
+                    for section in (preview_with_chat_scope.get("sections") or [])
+                    if section.get("name") == "preset"
+                ),
+                {},
+            )
+            preset_content_chat_scope = str(preset_section_chat_scope.get("content") or "")
+            assert "Example dialogue:" in preset_content_chat_scope
+            assert example_token in preset_content_chat_scope
+
+            r = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json={
+                    "settings": {
+                        "schemaVersion": 2,
+                        "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        "presetScope": "character",
+                        "chatPresetOverrideId": "st_default",
+                    }
+                },
+            )
+            assert r.status_code == 200
+
+            r = await client.post(
+                f"/api/v1/chats/{chat_id}/prompt-preview",
+                headers=headers,
+                json={"include_character_context": True},
+            )
+            assert r.status_code == 200
+            preview_with_character_scope = r.json()
+            preset_section_character_scope = next(
+                (
+                    section
+                    for section in (preview_with_character_scope.get("sections") or [])
+                    if section.get("name") == "preset"
+                ),
+                {},
+            )
+            preset_content_character_scope = str(
+                preset_section_character_scope.get("content") or ""
+            )
+            assert "Example dialogue:" not in preset_content_character_scope
+            assert example_token not in preset_content_character_scope
     finally:
         reset_settings()
         shutil.rmtree(tmpdir, ignore_errors=True)

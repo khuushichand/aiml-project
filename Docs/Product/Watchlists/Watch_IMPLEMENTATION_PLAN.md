@@ -89,7 +89,7 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - Optional: TTS brief generated and attached when item count below threshold.
   - tldw_Server_API/tests/Watchlists/test_tts_brief_optional.py
 
-**Status**: Partially Completed (templates/output delivery paths exist; advanced authoring/versioning and optional TTS are future work)
+**Status**: In Progress (template version history + version-aware rendering landed; regenerate now supports template version selection; delivery status is surfaced in outputs UI; optional TTS remains future work)
 
 ---
 

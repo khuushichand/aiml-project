@@ -150,6 +150,8 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
     WatchlistTemplateDetail,
     WatchlistTemplateListResponse,
     WatchlistTemplateSummary,
+    WatchlistTemplateVersionsResponse,
+    WatchlistTemplateVersionSummary,
     WatchlistTemplateValidationErrorResponse,
 )
 
@@ -1163,6 +1165,8 @@ async def test_source(
                 decision="ingest",
                 matched_action=None,
                 matched_filter_key=None,
+                matched_filter_id=None,
+                matched_filter_type=None,
                 flagged=False,
             )
         )
@@ -1823,6 +1827,16 @@ async def preview_job(
                     decision=decision,  # type: ignore[arg-type]
                     matched_action=action,  # type: ignore[arg-type]
                     matched_filter_key=(meta.get("key") if isinstance(meta, dict) else None),
+                    matched_filter_id=(
+                        int(meta["id"])
+                        if isinstance(meta, dict) and meta.get("id") is not None
+                        else None
+                    ),
+                    matched_filter_type=(
+                        meta.get("type")
+                        if isinstance(meta, dict) and isinstance(meta.get("type"), str)
+                        else None
+                    ),  # type: ignore[arg-type]
                     flagged=flagged,
                 )
             )
@@ -2717,15 +2731,29 @@ async def create_output(
     title = payload.title or default_title
 
     template_name = payload.template_name or template_defaults.get("default_name")
+    template_version = payload.template_version
+    if template_version is None:
+        configured_default_version = template_defaults.get("default_version")
+        if configured_default_version is not None:
+            try:
+                parsed_default_version = int(configured_default_version)
+                if parsed_default_version > 0:
+                    template_version = parsed_default_version
+            except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+                template_version = None
+    if template_version is not None and not template_name:
+        raise HTTPException(status_code=400, detail="template_version_requires_template_name")
     template_record = None
     output_template = None
     if template_name:
         name_is_safe = bool(_TEMPLATE_NAME_RE.fullmatch(template_name))
         if name_is_safe:
             try:
-                template_record = template_store.load_template(template_name)
+                template_record = template_store.load_template(template_name, version=template_version)
             except template_store.TemplateNotFoundError:
                 template_record = None
+            except template_store.TemplateVersionNotFoundError:
+                raise HTTPException(status_code=404, detail="template_version_not_found")
             except TemplateValidationError as exc:
                 raise HTTPException(status_code=400, detail="invalid_template_name") from exc
         try:
@@ -2736,6 +2764,8 @@ async def create_output(
         except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
             logger.error(f"Watchlists template lookup failed: {exc}")
             raise HTTPException(status_code=500, detail="template_lookup_failed") from exc
+        if output_template and template_version is not None:
+            raise HTTPException(status_code=400, detail="template_version_not_supported_for_outputs_template")
         if output_template and output_template.format not in {"md", "html"}:
             raise HTTPException(status_code=400, detail="template_format_not_supported")
         if template_record is None and output_template is None:
@@ -2799,6 +2829,7 @@ async def create_output(
             metadata["template_description"] = output_template.description
     elif template_record:
         metadata["template_name"] = template_record.name
+        metadata["template_version"] = template_record.version
         metadata["template_source"] = "watchlists_templates"
         if template_record.description:
             metadata["template_description"] = template_record.description
@@ -3271,29 +3302,66 @@ async def list_templates(
             format=rec.format,
             description=rec.description,
             updated_at=rec.updated_at,
+            version=rec.version,
+            history_count=rec.history_count,
         )
         for rec in records
     ]
     return WatchlistTemplateListResponse(items=items)
 
 
-@router.get("/templates/{template_name}", response_model=WatchlistTemplateDetail, summary="Fetch a template")
-async def get_template(
+@router.get(
+    "/templates/{template_name}/versions",
+    response_model=WatchlistTemplateVersionsResponse,
+    summary="List a template's versions",
+)
+async def list_template_versions(
     template_name: str,
     current_user: User = Depends(get_request_user),
 ):
     if not _TEMPLATE_NAME_RE.fullmatch(template_name):
         raise HTTPException(status_code=400, detail="invalid_template_name")
     try:
-        record = template_store.load_template(template_name)
+        versions = template_store.list_template_versions(template_name)
     except template_store.TemplateNotFoundError:
         raise HTTPException(status_code=404, detail="template_not_found")
+    return WatchlistTemplateVersionsResponse(
+        items=[
+            WatchlistTemplateVersionSummary(
+                version=item.version,
+                format=item.format,  # type: ignore[arg-type]
+                description=item.description,
+                updated_at=item.updated_at,
+                is_current=item.is_current,
+            )
+            for item in versions
+        ]
+    )
+
+
+@router.get("/templates/{template_name}", response_model=WatchlistTemplateDetail, summary="Fetch a template")
+async def get_template(
+    template_name: str,
+    version: int | None = Query(None, ge=1, description="Optional historical version to load"),
+    current_user: User = Depends(get_request_user),
+):
+    if not _TEMPLATE_NAME_RE.fullmatch(template_name):
+        raise HTTPException(status_code=400, detail="invalid_template_name")
+    try:
+        record = template_store.load_template(template_name, version=version)
+    except template_store.TemplateNotFoundError:
+        raise HTTPException(status_code=404, detail="template_not_found")
+    except template_store.TemplateVersionNotFoundError:
+        raise HTTPException(status_code=404, detail="template_version_not_found")
     return WatchlistTemplateDetail(
         name=record.name,
         format=record.format,
         description=record.description,
         updated_at=record.updated_at,
         content=record.content,
+        version=record.version,
+        history_count=record.history_count,
+        available_versions=record.available_versions or [record.version],
     )
 
 
@@ -3328,6 +3396,9 @@ async def create_template(
         description=record.description,
         updated_at=record.updated_at,
         content=record.content,
+        version=record.version,
+        history_count=record.history_count,
+        available_versions=record.available_versions or [record.version],
     )
 
 

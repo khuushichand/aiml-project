@@ -37,6 +37,31 @@ def http_client_factory(*args, **kwargs):  # pragma: no cover - behavior verifie
     return _hc_create_client(*args, **kwargs)
 
 
+_DEEPSEEK_CONFIG_EXCEPTIONS = (AttributeError, KeyError, TypeError, ValueError)
+_DEEPSEEK_DECODE_EXCEPTIONS = (TypeError, UnicodeDecodeError, ValueError)
+_DEEPSEEK_REDACTION_EXCEPTIONS = (re.error, TypeError, ValueError)
+
+
+def _build_deepseek_client_exceptions() -> tuple[type[BaseException], ...]:
+    excs: list[type[BaseException]] = [
+        ConnectionError,
+        OSError,
+        RuntimeError,
+        TimeoutError,
+        TypeError,
+        ValueError,
+    ]
+    try:
+        import httpx  # type: ignore
+        excs.append(httpx.HTTPError)
+    except (AttributeError, ImportError):
+        pass
+    return tuple(excs)
+
+
+_DEEPSEEK_CLIENT_EXCEPTIONS = _build_deepseek_client_exceptions()
+
+
 class DeepSeekAdapter(ChatProvider):
     name = "deepseek"
 
@@ -162,9 +187,9 @@ class DeepSeekAdapter(ChatProvider):
             if t is not None:
                 try:
                     return float(t)
-                except Exception:
+                except (TypeError, ValueError):
                     pass
-        except Exception:
+        except _DEEPSEEK_CONFIG_EXCEPTIONS:
             pass
         if fallback is not None:
             return float(fallback)
@@ -228,7 +253,7 @@ class DeepSeekAdapter(ChatProvider):
             for k in ("temperature", "top_p", "max_tokens"):
                 if payload.get(k) is not None:
                     meta[k] = payload.get(k)
-        except Exception:
+        except _DEEPSEEK_CONFIG_EXCEPTIONS:
             pass
         return meta
 
@@ -257,7 +282,7 @@ class DeepSeekAdapter(ChatProvider):
                 resp = client.post(url, headers=headers, json=payload)
                 resp.raise_for_status()
                 return resp.json()
-        except Exception as e:
+        except _DEEPSEEK_CLIENT_EXCEPTIONS as e:
             # Try to log upstream response text if available
             if is_http_status_error(e):
                 status = get_http_status_from_exception(e) or "?"
@@ -301,7 +326,7 @@ class DeepSeekAdapter(ChatProvider):
                             continue
                         try:
                             line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
-                        except Exception:
+                        except _DEEPSEEK_DECODE_EXCEPTIONS:
                             line = str(raw)
                         if is_done_line(line):
                             if not seen_done:
@@ -314,7 +339,7 @@ class DeepSeekAdapter(ChatProvider):
                     for tail in finalize_stream(response=resp, done_already=seen_done):
                         yield tail
             return
-        except Exception as e:
+        except _DEEPSEEK_CLIENT_EXCEPTIONS as e:
             # Try to log upstream response text if available
             if is_http_status_error(e):
                 status = get_http_status_from_exception(e) or "?"
@@ -336,7 +361,7 @@ class DeepSeekAdapter(ChatProvider):
                 text = re.sub(r"(?i)(Bearer)\s+[^\s,;]+", r"\1 [REDACTED]", text)
                 # Redact phrases like "api key: XYZ" or "api_key=XYZ"
                 text = re.sub(r"(?i)(api[ _-]?key\s*[:=]\s*)([^\s,;]+)", r"\1[REDACTED]", text)
-            except Exception:
+            except _DEEPSEEK_REDACTION_EXCEPTIONS:
                 pass
             return text
         if is_http_status_error(exc):
@@ -353,7 +378,7 @@ class DeepSeekAdapter(ChatProvider):
             if resp is not None:
                 try:
                     body = resp.json()
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     body = None
             log_http_400_body(self.name, exc, body)
             detail = None

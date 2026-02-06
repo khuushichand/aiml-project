@@ -115,6 +115,7 @@ class ChatSettingsResponse(BaseModel):
     conversation_id: str = Field(..., description="Conversation ID")
     settings: dict[str, Any] = Field(..., description="Stored chat settings")
     last_modified: datetime = Field(..., description="Settings last modified timestamp")
+    warnings: Optional[list[str]] = Field(None, description="Optional warnings (e.g. greeting staleness)")
 
 
 # ========================================================================
@@ -280,6 +281,10 @@ class CharacterChatCompletionPrepRequest(BaseModel):
         False,
         description="Single response: force narration style for the assistant reply.",
     )
+    prompt_preset: Optional[str] = Field(
+        None,
+        description="Optional single-turn prompt preset override.",
+    )
 
 
 class CharacterChatCompletionPrepResponse(BaseModel):
@@ -325,6 +330,10 @@ class CharacterChatCompletionV2Request(BaseModel):
         False,
         description="Single response: force narration style for the assistant reply.",
     )
+    prompt_preset: Optional[str] = Field(
+        None,
+        description="Optional single-turn prompt preset override.",
+    )
     # LLM controls
     provider: Optional[str] = Field(None, description="LLM provider (e.g., openai, anthropic, local-llm). Defaults to local-llm if omitted.")
     model: Optional[str] = Field(None, description="Model identifier. Defaults to a local test model if omitted.")
@@ -349,6 +358,10 @@ class CharacterChatCompletionV2Response(BaseModel):
     assistant_content: str
     speaker_character_id: Optional[int] = None
     speaker_character_name: Optional[str] = None
+    lorebook_diagnostics: Optional[list[dict[str, Any]]] = Field(
+        None,
+        description="Lorebook/world book trigger diagnostics for this turn",
+    )
 
 
 # New: Persist streamed assistant content after SSE
@@ -450,6 +463,133 @@ class CharacterTagFilter(BaseModel):
             "match_all": False
         }
     }}
+
+
+# ========================================================================
+# Greeting List Picker Schemas (PRD 1 Stage A2)
+# ========================================================================
+
+class GreetingItem(BaseModel):
+    """A single greeting entry from the character card."""
+    index: int = Field(..., description="Zero-based index into the greetings list")
+    text: str = Field(..., description="Full greeting text")
+    preview: str = Field(..., description="First 120 characters of the greeting")
+
+
+class GreetingListResponse(BaseModel):
+    """Response for GET /{chat_id}/greetings."""
+    chat_id: str
+    character_id: Optional[str] = None
+    character_name: Optional[str] = None
+    greetings: list[GreetingItem] = Field(default_factory=list)
+    current_selection: Optional[int] = Field(None, description="Currently selected greeting index")
+    staleness_warning: Optional[str] = Field(None, description="Warning if greetings changed since chat creation")
+
+
+class GreetingSelectRequest(BaseModel):
+    """Request body for PUT /{chat_id}/greetings/select."""
+    index: int = Field(..., description="Zero-based index of the greeting to select")
+
+
+class GreetingSelectResponse(BaseModel):
+    """Response for PUT /{chat_id}/greetings/select."""
+    chat_id: str
+    selected_index: int
+    greeting_preview: str
+    checksum_updated: bool
+
+
+# ========================================================================
+# Author Note Info Schemas (PRD 4 Stage D2)
+# ========================================================================
+
+class AuthorNoteInfoResponse(BaseModel):
+    """Response for GET /{chat_id}/author-note/info."""
+    chat_id: str
+    text: str = Field("", description="Author note text for UI display")
+    text_for_prompt: str = Field("", description="Author note text as injected into LLM prompt")
+    tokens_estimated: int = Field(0, description="Estimated token count for UI text")
+    tokens_for_prompt: int = Field(0, description="Estimated token count for prompt text")
+    budget: int = Field(0, description="Token budget for author note")
+    truncated: bool = Field(False, description="Whether the note exceeds the token budget")
+    enabled: bool = Field(True, description="Whether the author note is enabled")
+    gm_only: bool = Field(False, description="Whether the note is GM-only (visible but not in prompt)")
+    exclude_from_prompt: bool = Field(False, description="Whether the note is excluded from prompt")
+    scope: str = Field("shared", description="Memory scope: shared, character, or both")
+    source: str = Field("none", description="Source of the note text: settings, character_default, or none")
+    warnings: list[str] = Field(default_factory=list)
+
+
+# ========================================================================
+# Lorebook Diagnostic Export Schemas (PRD 6 Stage F2)
+# ========================================================================
+
+class DiagnosticTurnEntry(BaseModel):
+    """A single turn's lorebook diagnostics."""
+    message_id: str
+    timestamp: Optional[str] = None
+    turn_number: int
+    message_preview: str = Field("", description="First 120 characters of the assistant message")
+    diagnostics: list[dict] = Field(default_factory=list)
+
+
+class LorebookDiagnosticExportResponse(BaseModel):
+    """Response for GET /{chat_id}/diagnostics/lorebook."""
+    chat_id: str
+    character_id: Optional[str] = None
+    total_turns_with_diagnostics: int = 0
+    turns: list[DiagnosticTurnEntry] = Field(default_factory=list)
+    page: int = 1
+    size: int = 50
+
+
+# ========================================================================
+# Preset Editor Schemas (PRD 2 Stage B2)
+# ========================================================================
+
+class PresetTokenInfo(BaseModel):
+    """Template token with description."""
+    token: str = Field(..., description="Template token, e.g. '{{char}}'")
+    description: str = Field(..., description="What the token resolves to")
+
+
+class PresetDetail(BaseModel):
+    """Full details of a prompt preset."""
+    preset_id: str
+    name: str
+    builtin: bool = Field(False, description="Whether this is a built-in preset")
+    section_order: list[str] = Field(default_factory=list, description="Ordered list of section keys")
+    section_templates: dict[str, str] = Field(default_factory=dict, description="Section key → template string")
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class PresetListResponse(BaseModel):
+    """Response for GET /presets."""
+    presets: list[PresetDetail] = Field(default_factory=list)
+
+
+class PresetCreate(BaseModel):
+    """Request body for POST /presets."""
+    preset_id: str = Field(..., min_length=1, max_length=128, description="Unique identifier for the preset")
+    name: str = Field(..., min_length=1, max_length=256, description="Display name")
+    section_order: list[str] = Field(..., description="Ordered list of section keys")
+    section_templates: dict[str, str] = Field(..., description="Section key → template string")
+
+    @field_validator("preset_id")
+    @classmethod
+    def validate_preset_id(cls, v: str) -> str:
+        v = v.strip()
+        if not v or v in ("default", "st_default"):
+            raise ValueError("Cannot use a built-in preset ID")
+        return v
+
+
+class PresetUpdate(BaseModel):
+    """Request body for PUT /presets/{preset_id}."""
+    name: Optional[str] = Field(None, min_length=1, max_length=256)
+    section_order: Optional[list[str]] = None
+    section_templates: Optional[dict[str, str]] = None
 
 
 #

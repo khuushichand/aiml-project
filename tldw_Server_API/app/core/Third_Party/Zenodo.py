@@ -8,10 +8,34 @@ from __future__ import annotations
 
 from typing import Any
 
+from tldw_Server_API.app.core.exceptions import (
+    DownloadError,
+    EgressPolicyError,
+    JSONDecodeError,
+    NetworkError,
+    RetryExhaustedError,
+    StreamingProtocolError,
+)
 from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 RECORDS_URL = "https://zenodo.org/api/records"
 OAI_BASE = "https://zenodo.org/oai2d"
+
+_ZENODO_PARSE_EXCEPTIONS = (AttributeError, KeyError, TypeError, ValueError)
+_ZENODO_REQUEST_EXCEPTIONS = (
+    ConnectionError,
+    DownloadError,
+    EgressPolicyError,
+    JSONDecodeError,
+    NetworkError,
+    OSError,
+    RetryExhaustedError,
+    RuntimeError,
+    StreamingProtocolError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 def _join_authors(meta: dict[str, Any]) -> str | None:
@@ -23,7 +47,7 @@ def _join_authors(meta: dict[str, Any]) -> str | None:
             if nm:
                 names.append(nm)
         return ", ".join(names) if names else None
-    except Exception:
+    except _ZENODO_PARSE_EXCEPTIONS:
         return None
 
 
@@ -39,7 +63,7 @@ def _pick_pdf_url(rec: dict[str, Any]) -> str | None:
             if (key and key.lower().endswith(".pdf")) or (mimetype and "pdf" in mimetype.lower()):
                 return href or None
         return None
-    except Exception:
+    except _ZENODO_PARSE_EXCEPTIONS:
         return None
 
 
@@ -99,7 +123,7 @@ def search_records(
             total = len(hits)
         items = [_normalize_record(h) for h in hits if isinstance(h, dict)]
         return items, total, None
-    except Exception as e:
+    except _ZENODO_REQUEST_EXCEPTIONS as e:
         return None, 0, f"Zenodo error: {str(e)}"
 
 
@@ -107,7 +131,7 @@ def get_record_by_id(record_id: str) -> tuple[dict[str, Any] | None, str | None]
     try:
         data = fetch_json(method="GET", url=f"{RECORDS_URL}/{record_id}", timeout=20)
         return _normalize_record(data), None
-    except Exception as e:
+    except _ZENODO_REQUEST_EXCEPTIONS as e:
         return None, f"Zenodo error: {str(e)}"
 
 
@@ -125,7 +149,7 @@ def get_record_by_doi(doi: str) -> tuple[dict[str, Any] | None, str | None]:
         if items:
             return _normalize_record(items[0]), None
         return None, None
-    except Exception as e:
+    except _ZENODO_REQUEST_EXCEPTIONS as e:
         return None, f"Zenodo error: {str(e)}"
 
 
@@ -136,7 +160,7 @@ def oai_raw(params: dict[str, Any]) -> tuple[bytes | None, str | None, str | Non
             return None, None, f"Zenodo OAI-PMH HTTP error: {r.status_code}"
         ct = r.headers.get("content-type") or "application/xml"
         return r.content, ct.split(";")[0], None
-    except Exception as e:
+    except _ZENODO_REQUEST_EXCEPTIONS as e:
         return None, None, f"Zenodo OAI-PMH error: {str(e)}"
 
 
@@ -145,7 +169,7 @@ def get_record_raw(record_id: str) -> tuple[dict[str, Any] | None, str | None]:
     try:
         data = fetch_json(method="GET", url=f"{RECORDS_URL}/{record_id}", timeout=20)
         return data or {}, None
-    except Exception as e:
+    except _ZENODO_REQUEST_EXCEPTIONS as e:
         return None, f"Zenodo error: {str(e)}"
 
 
@@ -161,5 +185,5 @@ def extract_pdf_from_raw(rec: dict[str, Any]) -> str | None:
             if ((key and key.lower().endswith('.pdf')) or (mimetype and 'pdf' in mimetype.lower())) and href:
                 return href
         return None
-    except Exception:
+    except _ZENODO_PARSE_EXCEPTIONS:
         return None

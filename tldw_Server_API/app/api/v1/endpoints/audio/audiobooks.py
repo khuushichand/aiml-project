@@ -77,6 +77,27 @@ _project_lookup_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_PROJECT_LOOKUPS)
 _project_lookup_lock = threading.Lock()
 _PROJECT_CACHE_MISS = object()
 
+_AUDIOBOOKS_COERCE_EXCEPTIONS = (
+    TypeError,
+    ValueError,
+    AttributeError,
+)
+
+_AUDIOBOOKS_JSON_EXCEPTIONS = (
+    json.JSONDecodeError,
+    TypeError,
+    ValueError,
+)
+
+_AUDIOBOOKS_DB_OPERATION_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+)
+
 
 def _not_implemented(detail: str) -> None:
     raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=detail)
@@ -137,7 +158,7 @@ def _subtitle_cache_key(
     if alignment_output_id is None:
         try:
             alignment_dump = alignment.model_dump(mode="json")
-        except Exception:
+        except _AUDIOBOOKS_COERCE_EXCEPTIONS:
             alignment_dump = alignment.dict() if hasattr(alignment, "dict") else alignment
         alignment_hash = hashlib.sha256(
             json.dumps(alignment_dump, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -192,7 +213,7 @@ def _load_alignment_from_output(
             parsed = json.loads(row.metadata_json)
             if isinstance(parsed, dict):
                 meta = parsed
-        except Exception:
+        except _AUDIOBOOKS_JSON_EXCEPTIONS:
             meta = {}
     return alignment, meta, row.storage_path
 
@@ -292,7 +313,7 @@ def _safe_json_loads(raw: str | None) -> dict:
         return {}
     try:
         parsed = json.loads(raw)
-    except Exception:
+    except _AUDIOBOOKS_JSON_EXCEPTIONS:
         return {}
     if isinstance(parsed, dict):
         return parsed
@@ -380,19 +401,19 @@ def _parse_progress_message(
             stage = parsed.get("stage") or "audiobook_job"
             try:
                 chapter_index = int(parsed.get("chapter_index")) if parsed.get("chapter_index") is not None else None
-            except Exception:
+            except _AUDIOBOOKS_COERCE_EXCEPTIONS:
                 chapter_index = None
             try:
                 chapters_total = int(parsed.get("chapters_total")) if parsed.get("chapters_total") is not None else None
-            except Exception:
+            except _AUDIOBOOKS_COERCE_EXCEPTIONS:
                 chapters_total = None
             try:
                 item_index = int(parsed.get("item_index")) if parsed.get("item_index") is not None else None
-            except Exception:
+            except _AUDIOBOOKS_COERCE_EXCEPTIONS:
                 item_index = None
             try:
                 items_total = int(parsed.get("items_total")) if parsed.get("items_total") is not None else None
-            except Exception:
+            except _AUDIOBOOKS_COERCE_EXCEPTIONS:
                 items_total = None
             return str(stage), chapter_index, chapters_total, item_index, items_total
     return raw, None, None, None, None
@@ -529,7 +550,7 @@ async def create_audiobook_job(
                 try:
                     if isinstance(payload.get("items"), list):
                         payload["items"][idx].pop("subtitles", None)
-                except Exception as exc:
+                except _AUDIOBOOKS_COERCE_EXCEPTIONS as exc:
                     logger.debug("Failed to remove subtitle override at index {}: {}", idx, exc)
 
     job_manager = _get_job_manager()
@@ -586,7 +607,7 @@ async def get_audiobook_job_status(
     if percent is not None or stage:
         try:
             percent_val = int(percent) if percent is not None else None
-        except Exception:
+        except _AUDIOBOOKS_COERCE_EXCEPTIONS:
             percent_val = None
         stage_val, chapter_index, chapters_total, item_index, items_total = _parse_progress_message(stage)
         progress = {
@@ -643,7 +664,7 @@ async def get_audiobook_job_artifacts(
         if row.metadata_json:
             try:
                 metadata = json.loads(row.metadata_json)
-            except Exception:
+            except _AUDIOBOOKS_JSON_EXCEPTIONS:
                 metadata = {}
         artifact_type = metadata.get("artifact_type")
         if not artifact_type:
@@ -847,7 +868,7 @@ async def list_voice_profiles(
         if row.chapter_overrides_json:
             try:
                 overrides = json.loads(row.chapter_overrides_json)
-            except Exception:
+            except _AUDIOBOOKS_JSON_EXCEPTIONS:
                 overrides = []
         profiles.append(
             VoiceProfileResponse(
@@ -952,7 +973,7 @@ async def export_subtitles(
                 return response
             try:
                 collections_db.delete_output_artifact(cached_row.id, hard=True)
-            except Exception as exc:
+            except _AUDIOBOOKS_DB_OPERATION_EXCEPTIONS as exc:
                 logger.warning("audiobook subtitles: failed to prune missing cache output: %s", exc)
 
     try:
@@ -1014,7 +1035,7 @@ async def export_subtitles(
     )
     try:
         collections_db.update_audiobook_output_usage(size_bytes)
-    except Exception as exc:
+    except _AUDIOBOOKS_DB_OPERATION_EXCEPTIONS as exc:
         logger.warning("audiobook_quota: failed to increment subtitle usage: %s", exc)
 
     project_id = metadata.get("project_id")
@@ -1030,7 +1051,7 @@ async def export_subtitles(
             )
         except KeyError:
             pass
-        except Exception as exc:
+        except _AUDIOBOOKS_DB_OPERATION_EXCEPTIONS as exc:
             logger.warning("audiobook subtitles: failed to link artifact: %s", exc)
 
     response = PlainTextResponse(content)

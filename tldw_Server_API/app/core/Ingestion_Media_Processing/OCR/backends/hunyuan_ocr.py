@@ -21,6 +21,15 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 _TF_MODEL = None
 _TF_PROCESSOR = None
 _TF_LOCK = threading.Lock()
+_HUNYUAN_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _resolve_mode() -> str:
@@ -73,7 +82,7 @@ class HunyuanOCRBackend(OCRBackend):
                 has_torch = importlib.util.find_spec("torch") is not None
                 has_pil = importlib.util.find_spec("PIL") is not None
                 return bool(has_tf and has_torch and has_pil)
-            except Exception:
+            except _HUNYUAN_NONCRITICAL_EXCEPTIONS:
                 return False
         return False
 
@@ -124,14 +133,14 @@ class HunyuanOCRBackend(OCRBackend):
         if mode == "vllm" or (mode == "auto" and os.getenv("HUNYUAN_VLLM_URL")):
             try:
                 raw_text = _ocr_via_vllm(image_bytes, prompt)
-            except Exception as exc:
+            except _HUNYUAN_NONCRITICAL_EXCEPTIONS as exc:
                 logging.error(f"Hunyuan vLLM path failed: {exc}", exc_info=True)
                 # fall through to transformers if available
 
         if not raw_text:
             try:
                 raw_text = _ocr_via_transformers(image_bytes, prompt)
-            except Exception as exc:
+            except _HUNYUAN_NONCRITICAL_EXCEPTIONS as exc:
                 logging.error(f"Hunyuan transformers path failed: {exc}", exc_info=True)
                 raw_text = ""
 
@@ -189,7 +198,7 @@ def _ocr_via_vllm(image_bytes: bytes, prompt: str) -> str:
     def _getf(env: str, cast, default):
         try:
             return cast(os.getenv(env, str(default)))
-        except Exception:
+        except (TypeError, ValueError):
             return default
 
     max_tokens = _getf("HUNYUAN_MAX_NEW_TOKENS", int, 2048)
@@ -274,7 +283,7 @@ def _ocr_via_transformers(image_bytes: bytes, prompt: str) -> str:
 
     try:
         inputs = inputs.to(model.device)
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError, ValueError):
         pass
 
     max_new_tokens = int(os.getenv("HUNYUAN_MAX_NEW_TOKENS", "2048"))
@@ -353,7 +362,7 @@ def _try_parse_json(raw_text: str) -> Any | None:
     # Try full string first
     try:
         return json.loads(txt)
-    except Exception:
+    except (TypeError, ValueError, json.JSONDecodeError):
         pass
 
     # Try to extract a JSON object or array from the output
@@ -362,7 +371,7 @@ def _try_parse_json(raw_text: str) -> Any | None:
     if obj_start != -1 and obj_end != -1 and obj_end > obj_start:
         try:
             return json.loads(txt[obj_start : obj_end + 1])
-        except Exception:
+        except (TypeError, ValueError, json.JSONDecodeError):
             pass
 
     arr_start = txt.find("[")
@@ -370,7 +379,7 @@ def _try_parse_json(raw_text: str) -> Any | None:
     if arr_start != -1 and arr_end != -1 and arr_end > arr_start:
         try:
             return json.loads(txt[arr_start : arr_end + 1])
-        except Exception:
+        except (TypeError, ValueError, json.JSONDecodeError):
             pass
 
     return None
@@ -442,5 +451,5 @@ def _fill_blocks_tables_from_parsed(result: OCRResult, parsed: Any) -> None:
                     )
                 elif isinstance(item, str):
                     result.blocks.append(OCRBlock(text=item))
-    except Exception:
+    except _HUNYUAN_NONCRITICAL_EXCEPTIONS:
         return

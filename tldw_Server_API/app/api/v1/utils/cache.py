@@ -25,6 +25,40 @@ from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_re
 
 CacheClient = Any  # Redis-like interface (setex/get/delete/sadd/smembers/expire/scan).
 
+_CACHE_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
+
+_CACHE_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
+
+try:
+    from redis.exceptions import RedisError as _REDIS_ERROR
+except ImportError:
+    _REDIS_ERROR = None
+
+_CACHE_RUNTIME_EXCEPTIONS = (
+    *_CACHE_NONCRITICAL_EXCEPTIONS,
+    *((_REDIS_ERROR,) if _REDIS_ERROR else ()),
+)
+
 
 # TTL and enable flag come from central configuration.
 CACHE_TTL: int = int(config.get("CACHE_TTL", 300))
@@ -60,7 +94,7 @@ def get_cache_client() -> CacheClient | None:
             decode_responses=False,
         )
         logger.info("Redis cache enabled")
-    except Exception as exc:  # pragma: no cover - defensive; logged once
+    except _CACHE_RUNTIME_EXCEPTIONS as exc:  # pragma: no cover - defensive; logged once
         logger.warning(f"Failed to connect to Redis cache: {exc}. Running without cache.")
         _CACHE_CLIENT = None
     return _CACHE_CLIENT
@@ -116,7 +150,7 @@ def _serialize_for_etag(payload: Any) -> str:
     def _default(obj: Any) -> Any:
         try:
             return str(obj)
-        except Exception:
+        except _CACHE_COERCE_EXCEPTIONS:
             return repr(obj)
 
     return json.dumps(
@@ -193,9 +227,9 @@ def cache_response(
                 idx_key = f"cacheidx:/api/v1/media/{int(media_id)}"
                 cache.sadd(idx_key, key)
                 cache.expire(idx_key, max(CACHE_TTL, 300))
-            except Exception:  # pragma: no cover - defensive
+            except _CACHE_RUNTIME_EXCEPTIONS:  # pragma: no cover - defensive
                 pass
-    except Exception as exc:  # pragma: no cover - defensive; avoid breaking handlers
+    except _CACHE_RUNTIME_EXCEPTIONS as exc:  # pragma: no cover - defensive; avoid breaking handlers
         logger.warning(f"Failed to cache response for key '{key}': {exc}")
     return etag
 
@@ -232,7 +266,7 @@ def get_cached_response(
             logger.error(f"Failed to decode cached JSON for key '{key}'")
             return None
         return etag, payload
-    except Exception as exc:  # pragma: no cover - defensive
+    except _CACHE_RUNTIME_EXCEPTIONS as exc:  # pragma: no cover - defensive
         logger.warning(f"Failed to retrieve cached response for key '{key}': {exc}")
         return None
 
@@ -259,23 +293,23 @@ def invalidate_media_cache(
             members = cache.smembers(idx_key)
             if members:
                 keys = list(members)
-        except Exception:
+        except _CACHE_RUNTIME_EXCEPTIONS:
             keys = []
 
         total_deleted = 0
         if keys:
             try:
                 total_deleted += cache.delete(*keys)
-            except Exception:
+            except _CACHE_RUNTIME_EXCEPTIONS:
                 for key in keys:
                     try:
                         cache.delete(key)
                         total_deleted += 1
-                    except Exception:
+                    except _CACHE_RUNTIME_EXCEPTIONS:
                         pass
             try:
                 cache.delete(idx_key)
-            except Exception:
+            except _CACHE_RUNTIME_EXCEPTIONS:
                 pass
 
         # Fallback: scan for keys matching the media path.
@@ -284,17 +318,17 @@ def invalidate_media_cache(
         while True:
             try:
                 cursor, scan_keys = cache.scan(cursor=cursor, match=pattern, count=500)
-            except Exception:
+            except _CACHE_RUNTIME_EXCEPTIONS:
                 break
             if scan_keys:
                 try:
                     total_deleted += cache.delete(*scan_keys)
-                except Exception:
+                except _CACHE_RUNTIME_EXCEPTIONS:
                     for key in scan_keys:
                         try:
                             cache.delete(key)
                             total_deleted += 1
-                        except Exception:
+                        except _CACHE_RUNTIME_EXCEPTIONS:
                             pass
             if cursor == 0:
                 break
@@ -302,7 +336,7 @@ def invalidate_media_cache(
             logger.info(f"Invalidated {total_deleted} cache entries for media ID {media_id}")
         else:
             logger.debug(f"No cached entries found to invalidate for media ID {media_id}")
-    except Exception as exc:  # pragma: no cover - defensive
+    except _CACHE_RUNTIME_EXCEPTIONS as exc:  # pragma: no cover - defensive
         logger.error(f"Unexpected error invalidating cache for media ID {media_id}: {exc}")
 
 

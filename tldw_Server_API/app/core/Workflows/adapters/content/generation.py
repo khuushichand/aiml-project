@@ -36,6 +36,19 @@ from tldw_Server_API.app.core.Workflows.adapters.content._config import (
 )
 
 
+_GENERATION_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ImportError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
+
 @registry.register(
     "flashcard_generate",
     category="content",
@@ -109,7 +122,7 @@ async def run_flashcard_generate_adapter(config: dict[str, Any], context: dict[s
         for card in flashcards:
             card["model_type"] = card_type
         return {"flashcards": flashcards, "count": len(flashcards)}
-    except Exception as e:
+    except _GENERATION_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Flashcard generate adapter error: {e}")
         return {"error": f"flashcard_generate_error:{e}", "flashcards": [], "count": 0}
 
@@ -174,7 +187,7 @@ async def run_quiz_generate_adapter(config: dict[str, Any], context: dict[str, A
         except json.JSONDecodeError:
             questions = []
         return {"questions": questions, "count": len(questions)}
-    except Exception as e:
+    except _GENERATION_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Quiz generate adapter error: {e}")
         return {"error": f"quiz_generate_error:{e}", "questions": [], "count": 0}
 
@@ -228,7 +241,7 @@ async def run_outline_generate_adapter(config: dict[str, Any], context: dict[str
         except json.JSONDecodeError:
             pass
         return {"outline": outline, "outline_text": response_text, "sections": len(outline.get("sections", []))}
-    except Exception as e:
+    except _GENERATION_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Outline generate error: {e}")
         return {"error": str(e), "outline": {}, "outline_text": ""}
 
@@ -278,7 +291,7 @@ async def run_glossary_extract_adapter(config: dict[str, Any], context: dict[str
         except json.JSONDecodeError:
             glossary = []
         return {"glossary": glossary, "count": len(glossary)}
-    except Exception as e:
+    except _GENERATION_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Glossary extract error: {e}")
         return {"error": str(e), "glossary": [], "count": 0}
 
@@ -332,7 +345,7 @@ async def run_mindmap_generate_adapter(config: dict[str, Any], context: dict[str
         except json.JSONDecodeError:
             pass
         return {"mindmap": mindmap, "mermaid": "", "node_count": 0}
-    except Exception as e:
+    except _GENERATION_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Mindmap generate error: {e}")
         return {"error": str(e), "mindmap": {}, "mermaid": ""}
 
@@ -411,7 +424,7 @@ Content:
 
         return {"slides": [], "raw_text": result_text, "error": "json_parse_failed"}
 
-    except Exception as e:
+    except _GENERATION_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Slides generate error: {e}")
         return {"slides": [], "error": str(e)}
 
@@ -487,7 +500,7 @@ Content:
         report = extract_openai_content(response) or ""
         return {"report": report, "text": report, "title": title, "format": output_format}
 
-    except Exception as e:
+    except _GENERATION_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Report generate error: {e}")
         return {"report": "", "error": str(e)}
 
@@ -574,7 +587,7 @@ Include a header, brief intro, main content sections, and a closing."""
         newsletter = extract_openai_content(response) or ""
         return {"newsletter": newsletter, "text": newsletter, "title": title}
 
-    except Exception as e:
+    except _GENERATION_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Newsletter generate error: {e}")
         return {"newsletter": "", "error": str(e)}
 
@@ -662,6 +675,6 @@ Content:
 
         return {"diagram": diagram.strip(), "format": output_format, "diagram_type": diagram_type}
 
-    except Exception as e:
+    except _GENERATION_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Diagram generate error: {e}")
         return {"diagram": "", "error": str(e)}

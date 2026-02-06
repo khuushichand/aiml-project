@@ -3,3 +3,4 @@ export { GenerationSection, getGenerationSectionVisible } from "./GenerationSect
 export { CitationsSection, getCitationsSectionVisible } from "./CitationsSection"
 export { SafetySection, getSafetySectionVisible } from "./SafetySection"
 export { AdvancedSection, getAdvancedSectionVisible } from "./AdvancedSection"
+export { AllOptionsSection, getAllOptionsSectionVisible } from "./AllOptionsSection"

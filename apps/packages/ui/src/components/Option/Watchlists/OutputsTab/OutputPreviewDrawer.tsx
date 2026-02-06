@@ -5,6 +5,7 @@ import {
   Empty,
   Segmented,
   Spin,
+  Tag,
   Tooltip,
   message
 } from "antd"
@@ -13,6 +14,12 @@ import DOMPurify from "dompurify"
 import { useTranslation } from "react-i18next"
 import { downloadWatchlistOutput } from "@/services/watchlists"
 import type { WatchlistOutput } from "@/types/watchlists"
+import {
+  getDeliveryStatusColor,
+  getOutputDeliveryStatuses,
+  getOutputTemplateName,
+  getOutputTemplateVersion
+} from "./outputMetadata"
 
 interface OutputPreviewDrawerProps {
   output: WatchlistOutput | null | undefined
@@ -78,6 +85,18 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
     return DOMPurify.sanitize(content, { USE_PROFILES: { html: true } })
   }, [content])
 
+  const deliveryStatuses = useMemo(() => {
+    return getOutputDeliveryStatuses(output?.metadata)
+  }, [output?.metadata])
+
+  const templateName = useMemo(() => {
+    return getOutputTemplateName(output?.metadata)
+  }, [output?.metadata])
+
+  const templateVersion = useMemo(() => {
+    return getOutputTemplateVersion(output?.metadata)
+  }, [output?.metadata])
+
   // Open in new tab (for HTML)
   const handleOpenInNewTab = () => {
     if (!content || output?.format !== "html") return
@@ -126,6 +145,44 @@ export const OutputPreviewDrawer: React.FC<OutputPreviewDrawerProps> = ({
         <div className="text-center py-12 text-red-500">{error}</div>
       ) : content ? (
         <div className="space-y-4">
+          {(templateName || templateVersion || deliveryStatuses.length > 0 || output?.chatbook_path) && (
+            <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-3 space-y-2 bg-zinc-50 dark:bg-zinc-900">
+              {(templateName || templateVersion) && (
+                <div className="text-sm text-zinc-700 dark:text-zinc-200">
+                  <span className="font-medium">
+                    {t("watchlists:outputs.templateLabel", "Template")}:
+                  </span>{" "}
+                  {templateName || t("watchlists:outputs.templateUnknown", "Unknown")}
+                  {templateVersion ? ` v${templateVersion}` : ""}
+                </div>
+              )}
+              {deliveryStatuses.length > 0 && (
+                <div className="space-y-1">
+                  <div className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+                    {t("watchlists:outputs.deliveryStatusLabel", "Delivery status")}
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {deliveryStatuses.map((delivery, index) => (
+                      <Tooltip
+                        key={`${delivery.channel}-${delivery.status}-${index}`}
+                        title={delivery.detail}
+                      >
+                        <Tag color={getDeliveryStatusColor(delivery.status)}>
+                          {delivery.channel}: {delivery.status}
+                        </Tag>
+                      </Tooltip>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {output?.chatbook_path && (
+                <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Chatbook: {output.chatbook_path}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* View mode toggle for HTML */}
           {output?.format === "html" && (
             <div className="flex justify-end">

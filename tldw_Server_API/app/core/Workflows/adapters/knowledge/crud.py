@@ -12,6 +12,7 @@ This module includes adapters for knowledge CRUD operations:
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,21 @@ from tldw_Server_API.app.core.Workflows.adapters.knowledge._config import (
     NotesConfig,
     PromptsConfig,
     VoiceIntentConfig,
+)
+
+_KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    sqlite3.Error,
 )
 
 
@@ -62,7 +78,7 @@ async def run_notes_adapter(config: dict[str, Any], context: dict[str, Any]) -> 
     if not user_id:
         try:
             user_id = str(DatabasePaths.get_single_user_id())
-        except Exception:
+        except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS:
             return {"error": "missing_user_id"}
     user_id = str(user_id)
 
@@ -97,7 +113,7 @@ async def run_notes_adapter(config: dict[str, Any], context: dict[str, Any]) -> 
         # Resolve notes DB directory
         try:
             notes_base_dir = DatabasePaths.get_user_base_directory(int(user_id))
-        except Exception:
+        except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS:
             notes_base_dir = Path("Databases") / "user_databases"
 
         service = NotesInteropService(base_db_directory=notes_base_dir, api_client_id="workflow_engine")
@@ -174,7 +190,7 @@ async def run_notes_adapter(config: dict[str, Any], context: dict[str, Any]) -> 
 
         return {"error": f"unknown_action:{action}"}
 
-    except Exception as e:
+    except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Notes adapter error: {e}")
         return {"error": f"notes_error:{e}"}
 
@@ -233,7 +249,7 @@ async def run_prompts_adapter(config: dict[str, Any], context: dict[str, Any]) -
         if not prompts_interop.is_initialized():
             try:
                 prompts_db_path = DatabasePaths.get_prompts_db_path()
-            except Exception:
+            except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS:
                 prompts_db_path = Path("Databases") / "prompts.db"
             prompts_interop.initialize_interop(db_path=str(prompts_db_path), client_id="workflow_engine")
 
@@ -333,7 +349,7 @@ async def run_prompts_adapter(config: dict[str, Any], context: dict[str, Any]) -
 
         return {"error": f"unknown_action:{action}"}
 
-    except Exception as e:
+    except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Prompts adapter error: {e}")
         return {"error": f"prompts_error:{e}"}
 
@@ -370,7 +386,7 @@ async def run_collections_adapter(config: dict[str, Any], context: dict[str, Any
     if not user_id:
         try:
             user_id = str(DatabasePaths.get_single_user_id())
-        except Exception:
+        except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS:
             return {"error": "missing_user_id"}
     user_id = str(user_id)
 
@@ -551,7 +567,7 @@ async def run_collections_adapter(config: dict[str, Any], context: dict[str, Any
 
         return {"error": f"unknown_action:{action}"}
 
-    except Exception as e:
+    except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Collections adapter error: {e}")
         return {"error": f"collections_error:{e}"}
 
@@ -644,7 +660,7 @@ async def run_chunking_adapter(config: dict[str, Any], context: dict[str, Any]) 
             "overlap": overlap,
         }
 
-    except Exception as e:
+    except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Chunking adapter error: {e}")
         return {"error": f"chunking_error:{e}"}
 
@@ -679,7 +695,7 @@ async def run_claims_extract_adapter(config: dict[str, Any], context: dict[str, 
     if not user_id:
         try:
             user_id = str(DatabasePaths.get_single_user_id())
-        except Exception:
+        except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS:
             return {"error": "missing_user_id"}
     user_id = str(user_id)
 
@@ -811,7 +827,7 @@ async def run_claims_extract_adapter(config: dict[str, Any], context: dict[str, 
 
         return {"error": f"unknown_action:{action}"}
 
-    except Exception as e:
+    except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Claims extract adapter error: {e}")
         return {"error": f"claims_extract_error:{e}"}
 
@@ -858,7 +874,7 @@ async def run_voice_intent_adapter(config: dict[str, Any], context: dict[str, An
             last = context.get("prev") or context.get("last") or {}
             if isinstance(last, dict):
                 text_t = last.get("text") or last.get("transcript") or last.get("content") or ""
-        except Exception:
+        except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS:
             text_t = ""
 
     if not text_t:
@@ -1055,7 +1071,7 @@ async def run_voice_intent_adapter(config: dict[str, Any], context: dict[str, An
             "processing_time_ms": result.processing_time_ms,
         }
 
-    except Exception as e:
+    except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Voice intent adapter error: {e}")
         return {
             "error": f"voice_intent_error:{e}",

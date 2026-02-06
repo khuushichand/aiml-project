@@ -152,13 +152,13 @@ async def _authenticate_websocket(
             if isinstance(user_id, str):
                 try:
                     user_id = int(user_id)
-                except Exception:
+                except (TypeError, ValueError):
                     user_id = None
             if isinstance(user_id, int):
                 return True, user_id
         except (InvalidTokenError, TokenExpiredError):
             pass
-        except Exception:
+        except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError):
             pass
 
     try:
@@ -184,7 +184,7 @@ async def _authenticate_websocket(
         info = await api_mgr.validate_api_key(api_key=token, required_scope="read", ip_address=client_ip)
         if info and info.get("user_id") is not None:
             return True, int(info["user_id"])
-    except Exception:
+    except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError):
         pass
 
     return False, None
@@ -239,7 +239,7 @@ async def _generate_tts_audio(
 
         return audio_bytes, mime_type
 
-    except Exception as e:
+    except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         logger.error(f"TTS generation failed: {e}")
         return b"", "audio/mpeg"
 
@@ -1011,7 +1011,7 @@ async def websocket_voice_assistant(
             registry = get_voice_command_registry()
             registry.load_defaults()
             registry.refresh_user_commands(db, user_id, include_disabled=True)
-        except Exception as _db_err:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as _db_err:
             logger.warning(f"Voice assistant DB init failed (session={session_id}): {_db_err}")
 
         await websocket.send_json(
@@ -1170,7 +1170,7 @@ async def websocket_voice_assistant(
     except WebSocketDisconnect:
         logger.info(f"Voice assistant WebSocket disconnected: session={session_id}")
 
-    except Exception as e:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError, asyncio.TimeoutError) as e:
         logger.error(f"Voice assistant WebSocket error: {e}")
         try:
             await websocket.send_json(
@@ -1180,7 +1180,7 @@ async def websocket_voice_assistant(
                 ).model_dump()
             )
             await websocket.close(code=1011)
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             pass
 
     finally:
@@ -1188,7 +1188,7 @@ async def websocket_voice_assistant(
         if transcriber:
             try:
                 await transcriber.finalize()
-            except Exception:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 pass
 
 
@@ -1239,7 +1239,7 @@ async def _process_audio_command(
             ).model_dump()
         )
 
-    except Exception as e:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
         logger.error(f"Transcription failed: {e}")
         await websocket.send_json(
             WSErrorMessage(
@@ -1406,7 +1406,7 @@ async def _stream_tts_response(
             ).model_dump()
         )
 
-    except Exception as e:
+    except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         logger.error(f"TTS streaming failed: {e}")
         await websocket.send_json(
             WSErrorMessage(
@@ -1455,7 +1455,7 @@ async def _stream_workflow_progress(
                     ).model_dump()
                 )
 
-    except Exception as e:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError, asyncio.TimeoutError) as e:
         logger.error(f"Workflow progress streaming failed: {e}")
         await websocket.send_json(
             WSErrorMessage(

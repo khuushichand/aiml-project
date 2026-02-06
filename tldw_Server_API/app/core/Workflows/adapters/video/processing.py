@@ -64,7 +64,7 @@ async def run_video_trim_adapter(config: dict[str, Any], context: dict[str, Any]
 
     try:
         resolved_input = resolve_workflow_file_path(input_path, context, config)
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         return {"error": f"input_path_error: {e}", "trimmed": False}
 
     start = config.get("start", "0")
@@ -88,7 +88,7 @@ async def run_video_trim_adapter(config: dict[str, Any], context: dict[str, Any]
 
         return {"output_path": output_path, "trimmed": True}
 
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.exception(f"Video trim error: {e}")
         return {"error": str(e), "trimmed": False}
 
@@ -122,7 +122,7 @@ async def run_video_concat_adapter(config: dict[str, Any], context: dict[str, An
             p = _tmpl(p, context) or p
         try:
             resolved_inputs.append(str(resolve_workflow_file_path(p, context, config)))
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             continue
 
     if len(resolved_inputs) < 2:
@@ -146,7 +146,7 @@ async def run_video_concat_adapter(config: dict[str, Any], context: dict[str, An
 
         return {"output_path": output_path, "concatenated": True, "file_count": len(resolved_inputs)}
 
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.exception(f"Video concat error: {e}")
         return {"error": str(e), "concatenated": False}
 
@@ -182,7 +182,7 @@ async def run_video_convert_adapter(config: dict[str, Any], context: dict[str, A
 
     try:
         resolved_input = resolve_workflow_file_path(input_path, context, config)
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         return {"error": f"input_path_error: {e}", "converted": False}
 
     output_format = config.get("format", "mp4")
@@ -207,7 +207,7 @@ async def run_video_convert_adapter(config: dict[str, Any], context: dict[str, A
 
         return {"output_path": output_path, "converted": True, "format": output_format}
 
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.exception(f"Video convert error: {e}")
         return {"error": str(e), "converted": False}
 
@@ -248,7 +248,7 @@ async def run_video_thumbnail_adapter(config: dict[str, Any], context: dict[str,
 
     try:
         resolved_input = resolve_workflow_file_path(input_path, context, config)
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         return {"error": f"input_path_error: {e}", "generated": False}
 
     timestamp = config.get("timestamp", "00:00:05")
@@ -277,7 +277,7 @@ async def run_video_thumbnail_adapter(config: dict[str, Any], context: dict[str,
 
         return {"output_path": output_path, "generated": True, "timestamp": timestamp}
 
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.exception(f"Video thumbnail error: {e}")
         return {"error": str(e), "generated": False}
 
@@ -313,7 +313,7 @@ async def run_video_extract_frames_adapter(config: dict[str, Any], context: dict
 
     try:
         resolved_input = resolve_workflow_file_path(input_path, context, config)
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         return {"error": f"input_path_error: {e}", "frame_paths": [], "frame_count": 0}
 
     fps = float(config.get("fps", 1))
@@ -338,6 +338,6 @@ async def run_video_extract_frames_adapter(config: dict[str, Any], context: dict
 
         return {"frame_paths": frame_paths, "frame_count": len(frame_paths), "output_dir": str(art_dir)}
 
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.exception(f"Video extract frames error: {e}")
         return {"error": str(e), "frame_paths": [], "frame_count": 0}

@@ -104,7 +104,7 @@ class MCPDiscoveryModule(BaseModule):
         if catalog_id is not None:
             try:
                 params["catalog_id"] = int(catalog_id)
-            except Exception:
+            except (TypeError, ValueError):
                 pass
 
         catalog_strict = args.get("catalog_strict")
@@ -217,14 +217,14 @@ class MCPDiscoveryModule(BaseModule):
         if org_raw is not None:
             try:
                 org_ids.add(int(org_raw))
-            except Exception:
+            except (TypeError, ValueError):
                 pass
 
         team_raw = metadata.get("team_id")
         if team_raw is not None:
             try:
                 team_ids.add(int(team_raw))
-            except Exception:
+            except (TypeError, ValueError):
                 pass
 
         if admin_all:
@@ -239,10 +239,10 @@ class MCPDiscoveryModule(BaseModule):
             for m in memberships or []:
                 try:
                     org_id = int(m.get("org_id"))
-                except Exception:
+                except (TypeError, ValueError):
                     continue
                 org_ids.add(org_id)
-        except Exception as exc:
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.debug(f"MCP discovery: org membership lookup failed: {exc}")
 
         try:
@@ -255,9 +255,9 @@ class MCPDiscoveryModule(BaseModule):
                 try:
                     val = row["team_id"] if isinstance(row, dict) else row[0]
                     team_ids.add(int(val))
-                except Exception:
+                except (TypeError, ValueError):
                     continue
-        except Exception as exc:
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.debug(f"MCP discovery: team membership lookup failed: {exc}")
 
         return org_ids, team_ids
@@ -280,14 +280,14 @@ class MCPDiscoveryModule(BaseModule):
                 uid,
             )
             return row is not None
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             return False
 
     @staticmethod
     def _coerce_user_id(user_id: Any) -> int | None:
         try:
             return int(user_id)
-        except Exception:
+        except (TypeError, ValueError):
             return None
 
     @staticmethod
@@ -295,7 +295,7 @@ class MCPDiscoveryModule(BaseModule):
         if hasattr(val, "isoformat"):
             try:
                 return val.isoformat()
-            except Exception:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 return str(val)
         return val
 
@@ -305,7 +305,7 @@ class MCPDiscoveryModule(BaseModule):
                 if isinstance(row, dict):
                     return row.get(key)
                 return row[idx]
-            except Exception:
+            except (AttributeError, IndexError, KeyError, TypeError):
                 return None
 
         entry_id = _get("id", 0)

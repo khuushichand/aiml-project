@@ -231,8 +231,9 @@ export const AdvancedSection: React.FC<AdvancedSectionProps> = ({
                 label={t("sidepanel:rag.parentContextSize", "Parent context")}
                 value={settings.parent_context_size}
                 onChange={(val) => onUpdate("parent_context_size", val)}
-                min={0}
-                max={10}
+                min={100}
+                max={2000}
+                step={100}
               />
             )}
             <SettingField

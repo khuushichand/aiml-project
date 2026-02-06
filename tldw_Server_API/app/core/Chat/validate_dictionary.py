@@ -21,10 +21,10 @@ from typing import Any
 
 try:
     import yaml  # type: ignore
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     yaml = None  # type: ignore
 
-from jinja2 import StrictUndefined, nodes
+from jinja2 import StrictUndefined, TemplateError, nodes
 from jinja2.sandbox import SandboxedEnvironment
 from loguru import logger
 
@@ -32,6 +32,24 @@ from tldw_Server_API.app.core.Chat.chat_dictionary import parse_user_dict_markdo
 from tldw_Server_API.app.core.Chunking.regex_safety import check_pattern as check_regex_pattern
 from tldw_Server_API.app.core.Chunking.regex_safety import warn_ambiguity
 from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
+
+_VALIDATE_DICT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+_YAML_LOAD_EXCEPTIONS: tuple[type[BaseException], ...] = ()
+if yaml is not None:  # pragma: no cover
+    _yaml_error = getattr(yaml, "YAMLError", None)
+    if isinstance(_yaml_error, type) and issubclass(_yaml_error, BaseException):
+        _YAML_LOAD_EXCEPTIONS = (_yaml_error,)
+_CLI_LOAD_EXCEPTIONS = _VALIDATE_DICT_NONCRITICAL_EXCEPTIONS + _YAML_LOAD_EXCEPTIONS
 
 # -----------------------------
 # Schema and limits
@@ -77,7 +95,7 @@ def _int_env(name: str, default: int) -> int:
         return default
     try:
         return int(str(v))
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -143,7 +161,7 @@ def _template_ast_checks(text: str) -> tuple[list[dict[str, Any]], list[dict[str
         return errs, warns
     try:
         ast = _TPL_ENV.parse(text)
-    except Exception as e:
+    except (TemplateError, TypeError, ValueError) as e:
         errs.append({
             "code": "template_parse_error",
             "field": "replacement",
@@ -260,7 +278,7 @@ def _validate_entries(entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any
         prob = e.get("probability", 1.0)
         try:
             pf = float(prob)
-        except Exception:
+        except (TypeError, ValueError):
             errors.append({"code": "schema_invalid", "field": f"{path}.probability", "message": "Must be a number"})
             pf = 1.0
         if pf < 0.0 or pf > 1.0:
@@ -270,7 +288,7 @@ def _validate_entries(entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any
         mr = e.get("max_replacements", 0)
         try:
             mi = int(mr)
-        except Exception:
+        except (TypeError, ValueError):
             errors.append({"code": "schema_invalid", "field": f"{path}.max_replacements", "message": "Must be an integer"})
             mi = 0
         if mi < 0:
@@ -324,11 +342,11 @@ def validate_dictionary(data: dict[str, Any], schema_version: int = 1, strict: b
     _start_t = None
     try:
         _start_t = time.perf_counter()  # type: ignore[name-defined]
-    except Exception:
+    except _VALIDATE_DICT_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         increment_counter("chat_dictionary_validate_requests_total", labels={"strict": str(bool(strict)).lower()})
-    except Exception:
+    except _VALIDATE_DICT_NONCRITICAL_EXCEPTIONS:
         pass
 
     if not isinstance(data, dict):
@@ -352,7 +370,7 @@ def validate_dictionary(data: dict[str, Any], schema_version: int = 1, strict: b
         for w in warnings:
             code = str(w.get("code", "unknown"))
             increment_counter("chat_dictionary_validate_warnings_total", labels={"code": code})
-    except Exception:
+    except _VALIDATE_DICT_NONCRITICAL_EXCEPTIONS:
         pass
 
     ok = len(errors) == 0
@@ -363,7 +381,7 @@ def validate_dictionary(data: dict[str, Any], schema_version: int = 1, strict: b
                 value=float(time.perf_counter() - _start_t),  # type: ignore[name-defined]
                 labels={"strict": str(bool(strict)).lower()},
             )
-    except Exception:
+    except _VALIDATE_DICT_NONCRITICAL_EXCEPTIONS:
         pass
     return ValidationResult(ok, schema_version, errors, warnings, stats, fixes)
 
@@ -406,7 +424,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         payload = _load_file(args.file)
-    except Exception as e:
+    except _CLI_LOAD_EXCEPTIONS as e:
         logger.error(f"Failed to read {args.file}: {e}")
         print(json.dumps({
             "ok": False,

@@ -17,6 +17,21 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import resolve_user_id_value
 from tldw_Server_API.app.core.exceptions import AdapterError
 
+_WORKFLOW_COMMON_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+)
+
 
 def extract_openai_content(response: Any) -> str | None:
     """Extract text content from an OpenAI-style response.
@@ -38,7 +53,7 @@ def extract_openai_content(response: Any) -> str | None:
             text = response.get("content") or response.get("text")
             if isinstance(text, str):
                 return text
-        except Exception:
+        except _WORKFLOW_COMMON_NONCRITICAL_EXCEPTIONS:
             return None
     if isinstance(response, str):
         return response
@@ -121,12 +136,12 @@ def artifacts_base_dir() -> Path:
     try:
         if os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
             return (Path.cwd() / "Databases" / "artifacts").resolve()
-    except Exception:
+    except _WORKFLOW_COMMON_NONCRITICAL_EXCEPTIONS:
         logger.exception("Error checking TEST_MODE/PYTEST_CURRENT_TEST for artifacts base dir")
     try:
         from tldw_Server_API.app.core.Utils.Utils import get_project_root
         return (Path(get_project_root()) / "Databases" / "artifacts").resolve()
-    except Exception:
+    except _WORKFLOW_COMMON_NONCRITICAL_EXCEPTIONS:
         logger.exception("Error getting project root for artifacts base dir")
         return Path("Databases") / "artifacts"
 
@@ -146,7 +161,7 @@ def resolve_artifacts_dir(step_run_id: str | None) -> Path:
     base_dir = artifacts_base_dir()
     try:
         base_resolved = base_dir.resolve(strict=False)
-    except Exception as exc:
+    except _WORKFLOW_COMMON_NONCRITICAL_EXCEPTIONS as exc:
         logger.opt(exception=exc).debug(
             "Artifacts base dir resolve failed for {}. Using unresolved base dir.",
             base_dir,
@@ -215,7 +230,7 @@ def resolve_workflows_file_allowlist_paths(paths: list[str]) -> list[Path]:
     try:
         from tldw_Server_API.app.core.Utils.Utils import get_project_root
         project_root = Path(get_project_root())
-    except Exception as exc:
+    except _WORKFLOW_COMMON_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"Workflow file allowlist: failed to resolve project root: {exc}")
     resolved: list[Path] = []
     for raw in paths:
@@ -229,7 +244,7 @@ def resolve_workflows_file_allowlist_paths(paths: list[str]) -> list[Path]:
             else:
                 candidate = candidate.resolve(strict=False)
             resolved.append(candidate)
-        except Exception as exc:
+        except _WORKFLOW_COMMON_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Workflow file allowlist: invalid path {raw!r}: {exc}")
     return resolved
 
@@ -265,7 +280,7 @@ def workflow_file_base_dir(context: dict[str, Any], config: dict[str, Any] | Non
             try:
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root
                 base = (Path(get_project_root()) / base).resolve()
-            except Exception as exc:
+            except _WORKFLOW_COMMON_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Workflow file base dir: failed to resolve relative WORKFLOWS_FILE_BASE_DIR {env_override!r}: {exc}")
                 base = base.resolve()
         else:
@@ -276,11 +291,11 @@ def workflow_file_base_dir(context: dict[str, Any], config: dict[str, Any] | Non
         raw_user_id = context.get("user_id") if isinstance(context, dict) else None
         try:
             user_id = int(raw_user_id) if raw_user_id is not None else DatabasePaths.get_single_user_id()
-        except Exception as exc:
+        except _WORKFLOW_COMMON_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Workflow file base dir: invalid user_id {raw_user_id!r}; using single-user fallback: {exc}")
             user_id = DatabasePaths.get_single_user_id()
         return DatabasePaths.get_user_base_directory(user_id)
-    except Exception as exc:
+    except _WORKFLOW_COMMON_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"Workflow file base dir: failed to resolve per-user base dir; using Databases/: {exc}")
         return Path("Databases").resolve()
 
@@ -303,7 +318,7 @@ def resolve_workflow_file_path(path_value: str, context: dict[str, Any], config:
     base_dir = workflow_file_base_dir(context, config)
     try:
         base_resolved = base_dir.resolve(strict=False)
-    except Exception as exc:
+    except _WORKFLOW_COMMON_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"Failed to resolve base directory {base_dir}: {exc}")
         base_resolved = base_dir
     candidate = Path(path_value).expanduser()
@@ -315,7 +330,7 @@ def resolve_workflow_file_path(path_value: str, context: dict[str, Any], config:
         allowed_bases = [base_resolved]
         try:
             allowed_bases.extend(workflow_file_allowlist(context))
-        except Exception as exc:
+        except _WORKFLOW_COMMON_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Workflow file allowlist: failed to resolve allowlist: {exc}")
         if not any(is_subpath(base, resolved) for base in allowed_bases):
             raise AdapterError("file_access_denied")
@@ -489,7 +504,7 @@ class AsyncFileWriter:
             if self._fp:
                 self._fp.flush()
                 self._fp.close()
-        except Exception:
+        except _WORKFLOW_COMMON_NONCRITICAL_EXCEPTIONS:
             pass
 
 

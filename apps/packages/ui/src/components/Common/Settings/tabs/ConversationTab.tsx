@@ -12,6 +12,12 @@ import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
 import { PromptAssemblyPreview } from "@/components/Common/Settings/PromptAssemblyPreview"
 import { LorebookDebugPanel } from "@/components/Common/Settings/LorebookDebugPanel"
+import {
+  CHARACTER_PROMPT_PRESETS,
+  DEFAULT_CHARACTER_PROMPT_PRESET,
+  isCharacterPromptPresetId,
+  type CharacterPromptPresetId
+} from "@/data/character-prompt-presets"
 
 interface UploadedFile {
   id: string
@@ -108,6 +114,23 @@ const sanitizeAutoSummaryWindow = (
   return Math.min(12, maxWindow)
 }
 
+const sanitizeGenerationFloat = (
+  value: unknown,
+  min: number,
+  max: number
+): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(min, Math.min(max, value))
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value)
+    if (Number.isFinite(parsed)) {
+      return Math.max(min, Math.min(max, parsed))
+    }
+  }
+  return null
+}
+
 const normalizeAuthorNotePosition = (
   value: unknown
 ): { mode: "before_system" | "depth"; depth: number } => {
@@ -163,6 +186,13 @@ const normalizePresetScope = (value: unknown): "chat" | "character" => {
     return "chat"
   }
   return "character"
+}
+
+const normalizeChatPresetOverrideId = (
+  value: unknown
+): CharacterPromptPresetId | null => {
+  if (!isCharacterPromptPresetId(value)) return null
+  return value
 }
 
 const normalizeMemoryScope = (
@@ -270,6 +300,34 @@ const normalizeCharacterMemoryById = (
   return normalized
 }
 
+const normalizeGenerationStopList = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const stops: string[] = []
+  value.forEach((entry) => {
+    if (typeof entry !== "string") return
+    const normalized = entry.trim()
+    if (!normalized || seen.has(normalized)) return
+    seen.add(normalized)
+    stops.push(normalized)
+  })
+  return stops
+}
+
+const parseGenerationStopListFromText = (text: string): string[] => {
+  const seen = new Set<string>()
+  const stops: string[] = []
+  text
+    .split("\n")
+    .map((entry) => entry.trim())
+    .forEach((entry) => {
+      if (!entry || seen.has(entry)) return
+      seen.add(entry)
+      stops.push(entry)
+    })
+  return stops
+}
+
 export function ConversationTab({
   useDrawer,
   historyId,
@@ -323,8 +381,53 @@ export function ConversationTab({
   const [autoSummaryWindowDraft, setAutoSummaryWindowDraft] = React.useState(
     persistedAutoSummaryWindow
   )
+  const generationOverrideSource =
+    chatSettings?.chatGenerationOverride &&
+    typeof chatSettings.chatGenerationOverride === "object"
+      ? (chatSettings.chatGenerationOverride as Record<string, unknown>)
+      : chatSettings?.generationOverrides &&
+          typeof chatSettings.generationOverrides === "object"
+        ? (chatSettings.generationOverrides as Record<string, unknown>)
+        : null
+  const persistedGenerationOverrideEnabled = Boolean(
+    generationOverrideSource?.enabled ?? false
+  )
+  const persistedGenerationTemperature = sanitizeGenerationFloat(
+    generationOverrideSource?.temperature,
+    0,
+    2
+  )
+  const persistedGenerationTopP = sanitizeGenerationFloat(
+    generationOverrideSource?.top_p,
+    0,
+    1
+  )
+  const persistedGenerationRepetitionPenalty = sanitizeGenerationFloat(
+    generationOverrideSource?.repetition_penalty,
+    0,
+    3
+  )
+  const persistedGenerationStops = normalizeGenerationStopList(
+    generationOverrideSource?.stop
+  )
+  const persistedGenerationStopsKey = persistedGenerationStops.join("\n")
+  const [generationOverrideEnabledDraft, setGenerationOverrideEnabledDraft] =
+    React.useState(persistedGenerationOverrideEnabled)
+  const [generationTemperatureDraft, setGenerationTemperatureDraft] =
+    React.useState<number | null>(persistedGenerationTemperature)
+  const [generationTopPDraft, setGenerationTopPDraft] = React.useState<
+    number | null
+  >(persistedGenerationTopP)
+  const [generationRepetitionPenaltyDraft, setGenerationRepetitionPenaltyDraft] =
+    React.useState<number | null>(persistedGenerationRepetitionPenalty)
+  const [generationStopsDraft, setGenerationStopsDraft] = React.useState(
+    persistedGenerationStopsKey
+  )
   const greetingScopeValue = normalizeGreetingScope(chatSettings?.greetingScope)
   const presetScopeValue = normalizePresetScope(chatSettings?.presetScope)
+  const chatPresetOverrideValue = normalizeChatPresetOverrideId(
+    chatSettings?.chatPresetOverrideId
+  )
   const memoryScopeValue = normalizeMemoryScope(chatSettings?.memoryScope)
   const turnTakingModeValue = normalizeTurnTakingMode(chatSettings?.turnTakingMode)
   const directedCharacterIdValue = normalizeDirectedCharacterId(
@@ -388,6 +491,20 @@ export function ConversationTab({
     persistedAutoSummaryWindow
   ])
 
+  React.useEffect(() => {
+    setGenerationOverrideEnabledDraft(persistedGenerationOverrideEnabled)
+    setGenerationTemperatureDraft(persistedGenerationTemperature)
+    setGenerationTopPDraft(persistedGenerationTopP)
+    setGenerationRepetitionPenaltyDraft(persistedGenerationRepetitionPenalty)
+    setGenerationStopsDraft(persistedGenerationStopsKey)
+  }, [
+    persistedGenerationOverrideEnabled,
+    persistedGenerationTemperature,
+    persistedGenerationTopP,
+    persistedGenerationRepetitionPenalty,
+    persistedGenerationStopsKey
+  ])
+
   const conversationStateOptions = CONVERSATION_STATE_OPTIONS.map((option) => ({
     value: option.value,
     label: t(option.labelToken, option.defaultLabel)
@@ -435,6 +552,17 @@ export function ConversationTab({
       })
     }
   ]
+  const chatPresetOptions = CHARACTER_PROMPT_PRESETS.map((preset) => ({
+    value: preset.id,
+    label: t(
+      `settings:manageCharacters.promptPresets.${preset.id}.label`,
+      preset.label
+    ),
+    title: t(
+      `settings:manageCharacters.promptPresets.${preset.id}.description`,
+      preset.description
+    )
+  }))
   const memoryScopeOptions = [
     {
       value: "shared",
@@ -536,6 +664,52 @@ export function ConversationTab({
   }
   const persistPresetScope = async (value: "chat" | "character") => {
     await updateSettings({ presetScope: value })
+  }
+  const persistChatPresetOverrideId = async (
+    value: CharacterPromptPresetId | null
+  ) => {
+    await updateSettings({ chatPresetOverrideId: value })
+  }
+  const persistChatGenerationOverride = async (
+    override: {
+      enabled?: boolean
+      temperature?: number | null
+      top_p?: number | null
+      repetition_penalty?: number | null
+      stop?: string[]
+    } = {}
+  ) => {
+    const nextEnabled =
+      typeof override.enabled === "boolean"
+        ? override.enabled
+        : generationOverrideEnabledDraft
+    const nextTemperature =
+      override.temperature !== undefined
+        ? sanitizeGenerationFloat(override.temperature, 0, 2)
+        : generationTemperatureDraft
+    const nextTopP =
+      override.top_p !== undefined
+        ? sanitizeGenerationFloat(override.top_p, 0, 1)
+        : generationTopPDraft
+    const nextRepetitionPenalty =
+      override.repetition_penalty !== undefined
+        ? sanitizeGenerationFloat(override.repetition_penalty, 0, 3)
+        : generationRepetitionPenaltyDraft
+    const nextStops =
+      override.stop !== undefined
+        ? normalizeGenerationStopList(override.stop)
+        : parseGenerationStopListFromText(generationStopsDraft)
+
+    await updateSettings({
+      chatGenerationOverride: {
+        enabled: nextEnabled,
+        temperature: nextTemperature,
+        top_p: nextTopP,
+        repetition_penalty: nextRepetitionPenalty,
+        stop: nextStops,
+        updatedAt: new Date().toISOString()
+      }
+    })
   }
   const persistMemoryScope = async (
     value: "shared" | "character" | "both"
@@ -668,6 +842,12 @@ export function ConversationTab({
         autoSummaryEnabled: autoSummaryEnabledDraft,
         autoSummaryThresholdMessages: autoSummaryThresholdDraft,
         autoSummaryWindowMessages: autoSummaryWindowDraft,
+        chatGenerationOverrideEnabled: generationOverrideEnabledDraft,
+        chatGenerationOverrideTemperature: generationTemperatureDraft,
+        chatGenerationOverrideTopP: generationTopPDraft,
+        chatGenerationOverrideRepetitionPenalty:
+          generationRepetitionPenaltyDraft,
+        chatGenerationOverrideStop: generationStopsDraft,
         summaryUpdatedAt:
           typeof summarySettings?.updatedAt === "string"
             ? summarySettings.updatedAt
@@ -689,6 +869,11 @@ export function ConversationTab({
       autoSummaryEnabledDraft,
       autoSummaryThresholdDraft,
       autoSummaryWindowDraft,
+      generationOverrideEnabledDraft,
+      generationTemperatureDraft,
+      generationTopPDraft,
+      generationRepetitionPenaltyDraft,
+      generationStopsDraft,
       summarySettings,
       chatSettings?.greetingEnabled,
       chatSettings?.greetingSelectionId,
@@ -911,6 +1096,145 @@ export function ConversationTab({
             void persistPresetScope(next)
           }}
         />
+      </Form.Item>
+
+      {presetScopeValue === "chat" && (
+        <Form.Item
+          label={t(
+            "playground:composer.chatPresetOverride.label",
+            "Chat preset override"
+          )}
+          help={t("playground:composer.chatPresetOverride.help", {
+            defaultValue:
+              "When preset scope is chat, this preset applies to every turn until changed."
+          })}
+        >
+          <Select
+            value={chatPresetOverrideValue || DEFAULT_CHARACTER_PROMPT_PRESET}
+            options={chatPresetOptions}
+            onChange={(value) => {
+              const next = normalizeChatPresetOverrideId(value)
+              void persistChatPresetOverrideId(
+                next || DEFAULT_CHARACTER_PROMPT_PRESET
+              )
+            }}
+          />
+        </Form.Item>
+      )}
+
+      <Form.Item
+        label={t(
+          "playground:composer.chatGenerationOverride.label",
+          "Chat generation override"
+        )}
+        help={t("playground:composer.chatGenerationOverride.help", {
+          defaultValue:
+            "Override character generation settings for this chat with explicit values."
+        })}
+      >
+        <div className="space-y-2" data-testid="chat-generation-override">
+          <Select
+            value={generationOverrideEnabledDraft ? "on" : "off"}
+            options={[
+              {
+                value: "off",
+                label: t("playground:composer.chatGenerationOverride.off", {
+                  defaultValue: "Override disabled"
+                })
+              },
+              {
+                value: "on",
+                label: t("playground:composer.chatGenerationOverride.on", {
+                  defaultValue: "Override enabled"
+                })
+              }
+            ]}
+            onChange={(value) => {
+              const enabled = value === "on"
+              setGenerationOverrideEnabledDraft(enabled)
+              void persistChatGenerationOverride({ enabled })
+            }}
+          />
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <InputNumber
+              min={0}
+              max={2}
+              step={0.01}
+              precision={2}
+              disabled={!generationOverrideEnabledDraft}
+              value={generationTemperatureDraft}
+              addonBefore={t(
+                "playground:composer.chatGenerationOverride.temperature",
+                "Temp"
+              )}
+              onChange={(value) => {
+                setGenerationTemperatureDraft(
+                  sanitizeGenerationFloat(value, 0, 2)
+                )
+              }}
+              onBlur={() => {
+                void persistChatGenerationOverride({
+                  temperature: generationTemperatureDraft
+                })
+              }}
+            />
+            <InputNumber
+              min={0}
+              max={1}
+              step={0.01}
+              precision={2}
+              disabled={!generationOverrideEnabledDraft}
+              value={generationTopPDraft}
+              addonBefore={t(
+                "playground:composer.chatGenerationOverride.topP",
+                "Top-p"
+              )}
+              onChange={(value) => {
+                setGenerationTopPDraft(sanitizeGenerationFloat(value, 0, 1))
+              }}
+              onBlur={() => {
+                void persistChatGenerationOverride({ top_p: generationTopPDraft })
+              }}
+            />
+            <InputNumber
+              min={0}
+              max={3}
+              step={0.01}
+              precision={2}
+              disabled={!generationOverrideEnabledDraft}
+              value={generationRepetitionPenaltyDraft}
+              addonBefore={t(
+                "playground:composer.chatGenerationOverride.repetitionPenalty",
+                "Rep pen"
+              )}
+              onChange={(value) => {
+                setGenerationRepetitionPenaltyDraft(
+                  sanitizeGenerationFloat(value, 0, 3)
+                )
+              }}
+              onBlur={() => {
+                void persistChatGenerationOverride({
+                  repetition_penalty: generationRepetitionPenaltyDraft
+                })
+              }}
+            />
+          </div>
+          <Input.TextArea
+            rows={2}
+            disabled={!generationOverrideEnabledDraft}
+            value={generationStopsDraft}
+            onChange={(event) => setGenerationStopsDraft(event.target.value)}
+            onBlur={() => {
+              void persistChatGenerationOverride({
+                stop: parseGenerationStopListFromText(generationStopsDraft)
+              })
+            }}
+            placeholder={t(
+              "playground:composer.chatGenerationOverride.stopPlaceholder",
+              "Stop sequences, one per line"
+            )}
+          />
+        </div>
       </Form.Item>
 
       <Form.Item

@@ -55,7 +55,7 @@ async def run_llm_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
         if isinstance(val, str):
             try:
                 return _tmpl(val, context) or val
-            except Exception as exc:
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
                 snippet = val.strip().replace("\n", "\\n")
                 if len(snippet) > 120:
                     snippet = f"{snippet[:120]}..."
@@ -109,7 +109,7 @@ async def run_llm_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
         parsed = None
         try:
             parsed = json.loads(raw)
-        except Exception:
+        except json.JSONDecodeError:
             parsed = None
         if isinstance(parsed, list):
             for item in parsed:
@@ -140,7 +140,7 @@ async def run_llm_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
         if not preview:
             try:
                 preview = str(messages[-1].get("content") or "")
-            except Exception:
+            except (AttributeError, IndexError, TypeError, ValueError):
                 preview = ""
         return {
             "text": preview,
@@ -191,7 +191,7 @@ async def run_llm_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
                 payload = raw[5:].strip()
                 try:
                     data = json.loads(payload)
-                except Exception:
+                except json.JSONDecodeError:
                     data = None
                 if isinstance(data, dict):
                     choices = data.get("choices") or []
@@ -203,7 +203,7 @@ async def run_llm_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
                             try:
                                 if callable(context.get("append_event")):
                                     context["append_event"]("llm_stream", {"delta": chunk})
-                            except Exception as e:
+                            except (AttributeError, RuntimeError, TypeError, ValueError) as e:
                                 logger.debug(f"LLM stream event dispatch failed: {e}")
                     continue
             # Fallback: treat as plain text chunk
@@ -321,14 +321,14 @@ async def run_llm_with_tools_adapter(config: dict[str, Any], context: dict[str, 
 
                     messages.append({"role": "assistant", "content": None, "tool_calls": [tc]})
                     messages.append({"role": "tool", "tool_call_id": tc.get("id"), "content": json.dumps(result, default=str)})
-                except Exception as e:
+                except (AdapterError, AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
                     tool_results.append({"tool": tool_name, "error": str(e)})
                     messages.append({"role": "assistant", "content": None, "tool_calls": [tc]})
                     messages.append({"role": "tool", "tool_call_id": tc.get("id"), "content": f"Error: {e}"})
 
         return {"text": final_response or "", "tool_results": tool_results, "iterations": iteration + 1}
 
-    except Exception as e:
+    except (AdapterError, AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         logger.exception(f"LLM with tools error: {e}")
         return {"error": str(e), "text": "", "tool_results": []}
 
@@ -405,7 +405,7 @@ async def run_llm_compare_adapter(config: dict[str, Any], context: dict[str, Any
                     "elapsed_ms": elapsed_ms,
                     "char_count": len(text),
                 })
-            except Exception as e:
+            except (AdapterError, AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
                 responses.append({
                     "provider": provider,
                     "model": model,
@@ -422,7 +422,7 @@ async def run_llm_compare_adapter(config: dict[str, Any], context: dict[str, Any
             },
         }
 
-    except Exception as e:
+    except (AdapterError, AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         logger.exception(f"LLM compare error: {e}")
         return {"responses": [], "error": str(e)}
 
@@ -517,6 +517,6 @@ Revise the content to address the critique while maintaining the original intent
 
         return {"critique": critique, "revised": revised, "criteria": criteria}
 
-    except Exception as e:
+    except (AdapterError, AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         logger.exception(f"LLM critique error: {e}")
         return {"error": str(e), "critique": "", "revised": ""}

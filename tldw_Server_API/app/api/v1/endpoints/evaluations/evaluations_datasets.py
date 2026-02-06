@@ -21,6 +21,7 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
+    _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS,
     get_unified_evaluation_service_for_user,
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
@@ -47,7 +48,7 @@ def _normalize_dataset_payload(dataset: dict[str, Any]) -> dict[str, Any]:
             # Support both ISO-8601 and SQLite timestamp formats
             ts = created_at.replace("Z", "+00:00")
             timestamp = int(datetime.fromisoformat(ts).timestamp())
-        except Exception:
+        except (ValueError, TypeError, OverflowError):
             timestamp = None
 
     if timestamp is None:
@@ -79,10 +80,10 @@ async def create_dataset(
                             if response is not None:
                                 response.headers["X-Idempotent-Replay"] = "true"
                                 response.headers["Idempotency-Key"] = idempotency_key
-                        except Exception as e:
+                        except (AttributeError, TypeError, ValueError) as e:
                             logger.debug(f"Failed to set idempotency headers: {e}")
                         return DatasetResponse(**_normalize_dataset_payload(existing))
-            except Exception as e:
+            except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Idempotency lookup failed, proceeding with creation: {e}")
         dataset_id = await svc.create_dataset(
             name=dataset_request.name,
@@ -96,10 +97,10 @@ async def create_dataset(
         try:
             if idempotency_key:
                 svc.db.record_idempotency("dataset", idempotency_key, dataset_id, user_id)
-        except Exception as e:
+        except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to record idempotency key for dataset {dataset_id}: {e}")
         return DatasetResponse(**normalized)
-    except Exception as e:
+    except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Failed to create dataset: {e}")
         raise create_error_response(
             message=f"Failed to create dataset: {sanitize_error_message(e, 'creating dataset')}",
@@ -123,7 +124,7 @@ async def list_datasets(
         first_id = resp[0].id if resp else None
         last_id = resp[-1].id if resp else None
         return DatasetListResponse(data=resp, has_more=has_more, first_id=first_id, last_id=last_id)
-    except Exception as e:
+    except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Failed to list datasets: {e}")
         raise create_error_response(
             message=f"Failed to list datasets: {sanitize_error_message(e, 'listing datasets')}",
@@ -151,7 +152,7 @@ async def get_dataset(
         return DatasetResponse(**_normalize_dataset_payload(row))
     except HTTPException:
         raise
-    except Exception as e:
+    except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to get dataset: {e}")
         raise create_error_response(
             message=f"Failed to get dataset: {sanitize_error_message(e, 'retrieving dataset')}",
@@ -183,7 +184,7 @@ async def delete_dataset(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     except HTTPException:
         raise
-    except Exception as e:
+    except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to delete dataset: {e}")
         raise create_error_response(
             message=f"Failed to delete dataset: {sanitize_error_message(e, 'deleting dataset')}",

@@ -131,4 +131,59 @@ test.describe('Knowledge RAG workspace UX', () => {
 
     await context.close()
   })
+
+  test('fullscreen playground Search & Context exposes key-level RAG options', async () => {
+    const { context, page, optionsUrl } = await launchWithBuiltExtension()
+
+    await waitForConnectionStore(page, 'knowledge-rag-playground-context')
+    await forceConnected(
+      page,
+      { serverUrl: 'http://dummy-tldw' },
+      'knowledge-rag-playground-context'
+    )
+
+    await page.goto(optionsUrl + '#/')
+    await page.waitForLoadState('networkidle')
+    await dismissWelcomeOverlay(page)
+
+    const contextButton = page
+      .locator(
+        '[data-playground-knowledge-trigger="true"], button[aria-label*="Search & Context"], button[title*="Search & Context"]'
+      )
+      .first()
+    const triggerAlreadyVisible = await contextButton
+      .isVisible()
+      .catch(() => false)
+    if (!triggerAlreadyVisible) {
+      const startChatCard = page.getByText(/Start Chatting/i).first()
+      const startChatVisible = await startChatCard.isVisible().catch(() => false)
+      if (startChatVisible) {
+        await startChatCard.click()
+      }
+    }
+
+    await expect(contextButton).toBeVisible({ timeout: 15_000 })
+    await contextButton.click()
+
+    await expect(page.getByRole('heading', { name: /Knowledge Search/i })).toBeVisible()
+
+    const settingsTab = page.getByRole('tab', { name: /Settings/i }).first()
+    await settingsTab.click()
+
+    const settingsSearch = page.getByLabel(/Search settings/i).first()
+    await settingsSearch.fill('all options')
+
+    const allOptionsSectionToggle = page
+      .getByRole('button', { name: /All options/i })
+      .first()
+    await expect(allOptionsSectionToggle).toBeVisible()
+    await allOptionsSectionToggle.click()
+
+    const allOptionsFilter = page.getByTestId('knowledge-all-options-filter')
+    await expect(allOptionsFilter).toBeVisible()
+    await allOptionsFilter.fill('agentic_time_budget_sec')
+    await expect(page.getByText('agentic_time_budget_sec')).toBeVisible()
+
+    await context.close()
+  })
 })

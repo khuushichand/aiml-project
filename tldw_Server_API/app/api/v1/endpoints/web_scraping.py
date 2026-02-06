@@ -19,6 +19,20 @@ router = APIRouter(
     tags=["web-scraping"],
 )
 
+_WEB_SCRAPING_ENDPOINT_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    HTTPException,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 
 @router.get("/status")
 async def get_scraping_service_status(
@@ -36,7 +50,7 @@ async def get_scraping_service_status(
     try:
         service = get_web_scraping_service()
         return service.get_service_status()
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to get scraping service status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -58,7 +72,7 @@ async def get_scraping_job_status(
     try:
         service = get_web_scraping_service()
         return await service.get_job_status(job_id, current_user)
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to get job status for {job_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -80,7 +94,7 @@ async def cancel_scraping_job(
     try:
         service = get_web_scraping_service()
         return await service.cancel_job(job_id, current_user)
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to cancel job {job_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -102,7 +116,7 @@ async def initialize_scraping_service(
             "message": "Web scraping service initialized",
             "service_status": service.get_service_status()
         }
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to initialize scraping service: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -128,7 +142,7 @@ async def shutdown_scraping_service(
             "status": "success",
             "message": "Web scraping service shutdown completed"
         }
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to shutdown scraping service: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -165,7 +179,7 @@ async def get_scraping_progress(
         }
     except HTTPException:
         raise
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to get progress for task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -196,7 +210,7 @@ async def get_cookies_for_domain(
             "cookies": cookies or [],
             "cookie_count": len(cookies) if cookies else 0
         }
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to get cookies for {domain}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -231,7 +245,7 @@ async def set_cookies_for_domain(
             "message": f"Added {len(cookies)} cookies for {domain}",
             "domain": domain
         }
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to set cookies for {domain}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -271,7 +285,7 @@ async def check_url_duplicate(
             "is_duplicate": False,  # Placeholder
             "message": "Duplicate checking requires content analysis"
         }
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to check duplicate for {url}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 

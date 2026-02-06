@@ -28,17 +28,66 @@ class WebSearchConfig(BaseAdapterConfig):
     """Config for web search adapter."""
 
     query: str = Field(..., description="Search query (templated)")
-    provider: Literal["serper", "tavily", "brave", "duckduckgo", "searxng"] = Field(
-        "tavily", description="Search provider"
+    engine: Literal[
+        "google",
+        "duckduckgo",
+        "brave",
+        "kagi",
+        "tavily",
+        "searx",
+        "searxng",
+        "exa",
+        "firecrawl",
+        "baidu",
+        "bing",
+        "yandex",
+        "sogou",
+        "startpage",
+        "stract",
+        "serper",
+    ] = Field(
+        "google", description="Search engine/provider"
     )
+    provider: str | None = Field(None, description="Deprecated alias for engine")
+    auto_query_rewrite: bool = Field(False, description="Rewrite query before search using query_rewrite adapter")
+    query_rewrite_strategy: Literal["expand", "clarify", "simplify", "all"] = Field(
+        "simplify", description="Strategy for auto query rewrite"
+    )
+    query_rewrite_max_rewrites: int = Field(1, ge=1, le=5, description="Number of rewrite candidates to generate")
+    query_rewrite_provider: str | None = Field(None, description="Optional LLM provider override for query rewrite")
+    query_rewrite_model: str | None = Field(None, description="Optional LLM model override for query rewrite")
     num_results: int = Field(10, ge=1, le=50, description="Number of results")
+    result_count: int | None = Field(None, ge=1, le=50, description="Deprecated alias for num_results")
+    content_country: str = Field("US", description="Country code for localized results")
+    country: str | None = Field(None, description="Deprecated alias for content_country")
+    search_lang: str = Field("en", description="Search language")
+    search_language: str | None = Field(None, description="Deprecated alias for search_lang")
+    output_lang: str = Field("en", description="Output language")
+    output_language: str | None = Field(None, description="Deprecated alias for output_lang")
+    ui_lang: str | None = Field(None, description="Deprecated alias for output_lang")
+    safesearch: str | bool = Field("active", description="Safe search mode (or bool)")
+    date_range: str | None = Field(None, description="Provider date range filter")
     include_domains: list[str] | None = Field(None, description="Limit to specific domains")
     exclude_domains: list[str] | None = Field(None, description="Exclude specific domains")
+    site_whitelist: list[str] | None = Field(None, description="Deprecated alias for include_domains")
+    site_blacklist: list[str] | None = Field(None, description="Deprecated alias for exclude_domains")
+    exact_terms: str | None = Field(None, description="Exact terms filter (alias: exactTerms)")
+    exclude_terms: str | None = Field(None, description="Excluded terms filter (alias: excludeTerms)")
     time_range: Literal["day", "week", "month", "year"] | None = Field(
-        None, description="Time range filter"
+        None, description="Deprecated alias for date_range"
     )
-    safe_search: bool = Field(True, description="Enable safe search")
+    safe_search: bool = Field(True, description="Deprecated alias for safesearch")
+    searx_url: str | None = Field(None, description="Optional custom Searx endpoint URL")
+    searx_json_mode: bool = Field(False, description="Request JSON mode from Searx if available")
+    summarize: bool = Field(False, description="Summarize results with LLM")
+    api_name: str | None = Field(None, description="LLM provider for summarization")
+    api_provider: str | None = Field(None, description="Deprecated alias for api_name")
     fetch_content: bool = Field(False, description="Fetch and extract page content")
+    fetch_limit: int = Field(3, ge=0, le=50, description="Max results to enrich with fetched page content")
+    filter_failed_fetches: bool = Field(True, description="Drop failed content fetches from enriched output")
+    max_content_tokens: int = Field(1200, ge=32, description="Token budget per fetched page content")
+    fetch_timeout_seconds: float = Field(12.0, gt=0, le=120.0, description="Timeout for each page-content fetch")
+    tokenizer_model: str | None = Field(None, description="Optional model name for token counting during truncation")
 
 
 class RSSFetchConfig(BaseAdapterConfig):

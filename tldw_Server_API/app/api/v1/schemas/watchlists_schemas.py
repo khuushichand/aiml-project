@@ -234,6 +234,8 @@ class PreviewItem(BaseModel):
     decision: Literal["ingest", "filtered"]
     matched_action: FilterAction | None = None
     matched_filter_key: str | None = None
+    matched_filter_id: int | None = None
+    matched_filter_type: FilterType | None = None
     flagged: bool = False
 
 
@@ -317,6 +319,11 @@ class WatchlistOutputCreateRequest(BaseModel):
     format: Literal["md", "html"] | None = Field(None, description="Rendered output format (overrides template)")
     metadata: dict[str, Any] | None = Field(None, description="Optional metadata stored alongside the output")
     template_name: str | None = Field(None, description="Name of a stored template to render with")
+    template_version: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional version of a watchlists template to render (supports template history).",
+    )
     generate_mece: bool = Field(default=False, description="Generate a MECE variant output")
     mece_template_name: str | None = Field(default=None, description="Override template name for MECE output")
     generate_tts: bool = Field(default=False, description="Generate a TTS audio variant output")
@@ -361,10 +368,25 @@ class WatchlistTemplateSummary(BaseModel):
     format: Literal["md", "html"]
     description: str | None = None
     updated_at: str
+    version: int = 1
+    history_count: int = 0
 
 
 class WatchlistTemplateDetail(WatchlistTemplateSummary):
     content: str
+    available_versions: list[int] = Field(default_factory=list)
+
+
+class WatchlistTemplateVersionSummary(BaseModel):
+    version: int
+    format: Literal["md", "html"]
+    description: str | None = None
+    updated_at: str
+    is_current: bool = False
+
+
+class WatchlistTemplateVersionsResponse(BaseModel):
+    items: list[WatchlistTemplateVersionSummary]
 
 
 class WatchlistTemplateListResponse(BaseModel):

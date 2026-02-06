@@ -26,6 +26,18 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.sql_utils import split_sql_statements
 
+_USERDB_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    DatabaseError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
 ########################################################################################################################
 # Custom Exceptions
 ########################################################################################################################
@@ -290,14 +302,14 @@ class UserDatabase:
                     user_dict['metadata'] = json.loads(meta)
                 elif meta is None:
                     user_dict['metadata'] = {}
-            except Exception:
+            except _USERDB_NONCRITICAL_EXCEPTIONS:
                 user_dict['metadata'] = {}
             # Normalize boolean-ish flags for cross-backend consistency
             for _flag in ("is_active", "is_verified", "is_superuser"):
                 try:
                     if _flag in user_dict:
                         user_dict[_flag] = bool(user_dict[_flag])
-                except Exception:
+                except _USERDB_NONCRITICAL_EXCEPTIONS:
                     pass
             # Add roles
             user_dict['roles'] = self.get_user_roles(user_dict['id'])
@@ -343,7 +355,7 @@ class UserDatabase:
                     )
                     changes = change_result.rows[0].get("changes", 0) if change_result.rows else 0
                     success = bool(changes)
-                except Exception:
+                except _USERDB_NONCRITICAL_EXCEPTIONS:
                     success = False
             else:
                 success = result.rowcount > 0
@@ -443,7 +455,7 @@ class UserDatabase:
                               connection=conn)
                 return True
 
-            except Exception as e:
+            except _USERDB_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to assign role: {e}")
                 return False
 
@@ -830,7 +842,7 @@ class UserDatabase:
                  json.dumps(details) if details else None),
                 connection=connection,
             )
-        except Exception as e:
+        except _USERDB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create audit log: {e}")
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -1149,7 +1161,7 @@ class UserDatabase:
             if rid and pid:
                 try:
                     self.backend.execute(rp_sql, (rid, pid))
-                except Exception:
+                except _USERDB_NONCRITICAL_EXCEPTIONS:
                     pass
         # viewer role
         rid = viewer_id
@@ -1157,7 +1169,7 @@ class UserDatabase:
         if rid and pid:
             try:
                 self.backend.execute(rp_sql, (rid, pid))
-            except Exception:
+            except _USERDB_NONCRITICAL_EXCEPTIONS:
                 pass
         # admin all
         if admin_id:
@@ -1166,7 +1178,7 @@ class UserDatabase:
                 if pid:
                     try:
                         self.backend.execute(rp_sql, (admin_id, pid))
-                    except Exception:
+                    except _USERDB_NONCRITICAL_EXCEPTIONS:
                         pass
 
 
@@ -1215,12 +1227,12 @@ class UserDatabase:
                 self.backend.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superuser BOOLEAN DEFAULT FALSE")
                 try:
                     self.backend.execute("UPDATE users SET uuid = gen_random_uuid() WHERE uuid IS NULL")
-                except Exception:
+                except _USERDB_NONCRITICAL_EXCEPTIONS:
                     self.backend.execute("UPDATE users SET uuid = gen_random_uuid()::text WHERE uuid IS NULL")
                 self.backend.execute("ALTER TABLE users ALTER COLUMN uuid SET NOT NULL")
                 try:
                     self.backend.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT gen_random_uuid()")
-                except Exception:
+                except _USERDB_NONCRITICAL_EXCEPTIONS:
                     self.backend.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT (gen_random_uuid()::text)")
                 self.backend.execute(
                     "UPDATE users SET failed_login_attempts = 0 WHERE failed_login_attempts IS NULL"

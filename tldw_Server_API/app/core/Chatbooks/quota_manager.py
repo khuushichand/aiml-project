@@ -9,6 +9,7 @@ Manages user quotas for storage, export/import operations, and rate limits.
 """
 
 import os
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Optional
@@ -20,6 +21,21 @@ UNLIMITED_QUOTA = -1
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+
+_CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    sqlite3.Error,
+)
 
 
 def _env_flag(name: str) -> bool:
@@ -279,7 +295,7 @@ class QuotaManager:
                         total_size += path.stat().st_size
                 return total_size
             return 0
-        except Exception as e:
+        except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error calculating storage usage: {e}")
             return 0
 
@@ -323,13 +339,13 @@ class QuotaManager:
                     try:
                         # dict-like row
                         return int(row.get('c', 0))  # type: ignore[attr-defined]
-                    except Exception:
+                    except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS:
                         try:
                             # sqlite3.Row or tuple
                             if hasattr(row, 'keys'):
                                 return int(row['c'])  # type: ignore[index]
                             return int(row[0])
-                        except Exception:
+                        except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS:
                             return 0
                 elif isinstance(cursor, list) and cursor:
                     row = cursor[0]
@@ -338,19 +354,19 @@ class QuotaManager:
                     if hasattr(row, 'keys'):
                         try:
                             return int(row['c'])
-                        except Exception:
+                        except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS:
                             return 0
                     if isinstance(row, (list, tuple)):
                         return int(row[0])
                 return 0
-        except Exception as e:
+        except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"QuotaManager DB count fallback due to error: {e}")
             try:
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "chatbooks_quota", "event": "db_count_fallback"},
                 )
-            except Exception:
+            except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for chatbooks_quota db_count_fallback")
         # Fallback to cached value
         cache_key = f"{operation_type}_count_{datetime.now().date()}"
@@ -380,14 +396,14 @@ class QuotaManager:
                         return int(r.get('COUNT(1)', 0) if isinstance(r, dict) else r[0])
                     return 0
                 return _to_int(c1) + _to_int(c2)
-        except Exception as e:
+        except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"QuotaManager DB active job count fallback: {e}")
             try:
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "chatbooks_quota", "event": "db_active_count_fallback"},
                 )
-            except Exception:
+            except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for chatbooks_quota db_active_count_fallback")
         return self.usage_cache.get('active_jobs', 0)
 
@@ -416,26 +432,26 @@ class QuotaManager:
                         file_path.unlink()
                         deleted_count += 1
                         logger.info(f"Deleted old export: {file_path}")
-                    except Exception as e:
+                    except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS as e:
                         logger.error(f"Failed to delete {file_path}: {e}")
                         try:
                             get_metrics_registry().increment(
                                 "app_warning_events_total",
                                 labels={"component": "chatbooks_quota", "event": "export_delete_failed"},
                             )
-                        except Exception:
+                        except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS:
                             logger.debug("metrics increment failed for chatbooks_quota export_delete_failed")
 
             return deleted_count
 
-        except Exception as e:
+        except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error cleaning up old files: {e}")
             try:
                 get_metrics_registry().increment(
                     "app_exception_events_total",
                     labels={"component": "chatbooks_quota", "event": "cleanup_error"},
                 )
-            except Exception:
+            except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for chatbooks_quota cleanup_error")
             return 0
 

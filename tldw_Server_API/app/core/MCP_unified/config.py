@@ -15,10 +15,20 @@ from pydantic import Field, SecretStr
 
 try:
     from pydantic import field_validator  # v2
-except Exception:  # v1 fallback
+except (ImportError, AttributeError):  # v1 fallback
     from pydantic import validator as field_validator  # type: ignore
 from loguru import logger
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_MCP_CONFIG_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _default_ws_allowed_origins() -> list[str]:
@@ -54,7 +64,7 @@ def _parse_env_list(value: Any) -> Any:
                 parsed = json.loads(raw)
                 if isinstance(parsed, list):
                     return [str(item).strip() for item in parsed if str(item).strip()]
-            except Exception:
+            except (TypeError, ValueError, json.JSONDecodeError):
                 pass
         return [item.strip() for item in raw.split(",") if item.strip()]
     if isinstance(value, (list, tuple, set)):
@@ -292,7 +302,7 @@ class MCPConfig(BaseSettings):
                 import json as _json
                 data = _json.loads(v)
                 return data if isinstance(data, dict) else {}
-            except Exception:
+            except (TypeError, ValueError, json.JSONDecodeError):
                 return {}
         return v
 
@@ -339,7 +349,7 @@ class MCPConfig(BaseSettings):
             import os as _os
             if _os.getenv("MCP_INHERIT_GLOBAL_LOGGER", "").lower() in {"1","true","yes","on"}:
                 return
-        except Exception:
+        except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Placeholder-based format template (no color, safe for braces in messages)
@@ -351,7 +361,7 @@ class MCPConfig(BaseSettings):
 
         try:
             logger.remove()  # Reset to avoid duplicate/default handlers
-        except Exception:
+        except (RuntimeError, ValueError):
             pass
 
         # Console logging (safe format, no color)
@@ -406,7 +416,7 @@ def get_config() -> MCPConfig:
                         for k, v in data.items():
                             if isinstance(k, str) and isinstance(v, str):
                                 config.tool_category_map[k] = v
-        except Exception as _e:
+        except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS as _e:
             logger.warning(f"Failed to load tool category map file: {_e}")
         logger.info("MCP configuration loaded successfully")
         return config
@@ -425,13 +435,13 @@ def validate_config() -> bool:
                 os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
                 or bool(os.getenv("PYTEST_CURRENT_TEST"))
             )
-        except Exception:
+        except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS:
             test_mode = False
 
         def _field_was_set(cfg: MCPConfig, field_name: str) -> bool:
             try:
                 return field_name in cfg.model_fields_set  # type: ignore[attr-defined]
-            except Exception:
+            except (AttributeError, TypeError):
                 return field_name in getattr(cfg, "__fields_set__", set())
 
         # Check critical security settings
@@ -481,6 +491,6 @@ def validate_config() -> bool:
         logger.info("Configuration validation passed")
         return True
 
-    except Exception as e:
+    except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Configuration validation failed: {e}")
         return False

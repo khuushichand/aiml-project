@@ -83,7 +83,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
         blocks: list[_Block] = []
         try:
             tree = ast.parse(text)
-        except Exception as e:
+        except (SyntaxError, TypeError, ValueError) as e:
             logger.warning(f"AST parse failed; falling back to single block: {e}")
             return [_Block('module', None, 0, len(text.splitlines()))]
 
@@ -104,7 +104,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                     s = max(0, int(getattr(node, 'lineno', 1)) - 1)
                     e = int(getattr(node, 'end_lineno', s + 1))
                     blocks.append(_Block('class', node.name, s, e))
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 continue
 
         if not blocks:
@@ -184,7 +184,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
             chunks = self._pack_blocks(blocks, lines_ke, max_chars=max_size, overlap_chars=overlap)
             logger.info(f"PythonASTCodeChunkingStrategy produced {len(chunks)} chunks")
             return chunks
-        except Exception as e:
+        except (AttributeError, RuntimeError, TypeError, ValueError) as e:
             logger.warning(f"AST code chunking failed, returning whole text: {e}")
             return [text]
 
@@ -213,7 +213,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                 end_char = buf_e
                 try:
                     end_char = self._expand_end_to_grapheme_boundary(text, end_char)
-                except Exception:
+                except (AttributeError, RuntimeError, TypeError, ValueError):
                     end_char = buf_e
                 ch_text = text[buf_s:end_char]
                 md = ChunkMetadata(
@@ -249,7 +249,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                             end = min(e_char, start + max_size)
                             try:
                                 end_expanded = self._expand_end_to_grapheme_boundary(text, end)
-                            except Exception:
+                            except (AttributeError, RuntimeError, TypeError, ValueError):
                                 end_expanded = end
                             piece = text[start:end_expanded]
                             md = ChunkMetadata(
@@ -282,7 +282,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                                 end = min(e_char, start + max_size)
                                 try:
                                     end_expanded = self._expand_end_to_grapheme_boundary(text, end)
-                                except Exception:
+                                except (AttributeError, RuntimeError, TypeError, ValueError):
                                     end_expanded = end
                                 piece = text[start:end_expanded]
                                 md = ChunkMetadata(
@@ -311,7 +311,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                         prev_end = int(prev.metadata.end_char)
                         cur_start = int(cur.metadata.start_char)
                         cur_end = int(cur.metadata.end_char)
-                    except Exception:
+                    except (AttributeError, TypeError, ValueError):
                         prev = cur
                         continue
                     prev_len = max(0, prev_end - prev_start)
@@ -331,7 +331,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
 
             logger.info(f"PythonASTCodeChunkingStrategy produced {len(results)} chunks with metadata")
             return results
-        except Exception as e:
+        except (AttributeError, RuntimeError, TypeError, ValueError) as e:
             logger.warning(f"AST code chunking with metadata failed: {e}")
             # fallback: single chunk
             md = ChunkMetadata(

@@ -30,6 +30,17 @@ from .exceptions import TemplateError
 from .regex_safety import check_pattern as _rx_check
 from .regex_safety import compile_flags as _rx_flags
 
+_TEMPLATE_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    re.error,
+    json.JSONDecodeError,
+)
+
 
 @dataclass
 class TemplateStage:
@@ -249,7 +260,7 @@ class TemplateProcessor:
                 cfg.get('hierarchical_template') or
                 (extra_params or {}).get('hierarchical_template')
             )
-        except Exception:
+        except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
             hierarchical = False
             hier_template = None
 
@@ -331,7 +342,7 @@ class TemplateProcessor:
         # Remove excessive line breaks (coerce provided value to int safely)
         try:
             max_breaks = int(options.get("max_line_breaks", 2))
-        except Exception:
+        except (TypeError, ValueError):
             max_breaks = 2
         # Use cached compiled pattern for line break normalization
         linebreak_pattern = _get_linebreak_pattern(max_breaks)
@@ -352,7 +363,7 @@ class TemplateProcessor:
                 if ferr is not None:
                     flags = re.MULTILINE
                 text = re.sub(pattern, '', text, flags=flags)
-            except Exception as e:
+            except _TEMPLATE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to apply header removal pattern; skipping. Error: {e}")
         return text
 
@@ -366,7 +377,7 @@ class TemplateProcessor:
                 section_pattern = str(raw_pat)
             else:
                 logger.warning(f"Unsafe section pattern provided; using default. Reason: {err}")
-        except Exception:
+        except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
             # Fall back to default
             pass
         sections = []
@@ -375,14 +386,14 @@ class TemplateProcessor:
             for match in re.finditer(section_pattern, text, re.MULTILINE):
                 try:
                     title = match.group(1)
-                except Exception:
+                except (AttributeError, IndexError):
                     # If no capture group provided, use whole match
                     title = match.group(0)
                 sections.append({
                     "title": title,
                     "position": match.start()
                 })
-        except Exception as e:
+        except _TEMPLATE_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Section extraction regex failed; returning empty sections. Error: {e}")
 
         return {
@@ -609,7 +620,7 @@ class TemplateManager:
         if template_file.exists():
             try:
                 return self.load_template(template_file)
-            except Exception as e:
+            except _TEMPLATE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to load template {name}: {e}")
 
         return None
@@ -763,13 +774,13 @@ class TemplateClassifier:
                         continue
                     if re.search(pat, text, re.IGNORECASE):
                         regex_hits += 1
-                except Exception:
+                except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
                     pass
         score += weight_regex * (regex_hits / 3.0)
         # Clamp with min_score if provided
         try:
             min_score = float(classifier.get('min_score', 0.0))
-        except Exception:
+        except (TypeError, ValueError):
             min_score = 0.0
         return score if score >= min_score else 0.0
 

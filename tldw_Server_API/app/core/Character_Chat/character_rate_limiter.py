@@ -37,6 +37,17 @@ from tldw_Server_API.app.core.Character_Chat.character_limits import (
 )
 
 # Optional Resource Governor integration (gated by global RG_ENABLED/config)
+RG_IMPORT_EXCEPTIONS = (ImportError, AttributeError)
+RG_RUNTIME_EXCEPTIONS = (
+    asyncio.TimeoutError,
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    KeyError,
+)
+
 try:  # pragma: no cover - RG is optional
     from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
     from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
@@ -49,7 +60,7 @@ try:  # pragma: no cover - RG is optional
         PolicyReloadConfig,
         default_policy_loader,
     )
-except Exception:  # pragma: no cover - safe fallback when RG not installed
+except RG_IMPORT_EXCEPTIONS:  # pragma: no cover - safe fallback when RG not installed
     MemoryResourceGovernor = None  # type: ignore
     RedisResourceGovernor = None  # type: ignore
     RGRequest = None  # type: ignore
@@ -176,7 +187,7 @@ class CharacterRateLimiter:
                 policy_id=self.policy_id,
             )
             payload["requests"] = peek.get("requests")
-        except Exception:
+        except RG_RUNTIME_EXCEPTIONS:
             pass
         return payload
 
@@ -212,7 +223,7 @@ def _rg_char_context() -> dict[str, str]:
     )
     try:
         policy_path_resolved = os.path.abspath(policy_path)
-    except Exception:
+    except (OSError, ValueError, TypeError):
         policy_path_resolved = policy_path
     return {
         "backend": os.getenv("RG_BACKEND", "memory"),
@@ -262,7 +273,7 @@ def _rg_character_enabled() -> bool:
     if rg_enabled is not None:
         try:
             return bool(rg_enabled(True))  # type: ignore[func-returns-value]
-        except Exception:
+        except (RuntimeError, ValueError, TypeError, AttributeError):
             return False
     return False
 
@@ -314,7 +325,7 @@ async def _get_character_rg_governor():
                 gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
             _rg_char_governor = gov
             return gov
-        except Exception as exc:  # pragma: no cover - optional path
+        except RG_RUNTIME_EXCEPTIONS as exc:  # pragma: no cover - optional path
             _log_rg_character_init_failure(exc)
             return None
 
@@ -352,7 +363,7 @@ async def _maybe_enforce_with_rg_character(
             if handle:
                 try:
                     await gov.commit(handle, None, op_id=op_id)
-                except Exception:
+                except (RuntimeError, ValueError, TypeError, AttributeError):
                     logger.debug("Character Chat RG commit failed", exc_info=True)
             return {"allowed": True, "retry_after": None, "policy_id": policy_id}
         return {
@@ -360,7 +371,7 @@ async def _maybe_enforce_with_rg_character(
             "retry_after": decision.retry_after or 1,
             "policy_id": policy_id,
         }
-    except Exception as exc:
+    except RG_RUNTIME_EXCEPTIONS as exc:
         logger.debug("Character Chat RG reserve failed: {}", exc)
         return None
 
@@ -428,7 +439,7 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
             if configured_value is not None:
                 try:
                     return bool(configured_value)
-                except Exception as exc:
+                except (ValueError, TypeError, AttributeError) as exc:
                     logger.debug("Character rate limit enabled flag coercion failed: {}", exc)
             return fallback
 

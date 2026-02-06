@@ -53,6 +53,8 @@ class TestWebFallbackConfig:
         assert config.search_lang == "en"
         assert config.output_lang == "en"
         assert config.max_content_chars == 2000
+        assert config.max_content_tokens == 500
+        assert config.tokenizer_model is None
         assert config.subquery_generation is False
         assert config.safesearch == "active"
         assert config.timeout_seconds == 30.0
@@ -65,6 +67,8 @@ class TestWebFallbackConfig:
             content_country="GB",
             search_lang="de",
             max_content_chars=5000,
+            max_content_tokens=900,
+            tokenizer_model="gpt-4o-mini",
             timeout_seconds=60.0,
         )
 
@@ -73,6 +77,8 @@ class TestWebFallbackConfig:
         assert config.content_country == "GB"
         assert config.search_lang == "de"
         assert config.max_content_chars == 5000
+        assert config.max_content_tokens == 900
+        assert config.tokenizer_model == "gpt-4o-mini"
         assert config.timeout_seconds == 60.0
 
 
@@ -147,6 +153,30 @@ class TestConvertWebResultsToDocuments:
         # Body should be truncated
         assert len(docs[0].content) < 5000
         assert "..." in docs[0].content
+
+    def test_convert_respects_token_budget_override(self):
+        """Test explicit max_content_tokens overrides char-based fallback."""
+        long_body = "B" * 5000
+        raw_results = [
+            {
+                "title": "Token Limited Article",
+                "snippet": "Snippet",
+                "url": "https://example.com",
+                "body": long_body,
+            }
+        ]
+
+        docs = _convert_web_results_to_documents(
+            raw_results,
+            "test",
+            max_content_chars=5000,
+            max_content_tokens=10,
+        )
+
+        assert len(docs) == 1
+        assert "Content:" in docs[0].content
+        assert len(docs[0].content) < 400
+        assert "...[truncated]" in docs[0].content
 
     def test_convert_empty_results(self):
         """Test converting empty results."""

@@ -38,7 +38,7 @@ def _parse_cache_size(env_key: str, default: int) -> int:
     raw = os.getenv(env_key, str(default))
     try:
         value = int(str(raw).strip())
-    except Exception:
+    except (TypeError, ValueError):
         logger.warning(f"Invalid {env_key}={raw!r}; using default {default}")
         return default
     if value < 1:
@@ -113,7 +113,7 @@ def _stop_sync_loop() -> None:
     if loop and loop.is_running():
         try:
             loop.call_soon_threadsafe(loop.stop)
-        except Exception:
+        except (RuntimeError, TypeError, ValueError):
             pass
 
     if thread and thread.is_alive() and threading.current_thread() is not thread:
@@ -170,7 +170,7 @@ def _schedule(coro) -> None:
             warnings.filterwarnings("ignore", message="coroutine.*was never awaited")
             try:
                 coro.close()  # type: ignore[attr-defined]
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 pass
         raise RuntimeError("Embeddings audit adapter unavailable: no event loop")
 
@@ -181,7 +181,7 @@ def _schedule(coro) -> None:
             warnings.filterwarnings("ignore", message="coroutine.*was never awaited")
             try:
                 coro.close()  # type: ignore[attr-defined]
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 pass
         raise RuntimeError("Embeddings audit adapter failed to schedule") from exc
 
@@ -249,7 +249,7 @@ def _shutdown_on_exit() -> None:
             else:
                 logger.disable("tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps")
                 logger.disable("tldw_Server_API.app.core.Embeddings.audit_adapter")
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             pass
         # Prefer running in a fresh loop if no loop is running
         try:
@@ -257,14 +257,14 @@ def _shutdown_on_exit() -> None:
             # Schedule but do not await; at exit there may be no time to run
             try:
                 loop.create_task(shutdown_audit_adapter_services())
-            except Exception:
+            except (RuntimeError, TypeError, ValueError):
                 pass
         except RuntimeError:
             try:
                 asyncio.run(shutdown_audit_adapter_services())
-            except Exception:
+            except (RuntimeError, TypeError, ValueError):
                 pass
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         pass
 
 

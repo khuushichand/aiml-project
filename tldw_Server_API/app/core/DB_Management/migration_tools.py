@@ -16,6 +16,15 @@ from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBack
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 
 logger = logging.getLogger(__name__)
+_MIGRATION_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    sqlite3.Error,
+)
 
 
 @dataclass
@@ -89,7 +98,7 @@ def migrate_sqlite_to_postgres(
         finally:
             try:
                 backend.get_pool().close_all()
-            except Exception:  # pragma: no cover - defensive close
+            except _MIGRATION_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive close
                 pass
     finally:
         sqlite_conn.close()
@@ -169,7 +178,7 @@ def migrate_workflows_sqlite_to_postgres(
                         for row in pg_cols_info
                         if isinstance(row.get('type'), str) and 'bool' in row['type'].lower()
                     }
-                except Exception:
+                except _MIGRATION_NONCRITICAL_EXCEPTIONS:
                     bool_cols = set()
                 while rows := cursor.fetchmany(batch_size):
                     params = []
@@ -218,7 +227,7 @@ def migrate_workflows_sqlite_to_postgres(
     finally:
         try:
             backend.get_pool().close_all()
-        except Exception:
+        except _MIGRATION_NONCRITICAL_EXCEPTIONS:
             pass
         sqlite_conn.close()
 
@@ -326,7 +335,7 @@ def _truncate_tables(
             params = None
         try:
             backend.execute(sql, params, connection=pg_conn)
-        except Exception as exc:  # pragma: no cover - defensive logging
+        except _MIGRATION_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive logging
             logger.warning('Unable to clear table %s: %s', table_name, exc)
 
 
@@ -360,7 +369,7 @@ def _copy_table(
             for row in pg_columns_info
             if isinstance(row.get('type'), str) and 'bool' in row['type'].lower()
         }
-    except Exception:
+    except _MIGRATION_NONCRITICAL_EXCEPTIONS:
         boolean_columns = set()
 
     cursor = sqlite_conn.execute(select_sql, select_params)
@@ -386,7 +395,7 @@ def _copy_table(
                         else:
                             coerced = bool(val)
                         values.append(coerced)
-                    except Exception:
+                    except _MIGRATION_NONCRITICAL_EXCEPTIONS:
                         values.append(val)
                 else:
                     values.append(val)
@@ -411,7 +420,7 @@ def _sync_sequences(
             )
             try:
                 backend.execute(sql, connection=pg_conn)
-            except Exception as exc:  # pragma: no cover - defensive logging
+            except _MIGRATION_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive logging
                 logger.warning('Sequence sync failed for %s.%s: %s', meta.name, column, exc)
 
 
@@ -488,9 +497,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             _ = _Evals(db_path=':memory:', backend=_backend)
             try:
                 _backend.get_pool().close_all()
-            except Exception:
+            except _MIGRATION_NONCRITICAL_EXCEPTIONS:
                 pass
-    except Exception as _init_exc:  # pragma: no cover - defensive
+    except _MIGRATION_NONCRITICAL_EXCEPTIONS as _init_exc:  # pragma: no cover - defensive
         logger.warning('Could not pre-initialize PostgreSQL schema: %s', _init_exc)
     for label, path in targets:
         migrate_sqlite_to_postgres(

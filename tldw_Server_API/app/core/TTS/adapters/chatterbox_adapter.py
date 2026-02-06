@@ -28,6 +28,18 @@ from ..utils import parse_bool
 # Local Imports
 from .base import AudioFormat, ProviderStatus, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse, VoiceInfo
 
+_CHATTERBOX_IMPORT_EXCEPTIONS = (ImportError, ModuleNotFoundError)
+_CHATTERBOX_RUNTIME_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_CHATTERBOX_NUMERIC_EXCEPTIONS = (TypeError, ValueError)
+
 #######################################################################################################################
 # No-op watermarker to ensure no watermark is applied
 
@@ -156,7 +168,7 @@ class ChatterboxAdapter(TTSAdapter):
             # Verify the upstream package is available
             try:
                 import chatterbox  # noqa: F401
-            except Exception as e:
+            except _CHATTERBOX_IMPORT_EXCEPTIONS as e:
                 suggestion = (
                     "pip install chatterbox-tts\n"
                     "or install from source: git clone https://github.com/resemble-ai/chatterbox && pip install -e ."
@@ -171,7 +183,7 @@ class ChatterboxAdapter(TTSAdapter):
             # Defer heavy model weights loading until first request
             self._status = ProviderStatus.AVAILABLE
             return True
-        except Exception as e:
+        except (TTSModelLoadError, *_CHATTERBOX_RUNTIME_EXCEPTIONS) as e:
             logger.error(f"{self.provider_name}: Initialization failed: {e}")
             self._status = ProviderStatus.ERROR
             return False
@@ -282,7 +294,7 @@ class ChatterboxAdapter(TTSAdapter):
                 try:
                     from pathlib import Path
                     Path(voice_reference_path).unlink(missing_ok=True)
-                except Exception:
+                except (OSError, TypeError, ValueError):
                     pass
 
     async def _stream_audio_chatterbox(
@@ -368,7 +380,7 @@ class ChatterboxAdapter(TTSAdapter):
         # Scale around base with intensity [0.0..2.0]; clamp to [0.0..1.0]
         try:
             e = float(base) * float(max(0.0, min(2.0, intensity)))
-        except Exception:
+        except _CHATTERBOX_NUMERIC_EXCEPTIONS:
             e = base
         return max(0.0, min(1.0, e))
 
@@ -411,7 +423,7 @@ class ChatterboxAdapter(TTSAdapter):
             logger.info(f"Voice reference prepared: {tmp_path}")
             return tmp_path
 
-        except Exception as e:
+        except _CHATTERBOX_RUNTIME_EXCEPTIONS as e:
             logger.error(f"Failed to prepare voice reference: {e}")
             return None
 
@@ -471,7 +483,7 @@ class ChatterboxAdapter(TTSAdapter):
             if hasattr(self, attr):
                 try:
                     setattr(self, attr, None)
-                except Exception:
+                except (AttributeError, RuntimeError, TypeError, ValueError):
                     pass
         # Ensure our lazy models are cleared as well
         self.model_en = None
@@ -504,7 +516,7 @@ class ChatterboxAdapter(TTSAdapter):
                     )
                     if asyncio.iscoroutine(register_result):
                         await register_result
-                except Exception:
+                except _CHATTERBOX_RUNTIME_EXCEPTIONS:
                     pass
             return self.model_multi
         else:
@@ -530,7 +542,7 @@ class ChatterboxAdapter(TTSAdapter):
                     )
                     if asyncio.iscoroutine(register_result):
                         await register_result
-                except Exception:
+                except _CHATTERBOX_RUNTIME_EXCEPTIONS:
                     pass
             return self.model_en
 

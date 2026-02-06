@@ -2,6 +2,7 @@
 # Import/Export functionality for test cases
 
 import base64
+import binascii
 import csv
 import json
 from datetime import datetime
@@ -11,6 +12,21 @@ from typing import Optional
 from loguru import logger
 
 from .test_case_manager import TestCaseManager
+
+_IMPORT_DECODE_EXCEPTIONS = (
+    binascii.Error,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+_IMPORT_ROW_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 ########################################################################################################################
 # Test Case I/O Manager
@@ -174,7 +190,7 @@ class TestCaseIO:
             try:
                 json_bytes = base64.b64decode(json_data)
                 json_data = json_bytes.decode('utf-8')
-            except Exception as e:
+            except _IMPORT_DECODE_EXCEPTIONS as e:
                 logger.debug(f"JSON import not base64 or decode failed: error={e}")
                 # Not base64 or decode error; proceed with original string
 
@@ -216,14 +232,14 @@ class TestCaseIO:
                     )
                     imported_count += 1
 
-                except Exception as e:
+                except _IMPORT_ROW_EXCEPTIONS as e:
                     errors.append(f"Test case {idx}: {str(e)}")
 
             logger.info(f"Imported {imported_count} test cases from JSON")
 
         except json.JSONDecodeError as e:
             errors.append(f"Invalid JSON: {str(e)}")
-        except Exception as e:
+        except _IMPORT_ROW_EXCEPTIONS as e:
             errors.append(f"Import failed: {str(e)}")
 
         return imported_count, errors
@@ -251,7 +267,7 @@ class TestCaseIO:
             try:
                 csv_bytes = base64.b64decode(csv_data)
                 csv_data = csv_bytes.decode('utf-8')
-            except Exception as e:
+            except _IMPORT_DECODE_EXCEPTIONS as e:
                 logger.debug(f"CSV import not base64 or decode failed: error={e}")
                 # Not base64 or decode error; proceed with original string
 
@@ -270,14 +286,14 @@ class TestCaseIO:
                             # Try to parse as JSON, otherwise use as string
                             try:
                                 inputs[field_name] = json.loads(value) if value else None
-                            except Exception as e:
+                            except (json.JSONDecodeError, TypeError, ValueError) as e:
                                 logger.debug(f"CSV input field JSON parse failed: field={field_name}, error={e}")
                                 inputs[field_name] = value
                         elif key.startswith("expected."):
                             field_name = key[9:]  # Remove "expected." prefix
                             try:
                                 expected_outputs[field_name] = json.loads(value) if value else None
-                            except Exception as e:
+                            except (json.JSONDecodeError, TypeError, ValueError) as e:
                                 logger.debug(f"CSV expected field JSON parse failed: field={field_name}, error={e}")
                                 expected_outputs[field_name] = value
 
@@ -312,12 +328,12 @@ class TestCaseIO:
                     )
                     imported_count += 1
 
-                except Exception as e:
+                except _IMPORT_ROW_EXCEPTIONS as e:
                     errors.append(f"Row {row_idx + 2}: {str(e)}")
 
             logger.info(f"Imported {imported_count} test cases from CSV")
 
-        except Exception as e:
+        except _IMPORT_ROW_EXCEPTIONS as e:
             errors.append(f"CSV parsing failed: {str(e)}")
 
         return imported_count, errors

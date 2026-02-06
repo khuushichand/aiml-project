@@ -34,6 +34,21 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
 
 router = APIRouter(prefix="/flashcards", tags=["flashcards"])
+_FLASHCARDS_INT_PARSE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    TypeError,
+    ValueError,
+)
+_FLASHCARDS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    CharactersRAGDBError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _fetch_flashcard_or_404(card_uuid: str, db: CharactersRAGDB) -> dict:
@@ -160,7 +175,7 @@ def create_flashcard(payload: FlashcardCreate, db: CharactersRAGDB = Depends(get
         if tags:
             try:
                 db.set_flashcard_tags(card_uuid, tags)
-            except Exception as _e:
+            except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as _e:
                 logger.warning(f"Failed to link tags->keywords on create: {_e}")
         # Return the created flashcard via direct fetch
         card = db.get_flashcard(card_uuid)
@@ -188,7 +203,7 @@ def create_flashcards_bulk(payload: list[FlashcardCreate], db: CharactersRAGDB =
             if data.get("deck_id") is not None:
                 try:
                     deck_ids_to_validate.add(int(data.get("deck_id")))
-                except Exception:
+                except _FLASHCARDS_INT_PARSE_EXCEPTIONS:
                     raise HTTPException(status_code=400, detail="Invalid deck_id type")
             effective_model, eff_is_cloze, eff_reverse = _normalize_flashcard_model_fields(
                 data.get("front"),
@@ -221,7 +236,7 @@ def create_flashcards_bulk(payload: list[FlashcardCreate], db: CharactersRAGDB =
             if tags:
                 try:
                     db.set_flashcard_tags(u, tags)
-                except Exception as _e:
+                except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as _e:
                     logger.warning(f"Failed to link tags for {u}: {_e}")
         # Fetch created cards precisely by uuid (order-preserving)
         try:
@@ -230,7 +245,7 @@ def create_flashcards_bulk(payload: list[FlashcardCreate], db: CharactersRAGDB =
             for u in uuids:
                 if u in index:
                     card_dicts.append(index[u])
-        except Exception:
+        except _FLASHCARDS_NONCRITICAL_EXCEPTIONS:
             for u in uuids:
                 c = db.get_flashcard(u)
                 if c:
@@ -407,7 +422,7 @@ def import_flashcards(
             try:
                 v = int(os.getenv(name, str(default)))
                 return max(1, v)
-            except Exception:
+            except _FLASHCARDS_INT_PARSE_EXCEPTIONS:
                 return default
         ENV_MAX_LINES = _int_env('FLASHCARDS_IMPORT_MAX_LINES', 10000)
         ENV_MAX_LINE_LENGTH = _int_env('FLASHCARDS_IMPORT_MAX_LINE_LENGTH', 32768)
@@ -585,7 +600,7 @@ def import_flashcards(
     except CharactersRAGDBError as e:
         logger.error(f"Failed to import flashcards: {e}")
         raise HTTPException(status_code=500, detail="Failed to import flashcards")
-    except Exception as e:
+    except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"TSV import failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to import TSV flashcards")
 
@@ -604,7 +619,7 @@ async def import_flashcards_json(
         def _int_env(name: str, default: int) -> int:
             try:
                 return max(1, int(os.getenv(name, str(default))))
-            except Exception:
+            except _FLASHCARDS_INT_PARSE_EXCEPTIONS:
                 return default
         ENV_MAX_ITEMS = _int_env('FLASHCARDS_IMPORT_MAX_LINES', 10000)
         ENV_MAX_FIELD_LENGTH = _int_env('FLASHCARDS_IMPORT_MAX_FIELD_LENGTH', 8192)
@@ -618,7 +633,7 @@ async def import_flashcards_json(
         text = raw.decode('utf-8')
         try:
             data = _json.loads(text)
-        except Exception:
+        except _json.JSONDecodeError:
             # Try JSON Lines: one JSON object per line
             items = []
             for ln in text.splitlines():
@@ -626,7 +641,7 @@ async def import_flashcards_json(
                     continue
                 try:
                     items.append(_json.loads(ln))
-                except Exception:
+                except _json.JSONDecodeError:
                     raise HTTPException(status_code=400, detail="Invalid JSON/JSONL upload: failed to parse a line")
             data = {'items': items}
 
@@ -745,7 +760,7 @@ async def import_flashcards_json(
     except CharactersRAGDBError as e:
         logger.error(f"Failed to import JSON flashcards: {e}")
         raise HTTPException(status_code=500, detail="Failed to import flashcards")
-    except Exception as e:
+    except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"JSON import failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to import JSON flashcards")
 

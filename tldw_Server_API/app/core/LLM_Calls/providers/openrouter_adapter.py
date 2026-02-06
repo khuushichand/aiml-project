@@ -28,6 +28,29 @@ from tldw_Server_API.app.core.http_client import (
 
 http_client_factory = _hc_create_client
 
+_OPENROUTER_CONFIG_EXCEPTIONS = (AttributeError, KeyError, TypeError, ValueError)
+_OPENROUTER_DECODE_EXCEPTIONS = (TypeError, UnicodeDecodeError, ValueError)
+
+
+def _build_openrouter_client_exceptions() -> tuple[type[BaseException], ...]:
+    excs: list[type[BaseException]] = [
+        ConnectionError,
+        OSError,
+        RuntimeError,
+        TimeoutError,
+        TypeError,
+        ValueError,
+    ]
+    try:
+        import httpx  # type: ignore
+        excs.append(httpx.HTTPError)
+    except (AttributeError, ImportError):
+        pass
+    return tuple(excs)
+
+
+_OPENROUTER_CLIENT_EXCEPTIONS = _build_openrouter_client_exceptions()
+
 
 class OpenRouterAdapter(ChatProvider):
     name = "openrouter"
@@ -61,7 +84,7 @@ class OpenRouterAdapter(ChatProvider):
             base = or_cfg.get("api_base_url")
             if isinstance(base, str) and base.strip():
                 return base.strip()
-        except Exception:
+        except _OPENROUTER_CONFIG_EXCEPTIONS:
             pass
         return self._base_url()
 
@@ -73,9 +96,9 @@ class OpenRouterAdapter(ChatProvider):
             if t is not None:
                 try:
                     return float(t)
-                except Exception:
+                except (TypeError, ValueError):
                     pass
-        except Exception:
+        except _OPENROUTER_CONFIG_EXCEPTIONS:
             pass
         if fallback is not None:
             return float(fallback)
@@ -100,7 +123,7 @@ class OpenRouterAdapter(ChatProvider):
             or_cfg = cfg.get("openrouter_api") or {}
             site_url = or_cfg.get("site_url") or site_url
             site_name = or_cfg.get("site_name") or site_name
-        except Exception:
+        except _OPENROUTER_CONFIG_EXCEPTIONS:
             # best-effort; fall back to env/defaults
             pass
         # OpenRouter strongly prefers a valid public referer; use their site as a safe default
@@ -171,7 +194,7 @@ class OpenRouterAdapter(ChatProvider):
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     return resp.json()
-            except Exception as e:
+            except _OPENROUTER_CLIENT_EXCEPTIONS as e:
                 raise self.normalize_error(e)
 
         # Native disabled -> error to avoid legacy recursion
@@ -198,7 +221,7 @@ class OpenRouterAdapter(ChatProvider):
                                 continue
                             try:
                                 line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
-                            except Exception:
+                            except _OPENROUTER_DECODE_EXCEPTIONS:
                                 line = str(raw)
                             if is_done_line(line):
                                 if not seen_done:
@@ -211,7 +234,7 @@ class OpenRouterAdapter(ChatProvider):
                         for tail in finalize_stream(response=resp, done_already=seen_done):
                             yield tail
                 return
-            except Exception as e:
+            except _OPENROUTER_CLIENT_EXCEPTIONS as e:
                 raise self.normalize_error(e)
 
         # Native disabled -> error to avoid legacy recursion
@@ -248,7 +271,7 @@ class OpenRouterAdapter(ChatProvider):
             body = None
             try:
                 body = resp.json()
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 body = None
             log_http_400_body(self.name, exc, body)
             detail = None

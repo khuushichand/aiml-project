@@ -30,6 +30,27 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores import (
 
 pipeline_router = APIRouter()
 
+_TS_PARSE_EXCEPTIONS = (TypeError, ValueError)
+_PIPELINE_ENDPOINT_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    HTTPException,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+_PIPELINE_CLEANUP_ITEM_EXCEPTIONS = (
+    ConnectionError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
 
 @pipeline_router.post(
     "/rag/pipeline/presets",
@@ -56,7 +77,7 @@ async def create_or_update_pipeline_preset(
                 if "T" in x:
                     return int(datetime.fromisoformat(x.replace("Z", "+00:00")).timestamp())
                 return int(datetime.strptime(x, "%Y-%m-%d %H:%M:%S").timestamp())
-            except Exception:
+            except _TS_PARSE_EXCEPTIONS:
                 return None
 
         return PipelinePresetResponse(
@@ -65,7 +86,7 @@ async def create_or_update_pipeline_preset(
             created_at=to_ts(row.get("created_at")),
             updated_at=to_ts(row.get("updated_at")),
         )
-    except Exception as e:
+    except _PIPELINE_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to save preset: {e}")
         raise create_error_response(
             message=f"Failed to save preset: {sanitize_error_message(e, 'save_preset')}",
@@ -100,7 +121,7 @@ async def list_pipeline_presets(
                 if "T" in x:
                     return int(datetime.fromisoformat(x.replace("Z", "+00:00")).timestamp())
                 return int(datetime.strptime(x, "%Y-%m-%d %H:%M:%S").timestamp())
-            except Exception:
+            except _TS_PARSE_EXCEPTIONS:
                 return None
 
         for r in items:
@@ -111,7 +132,7 @@ async def list_pipeline_presets(
                 updated_at=to_ts(r.get("updated_at")),
             ))
         return PipelinePresetListResponse(items=resp_items, total=total)
-    except Exception as e:
+    except _PIPELINE_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to list presets: {e}")
         raise create_error_response(
             message=f"Failed to list presets: {sanitize_error_message(e, 'list_presets')}",
@@ -150,7 +171,7 @@ async def get_pipeline_preset(
                 if "T" in x:
                     return int(datetime.fromisoformat(x.replace("Z", "+00:00")).timestamp())
                 return int(datetime.strptime(x, "%Y-%m-%d %H:%M:%S").timestamp())
-            except Exception:
+            except _TS_PARSE_EXCEPTIONS:
                 return None
 
         return PipelinePresetResponse(
@@ -161,7 +182,7 @@ async def get_pipeline_preset(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except _PIPELINE_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to get preset: {e}")
         raise create_error_response(
             message=f"Failed to get preset: {sanitize_error_message(e, 'get_preset')}",
@@ -196,7 +217,7 @@ async def delete_pipeline_preset(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     except HTTPException:
         raise
-    except Exception as e:
+    except _PIPELINE_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to delete preset: {e}")
         raise create_error_response(
             message=f"Failed to delete preset: {sanitize_error_message(e, 'delete_preset')}",
@@ -232,11 +253,11 @@ async def cleanup_ephemeral_collections(
                 await adapter.delete_collection(name)
                 db.mark_ephemeral_deleted(name)
                 deleted += 1
-            except Exception as e:
+            except _PIPELINE_CLEANUP_ITEM_EXCEPTIONS as e:
                 logger.warning(f"Failed to delete expired collection {name}: {e}")
                 errors.append(f"{name}: {str(e)}")
         return PipelineCleanupResponse(expired_count=len(expired), deleted_count=deleted, errors=errors or None)
-    except Exception as e:
+    except _PIPELINE_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Cleanup failed: {e}")
         raise create_error_response(
             message=f"Cleanup failed: {sanitize_error_message(e, 'cleanup')}",

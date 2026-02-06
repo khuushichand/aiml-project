@@ -8,6 +8,14 @@ and this project adheres to Some kind of Versioning
 ## [Version] Date
 
 ### Added
+- **FVA Pipeline (Falsification-Verification Alignment)**: New claim verification enhancement that actively searches for contradicting evidence to provide more robust verification results. Implements the FVA-RAG paper (arXiv:2512.07015).
+  - New `CONTESTED` verification status for claims with significant evidence both supporting and contradicting
+  - Anti-context retrieval generates counter-queries (negation, contrary, alternative) to find contradicting evidence
+  - Adjudication weighs supporting vs contradicting evidence using NLI and LLM-based stance assessment
+  - API endpoints: `POST /api/v1/claims/verify/fva` and `GET /api/v1/claims/verify/fva/settings`
+  - Configurable via config.txt: FVA_ENABLED, FVA_CONFIDENCE_THRESHOLD, FVA_CONTESTED_THRESHOLD, etc.
+  - 9 new Prometheus metrics for observability (falsification triggers, status changes, adjudication scores, timeouts)
+  - Budget management to prevent runaway costs on large claim sets
 - Speech Playground history now shows metadata (duration, model/voice/provider, params summary) with a detail tooltip.
 - History entries now persist STT/TTS params (task, temp, response format, segmentation, speed, split, streaming, mode) so metadata reflects actual runs.
 - Global TS typecheck fixed across UI (EPUB viewer/search typings, document chat/store shapes, KnowledgeQA response normalization, MCP path typing, chunking options, safe config typing, xterm ambient types, SpeechPlayground ordering/import issues).

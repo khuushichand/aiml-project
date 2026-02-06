@@ -1431,6 +1431,7 @@ class WorldBookService:
                 "token_cost": int(entry_tokens),
                 "priority": int(entry.priority),
                 "regex_match": bool(entry.regex_match),
+                "appendable": bool(entry.metadata.get("appendable", False)) if entry.metadata else False,
                 "content_preview": (entry.content or "")[:240],
                 "depth_level": depth_level,
             }
@@ -1502,11 +1503,26 @@ class WorldBookService:
                 combined_content = " ".join(e.content for e in matched_entries)
                 current_depth -= 1
 
-        # Build injected content
+        # Build injected content (appendable-aware grouping)
         if matched_entries:
             # Sort by priority for final output
             matched_entries.sort(key=lambda e: e.priority, reverse=True)
-            injected_content = "\n\n".join(e.content for e in matched_entries)
+            # Consecutive appendable entries are concatenated directly (no separator).
+            # Non-appendable entries are separated by "\n\n".
+            blocks: list[str] = []
+            current_block: list[str] = []
+            for entry in matched_entries:
+                is_appendable = bool(entry.metadata.get("appendable", False)) if entry.metadata else False
+                if is_appendable:
+                    current_block.append(entry.content)
+                else:
+                    if current_block:
+                        blocks.append("".join(current_block))
+                        current_block = []
+                    blocks.append(entry.content)
+            if current_block:
+                blocks.append("".join(current_block))
+            injected_content = "\n\n".join(blocks)
         else:
             injected_content = ""
 

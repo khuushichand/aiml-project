@@ -118,6 +118,21 @@ _SETTINGS_ALLOWLIST: dict[str, tuple[type, ...]] = {
 _ETAG_RE = re.compile(r'^(W/)?"v(?P<version>\d+)"$')
 _MARP_THEME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
+_SLIDES_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
 
 def _parse_etag(raw: str | None) -> int:
     if not raw:
@@ -514,7 +529,7 @@ def _generate_presentation(
     generator = SlidesGenerator()
     try:
         metrics = get_metrics_registry()
-    except Exception:
+    except _SLIDES_NONCRITICAL_EXCEPTIONS:
         logger.debug("Failed to get metrics registry, metrics disabled")
         metrics = None
     started_at = time.perf_counter()
@@ -527,7 +542,7 @@ def _generate_presentation(
                 "slides_generation_errors_total",
                 labels={"source_type": source_type, "error": error_type},
             )
-        except Exception as exc:
+        except _SLIDES_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Failed to record generation error metric: {}", exc)
 
     try:
@@ -595,7 +610,7 @@ def _generate_presentation(
                 time.perf_counter() - started_at,
                 labels={"source_type": source_type},
             )
-        except Exception as exc:
+        except _SLIDES_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Failed to record generation latency metric: {}", exc)
     response.headers["ETag"] = _format_etag(row.version)
     response.headers["Last-Modified"] = row.last_modified
@@ -1281,7 +1296,7 @@ async def export_presentation(
     settings = _deserialize_settings(row.settings)
     try:
         metrics = get_metrics_registry()
-    except Exception:
+    except _SLIDES_NONCRITICAL_EXCEPTIONS:
         metrics = None
     started_at = time.perf_counter()
 
@@ -1305,7 +1320,7 @@ async def export_presentation(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "input_error"},
                     )
-                except Exception:
+                except _SLIDES_NONCRITICAL_EXCEPTIONS:
                     pass
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except SlidesExportError as exc:
@@ -1315,7 +1330,7 @@ async def export_presentation(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "export_error"},
                     )
-                except Exception:
+                except _SLIDES_NONCRITICAL_EXCEPTIONS:
                     pass
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         filename = f"presentation_{presentation_id}.md"
@@ -1350,7 +1365,7 @@ async def export_presentation(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "input_error"},
                     )
-                except Exception:
+                except _SLIDES_NONCRITICAL_EXCEPTIONS:
                     pass
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except SlidesExportError as exc:
@@ -1360,7 +1375,7 @@ async def export_presentation(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "export_error"},
                     )
-                except Exception:
+                except _SLIDES_NONCRITICAL_EXCEPTIONS:
                     pass
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         filename = f"presentation_{presentation_id}.pdf"
@@ -1381,7 +1396,7 @@ async def export_presentation(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "assets_missing"},
                     )
-                except Exception:
+                except _SLIDES_NONCRITICAL_EXCEPTIONS:
                     pass
             raise HTTPException(status_code=500, detail="slides_assets_missing") from exc
         except SlidesExportInputError as exc:
@@ -1391,7 +1406,7 @@ async def export_presentation(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "input_error"},
                     )
-                except Exception:
+                except _SLIDES_NONCRITICAL_EXCEPTIONS:
                     pass
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except SlidesExportError as exc:
@@ -1401,7 +1416,7 @@ async def export_presentation(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "export_error"},
                     )
-                except Exception:
+                except _SLIDES_NONCRITICAL_EXCEPTIONS:
                     pass
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         filename = f"presentation_{presentation_id}.zip"
@@ -1413,7 +1428,7 @@ async def export_presentation(
                     "slides_export_errors_total",
                     labels={"format": str(format), "error": "invalid_format"},
                 )
-            except Exception:
+            except _SLIDES_NONCRITICAL_EXCEPTIONS:
                 pass
         raise HTTPException(status_code=400, detail="invalid_export_format")
 
@@ -1424,7 +1439,7 @@ async def export_presentation(
                 time.perf_counter() - started_at,
                 labels={"format": format.value},
             )
-        except Exception:
+        except _SLIDES_NONCRITICAL_EXCEPTIONS:
             pass
 
     headers = {"Content-Disposition": f"attachment; filename=\"{filename}\""}
@@ -1440,7 +1455,7 @@ async def export_presentation(
 async def slides_health(db: SlidesDatabase = Depends(get_slides_db_for_user)) -> SlidesHealthResponse:
     try:
         _ = db.list_presentations(limit=1, offset=0, include_deleted=True, sort_column="created_at", sort_direction="DESC")
-    except Exception as exc:
+    except _SLIDES_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning("slides health check failed: {}", exc)
         raise HTTPException(status_code=500, detail="slides_db_unavailable") from exc
     return SlidesHealthResponse(service="slides", status="ok")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 
@@ -49,13 +50,35 @@ from tldw_Server_API.app.core.Utils.metadata_utils import (
 
 router = APIRouter(tags=["Media Versioning"])
 
+_MEDIA_VERSIONS_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
+_MEDIA_VERSIONS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
 
 def _is_test_mode() -> bool:
     try:
         from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode_impl
 
         return bool(_is_test_mode_impl())
-    except Exception:
+    except _MEDIA_VERSIONS_NONCRITICAL_EXCEPTIONS:
         return False
 
 
@@ -144,7 +167,7 @@ async def list_versions(
                     created_at_dt = datetime.fromisoformat(
                         created_at_dt.replace("Z", "+00:00")
                     )
-                except Exception:
+                except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
                     pass
             safe_md = rv.get("safe_metadata")
             if isinstance(safe_md, str):
@@ -152,7 +175,7 @@ async def list_versions(
 
                 try:
                     safe_md = _json.loads(safe_md)
-                except Exception:
+                except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
                     safe_md = None
             versions.append(
                 VersionDetailResponse(
@@ -243,7 +266,7 @@ async def get_version(
                 created_at_dt = datetime.fromisoformat(
                     created_at_dt.replace("Z", "+00:00")
                 )
-            except Exception:
+            except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
                 pass
         safe_md = version_dict.get("safe_metadata")
         if isinstance(safe_md, str):
@@ -251,7 +274,7 @@ async def get_version(
 
             try:
                 safe_md = _json.loads(safe_md)
-            except Exception:
+            except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
                 safe_md = None
 
         return VersionDetailResponse(
@@ -334,7 +357,7 @@ async def create_version(
                 bool(headers.get("X-API-KEY")),
                 bool(headers.get("authorization")),
             )
-    except Exception:  # pragma: no cover - diagnostics only
+    except _MEDIA_VERSIONS_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - diagnostics only
         pass
 
     try:
@@ -703,7 +726,7 @@ async def patch_metadata(
         if isinstance(existing, str):
             try:
                 existing = _json.loads(existing)
-            except Exception:
+            except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
                 existing = None
         if not isinstance(existing, dict):
             existing = {}
@@ -716,7 +739,7 @@ async def patch_metadata(
 
         try:
             new_meta_json = _json.dumps(new_meta, ensure_ascii=False)
-        except Exception:
+        except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="safe_metadata is not JSON-serializable",
@@ -822,7 +845,7 @@ async def put_version_metadata(
         if isinstance(existing, str):
             try:
                 existing = _json.loads(existing)
-            except Exception:
+            except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
                 existing = None
         if not isinstance(existing, dict):
             existing = {}
@@ -835,7 +858,7 @@ async def put_version_metadata(
 
         try:
             smj = _json.dumps(new_meta, ensure_ascii=False)
-        except Exception:
+        except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="safe_metadata is not JSON-serializable",
@@ -934,7 +957,7 @@ async def create_or_update_version_advanced(
         if isinstance(latest_sm, str):
             try:
                 latest_sm = _json.loads(latest_sm)
-            except Exception:
+            except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
                 latest_sm = None
         if not isinstance(latest_sm, dict):
             latest_sm = {}
@@ -951,7 +974,7 @@ async def create_or_update_version_advanced(
 
         try:
             smj = _json.dumps(merged_sm, ensure_ascii=False) if merged_sm else None
-        except Exception:
+        except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="safe_metadata is not JSON-serializable",

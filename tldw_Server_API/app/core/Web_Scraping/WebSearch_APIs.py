@@ -284,6 +284,7 @@ def initialize_web_search_results_dict(search_params: dict) -> dict:
         "result_count": 0,
         "date_range": search_params.get('date_range'),
         "safesearch": search_params.get('safesearch', 'active'),
+        "site_whitelist": search_params.get('site_whitelist') or search_params.get('include_domains', []),
         "site_blacklist": search_params.get('site_blacklist', []),
         "exactTerms": search_params.get('exactTerms'),
         "excludeTerms": search_params.get('excludeTerms'),
@@ -368,13 +369,15 @@ def generate_and_search(question: str, search_params: dict) -> dict:
             result_count=search_params.get('result_count', 10),
             date_range=search_params.get('date_range'),
             safesearch=search_params.get('safesearch', 'active'),
+            site_whitelist=search_params.get('site_whitelist') or search_params.get('include_domains'),
             site_blacklist=search_params.get('site_blacklist', []),
             exactTerms=search_params.get('exactTerms'),
             excludeTerms=search_params.get('excludeTerms'),
             filter=search_params.get('filter'),
             geolocation=search_params.get('geolocation'),
             search_result_language=search_params.get('search_result_language'),
-            sort_results_by=search_params.get('sort_results_by')
+            sort_results_by=search_params.get('sort_results_by'),
+            search_params=search_params,
         )
 
         # Debug: Inspect raw results
@@ -1121,7 +1124,7 @@ def aggregate_results(
 
 # FIXME
 def perform_websearch(search_engine, search_query, content_country, search_lang, output_lang, result_count, date_range=None,
-                      safesearch=None, site_blacklist=None, exactTerms=None, excludeTerms=None, filter=None, geolocation=None, search_result_language=None, sort_results_by=None, search_params=None):
+                      safesearch=None, site_blacklist=None, exactTerms=None, excludeTerms=None, filter=None, geolocation=None, search_result_language=None, sort_results_by=None, search_params=None, site_whitelist=None):
     try:
         if search_engine.lower() == "baidu":
             web_search_results = search_web_baidu(search_query, None, None)
@@ -1159,6 +1162,7 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             web_search_results = {"results": ddg_results}
 
         elif search_engine.lower() == "google":
+            site_whitelist_list = site_whitelist if isinstance(site_whitelist, list) else None
             site_blacklist_list = site_blacklist if isinstance(site_blacklist, list) else None
             site_blacklist_value: str | None
             if site_blacklist_list:
@@ -1182,8 +1186,14 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
                 "safesearch": safesearch or "off",  # Default value,
             }
 
-            # If site_blacklist has multiple domains, do not use siteSearch
-            if site_blacklist_list and len(site_blacklist_list) == 1:
+            # Prefer include-domain filter when present; otherwise apply exclude-domain filter.
+            if site_whitelist_list and len(site_whitelist_list) == 1:
+                google_args["siteSearch"] = site_whitelist_list[0]
+                google_args["siteSearchFilter"] = "i"
+            elif isinstance(site_whitelist, str) and site_whitelist:
+                google_args["siteSearch"] = site_whitelist
+                google_args["siteSearchFilter"] = "i"
+            elif site_blacklist_list and len(site_blacklist_list) == 1:
                 google_args["siteSearch"] = site_blacklist_list[0]
                 google_args["siteSearchFilter"] = "e"
             elif isinstance(site_blacklist, str) and site_blacklist:
@@ -1220,6 +1230,7 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             web_search_results = search_web_tavily(
                 search_query=search_query,
                 result_count=result_count,
+                site_whitelist=site_whitelist,
                 site_blacklist=site_blacklist,
             )
 
@@ -1228,6 +1239,7 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
                 search_query=search_query,
                 result_count=result_count,
                 content_country=content_country,
+                site_whitelist=site_whitelist,
                 site_blacklist=site_blacklist,
             )
 
@@ -1424,6 +1436,7 @@ def process_web_search_results(search_results: dict, search_engine: str) -> dict
         "result_count": search_results.get("result_count", 0),
         "date_range": search_results.get("date_range"),
         "safesearch": search_results.get("safesearch"),
+        "site_whitelist": search_results.get("site_whitelist"),
         "site_blacklist": search_results.get("site_blacklist"),
         "exactTerms": search_results.get("exactTerms"),
         "excludeTerms": search_results.get("excludeTerms"),

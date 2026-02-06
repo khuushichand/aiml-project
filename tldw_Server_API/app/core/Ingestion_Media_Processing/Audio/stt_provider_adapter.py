@@ -26,7 +26,7 @@ try:
     # Reuse the central model-name parser so HTTP/OpenAI-style model
     # identifiers resolve consistently across REST, ingestion, and jobs.
     from .Audio_Transcription_Lib import parse_transcription_model
-except Exception:  # pragma: no cover - defensive fallback for minimal envs
+except ImportError:  # pragma: no cover - defensive fallback for minimal envs
 
     def parse_transcription_model(model_name: str) -> tuple[str, str, str | None]:  # type: ignore[override]
         model_name = (model_name or "").strip()
@@ -36,6 +36,14 @@ except Exception:  # pragma: no cover - defensive fallback for minimal envs
 
 
 _SUPPORTED_PARAKEET_VARIANTS = {"standard", "onnx", "mlx", "cuda"}
+_STT_PROVIDER_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def _raise_if_cancelled(cancel_check: Callable[[], bool] | None) -> None:
@@ -298,7 +306,7 @@ class ParakeetAdapter(SttProviderAdapter):
         else:
             try:
                 stt_cfg = get_stt_config() or {}
-            except Exception:
+            except _STT_PROVIDER_NONCRITICAL_EXCEPTIONS:
                 stt_cfg = {}
             model_name, _ = _resolve_default_model_for_provider(self.name.value, stt_cfg)
             if not model_name:
@@ -491,7 +499,7 @@ class Qwen3ASRAdapter(SttProviderAdapter):
             vllm_url = str(stt_cfg.get("qwen3_asr_vllm_base_url", "")).strip()
             backend = str(stt_cfg.get("qwen3_asr_backend", "")).lower()
             streaming_available = bool(vllm_url and backend == "vllm")
-        except Exception:
+        except _STT_PROVIDER_NONCRITICAL_EXCEPTIONS:
             streaming_available = False
 
         notes = "Qwen3-ASR: 30 languages, word timestamps via ForcedAligner"
@@ -529,7 +537,7 @@ class Qwen3ASRAdapter(SttProviderAdapter):
         else:
             try:
                 stt_cfg = get_stt_config() or {}
-            except Exception:
+            except _STT_PROVIDER_NONCRITICAL_EXCEPTIONS:
                 stt_cfg = {}
             model_path, _ = _resolve_default_model_for_provider(self.name.value, stt_cfg)
             if not model_path:
@@ -587,7 +595,7 @@ class VibeVoiceAdapter(SttProviderAdapter):
         else:
             try:
                 stt_cfg = get_stt_config() or {}
-            except Exception:
+            except _STT_PROVIDER_NONCRITICAL_EXCEPTIONS:
                 stt_cfg = {}
             model_name, _ = _resolve_default_model_for_provider(self.name.value, stt_cfg)
             if not model_name:
@@ -730,7 +738,7 @@ class SttProviderRegistry:
         cfg: dict[str, Any]
         try:
             cfg = get_stt_config() or {}
-        except Exception:
+        except _STT_PROVIDER_NONCRITICAL_EXCEPTIONS:
             cfg = {}
 
         raw_default = cfg.get("default_transcriber") or cfg.get("default_stt_provider") or "faster-whisper"
@@ -779,7 +787,7 @@ class SttProviderRegistry:
             provider = self.get_default_provider_name()
             try:
                 stt_cfg = get_stt_config() or {}
-            except Exception:
+            except _STT_PROVIDER_NONCRITICAL_EXCEPTIONS:
                 stt_cfg = {}
             model, variant = _resolve_default_model_for_provider(provider, stt_cfg)
             return provider, model, variant
@@ -807,7 +815,7 @@ class SttProviderRegistry:
                 return provider, normalized_name, None
 
             raw_provider, model, variant = parse_transcription_model(normalized_name)
-        except Exception:
+        except _STT_PROVIDER_NONCRITICAL_EXCEPTIONS:
             # Defensive: treat unknown models as Whisper-family
             raw_provider, model, variant = "whisper", (model_name or "").strip(), None
 
@@ -846,7 +854,7 @@ def resolve_default_transcription_model(fallback_whisper_model: str) -> str:
     registry = get_stt_provider_registry()
     try:
         stt_cfg = get_stt_config() or {}
-    except Exception:
+    except _STT_PROVIDER_NONCRITICAL_EXCEPTIONS:
         stt_cfg = {}
 
     provider = registry.get_default_provider_name()

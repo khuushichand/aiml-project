@@ -3739,6 +3739,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         pass
                     # Verify core FTS tables exist to avoid silent search failures
                     self._verify_required_fts_tables_sqlite(conn)
+                    # Seed/heal character_cards_fts before request traffic. Schema V4
+                    # inserts "Default Assistant" before FTS triggers are created.
+                    self._self_heal_character_cards_fts_sqlite(conn)
                     return
                 if current_db_version > target_version:
                     raise SchemaError(
@@ -4054,6 +4057,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         f"Schema migration process completed, but final DB version is {final_version_check}, expected {target_version}. Manual check required.")
                 # Verify core FTS tables after migrations complete
                 self._verify_required_fts_tables_sqlite(conn)
+                # Seed/heal character_cards_fts before request traffic. Schema V4
+                # inserts "Default Assistant" before FTS triggers are created.
+                self._self_heal_character_cards_fts_sqlite(conn)
                 logger.info(
                     f"Database schema '{self._SCHEMA_NAME}' successfully initialized/migrated to version {final_version_check}.")
 
@@ -4088,6 +4094,55 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 )
         except sqlite3.Error as e:
             raise SchemaError(f"Failed verifying FTS tables for '{self._SCHEMA_NAME}': {e}") from e
+
+    def _self_heal_character_cards_fts_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Rebuild character_cards_fts when active card rows are not indexed.
+
+        Rationale:
+        - Schema V4 inserts the bootstrap "Default Assistant" row before the
+          character_cards FTS triggers exist.
+        - On a fresh DB this can leave character_cards_fts missing at least one
+          active row, and the first UPDATE trigger delete op can fail with:
+          "database disk image is malformed".
+        """
+        try:
+            active_cards_row = conn.execute(
+                "SELECT COUNT(*) FROM character_cards WHERE deleted = 0"
+            ).fetchone()
+            active_cards = int(active_cards_row[0]) if active_cards_row else 0
+        except sqlite3.Error as exc:
+            logger.warning("Failed counting active character cards for FTS heal: %s", exc)
+            return
+
+        if active_cards <= 0:
+            return
+
+        try:
+            # For default FTS5 settings this tracks indexed row count.
+            docsize_row = conn.execute(
+                "SELECT COUNT(*) FROM character_cards_fts_docsize"
+            ).fetchone()
+            indexed_cards = int(docsize_row[0]) if docsize_row else 0
+        except sqlite3.Error as exc:
+            logger.warning(
+                "Failed counting character_cards_fts_docsize rows; rebuilding index defensively: %s",
+                exc,
+            )
+            indexed_cards = -1
+
+        if indexed_cards >= active_cards:
+            return
+
+        logger.warning(
+            "character_cards_fts out of sync (active=%s indexed=%s); rebuilding.",
+            active_cards,
+            indexed_cards,
+        )
+        try:
+            conn.execute("INSERT INTO character_cards_fts(character_cards_fts) VALUES('rebuild')")
+        except sqlite3.Error as exc:
+            logger.error("Failed rebuilding character_cards_fts: %s", exc)
+            raise SchemaError(f"Failed rebuilding character_cards_fts: {exc}") from exc
 
     def _initialize_schema_postgres(self):
         """Bootstrap or migrate the ChaCha schema on PostgreSQL."""
@@ -4554,6 +4609,160 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"get_conversation_settings failed for {conversation_id}: {exc}")
             return None
+
+    # ----------------------
+    # Prompt presets
+    # ----------------------
+    def _ensure_prompt_presets_table(self) -> None:
+        """Ensure the prompt_presets table exists."""
+        if self.backend_type == BackendType.SQLITE:
+            self.execute_query(
+                """
+                CREATE TABLE IF NOT EXISTS prompt_presets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    preset_id TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    section_order TEXT NOT NULL DEFAULT '[]',
+                    section_templates TEXT NOT NULL DEFAULT '{}',
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
+                commit=True,
+            )
+        else:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS prompt_presets (
+                    id SERIAL PRIMARY KEY,
+                    preset_id TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    section_order TEXT NOT NULL DEFAULT '[]',
+                    section_templates TEXT NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+
+    def upsert_prompt_preset(
+        self,
+        preset_id: str,
+        name: str,
+        section_order: list[str],
+        section_templates: dict[str, str],
+    ) -> bool:
+        """Create or update a prompt preset."""
+        try:
+            self._ensure_prompt_presets_table()
+            order_json = json.dumps(section_order)
+            templates_json = json.dumps(section_templates)
+            if self.backend_type == BackendType.SQLITE:
+                self.execute_query(
+                    "INSERT INTO prompt_presets(preset_id, name, section_order, section_templates, updated_at) "
+                    "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) "
+                    "ON CONFLICT(preset_id) DO UPDATE SET name=excluded.name, "
+                    "section_order=excluded.section_order, section_templates=excluded.section_templates, "
+                    "updated_at=CURRENT_TIMESTAMP",
+                    (preset_id, name, order_json, templates_json),
+                    commit=True,
+                )
+            else:
+                self.backend.execute(
+                    "INSERT INTO prompt_presets(preset_id, name, section_order, section_templates, updated_at) "
+                    "VALUES (%s, %s, %s, %s, NOW()) "
+                    "ON CONFLICT (preset_id) DO UPDATE SET name = EXCLUDED.name, "
+                    "section_order = EXCLUDED.section_order, section_templates = EXCLUDED.section_templates, "
+                    "updated_at = NOW()",
+                    (preset_id, name, order_json, templates_json),
+                )
+            return True
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"upsert_prompt_preset failed for {preset_id}: {exc}")
+            return False
+
+    def get_prompt_preset(self, preset_id: str) -> dict[str, Any] | None:
+        """Fetch a single prompt preset by ID."""
+        try:
+            self._ensure_prompt_presets_table()
+            if self.backend_type == BackendType.SQLITE:
+                cursor = self.execute_query(
+                    "SELECT preset_id, name, section_order, section_templates, created_at, updated_at "
+                    "FROM prompt_presets WHERE preset_id = ?",
+                    (preset_id,),
+                )
+                row = cursor.fetchone()
+            else:
+                result = self.backend.execute(
+                    "SELECT preset_id, name, section_order, section_templates, created_at, updated_at "
+                    "FROM prompt_presets WHERE preset_id = %s",
+                    (preset_id,),
+                )
+                row = result.fetchone()
+            if not row:
+                return None
+            return {
+                "preset_id": row[0],
+                "name": row[1],
+                "section_order": json.loads(row[2]) if row[2] else [],
+                "section_templates": json.loads(row[3]) if row[3] else {},
+                "created_at": str(row[4]) if row[4] else None,
+                "updated_at": str(row[5]) if row[5] else None,
+            }
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"get_prompt_preset failed for {preset_id}: {exc}")
+            return None
+
+    def list_prompt_presets(self) -> list[dict[str, Any]]:
+        """List all user-defined prompt presets."""
+        try:
+            self._ensure_prompt_presets_table()
+            if self.backend_type == BackendType.SQLITE:
+                cursor = self.execute_query(
+                    "SELECT preset_id, name, section_order, section_templates, created_at, updated_at "
+                    "FROM prompt_presets ORDER BY name",
+                )
+                rows = cursor.fetchall()
+            else:
+                result = self.backend.execute(
+                    "SELECT preset_id, name, section_order, section_templates, created_at, updated_at "
+                    "FROM prompt_presets ORDER BY name",
+                )
+                rows = result.fetchall()
+            return [
+                {
+                    "preset_id": r[0],
+                    "name": r[1],
+                    "section_order": json.loads(r[2]) if r[2] else [],
+                    "section_templates": json.loads(r[3]) if r[3] else {},
+                    "created_at": str(r[4]) if r[4] else None,
+                    "updated_at": str(r[5]) if r[5] else None,
+                }
+                for r in rows
+            ]
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"list_prompt_presets failed: {exc}")
+            return []
+
+    def delete_prompt_preset(self, preset_id: str) -> bool:
+        """Delete a prompt preset by ID."""
+        try:
+            self._ensure_prompt_presets_table()
+            if self.backend_type == BackendType.SQLITE:
+                self.execute_query(
+                    "DELETE FROM prompt_presets WHERE preset_id = ?",
+                    (preset_id,),
+                    commit=True,
+                )
+            else:
+                self.backend.execute(
+                    "DELETE FROM prompt_presets WHERE preset_id = %s",
+                    (preset_id,),
+                )
+            return True
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"delete_prompt_preset failed for {preset_id}: {exc}")
+            return False
 
     # ----------------------
     # Skill registry

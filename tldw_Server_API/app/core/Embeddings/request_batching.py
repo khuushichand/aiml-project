@@ -20,6 +20,19 @@ from tldw_Server_API.app.core.Embeddings.rate_limiter import get_async_rate_limi
 from tldw_Server_API.app.core.Embeddings.simplified_config import ProviderConfig, get_config
 from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens
 
+_BATCHER_TOKEN_PARSE_EXCEPTIONS = (RuntimeError, TypeError, ValueError)
+_BATCHER_NONCRITICAL_EXCEPTIONS = (
+    asyncio.InvalidStateError,
+    AttributeError,
+    ConnectionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_BATCHER_FINGERPRINT_EXCEPTIONS = (RuntimeError, TypeError, ValueError)
+_BATCHER_SHUTDOWN_EXCEPTIONS = (RuntimeError, TypeError, ValueError)
+
 
 class EmbeddingsRateLimitError(RuntimeError):
     """Raised when the embeddings rate limiter rejects a request."""
@@ -188,7 +201,7 @@ class RequestBatcher:
         ):
             try:
                 tokens_units = int(_count_tokens(text))
-            except Exception:
+            except _BATCHER_TOKEN_PARSE_EXCEPTIONS:
                 tokens_units = 0
             allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
                 user_id,
@@ -202,7 +215,7 @@ class RequestBatcher:
                     tier = limiter.user_tiers.get(user_id, "free")
                 try:
                     self.metrics.log_rate_limit_hit(user_id, tier)
-                except Exception:
+                except _BATCHER_NONCRITICAL_EXCEPTIONS:
                     pass
                 retry_after_msg = f" Retry after {retry_after}s." if retry_after else ""
                 raise EmbeddingsRateLimitError(
@@ -246,7 +259,7 @@ class RequestBatcher:
             if task is not None and task.done():
                 try:
                     reason = "cancelled" if task.cancelled() else f"finished (error={task.exception()})"
-                except Exception:
+                except _BATCHER_NONCRITICAL_EXCEPTIONS:
                     reason = "finished"
                 logger.debug(f"Restarting processing task for queue {self._queue_label(queue_key)}: previous task {reason}.")
             self._start_processing_task(queue_key)
@@ -293,7 +306,7 @@ class RequestBatcher:
             except asyncio.CancelledError:
                 logger.debug(f"Processing task for queue {queue_key} cancelled; shutting down.")
                 raise
-            except Exception as e:
+            except _BATCHER_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error processing batch queue {queue_key}: {e}")
                 # Don't crash the processing task
                 await asyncio.sleep(0.1)
@@ -433,7 +446,7 @@ class RequestBatcher:
                 f"avg_wait={avg_wait:.3f}s"
             )
 
-        except Exception as e:
+        except _BATCHER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error processing batch: {e}")
 
             # Set error for all requests
@@ -695,10 +708,10 @@ class RequestBatcher:
             normalized = _normalize(config)
             payload = json.dumps(normalized, sort_keys=True, separators=(",", ":"), default=str)
             return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
-        except Exception as exc:
+        except _BATCHER_FINGERPRINT_EXCEPTIONS as exc:
             try:
                 logger.debug(f"Falling back to identity fingerprint for config override due to: {exc}")
-            except Exception:
+            except _BATCHER_NONCRITICAL_EXCEPTIONS:
                 pass
             return f"cfg_fallback:{id(config)}"
 
@@ -855,7 +868,7 @@ class RequestBatcher:
                 try:
                     if not task.done():
                         task_loop.call_soon_threadsafe(task.cancel)
-                except Exception:
+                except _BATCHER_SHUTDOWN_EXCEPTIONS:
                     # Loop may already be closed; best effort cancellation
                     pass
 

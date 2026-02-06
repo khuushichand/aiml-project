@@ -170,7 +170,7 @@ class EchoTTSAdapter(TTSAdapter):
             # Best effort: capabilities should still list streaming support if module exists.
             try:
                 self._load_echo_modules()
-            except Exception:
+            except (ImportError, ModuleNotFoundError, OSError, RuntimeError):
                 supports_streaming = False
         return TTSCapabilities(
             provider_name="EchoTTS",
@@ -443,7 +443,7 @@ class EchoTTSAdapter(TTSAdapter):
         try:
             inference = importlib.import_module("inference")
             blockwise = importlib.import_module("inference_blockwise")
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             module_dir = self.module_path
             if not module_dir.exists():
                 raise TTSModelLoadError(
@@ -484,7 +484,7 @@ class EchoTTSAdapter(TTSAdapter):
                     model_dtype = torch.float16
                 elif parse_bool(self.config.get("echo_tts_use_fp32"), default=False):
                     model_dtype = torch.float32
-            except Exception:
+            except (TypeError, ValueError):
                 model_dtype = torch.bfloat16
 
             self._model = await asyncio.to_thread(
@@ -520,7 +520,7 @@ class EchoTTSAdapter(TTSAdapter):
                 )
                 if asyncio.iscoroutine(register_result):
                     await register_result
-            except Exception:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 pass
 
     def _cache_key(self, voice_bytes: bytes) -> str:
@@ -551,7 +551,7 @@ class EchoTTSAdapter(TTSAdapter):
                 async with self._cache_lock:
                     self._speaker_cache.clear()
                 return
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             pass
 
         if not self.cache_on_device:
@@ -1079,7 +1079,7 @@ class EchoTTSAdapter(TTSAdapter):
         try:
             if len(text.encode("utf-8")) > max_bytes:
                 return True
-        except Exception:
+        except UnicodeError:
             return True
         return False
 
@@ -1088,7 +1088,7 @@ class EchoTTSAdapter(TTSAdapter):
             return False
         try:
             return len(text.encode("utf-8")) <= max_bytes
-        except Exception:
+        except UnicodeError:
             return False
 
     def _split_text_chunks(self, text: str, *, max_chars: int, max_bytes: int) -> list[str]:
@@ -1162,7 +1162,7 @@ class EchoTTSAdapter(TTSAdapter):
         for ch in text:
             try:
                 ch_bytes = len(ch.encode("utf-8"))
-            except Exception:
+            except UnicodeError:
                 ch_bytes = 1
             if current_chars and (current_bytes + ch_bytes > max_bytes or len(current_chars) + 1 > max_chars):
                 chunks.append("".join(current_chars))
@@ -1188,7 +1188,7 @@ class EchoTTSAdapter(TTSAdapter):
     def _coerce_bool(self, value: Any, default: bool) -> bool:
         try:
             return parse_bool(value, default=default)
-        except Exception:
+        except (TypeError, ValueError):
             return default
 
     def _coerce_int(self, value: Any, default: int) -> int:

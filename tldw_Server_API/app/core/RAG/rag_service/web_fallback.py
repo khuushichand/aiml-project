@@ -27,7 +27,9 @@ class WebFallbackConfig:
     content_country: str = "US"
     search_lang: str = "en"
     output_lang: str = "en"
-    max_content_chars: int = 2000
+    max_content_chars: int = 2000  # deprecated fallback knob (chars)
+    max_content_tokens: int = 500
+    tokenizer_model: str | None = None
     subquery_generation: bool = False
     safesearch: str = "active"
     timeout_seconds: float = 30.0
@@ -43,6 +45,50 @@ class WebFallbackResult:
     engine_used: str
     query_used: str
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+def _truncate_content_by_tokens(
+    content: str,
+    max_tokens: int,
+    model: str | None = None,
+) -> str:
+    """Truncate text by token budget using binary search with fallback."""
+    text = str(content or "")
+    if not text:
+        return ""
+
+    token_budget = max(1, int(max_tokens))
+
+    try:
+        import tiktoken  # type: ignore
+
+        if model:
+            try:
+                encoding = tiktoken.encoding_for_model(model)
+            except Exception:
+                encoding = tiktoken.get_encoding("cl100k_base")
+        else:
+            encoding = tiktoken.get_encoding("cl100k_base")
+
+        if len(encoding.encode(text)) <= token_budget:
+            return text
+
+        left, right = 0, len(text)
+        while left < right:
+            mid = (left + right + 1) // 2
+            if len(encoding.encode(text[:mid])) <= token_budget:
+                left = mid
+            else:
+                right = mid - 1
+
+        truncated = text[:left].rstrip()
+        return f"{truncated}\n...[truncated]" if left < len(text) else truncated
+
+    except Exception:
+        char_budget = max(1, token_budget) * 4
+        if len(text) <= char_budget:
+            return text
+        return f"{text[:char_budget].rstrip()}\n...[truncated]"
 
 
 async def web_search_fallback(
@@ -99,6 +145,8 @@ async def web_search_fallback(
             raw_results,
             query,
             config.max_content_chars,
+            max_content_tokens=config.max_content_tokens,
+            tokenizer_model=config.tokenizer_model,
         )
 
         return WebFallbackResult(
@@ -152,6 +200,8 @@ def _convert_web_results_to_documents(
     raw_results: list[dict[str, Any]],
     query: str,
     max_content_chars: int,
+    max_content_tokens: int | None = None,
+    tokenizer_model: str | None = None,
 ) -> list[Document]:
     """
     Convert raw web search results to Document objects.
@@ -159,7 +209,9 @@ def _convert_web_results_to_documents(
     Args:
         raw_results: Raw results from web search
         query: Original query
-        max_content_chars: Maximum characters to include in content
+        max_content_chars: Deprecated char limit fallback for content
+        max_content_tokens: Maximum tokens to include in content
+        tokenizer_model: Optional tokenizer model for token counting
 
     Returns:
         List of Document objects
@@ -181,10 +233,11 @@ def _convert_web_results_to_documents(
             if snippet:
                 content_parts.append(f"Summary: {snippet}")
             if body:
-                # Truncate body if needed
-                truncated_body = body[:max_content_chars]
-                if len(body) > max_content_chars:
-                    truncated_body += "..."
+                # Prefer token-aware truncation with max_content_chars fallback.
+                token_budget = max_content_tokens
+                if token_budget is None:
+                    token_budget = max(32, int(max(1, max_content_chars) / 4))
+                truncated_body = _truncate_content_by_tokens(str(body), token_budget, model=tokenizer_model)
                 content_parts.append(f"Content: {truncated_body}")
 
             content = "\n\n".join(content_parts)

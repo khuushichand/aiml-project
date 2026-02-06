@@ -13,6 +13,7 @@ This module tests all RAG and search-related workflow adapters:
 """
 
 import pytest
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -86,8 +87,8 @@ def mock_web_search_result():
     """Create mock web search results."""
     return {
         "results": [
-            {"title": "Result 1", "link": "https://example.com/1", "snippet": "First result"},
-            {"title": "Result 2", "link": "https://example.com/2", "snippet": "Second result"},
+            {"title": "Result 1", "url": "https://example.com/1", "content": "First result"},
+            {"title": "Result 2", "url": "https://example.com/2", "content": "Second result"},
         ],
         "total_results_found": 100,
     }
@@ -313,7 +314,7 @@ class TestWebSearchAdapter:
 
         mock_websearch = MagicMock(return_value=mock_web_search_result)
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.WebSearch.Web_Search.perform_websearch",
+            "tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs.perform_websearch",
             mock_websearch,
         )
 
@@ -325,6 +326,7 @@ class TestWebSearchAdapter:
         assert result["count"] == 2
         assert result["query"] == "test query"
         assert "text" in result
+        assert "First result" in result["text"]
 
     @pytest.mark.asyncio
     async def test_web_search_adapter_cancelled(self, base_context):
@@ -347,13 +349,13 @@ class TestWebSearchAdapter:
 
         mock_websearch = MagicMock(return_value=mock_web_search_result)
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.WebSearch.Web_Search.perform_websearch",
+            "tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs.perform_websearch",
             mock_websearch,
         )
 
         mock_summarize = MagicMock(return_value="Summarized content about the query.")
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.WebSearch.Web_Search.summarize",
+            "tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs.summarize",
             mock_summarize,
         )
 
@@ -363,6 +365,325 @@ class TestWebSearchAdapter:
 
         assert "summary" in result
         assert result["summary"] == "Summarized content about the query."
+
+    @pytest.mark.asyncio
+    async def test_web_search_adapter_uses_provider_alias(self, monkeypatch, base_context):
+        """Test provider alias maps to engine when engine is not provided."""
+        monkeypatch.setenv("TEST_MODE", "0")
+
+        from tldw_Server_API.app.core.Workflows.adapters.rag import run_web_search_adapter
+
+        captured = {}
+
+        def fake_perform_websearch(**kwargs):
+            captured.update(kwargs)
+            return {"results": [], "total_results_found": 0}
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs.perform_websearch",
+            fake_perform_websearch,
+        )
+
+        result = await run_web_search_adapter({"query": "q", "provider": "duckduckgo"}, base_context)
+
+        assert "error" not in result
+        assert captured.get("search_engine") == "duckduckgo"
+
+    @pytest.mark.asyncio
+    async def test_web_search_adapter_maps_searxng_and_forwards_overrides(self, monkeypatch, base_context):
+        """Test searxng alias normalization and Searx override forwarding."""
+        monkeypatch.setenv("TEST_MODE", "0")
+
+        from tldw_Server_API.app.core.Workflows.adapters.rag import run_web_search_adapter
+
+        captured = {}
+
+        def fake_perform_websearch(**kwargs):
+            captured.update(kwargs)
+            return {"results": [], "total_results_found": 0}
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs.perform_websearch",
+            fake_perform_websearch,
+        )
+
+        result = await run_web_search_adapter(
+            {
+                "query": "q",
+                "engine": "searxng",
+                "searx_url": "https://searx.example",
+                "searx_json_mode": True,
+            },
+            base_context,
+        )
+
+        assert "error" not in result
+        assert captured.get("search_engine") == "searx"
+        assert captured.get("search_params", {}).get("searx_url") == "https://searx.example"
+        assert captured.get("search_params", {}).get("searx_json_mode") is True
+
+    @pytest.mark.asyncio
+    async def test_web_search_adapter_forwards_domain_and_term_aliases(self, monkeypatch, base_context):
+        """Test include/exclude-domain and term aliases map to perform_websearch args."""
+        monkeypatch.setenv("TEST_MODE", "0")
+
+        from tldw_Server_API.app.core.Workflows.adapters.rag import run_web_search_adapter
+
+        captured = {}
+
+        def fake_perform_websearch(**kwargs):
+            captured.update(kwargs)
+            return {"results": [], "total_results_found": 0}
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs.perform_websearch",
+            fake_perform_websearch,
+        )
+
+        result = await run_web_search_adapter(
+            {
+                "query": "q",
+                "search_engine": "tavily",
+                "include_domains": ["allowed.example"],
+                "exclude_domains": ["blocked.example"],
+                "exact_terms": "must include",
+                "exclude_terms": "must exclude",
+                "safeSearch": False,
+                "timeRange": "week",
+                "searxUrl": "https://searx.alias.example",
+                "searxJsonMode": "true",
+            },
+            base_context,
+        )
+
+        assert "error" not in result
+        assert captured.get("search_engine") == "tavily"
+        assert captured.get("site_whitelist") == ["allowed.example"]
+        assert captured.get("site_blacklist") == ["blocked.example"]
+        assert captured.get("exactTerms") == "must include"
+        assert captured.get("excludeTerms") == "must exclude"
+        assert captured.get("safesearch") == "off"
+        assert captured.get("date_range") == "week"
+        assert captured.get("search_params", {}).get("searx_url") == "https://searx.alias.example"
+        assert captured.get("search_params", {}).get("searx_json_mode") is True
+
+    @pytest.mark.asyncio
+    async def test_web_search_adapter_fetch_content_enriches_results(self, monkeypatch, base_context):
+        """Test optional page-content enrichment with token truncation hook."""
+        monkeypatch.setenv("TEST_MODE", "0")
+
+        from tldw_Server_API.app.core.Workflows.adapters.rag import run_web_search_adapter
+
+        mock_web_results = {
+            "results": [
+                {"title": "Result 1", "url": "https://example.com/1", "content": "snippet one"},
+                {"title": "Result 2", "url": "https://example.com/2", "content": "snippet two"},
+            ],
+            "total_results_found": 2,
+        }
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs.perform_websearch",
+            lambda **_: mock_web_results,
+        )
+
+        async def fake_scrape_article(url: str, custom_cookies=None):
+            return {"url": url, "content": f"full content for {url}", "extraction_successful": True}
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib.scrape_article",
+            fake_scrape_article,
+        )
+
+        trunc_calls = {}
+
+        def fake_truncate(content: str, max_tokens: int, model=None) -> str:
+            trunc_calls["content"] = content
+            trunc_calls["max_tokens"] = max_tokens
+            trunc_calls["model"] = model
+            return "TRUNCATED_CONTENT"
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Workflows.adapters.rag.search._truncate_content_by_tokens",
+            fake_truncate,
+        )
+
+        result = await run_web_search_adapter(
+            {
+                "query": "test query",
+                "engine": "google",
+                "fetch_content": True,
+                "fetch_limit": 1,
+                "max_content_tokens": 123,
+                "tokenizer_model": "gpt-4o-mini",
+            },
+            base_context,
+        )
+
+        assert "error" not in result
+        assert result["results"][0]["content"] == "TRUNCATED_CONTENT"
+        assert "content" not in result["results"][1]
+        assert "TRUNCATED_CONTENT" in result["text"]
+        assert result.get("fetch_content", {}).get("attempted") == 1
+        assert result.get("fetch_content", {}).get("fetched") == 1
+        assert result.get("fetch_content", {}).get("max_content_tokens") == 123
+        assert trunc_calls.get("max_tokens") == 123
+        assert trunc_calls.get("model") == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_web_search_adapter_fetch_content_failure_keeps_snippet(self, monkeypatch, base_context):
+        """Test failed fetches are dropped from enriched output by default."""
+        monkeypatch.setenv("TEST_MODE", "0")
+
+        from tldw_Server_API.app.core.Workflows.adapters.rag import run_web_search_adapter
+
+        mock_web_results = {
+            "results": [
+                {"title": "Result 1", "url": "https://example.com/1", "content": "snippet one"},
+            ],
+            "total_results_found": 1,
+        }
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs.perform_websearch",
+            lambda **_: mock_web_results,
+        )
+
+        async def fake_scrape_article(url: str, custom_cookies=None):
+            return {"url": url, "content": "", "extraction_successful": False, "error": "blocked"}
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib.scrape_article",
+            fake_scrape_article,
+        )
+
+        result = await run_web_search_adapter(
+            {
+                "query": "test query",
+                "engine": "google",
+                "fetch_content": True,
+                "fetch_limit": 1,
+            },
+            base_context,
+        )
+
+        assert "error" not in result
+        assert result["count"] == 0
+        assert result.get("fetch_content", {}).get("attempted") == 1
+        assert result.get("fetch_content", {}).get("fetched") == 0
+        assert result.get("fetch_content", {}).get("dropped_failed") == 1
+        assert result.get("fetch_content", {}).get("errors")
+
+    @pytest.mark.asyncio
+    async def test_web_search_adapter_fetch_content_can_keep_failed_results(self, monkeypatch, base_context):
+        """Test optional disablement of failed-fetch filtering keeps snippet results."""
+        monkeypatch.setenv("TEST_MODE", "0")
+
+        from tldw_Server_API.app.core.Workflows.adapters.rag import run_web_search_adapter
+
+        mock_web_results = {
+            "results": [
+                {"title": "Result 1", "url": "https://example.com/1", "content": "snippet one"},
+            ],
+            "total_results_found": 1,
+        }
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs.perform_websearch",
+            lambda **_: mock_web_results,
+        )
+
+        async def fake_scrape_article(url: str, custom_cookies=None):
+            return {"url": url, "content": "", "extraction_successful": False, "error": "blocked"}
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib.scrape_article",
+            fake_scrape_article,
+        )
+
+        result = await run_web_search_adapter(
+            {
+                "query": "test query",
+                "engine": "google",
+                "fetch_content": True,
+                "fetch_limit": 1,
+                "filter_failed_fetches": False,
+            },
+            base_context,
+        )
+
+        assert "error" not in result
+        assert result["count"] == 1
+        assert "snippet one" in result["text"]
+        assert result.get("fetch_content", {}).get("dropped_failed") == 0
+
+    @pytest.mark.asyncio
+    async def test_web_search_adapter_auto_query_rewrite(self, monkeypatch, base_context):
+        """Test optional query rewrite updates the search query before provider call."""
+        monkeypatch.setenv("TEST_MODE", "0")
+
+        from tldw_Server_API.app.core.Workflows.adapters.rag import run_web_search_adapter
+
+        captured = {}
+
+        def fake_perform_websearch(**kwargs):
+            captured.update(kwargs)
+            return {"results": [], "total_results_found": 0}
+
+        async def fake_run_query_rewrite_adapter(config, context):
+            assert config.get("query") == "original query"
+            return {
+                "original_query": "original query",
+                "rewritten_queries": ["rewritten compact query"],
+                "strategy": "simplify",
+            }
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs.perform_websearch",
+            fake_perform_websearch,
+        )
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Workflows.adapters.rag.query.run_query_rewrite_adapter",
+            fake_run_query_rewrite_adapter,
+        )
+
+        result = await run_web_search_adapter(
+            {
+                "query": "original query",
+                "engine": "google",
+                "auto_query_rewrite": True,
+                "query_rewrite_strategy": "simplify",
+                "query_rewrite_max_rewrites": 1,
+            },
+            base_context,
+        )
+
+        assert "error" not in result
+        assert captured.get("search_query") == "rewritten compact query"
+        assert result.get("query") == "rewritten compact query"
+        assert result.get("original_query") == "original query"
+        assert result.get("query_rewrite", {}).get("rewritten") is True
+        assert result.get("query_rewrite", {}).get("query_used") == "rewritten compact query"
+
+    def test_truncate_content_by_tokens_respects_budget(self, monkeypatch):
+        """Test token truncation helper enforces the requested token budget."""
+        from tldw_Server_API.app.core.Workflows.adapters.rag import search as search_module
+
+        class _FakeEncoding:
+            def encode(self, value: str):
+                return [0] * len(value)
+
+        class _FakeTiktoken:
+            @staticmethod
+            def get_encoding(_name: str):
+                return _FakeEncoding()
+
+            @staticmethod
+            def encoding_for_model(_model: str):
+                return _FakeEncoding()
+
+        monkeypatch.setitem(sys.modules, "tiktoken", _FakeTiktoken())
+
+        truncated = search_module._truncate_content_by_tokens("abcdefghij", max_tokens=5, model="fake-model")
+        assert truncated.startswith("abcde")
+        assert truncated.endswith("\n...[truncated]")
 
 
 # ---------------------------------------------------------------------------

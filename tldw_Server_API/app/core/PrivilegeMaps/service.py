@@ -25,6 +25,26 @@ from tldw_Server_API.app.core.PrivilegeMaps.trends import PrivilegeTrendStore, g
 RESOURCE_FALLBACK = "uncategorized"
 MAX_DETAIL_ROWS = 50_000
 
+_PRIVILEGE_MAP_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+)
+
+_PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 
 class PrivilegeMapService:
     """Aggregates privilege information for organization, team, and user views."""
@@ -59,7 +79,7 @@ class PrivilegeMapService:
     def _resolve_cache_ttl(self) -> int:
         try:
             ttl = int(os.getenv("PRIVILEGE_MAP_CACHE_TTL_SECONDS", "120") or "120")
-        except Exception:
+        except _PRIVILEGE_MAP_COERCE_EXCEPTIONS:
             ttl = 120
         # Enforce a sensible floor to avoid thrashing.
         return max(ttl, 10)
@@ -86,7 +106,7 @@ class PrivilegeMapService:
                     )
             payload = json.dumps(serialized, sort_keys=True, default=list)
             return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-        except Exception:
+        except _PRIVILEGE_MAP_COERCE_EXCEPTIONS:
             return "static"
 
     def _compute_user_signature(self, users: Sequence[dict[str, Any]]) -> str:
@@ -143,7 +163,7 @@ class PrivilegeMapService:
         if isinstance(generated_at, str):
             try:
                 base_payload["generated_at"] = datetime.fromisoformat(generated_at.replace("Z", "+00:00")).astimezone(timezone.utc)
-            except Exception:
+            except _PRIVILEGE_MAP_COERCE_EXCEPTIONS:
                 base_payload["generated_at"] = self._normalize_timestamp(datetime.now(timezone.utc))
         return base_payload
 
@@ -186,7 +206,7 @@ class PrivilegeMapService:
                     generated_at=generated_at,
                     team_id=None,
                 )
-            except Exception as exc:
+            except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Unable to record privilege trend snapshot: %s", exc)
 
         generated_at = base_payload["generated_at"]
@@ -270,7 +290,7 @@ class PrivilegeMapService:
                     generated_at=generated_at,
                     team_id=team_id,
                 )
-            except Exception as exc:
+            except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Unable to record team privilege trend snapshot: %s", exc)
 
         generated_at = base_payload["generated_at"]
@@ -461,7 +481,7 @@ class PrivilegeMapService:
             from tldw_Server_API.app.main import app as fastapi_app
 
             return collect_privilege_route_registry(fastapi_app, self.catalog)
-        except Exception as exc:
+        except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning("Privilege route introspection failed: %s", exc)
             return {}
 
@@ -537,7 +557,7 @@ class PrivilegeMapService:
                     }
                 )
             return users
-        except Exception as exc:
+        except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Falling back to single-user privilege dataset: %s", exc)
 
         # Fallback: single-user-style profile or empty DB
@@ -580,7 +600,7 @@ class PrivilegeMapService:
                 if record:
                     memberships.append(record)
             return memberships
-        except Exception as exc:
+        except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Unable to load team memberships: %s", exc)
             return []
 
@@ -599,7 +619,7 @@ class PrivilegeMapService:
                 if record:
                     memberships.append(record)
             return memberships
-        except Exception as exc:
+        except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Unable to load org memberships: %s", exc)
             return []
 
@@ -657,7 +677,7 @@ class PrivilegeMapService:
                 role_name = record.get("role_name")
                 if user_id in base_users and role_name:
                     role_assignments[user_id].add(role_name)
-        except Exception as exc:
+        except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Unable to load role assignments: %s", exc)
 
         role_permissions: dict[str, set[str]] = defaultdict(set)
@@ -678,7 +698,7 @@ class PrivilegeMapService:
                 permission_name = record.get("permission_name")
                 if role_name and permission_name:
                     role_permissions[role_name].add(permission_name)
-        except Exception as exc:
+        except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Unable to load role permissions: %s", exc)
 
         user_permissions_direct: dict[str, set[str]] = defaultdict(set)
@@ -701,7 +721,7 @@ class PrivilegeMapService:
                 permission_name = record.get("permission_name")
                 if user_id in base_users and permission_name:
                     user_permissions_direct[user_id].add(permission_name)
-        except Exception as exc:
+        except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Unable to load direct user permissions: %s", exc)
 
         for user_id, payload in base_users.items():
@@ -1104,7 +1124,7 @@ class PrivilegeMapService:
                 window_end=window_end,
                 team_id=team_id,
             )
-        except Exception as exc:
+        except _PRIVILEGE_MAP_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Privilege trend computation failed: %s", exc)
             return []
 

@@ -1,6 +1,7 @@
 # audio_history.py
 # Description: TTS history endpoints.
 import base64
+import binascii
 import json
 import time
 from typing import Any, Optional
@@ -34,6 +35,30 @@ router = APIRouter(
 
 _CURSOR_VERSION = 1
 _TEXT_PREVIEW_LEN = 120
+_TTS_HISTORY_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+_TTS_HISTORY_CURSOR_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    binascii.Error,
+    json.JSONDecodeError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+_TTS_HISTORY_JSON_PARSE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _tts_history_config() -> dict[str, Any]:
@@ -71,7 +96,7 @@ def _parse_json_field(raw: Any) -> Any:
         return raw
     try:
         return json.loads(raw)
-    except Exception:
+    except _TTS_HISTORY_JSON_PARSE_EXCEPTIONS:
         return None
 
 
@@ -116,7 +141,7 @@ async def list_tts_history(
     if text_exact:
         try:
             text_hash = compute_tts_history_text_hash(text_exact, cfg.get("hash_key"))
-        except Exception as exc:
+        except _TTS_HISTORY_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("TTS history: failed to compute text_exact hash: {}", exc)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -129,7 +154,7 @@ async def list_tts_history(
         try:
             cursor_created_at, cursor_id = _decode_cursor(cursor)
             offset = 0
-        except Exception as exc:
+        except _TTS_HISTORY_CURSOR_EXCEPTIONS as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid cursor",
@@ -138,7 +163,7 @@ async def list_tts_history(
     list_start = None
     try:
         list_start = time.monotonic()
-    except Exception:
+    except _TTS_HISTORY_NONCRITICAL_EXCEPTIONS:
         list_start = None
     rows = media_db.list_tts_history(
         user_id=str(request_user.id),
@@ -165,7 +190,7 @@ async def list_tts_history(
                 "mode": "list",
             },
         )
-    except Exception:
+    except _TTS_HISTORY_NONCRITICAL_EXCEPTIONS:
         pass
     if list_start is not None:
         try:
@@ -174,7 +199,7 @@ async def list_tts_history(
                 value=max(0.0, (time.monotonic() - list_start) * 1000),
                 labels={"mode": "list"},
             )
-        except Exception:
+        except _TTS_HISTORY_NONCRITICAL_EXCEPTIONS:
             pass
 
     has_more = len(rows) > limit
@@ -211,7 +236,7 @@ async def list_tts_history(
         last_row = rows[-1]
         try:
             next_cursor = _encode_cursor(last_row.get("created_at"), int(last_row.get("id")))
-        except Exception as exc:
+        except _TTS_HISTORY_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("TTS history: failed to build next cursor: {}", exc)
             next_cursor = None
 
@@ -220,7 +245,7 @@ async def list_tts_history(
         total_start = None
         try:
             total_start = time.monotonic()
-        except Exception:
+        except _TTS_HISTORY_NONCRITICAL_EXCEPTIONS:
             total_start = None
         total = media_db.count_tts_history(
             user_id=str(request_user.id),
@@ -241,7 +266,7 @@ async def list_tts_history(
                     value=max(0.0, (time.monotonic() - total_start) * 1000),
                     labels={"mode": "count"},
                 )
-            except Exception:
+            except _TTS_HISTORY_NONCRITICAL_EXCEPTIONS:
                 pass
 
     return TTSHistoryListResponse(
@@ -270,7 +295,7 @@ async def get_tts_history_entry(
     detail_start = None
     try:
         detail_start = time.monotonic()
-    except Exception:
+    except _TTS_HISTORY_NONCRITICAL_EXCEPTIONS:
         detail_start = None
     row = media_db.get_tts_history_entry(
         user_id=str(request_user.id),
@@ -282,7 +307,7 @@ async def get_tts_history_entry(
             "tts_history_reads_total",
             labels={"mode": "detail"},
         )
-    except Exception:
+    except _TTS_HISTORY_NONCRITICAL_EXCEPTIONS:
         pass
     if detail_start is not None:
         try:
@@ -291,7 +316,7 @@ async def get_tts_history_entry(
                 value=max(0.0, (time.monotonic() - detail_start) * 1000),
                 labels={"mode": "detail"},
             )
-        except Exception:
+        except _TTS_HISTORY_NONCRITICAL_EXCEPTIONS:
             pass
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="History entry not found")

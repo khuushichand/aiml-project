@@ -3,7 +3,11 @@
 #
 # Imports
 import base64
+import io
+import json
 import pathlib
+import struct
+import zlib
 from datetime import datetime
 from typing import Any, Optional
 
@@ -11,7 +15,7 @@ from typing import Any, Optional
 # Third-party Libraries
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi import Path as FastAPIPath
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from loguru import logger
 from starlette import status
 
@@ -1660,11 +1664,67 @@ async def bulk_entry_operations(
 # ========================================================================
 
 
-@router.get("/{character_id}/export", response_model=dict[str, Any],
+def _encode_png_with_chara_metadata(
+    image_data: Optional[bytes],
+    card_json: str,
+) -> bytes:
+    """Create a PNG file with character card JSON in a tEXt chunk.
+
+    If *image_data* is valid PNG bytes the character data is injected into it;
+    otherwise a minimal 1x1 transparent PNG is generated as the carrier.
+    """
+    chara_b64 = base64.b64encode(card_json.encode("utf-8")).decode("ascii")
+
+    # Build tEXt chunk: keyword NUL text
+    keyword = b"chara"
+    text_data = keyword + b"\x00" + chara_b64.encode("ascii")
+    chunk_type = b"tEXt"
+    chunk_length = struct.pack(">I", len(text_data))
+    chunk_crc = struct.pack(">I", zlib.crc32(chunk_type + text_data) & 0xFFFFFFFF)
+    text_chunk = chunk_length + chunk_type + text_data + chunk_crc
+
+    if image_data and image_data[:8] == b"\x89PNG\r\n\x1a\n":
+        # Insert tEXt chunk before the IEND chunk (last 12 bytes of a valid PNG).
+        iend_pos = image_data.rfind(b"IEND")
+        if iend_pos >= 4:
+            iend_start = iend_pos - 4  # length field is 4 bytes before type
+            return image_data[:iend_start] + text_chunk + image_data[iend_start:]
+
+    # Fallback: generate a minimal 1x1 transparent PNG.
+    png_header = b"\x89PNG\r\n\x1a\n"
+
+    # IHDR chunk
+    ihdr_data = struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)  # 1x1 RGBA
+    ihdr_type = b"IHDR"
+    ihdr = (
+        struct.pack(">I", len(ihdr_data))
+        + ihdr_type
+        + ihdr_data
+        + struct.pack(">I", zlib.crc32(ihdr_type + ihdr_data) & 0xFFFFFFFF)
+    )
+
+    # IDAT chunk (1x1 transparent pixel: filter byte + 4 zero bytes)
+    raw_data = zlib.compress(b"\x00\x00\x00\x00\x00")
+    idat_type = b"IDAT"
+    idat = (
+        struct.pack(">I", len(raw_data))
+        + idat_type
+        + raw_data
+        + struct.pack(">I", zlib.crc32(idat_type + raw_data) & 0xFFFFFFFF)
+    )
+
+    # IEND chunk
+    iend_type = b"IEND"
+    iend = struct.pack(">I", 0) + iend_type + struct.pack(">I", zlib.crc32(iend_type) & 0xFFFFFFFF)
+
+    return png_header + ihdr + text_chunk + idat + iend
+
+
+@router.get("/{character_id}/export", response_model=None,
             summary="Export character in various formats", tags=["characters"])
 async def export_character(
     character_id: int = FastAPIPath(..., description="Character ID to export", gt=0),
-    format: str = Query("v3", description="Export format (v3, v2, json)"),
+    format: str = Query("v3", description="Export format (v3, v2, json, png)"),
     include_world_books: bool = Query(False, description="Include associated world books"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
@@ -1801,6 +1861,43 @@ async def export_character(
             export_data["character_image"] = encoded_image
 
         logger.info(f"Exported character {character_id} in format {format}")
+
+        # PNG export: embed V2 card JSON in PNG tEXt metadata chunk.
+        if format == "png":
+            # Build V2 card JSON for embedding (standard interchange format).
+            v2_data: dict[str, Any] = {
+                "spec": "chara_card_v2",
+                "spec_version": "2.0",
+                "data": {
+                    "name": _as_export_str(character.get("name")),
+                    "description": _as_export_str(character.get("description")),
+                    "personality": _as_export_str(character.get("personality")),
+                    "scenario": _as_export_str(character.get("scenario")),
+                    "first_mes": _as_export_str(character.get("first_message")),
+                    "mes_example": _as_export_str(character.get("message_example")),
+                    "creator_notes": _as_export_str(character.get("creator_notes")),
+                    "system_prompt": _as_export_str(character.get("system_prompt")),
+                    "post_history_instructions": _as_export_str(character.get("post_history_instructions")),
+                    "alternate_greetings": _as_export_str_list(character.get("alternate_greetings")),
+                    "tags": _as_export_str_list(character.get("tags")),
+                    "creator": _as_export_str(character.get("creator")),
+                    "character_version": _as_export_str(character.get("character_version"), default="1.0"),
+                    "extensions": character.get("extensions") if isinstance(character.get("extensions"), dict) else {},
+                },
+            }
+            card_json_str = json.dumps(v2_data, ensure_ascii=False)
+
+            image_bytes = character.get("image") if isinstance(character.get("image"), bytes) else None
+            png_bytes = _encode_png_with_chara_metadata(image_bytes, card_json_str)
+
+            safe_name = (character.get("name") or "character").replace(" ", "_")[:50]
+            return Response(
+                content=png_bytes,
+                media_type="image/png",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{safe_name}.png"',
+                },
+            )
 
         return export_data
 

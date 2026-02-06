@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import binascii
 import base64
 import importlib.util
 import re
@@ -14,6 +15,17 @@ from typing import Any, Optional
 # Third-party Imports
 import numpy as np
 from loguru import logger
+
+_AUDIO_PROCESS_EXCEPTIONS = (
+    ImportError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_AUDIO_BASE64_EXCEPTIONS = (binascii.Error, TypeError, ValueError)
+_AUDIO_INT_PARSE_EXCEPTIONS = (OverflowError, TypeError, ValueError)
 
 #
 #######################################################################################################################
@@ -77,7 +89,7 @@ class AudioProcessor:
             import subprocess
             result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
             return result.returncode == 0
-        except Exception as e:
+        except _AUDIO_PROCESS_EXCEPTIONS as e:
             logger.warning(f"ffmpeg not found or not runnable; audio conversion limited. error={e}")
             return False
 
@@ -110,7 +122,7 @@ class AudioProcessor:
             audio_bytes = base64.b64decode(base64_data)
             return audio_bytes
 
-        except Exception as e:
+        except _AUDIO_BASE64_EXCEPTIONS as e:
             raise ValueError(f"Failed to decode base64 audio: {e}")
 
     def encode_audio_base64(self, audio_bytes: bytes) -> str:
@@ -197,7 +209,7 @@ class AudioProcessor:
                 # Clean up temp file
                 Path(tmp_path).unlink(missing_ok=True)
 
-        except Exception as e:
+        except _AUDIO_PROCESS_EXCEPTIONS as e:
             logger.error(f"Audio validation error: {e}")
             return False, f"Failed to validate audio: {e}", info
 
@@ -310,7 +322,7 @@ class AudioProcessor:
                     Path(input_path).unlink(missing_ok=True)
                     Path(output_path).unlink(missing_ok=True)
 
-        except Exception as e:
+        except _AUDIO_PROCESS_EXCEPTIONS as e:
             logger.error(f"Audio conversion failed: {e}")
             return audio_bytes  # Return original if conversion fails
 
@@ -393,7 +405,7 @@ class AudioProcessor:
             finally:
                 Path(tmp_path).unlink(missing_ok=True)
 
-        except Exception as e:
+        except _AUDIO_PROCESS_EXCEPTIONS as e:
             logger.error(f"Failed to extract clean segment: {e}")
             return audio_bytes
 
@@ -448,7 +460,7 @@ def process_voice_reference(
 
         return audio_bytes, None
 
-    except Exception as e:
+    except _AUDIO_PROCESS_EXCEPTIONS as e:
         logger.error(f"Failed to process voice reference: {e}")
         return None, str(e)
 
@@ -496,7 +508,7 @@ async def process_voice_reference_async(
 
         return audio_bytes, None
 
-    except Exception as e:
+    except _AUDIO_PROCESS_EXCEPTIONS as e:
         logger.error(f"Failed to process voice reference (async): {e}")
         return None, str(e)
 
@@ -573,7 +585,7 @@ def crossfade_audio(
 
     try:
         fade_samples = int(sample_rate * (crossfade_ms / 1000.0))
-    except Exception:
+    except _AUDIO_INT_PARSE_EXCEPTIONS:
         fade_samples = 0
     if fade_samples <= 0:
         return np.concatenate([left, right])

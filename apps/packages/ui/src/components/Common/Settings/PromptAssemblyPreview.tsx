@@ -5,10 +5,29 @@ import { useTranslation } from "react-i18next"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useStoreMessageOption } from "@/store/option"
 import { resolveMessageSteering } from "@/utils/message-steering"
-import {
-  buildPromptPreviewSummary,
-  type PromptPreviewSummary
-} from "@/utils/prompt-preview"
+
+export type PromptPreviewConflict = {
+  type: string
+  message: string
+}
+
+export type PromptPreviewSection = {
+  key: string
+  label: string
+  active: boolean
+  tokens: number
+  preview: string
+}
+
+export type PromptPreviewSummary = {
+  sections: PromptPreviewSection[]
+  supplementalTokens: number
+  supplementalBudget: number
+  budgetStatus: "ok" | "caution" | "error"
+  warnings: string[]
+  conflicts: PromptPreviewConflict[]
+  examples: string[]
+}
 
 type Props = {
   serverChatId: string | null
@@ -19,6 +38,88 @@ const getBudgetToneClass = (status: PromptPreviewSummary["budgetStatus"]) => {
   if (status === "error") return "text-danger border-danger/40 bg-danger/10"
   if (status === "caution") return "text-warn border-warn/40 bg-warn/10"
   return "text-text-muted border-border/60 bg-surface2"
+}
+
+const SECTION_LABELS: Record<string, string> = {
+  preset: "Character preset",
+  author_note: "Author note",
+  message_steering: "Message steering",
+  greeting: "Greeting",
+  lorebook: "Lorebook",
+  world_book: "World book"
+}
+
+const toBudgetStatus = (
+  value: unknown,
+  supplementalTokens: number,
+  supplementalBudget: number
+): PromptPreviewSummary["budgetStatus"] => {
+  if (value === "error" || value === "caution" || value === "ok") return value
+  if (supplementalTokens >= supplementalBudget) return "error"
+  if (supplementalTokens >= Math.floor(supplementalBudget * 0.9)) return "caution"
+  return "ok"
+}
+
+export const normalizePreviewPayload = (payload: any): PromptPreviewSummary => {
+  const sectionList = Array.isArray(payload?.sections) ? payload.sections : []
+  const sections = sectionList.map((section: any) => {
+    const key = String(section?.name || "unknown")
+    const content = typeof section?.content === "string" ? section.content : ""
+    const label = SECTION_LABELS[key] || key.replace(/_/g, " ")
+    const tokens =
+      typeof section?.tokens_effective === "number"
+        ? section.tokens_effective
+        : typeof section?.tokens_estimated === "number"
+          ? section.tokens_estimated
+          : 0
+    return {
+      key,
+      label,
+      active: content.trim().length > 0 || tokens > 0,
+      tokens,
+      preview: content
+    } as PromptPreviewSection
+  })
+
+  const supplementalBudget =
+    typeof payload?.supplemental_budget === "number"
+      ? payload.supplemental_budget
+      : 1200
+  const supplementalTokens =
+    typeof payload?.total_supplemental_effective_tokens === "number"
+      ? payload.total_supplemental_effective_tokens
+      : typeof payload?.total_supplemental_tokens === "number"
+        ? payload.total_supplemental_tokens
+        : sections.reduce((total, section) => total + section.tokens, 0)
+  const budgetStatus = toBudgetStatus(
+    payload?.budget_status,
+    supplementalTokens,
+    supplementalBudget
+  )
+  const warnings = Array.isArray(payload?.warnings)
+    ? payload.warnings.filter((value: unknown) => typeof value === "string")
+    : []
+  const conflicts = Array.isArray(payload?.conflicts)
+    ? payload.conflicts
+        .map((item: any) => ({
+          type: String(item?.type || "directive_conflict"),
+          message: String(item?.message || "")
+        }))
+        .filter((item: PromptPreviewConflict) => item.message.length > 0)
+    : []
+  const examples = Array.isArray(payload?.examples)
+    ? payload.examples.filter((value: unknown) => typeof value === "string")
+    : []
+
+  return {
+    sections,
+    supplementalTokens,
+    supplementalBudget,
+    budgetStatus,
+    warnings,
+    conflicts,
+    examples
+  }
 }
 
 export const PromptAssemblyPreview: React.FC<Props> = ({
@@ -51,7 +152,7 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
       if (!serverChatId) {
         return null
       }
-      const payload = await tldwClient.prepareCharacterCompletion(serverChatId, {
+      const payload = await tldwClient.getCharacterPromptPreview(serverChatId, {
         include_character_context: true,
         limit: 250,
         offset: 0,
@@ -59,10 +160,7 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
         impersonate_user: resolvedSteering.impersonateUser,
         force_narrate: resolvedSteering.forceNarrate
       })
-      const preparedMessages = Array.isArray(payload?.messages)
-        ? payload.messages
-        : []
-      return buildPromptPreviewSummary(preparedMessages)
+      return normalizePreviewPayload(payload)
     },
     staleTime: 5000
   })

@@ -3875,7 +3875,6 @@ async def verify_claims_with_fva(
         Claim,
         ClaimType,
         ClaimsEngine,
-        create_claims_engine,
     )
     from tldw_Server_API.app.core.Claims_Extraction.fva_pipeline import (
         FVAConfig,
@@ -3944,8 +3943,33 @@ async def verify_claims_with_fva(
         config=retrieval_config,
     )
 
-    # Create claims engine
-    claims_engine = create_claims_engine()
+    # Create claims engine with LLM analyze function
+    async def _fva_analyze_fn(prompt: str) -> str:
+        """Analyze function for FVA claims engine using configured LLM."""
+        try:
+            from tldw_Server_API.app.core.LLM_Calls.Unified_OpenAI_API import (
+                unified_llm_call,
+            )
+            from tldw_Server_API.app.core.config import settings as _cfg
+
+            provider = _cfg.get("CLAIMS_LLM_PROVIDER", "openai")
+            model = _cfg.get("CLAIMS_LLM_MODEL", "gpt-4o-mini")
+            temp = float(_cfg.get("CLAIMS_LLM_TEMPERATURE", 0.3))
+
+            result = await unified_llm_call(
+                api_endpoint=provider,
+                api_key=None,  # Uses config
+                input_data=prompt,
+                model=model,
+                temperature=temp,
+                max_tokens=2000,
+            )
+            return str(result) if result else ""
+        except Exception as e:
+            logger.warning(f"FVA analyze function failed: {e}")
+            return ""
+
+    claims_engine = ClaimsEngine(analyze_fn=_fva_analyze_fn)
 
     # Create FVA pipeline
     pipeline = FVAPipeline(
@@ -4056,18 +4080,20 @@ async def verify_claims_with_fva(
 
 
 def get_fva_settings() -> dict[str, Any]:
-    """Return current FVA pipeline settings."""
-    from tldw_Server_API.app.core.Claims_Extraction.fva_pipeline import FVAConfig
+    """Return current FVA pipeline settings from application configuration."""
+    from tldw_Server_API.app.core.Claims_Extraction.fva_pipeline import get_fva_config_from_settings
 
-    # Get default config
-    default_config = FVAConfig()
+    # Get config from settings
+    config = get_fva_config_from_settings()
 
     return {
-        "enabled": default_config.enabled,
-        "confidence_threshold": default_config.confidence_threshold,
-        "contested_threshold": default_config.contested_threshold,
-        "max_concurrent_falsifications": default_config.max_concurrent_falsifications,
-        "timeout_seconds": default_config.falsification_timeout_seconds,
-        "force_claim_types": default_config.force_falsification_claim_types,
+        "enabled": config.enabled,
+        "confidence_threshold": config.confidence_threshold,
+        "contested_threshold": config.contested_threshold,
+        "max_concurrent_falsifications": config.max_concurrent_falsifications,
+        "timeout_seconds": config.falsification_timeout_seconds,
+        "force_claim_types": config.force_falsification_claim_types,
+        "max_budget_ratio": config.max_budget_ratio_for_fva,
+        "min_confidence_for_skip": config.min_confidence_for_skip,
         "anti_context_cache_size": 0,  # Cache size would come from active pipeline
     }

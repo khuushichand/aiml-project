@@ -117,7 +117,7 @@ class Scheduler:
             self._started = True
             logger.info("Scheduler started successfully")
 
-        except Exception as e:
+        except (AttributeError, LookupError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to start scheduler: {e}")
             await self.stop()
             raise SchedulerError(f"Scheduler start failed: {e}")
@@ -221,7 +221,7 @@ class Scheduler:
                 if await self.dependency_service.detect_circular_dependencies(task.id):
                     logger.error(f"Circular dependency detected for task {task.id}")
                     raise ValueError(f"Circular dependency detected for task {task.id} with dependencies {depends_on}")
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 # If detection can't be completed (e.g., due to buffered tasks), skip here
                 pass
 
@@ -295,7 +295,7 @@ class Scheduler:
             except PermissionError as exc:
                 logger.error(f"Batch validation failed at task {idx}: {exc}")
                 raise PermissionError(str(exc))
-            except Exception as exc:
+            except (AttributeError, LookupError, OSError, RuntimeError, TypeError, ValueError) as exc:
                 logger.error(f"Batch validation failed at task {idx}: {exc}")
                 raise ValueError(f"Batch submission failed - task {idx}: {exc}")
 
@@ -332,7 +332,7 @@ class Scheduler:
                             raise ValueError(
                                 f"Batch submission failed - task {idx}: circular dependency detected for {task.id}"
                             )
-                    except Exception:
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         # Best-effort detection; ignore if the graph cannot yet be built
                         pass
 
@@ -345,7 +345,7 @@ class Scheduler:
                     f"Successfully submitted batch of {len(tasks_to_enqueue)} tasks "
                     f"({len(result_ids) - len(tasks_to_enqueue)} idempotent hits)"
                 )
-            except Exception as exc:
+            except (AttributeError, LookupError, OSError, RuntimeError, TypeError, ValueError) as exc:
                 logger.error(f"Batch submission failed: {exc}")
                 raise SchedulerError(f"Failed to submit batch: {exc}")
         else:
@@ -610,7 +610,7 @@ class Scheduler:
                                 f"Idempotent (buffer) submission: key '{idempotency_key}' maps to task {pending.id}"
                             )
                             return None, pending.id
-                    except Exception:
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         continue
 
         if self.payload_service:
@@ -680,7 +680,7 @@ class Scheduler:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError, asyncio.TimeoutError) as e:
                 logger.error(f"Cleanup loop error: {e}")
 
     async def _monitor_loop(self) -> None:
@@ -695,7 +695,7 @@ class Scheduler:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError, asyncio.TimeoutError) as e:
                 logger.error(f"Monitor loop error: {e}")
 
     async def _on_become_cleanup_leader(self) -> None:
@@ -727,13 +727,13 @@ class Scheduler:
                     recovered = await self.write_buffer.recover_from_backup(backup_file)
                     total_recovered += recovered
                     logger.info(f"Recovered {recovered} tasks from {backup_file}")
-                except Exception as e:
+                except (AttributeError, OSError, RuntimeError, TypeError, ValueError, asyncio.TimeoutError) as e:
                     logger.error(f"Failed to recover from backup {backup_file}: {e}")
 
             if total_recovered > 0:
                 logger.warning(f"RECOVERY COMPLETE: Restored {total_recovered} tasks from emergency backups")
 
-        except Exception as e:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError, asyncio.TimeoutError) as e:
             logger.error(f"Error during backup recovery: {e}")
             # Don't fail startup if recovery fails
 
@@ -865,7 +865,7 @@ class Scheduler:
                 return any(p in s for p in (p.lower() for p in patterns))
             else:
                 return False
-        except Exception:
+        except (AttributeError, RecursionError, RuntimeError, TypeError, ValueError):
             return True
 
 

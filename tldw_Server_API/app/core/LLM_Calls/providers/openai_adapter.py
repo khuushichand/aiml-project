@@ -5,6 +5,10 @@ import os
 import threading
 from collections.abc import AsyncIterator, Iterable
 from typing import Any
+try:
+    import httpx
+except ImportError:  # pragma: no cover - optional for static analysis
+    httpx = None
 
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
@@ -23,6 +27,21 @@ from .base import ChatProvider
 
 # Expose a patchable factory for tests; production uses the centralized client
 http_client_factory = _hc_create_client
+
+_OPENAI_HTTP_EXCEPTIONS: tuple[type[BaseException], ...] = ()
+if httpx is not None:
+    _OPENAI_HTTP_EXCEPTIONS = (httpx.HTTPError,)
+
+_OPENAI_ADAPTER_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+) + _OPENAI_HTTP_EXCEPTIONS
 
 # Reuse the existing, stable implementation to ensure behavior parity during migration
 # Do not import legacy handler at module import time to keep tests patchable.
@@ -217,7 +236,7 @@ class OpenAIAdapter(ChatProvider):
             base = oa.get("api_base_url") or oa.get("api_base") or oa.get("base_url")
             if isinstance(base, str) and base.strip():
                 return base.strip()
-        except Exception:
+        except (AttributeError, LookupError, TypeError):
             pass
         return self._openai_base_url()
 
@@ -229,9 +248,9 @@ class OpenAIAdapter(ChatProvider):
             if t is not None:
                 try:
                     return float(t)
-                except Exception:
+                except (TypeError, ValueError):
                     pass
-        except Exception:
+        except (AttributeError, LookupError, TypeError):
             pass
         if fallback is not None:
             return float(fallback)
@@ -260,7 +279,7 @@ class OpenAIAdapter(ChatProvider):
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     return resp.json()
-            except Exception as e:
+            except _OPENAI_ADAPTER_NONCRITICAL_EXCEPTIONS as e:
                 raise self.normalize_error(e)
 
         # If disabled explicitly, raise clear error rather than falling back
@@ -288,7 +307,7 @@ class OpenAIAdapter(ChatProvider):
                                 continue
                             try:
                                 line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
-                            except Exception:
+                            except (AttributeError, TypeError, UnicodeError):
                                 line = str(raw)
                             # Canonicalize provider lines to OpenAI-style SSE
                             if is_done_line(line):
@@ -303,7 +322,7 @@ class OpenAIAdapter(ChatProvider):
                         for tail in finalize_stream(response=resp, done_already=seen_done):
                             yield tail
                 return
-            except Exception as e:
+            except _OPENAI_ADAPTER_NONCRITICAL_EXCEPTIONS as e:
                 raise self.normalize_error(e)
 
         # If disabled explicitly, raise clear error rather than falling back
@@ -325,13 +344,13 @@ class OpenAIAdapter(ChatProvider):
                     if stop_event.is_set():
                         break
                     loop.call_soon_threadsafe(queue.put_nowait, item)
-            except Exception as exc:
+            except _OPENAI_ADAPTER_NONCRITICAL_EXCEPTIONS as exc:
                 loop.call_soon_threadsafe(queue.put_nowait, exc)
             finally:
                 try:
                     if hasattr(gen, "close"):
                         gen.close()
-                except Exception:
+                except _OPENAI_ADAPTER_NONCRITICAL_EXCEPTIONS:
                     pass
                 loop.call_soon_threadsafe(queue.put_nowait, sentinel)
 
@@ -369,7 +388,7 @@ class OpenAIAdapter(ChatProvider):
             body = None
             try:
                 body = resp.json()
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 body = None
             log_http_400_body(self.name, exc, body)
             detail = None

@@ -62,13 +62,13 @@ try:
             DEFAULT_CHUNK_OPTIONS['proposition_prompt_profile'] = _c.get('proposition_prompt_profile', DEFAULT_CHUNK_OPTIONS['proposition_prompt_profile'])
             try:
                 DEFAULT_CHUNK_OPTIONS['proposition_aggressiveness'] = int(_c.get('proposition_aggressiveness', DEFAULT_CHUNK_OPTIONS['proposition_aggressiveness']))
-            except Exception:
+            except (TypeError, ValueError):
                 pass
             try:
                 DEFAULT_CHUNK_OPTIONS['proposition_min_proposition_length'] = int(_c.get('proposition_min_proposition_length', DEFAULT_CHUNK_OPTIONS['proposition_min_proposition_length']))
-            except Exception:
+            except (TypeError, ValueError):
                 pass
-except Exception:
+except (AttributeError, ImportError, TypeError, ValueError):
     # Config not available; keep in-module defaults
     pass
 
@@ -179,7 +179,7 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
     # Normalize method to infer a conservative chunk_type
     try:
         method_norm = getattr(method, "value", method)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         method_norm = method
     method_norm = str(method_norm or "").strip().lower()
     if method_norm in {"code", "code_ast"}:
@@ -194,11 +194,11 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
         # Stable chunk UID constructed from file name, offsets, and content hash
         try:
             start_c = getattr(chunk.metadata, 'start_char', None)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             start_c = None
         try:
             end_c = getattr(chunk.metadata, 'end_char', None)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             end_c = None
         txt = chunk.text
         content_sig = _hashlib.sha1((txt or '').encode('utf-8')).hexdigest()[:12]
@@ -208,7 +208,7 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
         try:
             # Prefer v2 Chunker fields when present
             ancestry_titles = list(getattr(chunk.metadata, 'ancestry_titles', []) or [])
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             ancestry_titles = []
         headings = ancestry_titles if isinstance(ancestry_titles, list) else []
         # Basic captions placeholder (can be filled by upstream parsers)
@@ -240,7 +240,16 @@ def flatten_hierarchical(tree: dict) -> list:
     """
     try:
         return Chunker().flatten_hierarchical(tree)
-    except Exception:
+    except (
+        ChunkingError,
+        ConfigurationError,
+        InvalidChunkingMethodError,
+        InvalidInputError,
+        ProcessingError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         return []
 
 

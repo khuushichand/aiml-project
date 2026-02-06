@@ -36,7 +36,7 @@ from tldw_Server_API.app.core.Prompt_Management.Prompts_Interop import (
 # Back-compat for tests that patch this module-level path.
 try:
     MAIN_USER_DATA_BASE_DIR = DatabasePaths.get_user_db_base_dir()
-except Exception:
+except (OSError, ValueError, RuntimeError):
     MAIN_USER_DATA_BASE_DIR = None
 
 # --- Configuration ---
@@ -86,7 +86,7 @@ def _close_prompts_db_instance_sync(
             cache_key,
             reason,
         )
-    except Exception as exc:
+    except (DatabaseError, OSError, RuntimeError, ValueError, TypeError) as exc:
         logger.error(
             "Error closing PromptsDatabase instance for cache_key=%s (reason=%s): %s",
             cache_key,
@@ -104,7 +104,7 @@ def _enqueue_prompts_db_close(
 ) -> None:
     try:
         _pending_close_queue.put_nowait((cache_key, db_instance, reason))
-    except Exception as exc:
+    except (asyncio.QueueFull, RuntimeError) as exc:
         logger.error(
             "Failed to enqueue PromptsDatabase close for cache_key=%s (reason=%s): %s",
             cache_key,
@@ -137,7 +137,7 @@ async def _process_pending_closes() -> None:
                 db_instance,
                 reason=reason,
             )
-        except Exception as exc:
+        except (DatabaseError, OSError, RuntimeError, ValueError, TypeError) as exc:
             logger.error(
                 "Error processing PromptsDatabase close for cache_key=%s (reason=%s): %s",
                 cache_key,
@@ -189,7 +189,7 @@ class _EvictingLRUCache(LRUCache):
         if self._on_evict is not None:
             try:
                 self._on_evict(cache_key, value)
-            except Exception as exc:
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError) as exc:
                 logger.error(
                     "Prompts DB cache eviction callback failed for %s: %s",
                     cache_key,
@@ -214,7 +214,7 @@ def _is_db_instance_alive(db_instance: PromptsDatabase) -> bool:
         conn = db_instance.get_connection()
         conn.execute("SELECT 1")
         return True
-    except Exception:
+    except (DatabaseError, OSError, RuntimeError, ValueError):
         return False
 
 
@@ -256,7 +256,7 @@ async def get_prompts_db_for_user(
             if not hasattr(request.app.state, "prompts_db_salt"):
                 request.app.state.prompts_db_salt = _uuid.uuid4().hex
             salt = str(request.app.state.prompts_db_salt)
-    except Exception:
+    except (AttributeError, RuntimeError, ValueError):
         salt = ""
 
     cache_key = (user_id, salt)
@@ -371,7 +371,7 @@ async def close_all_cached_prompts_db_instances() -> None:
             try:
                 await asyncio.to_thread(db_instance.close_connection)
                 logger.info(f"Closed PromptsDatabase connection for cache_key {cache_key}.")
-            except Exception as e:
+            except (DatabaseError, OSError, RuntimeError, ValueError, TypeError) as e:
                 logger.error(
                     f"Error closing PromptsDatabase instance for cache_key {cache_key}: {e}",
                     exc_info=True,

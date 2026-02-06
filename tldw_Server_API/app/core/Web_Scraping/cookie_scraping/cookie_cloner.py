@@ -16,6 +16,33 @@ from datetime import datetime
 from Cryptodome.Cipher import AES
 from Cryptodome.Protocol.KDF import PBKDF2
 
+_COOKIE_DECRYPT_EXCEPTIONS = (
+    AttributeError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+_COOKIE_COLLECTION_EXCEPTIONS = (
+    FileNotFoundError,
+    json.JSONDecodeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    sqlite3.Error,
+    struct.error,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+_SAFARI_PARSE_EXCEPTIONS = (
+    IndexError,
+    struct.error,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 #
 ########################################################################################################################
 #
@@ -82,7 +109,7 @@ def get_chrome_cookies(domain_name):
             if sys.platform == 'win32':
                 try:
                     decrypted_value = win32crypt.CryptUnprotectData(encrypted_value, None, None, None, 0)[1]
-                except Exception:
+                except _COOKIE_DECRYPT_EXCEPTIONS:
                     # Fallback to edge cookie decryption if CryptUnprotectData fails
                     decrypted_value = decrypt_edge_cookie(encrypted_value, key)
             else:
@@ -234,7 +261,7 @@ def get_edge_cookies(domain_name):
                     try:
                         # Try to decrypt using CryptUnprotectData
                         decrypted_value = win32crypt.CryptUnprotectData(encrypted_value, None, None, None, 0)[1]
-                    except Exception:
+                    except _COOKIE_DECRYPT_EXCEPTIONS:
                         # If failed, use custom decryption
                         decrypted_value = decrypt_edge_cookie(encrypted_value, key)
                 else:
@@ -253,7 +280,7 @@ def get_edge_cookies(domain_name):
 
         return cookies
 
-    except Exception as e:
+    except _COOKIE_COLLECTION_EXCEPTIONS as e:
         print(f"An error occurred while retrieving Edge cookies: {e}")
         return {}
 
@@ -334,7 +361,7 @@ def parse_safari_cookie(data, domain_name):
         cookie_domain = data[url_offset:data.find(b'\x00', url_offset)].decode('utf-8')
         if domain_name in cookie_domain:
             return {'name': cookie_name, 'value': cookie_value}
-    except Exception:
+    except _SAFARI_PARSE_EXCEPTIONS:
         pass
     return None
 
@@ -355,7 +382,7 @@ def get_cookies(domain_name, browser='all'):
         try:
             chrome_cookies = get_chrome_cookies(domain_name)
             cookies.update(chrome_cookies)
-        except Exception as e:
+        except _COOKIE_COLLECTION_EXCEPTIONS as e:
             print(f"Failed to get Chrome cookies: {e}")
 
     if browser in ('all', 'firefox'):
@@ -363,7 +390,7 @@ def get_cookies(domain_name, browser='all'):
         try:
             firefox_cookies = get_firefox_cookies(domain_name)
             cookies.update(firefox_cookies)
-        except Exception as e:
+        except _COOKIE_COLLECTION_EXCEPTIONS as e:
             print(f"Failed to get Firefox cookies: {e}")
 
     if browser in ('all', 'edge'):
@@ -371,7 +398,7 @@ def get_cookies(domain_name, browser='all'):
         try:
             edge_cookies = get_edge_cookies(domain_name)
             cookies.update(edge_cookies)
-        except Exception as e:
+        except _COOKIE_COLLECTION_EXCEPTIONS as e:
             print(f"Failed to get Edge cookies: {e}")
 
     if sys.platform == 'darwin' and browser in ('all', 'safari'):
@@ -379,7 +406,7 @@ def get_cookies(domain_name, browser='all'):
         try:
             safari_cookies = get_safari_cookies(domain_name)
             cookies.update(safari_cookies)
-        except Exception as e:
+        except _COOKIE_COLLECTION_EXCEPTIONS as e:
             print(f"Failed to get Safari cookies: {e}")
 
     if not cookies:

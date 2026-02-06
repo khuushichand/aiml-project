@@ -12,6 +12,9 @@ from pathlib import Path
 
 from loguru import logger
 
+_JOBS_PATH_EXCEPTIONS = (ImportError, OSError, RuntimeError, TypeError, ValueError)
+_JOBS_DB_EXCEPTIONS = (sqlite3.Error, OSError, RuntimeError, TypeError, ValueError)
+
 JOBS_SQLITE_DDL = """
 CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY,
@@ -218,7 +221,7 @@ def ensure_jobs_tables(db_path: Path | None = None) -> Path:
         try:
             from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
             db_path = (Path(_gpr()) / "Databases" / "jobs.db").resolve()
-        except Exception:
+        except _JOBS_PATH_EXCEPTIONS:
             db_path = (Path(__file__).resolve().parents[5] / "Databases" / "jobs.db").resolve()
     else:
         try:
@@ -226,11 +229,11 @@ def ensure_jobs_tables(db_path: Path | None = None) -> Path:
             if not db_path.is_absolute():
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
                 db_path = (Path(_gpr()) / db_path).resolve()
-        except Exception:
+        except _JOBS_PATH_EXCEPTIONS:
             db_path = Path(db_path)
     try:
         db_path.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
+    except _JOBS_PATH_EXCEPTIONS:
         pass
     try:
         with sqlite3.connect(db_path) as conn:
@@ -239,23 +242,23 @@ def ensure_jobs_tables(db_path: Path | None = None) -> Path:
                 conn.execute("PRAGMA journal_mode=WAL;")
                 conn.execute("PRAGMA synchronous=NORMAL;")
                 conn.execute("PRAGMA busy_timeout=5000;")
-            except Exception:
+            except _JOBS_DB_EXCEPTIONS:
                 pass
             conn.executescript(JOBS_SQLITE_DDL)
             conn.commit()
             try:
                 conn.execute("ALTER TABLE jobs ADD COLUMN batch_group TEXT")
-            except Exception:
+            except _JOBS_DB_EXCEPTIONS:
                 pass
             try:
                 conn.execute("ALTER TABLE jobs_archive ADD COLUMN batch_group TEXT")
-            except Exception:
+            except _JOBS_DB_EXCEPTIONS:
                 pass
             conn.commit()
         try:
             logger.info(f"Ensured Jobs schema at {Path(db_path).resolve()}")
-        except Exception:
+        except _JOBS_PATH_EXCEPTIONS:
             logger.info(f"Ensured Jobs schema at {db_path}")
-    except Exception as e:
+    except _JOBS_DB_EXCEPTIONS as e:
         logger.warning(f"Failed to ensure Jobs schema at {db_path}: {e}")
     return db_path

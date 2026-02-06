@@ -27,6 +27,16 @@ from tldw_Server_API.app.core.config_utils import (
     section_to_nested_dict,
 )
 
+_EVAL_CONFIG_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    yaml.YAMLError,
+)
+
 
 @dataclass
 class RateLimitTierConfig:
@@ -215,7 +225,7 @@ class EvaluationsConfigManager:
             logger.info(f"Environment: {self.environment}")
             return True
 
-        except Exception as e:
+        except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to load configuration: {e}")
             return False
 
@@ -235,7 +245,7 @@ class EvaluationsConfigManager:
             return {}
         try:
             data = yaml.safe_load(raw)
-        except Exception as exc:
+        except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Invalid EVALUATIONS_CONFIG_OVERRIDES payload: {exc}")
             return {}
         if not isinstance(data, dict):
@@ -261,7 +271,7 @@ class EvaluationsConfigManager:
             try:
                 tier_config = RateLimitTierConfig.from_dict(tier_name, tier_data)
                 self._rate_limit_tiers[tier_name] = tier_config
-            except Exception as e:
+            except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Invalid rate limit config for tier '{tier_name}': {e}")
 
         logger.info(f"Loaded {len(self._rate_limit_tiers)} rate limit tier configurations")
@@ -276,7 +286,7 @@ class EvaluationsConfigManager:
             try:
                 cb_config = CircuitBreakerConfig.from_dict(provider_name, provider_data)
                 self._circuit_breaker_configs[provider_name] = cb_config
-            except Exception as e:
+            except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Invalid circuit breaker config for provider '{provider_name}': {e}")
 
         logger.info(f"Loaded {len(self._circuit_breaker_configs)} circuit breaker configurations")
@@ -302,7 +312,7 @@ class EvaluationsConfigManager:
                         else:
                             logger.error("Failed to reload configuration")
 
-            except Exception as e:
+            except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Hot reload error: {e}")
                 await asyncio.sleep(30)  # Wait longer on error
 
@@ -403,7 +413,7 @@ class EvaluationsConfigManager:
                 logger.info(f"Updated tier '{tier}' configuration: {updates}")
                 return True
 
-        except Exception as e:
+        except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to update tier configuration: {e}")
             return False
 
@@ -416,7 +426,7 @@ class EvaluationsConfigManager:
             logger.info(f"Configuration persisted to {self.config_path}")
             return True
 
-        except Exception as e:
+        except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to persist configuration: {e}")
             return False
 
@@ -502,7 +512,7 @@ class EvaluationsConfigManager:
                             if field not in provider_data:
                                 errors.append(f"Missing field '{field}' in circuit breaker '{provider_name}'")
 
-        except Exception as e:
+        except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as e:
             errors.append(f"Configuration validation error: {e}")
 
         return errors
@@ -516,7 +526,7 @@ config_manager = EvaluationsConfigManager(
 
 try:
     config_manager.ensure_hot_reload_started()
-except Exception:
+except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS:
     # Best-effort: avoid import-time crashes if no loop is running yet
     pass
 

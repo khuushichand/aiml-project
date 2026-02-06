@@ -1,3 +1,4 @@
+import json
 from math import ceil
 from typing import Any, Optional
 
@@ -42,6 +43,28 @@ from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadat
 
 router = APIRouter(tags=["Media Management"])
 
+_MEDIA_LISTING_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
+_MEDIA_LISTING_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
 
 try:
     HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_CONTENT
@@ -54,7 +77,7 @@ def _is_test_mode() -> bool:
         from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode_impl
 
         return bool(_is_test_mode_impl())
-    except Exception:
+    except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS:
         return False
 
 
@@ -98,7 +121,7 @@ async def list_media_endpoint(
                     bool(headers.get("X-API-KEY")),
                     bool(headers.get("authorization")),
                 )
-        except Exception:
+        except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS:
             pass
 
         rows, total_pages, current_page, total_items = get_paginated_files(
@@ -122,9 +145,9 @@ async def list_media_endpoint(
                     try:
                         response.headers["X-TLDW-DB-Path"] = str(db_path)
                         response.headers["X-TLDW-List-Total"] = str(int(total_items))
-                    except Exception:
+                    except _MEDIA_LISTING_COERCE_EXCEPTIONS:
                         pass
-        except Exception:
+        except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Build base items and collect IDs for keyword lookup
@@ -275,7 +298,7 @@ async def list_media_trash_endpoint(
                     bool(headers.get("X-API-KEY")),
                     bool(headers.get("authorization")),
                 )
-        except Exception:
+        except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS:
             pass
 
         rows, total_pages, current_page, total_items = get_paginated_trash_files(
@@ -298,9 +321,9 @@ async def list_media_trash_endpoint(
                     try:
                         response.headers["X-TLDW-DB-Path"] = str(db_path)
                         response.headers["X-TLDW-List-Total"] = str(int(total_items))
-                    except Exception:
+                    except _MEDIA_LISTING_COERCE_EXCEPTIONS:
                         pass
-        except Exception:
+        except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS:
             pass
 
         base_items: list[dict[str, Any]] = []
@@ -344,7 +367,7 @@ async def list_media_trash_endpoint(
                 )
                 keywords_map = {}
                 keywords_available = False
-            except Exception as exc:  # pragma: no cover
+            except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover
                 logger.error(
                     "Unexpected error fetching keywords for media trash list page={} rpp={}: {}",
                     page,
@@ -435,7 +458,7 @@ async def empty_media_trash_endpoint(
                     deleted_count += 1
                 else:
                     failed_ids.append(int(media_id))
-            except Exception as exc:
+            except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error(
                     "Error permanently deleting trashed media {}: {}",
                     media_id,
@@ -451,7 +474,7 @@ async def empty_media_trash_endpoint(
             )
             count_row = count_cursor.fetchone()
             remaining_count = count_row["total_items"] if count_row else 0
-        except Exception:
+        except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS:
             pass
 
         logger.warning(
@@ -594,7 +617,7 @@ async def search_by_metadata(
             if isinstance(sm, str):
                 try:
                     r["safe_metadata"] = _json.loads(sm)
-                except Exception:
+                except _MEDIA_LISTING_COERCE_EXCEPTIONS:
                     r["safe_metadata"] = None
 
         payload: dict[str, Any] = {
@@ -745,7 +768,7 @@ async def get_by_identifier(
             if isinstance(sm, str):
                 try:
                     r["safe_metadata"] = _json.loads(sm)
-                except Exception:
+                except _MEDIA_LISTING_COERCE_EXCEPTIONS:
                     r["safe_metadata"] = None
 
         payload: dict[str, Any] = {"results": rows, "total": total}

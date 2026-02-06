@@ -12,6 +12,17 @@ from loguru import logger
 
 from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
 
+_SENTENCE_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ImportError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    re.error,
+)
+
 
 class SentenceChunkingStrategy(BaseChunkingStrategy):
     """
@@ -65,7 +76,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                 self._th_sent_tokenize = _th_sent_tokenize
                 self.pythainlp_available = True
                 logger.debug("PyThaiNLP available for Thai sentence segmentation")
-            except Exception:
+            except ImportError:
                 logger.debug("PyThaiNLP not available; using regex fallback for Thai")
 
     def set_language(self, language: str) -> None:
@@ -80,7 +91,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                 self._th_sent_tokenize = _th_sent_tokenize
                 self.pythainlp_available = True
                 logger.debug("PyThaiNLP available for Thai sentence segmentation")
-            except Exception:
+            except ImportError:
                 logger.debug("PyThaiNLP not available; using regex fallback for Thai")
 
     def chunk(self,
@@ -133,7 +144,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                 sents = [s for s in self._th_sent_tokenize(text) if s and s.strip()]
                 if sents:
                     return sents
-            except Exception:
+            except _SENTENCE_NONCRITICAL_EXCEPTIONS:
                 logger.debug("PyThaiNLP sentence splitting failed; falling back")
 
         # Try pysbd next if available
@@ -166,7 +177,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                     pos = end
                 if spans:
                     return spans
-            except Exception:
+            except _SENTENCE_NONCRITICAL_EXCEPTIONS:
                 logger.debug("PyThaiNLP sentence splitting (spans) failed; falling back")
 
         # Try pysbd next if available; if used, recover spans via rolling pointer
@@ -185,7 +196,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                     spans.append((s, idx, end))
                     pos = end
                 return spans
-            except Exception:
+            except _SENTENCE_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Regex path: compute spans directly during reconstruction
@@ -273,7 +284,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             logger.debug(f"pysbd split text into {len(sentences)} sentences")
             return sentences
 
-        except Exception as e:
+        except _SENTENCE_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"pysbd sentence splitting failed: {e}, falling back to regex")
             return []
 
@@ -431,7 +442,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
         if options.get('combine_short', False):
             try:
                 min_length = int(options.get('min_sentence_length', 10))
-            except Exception:
+            except (TypeError, ValueError):
                 min_length = 10
             combined = self._combine_short_sentences_with_spans(sentences_with_spans, min_length)
         # Ensure we operate on a copy to avoid mutating shared state
@@ -449,7 +460,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             end_char = window[-1][2]
             try:
                 end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
-            except Exception:
+            except _SENTENCE_NONCRITICAL_EXCEPTIONS:
                 pass
             sentences_only = [item[0] for item in window]
             if self.language in no_space_languages:
@@ -489,7 +500,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
 
         try:
             min_length_opt = int(options.get('min_sentence_length', 10))
-        except Exception:
+        except (TypeError, ValueError):
             min_length_opt = 10
 
         results: list[ChunkResult] = []

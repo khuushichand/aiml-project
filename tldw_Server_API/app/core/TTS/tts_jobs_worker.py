@@ -37,6 +37,18 @@ from tldw_Server_API.app.core.TTS.utils import (
 
 TTS_DOMAIN = "audio"
 TTS_JOB_TYPE = "tts_longform"
+_TTS_JOBS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    OverflowError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 class TTSJobError(Exception):
@@ -67,7 +79,7 @@ def _open_media_db_for_history(user_id: str) -> MediaDatabase | None:
     try:
         db_path = DatabasePaths.get_media_db_path(user_id)
         return MediaDatabase(db_path=str(db_path), client_id="tts_jobs_worker")
-    except Exception as exc:
+    except _TTS_JOBS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("TTS jobs worker: failed to open media db for history: {}", exc)
         return None
 
@@ -77,7 +89,7 @@ def _sanitize_params_json(request: OpenAISpeechRequest) -> dict[str, Any]:
     if request.extra_params:
         try:
             extra_params = dict(request.extra_params)
-        except Exception:
+        except _TTS_JOBS_NONCRITICAL_EXCEPTIONS:
             extra_params = None
         if extra_params:
             extra_params.pop("voice_reference", None)
@@ -144,7 +156,7 @@ async def _handle_tts_job(job: dict[str, Any]) -> dict[str, Any]:
             return
         try:
             text_hash = compute_tts_history_text_hash(request.input, history_cfg.get("hash_key"))
-        except Exception as exc:
+        except _TTS_JOBS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("TTS jobs worker: failed to compute text hash: {}", exc)
             return
         metadata = getattr(request, "_tts_metadata", None)
@@ -211,10 +223,10 @@ async def _handle_tts_job(job: dict[str, Any]) -> dict[str, Any]:
                     value=max(0.0, (asyncio.get_event_loop().time() - insert_start) * 1000),
                     labels={"status": str(final_status or "unknown")},
                 )
-            except Exception:
+            except _TTS_JOBS_NONCRITICAL_EXCEPTIONS:
                 pass
             history_written = True
-        except Exception as exc:
+        except _TTS_JOBS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("TTS jobs worker: failed to write history record: {}", exc)
 
     def _emit_progress(percent: float, message: str, eta_seconds: float | None = None) -> None:
@@ -222,14 +234,14 @@ async def _handle_tts_job(job: dict[str, Any]) -> dict[str, Any]:
             return
         try:
             jm.update_job_progress(job_id, progress_percent=percent, progress_message=message)
-        except Exception:
+        except _TTS_JOBS_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             attrs = {"progress_percent": percent, "progress_message": message}
             if eta_seconds is not None:
                 attrs["eta_seconds"] = max(0.0, float(eta_seconds))
             emit_job_event("job.progress", job={"id": job_id}, attrs=attrs)
-        except Exception:
+        except _TTS_JOBS_NONCRITICAL_EXCEPTIONS:
             pass
 
     try:
@@ -249,7 +261,7 @@ async def _handle_tts_job(job: dict[str, Any]) -> dict[str, Any]:
                 expected_chars_per_sec = float(
                     (request.extra_params or {}).get("audio_expected_chars_per_sec", expected_chars_per_sec)
                 )
-            except Exception:
+            except _TTS_JOBS_NONCRITICAL_EXCEPTIONS:
                 expected_chars_per_sec = 15.0
             expected_sec = max(1.0, len(request.input or "") / max(1.0, expected_chars_per_sec))
             async for chunk in speech_iter:
@@ -323,7 +335,7 @@ async def _handle_tts_job(job: dict[str, Any]) -> dict[str, Any]:
         if history_db is not None:
             try:
                 history_db.close_connection()
-            except Exception:
+            except _TTS_JOBS_NONCRITICAL_EXCEPTIONS:
                 pass
 
 
@@ -359,7 +371,7 @@ async def run_tts_jobs_worker(stop_event: asyncio.Event | None = None) -> None:
             _stop_watcher_task.cancel()
             try:
                 await _stop_watcher_task
-            except Exception:
+            except _TTS_JOBS_NONCRITICAL_EXCEPTIONS:
                 pass
 
 

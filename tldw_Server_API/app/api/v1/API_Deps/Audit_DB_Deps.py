@@ -111,7 +111,7 @@ def _resolve_audit_storage_mode() -> str:
     raw = settings.get("AUDIT_STORAGE_MODE", "per_user")
     try:
         mode = str(raw).strip().lower()
-    except Exception:
+    except (TypeError, ValueError):
         mode = "per_user"
     if mode not in _VALID_STORAGE_MODES:
         logger.warning(f"Invalid AUDIT_STORAGE_MODE={raw!r}; using per_user")
@@ -127,7 +127,7 @@ def _shared_audit_db_path() -> str:
 def _is_test_context() -> bool:
     try:
         return bool(os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode()
-    except Exception as exc:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         logger.debug("Failed to determine test context; defaulting to False: {}", exc)
         return False
 
@@ -135,7 +135,7 @@ def _is_test_context() -> bool:
 def _mark_service_used(service: UnifiedAuditService) -> None:
     try:
         service._last_used_ts = time.monotonic()  # type: ignore[attr-defined]
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError):
         logger.debug("Failed to mark service used timestamp")
 
 
@@ -151,7 +151,7 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
     evicted_at = time.monotonic()
     try:
         service._tldw_evicted_at = evicted_at  # type: ignore[attr-defined]
-    except Exception as exc:
+    except (AttributeError, RuntimeError, TypeError) as exc:
         logger.debug("Failed to set eviction timestamp for user {}: {}", user_id, exc)
     service_key = id(service)
 
@@ -166,7 +166,7 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
             _services_stopping.discard(service_key)
         try:
             service._tldw_stop_scheduled = False  # type: ignore[attr-defined]
-        except Exception as exc:
+        except (AttributeError, RuntimeError, TypeError) as exc:
             logger.debug("Failed to clear stop-scheduled flag on audit service: {}", exc)
 
     async def _stop():
@@ -195,7 +195,7 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
                 ):
                     try:
                         service._tldw_evicted_at = last_used  # type: ignore[attr-defined]
-                    except Exception as exc:
+                    except (AttributeError, RuntimeError, TypeError) as exc:
                         logger.debug(
                             "Failed to update eviction timestamp for user {}: {}",
                             user_id,
@@ -216,7 +216,7 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
                 break
             await service.stop()
             logger.info(f"Audit service for user {user_id} stopped ({reason}).")
-        except Exception as exc:
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(
                 f"Failed to stop audit service for user {user_id} ({reason}): {exc}",
                 exc_info=True,
@@ -234,7 +234,7 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
                     "Audit service owner loop not running; shutting down on current loop."
                 )
                 owner_loop = None
-        except Exception:
+        except (AttributeError, RuntimeError):
             owner_loop = None
 
     try:
@@ -263,7 +263,7 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
     def _run():
         try:
             asyncio.run(_stop())
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(
                 f"Audit service stop failed for user {user_id} in fallback thread: {type(e).__name__}: {e}"
             )
@@ -746,7 +746,7 @@ async def shutdown_user_audit_service(user_id: int):
             else:
                 await service.stop()
             logger.info(f"Shut down audit service for user {user_id}")
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(
                 f"Error shutting down audit service for user {user_id}: {e}",
                 exc_info=True,
@@ -824,7 +824,7 @@ async def shutdown_all_audit_services():
                         f"Audit service owner loop not running; forcing shutdown on current loop ({_service_label(service)})"
                     )
                     owner_loop = None
-            except Exception:
+            except (AttributeError, RuntimeError):
                 owner_loop = None
 
         try:
@@ -838,7 +838,7 @@ async def shutdown_all_audit_services():
                 await _await_with_timeout(asyncio.wrap_future(future), label=_service_label(service))
             else:
                 await _await_with_timeout(service.stop(), label=_service_label(service))
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
             error_count += 1
             logger.error(f"Error shutting down audit service: {e}", exc_info=True)
 

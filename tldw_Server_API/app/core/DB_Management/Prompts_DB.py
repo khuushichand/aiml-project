@@ -91,6 +91,21 @@ class ConflictError(DatabaseError):
         return f"{base} ({', '.join(details)})" if details else base
 
 
+_PROMPTS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    DatabaseError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+    json.JSONDecodeError,
+    sqlite3.Error,
+)
+
+
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -271,7 +286,7 @@ class PromptsDatabase:
             def close(self):
                 try:
                     self._outer.close_connection()
-                except Exception:
+                except _PROMPTS_NONCRITICAL_EXCEPTIONS:
                     pass
         # Expose as attribute, not property, to satisfy hasattr checks in fixtures
         self.conn = _ConnCloseProxy(self)
@@ -320,7 +335,7 @@ class PromptsDatabase:
                 is_closed = True
                 try:
                     conn.close()
-                except Exception as e:
+                except _PROMPTS_NONCRITICAL_EXCEPTIONS as e:
                     logging.warning(f"Failed to close database connection: {e}")
                 self._local.conn = None
 
@@ -376,7 +391,7 @@ class PromptsDatabase:
         """
         try:
             self.close_connection()
-        except Exception as _e:
+        except _PROMPTS_NONCRITICAL_EXCEPTIONS as _e:
             # Be conservative: swallowing errors during close ensures test teardown
             # can proceed to unlink temporary files on platforms like Windows.
             logging.warning(f"PromptsDatabase.close() encountered an error: {_e}")
@@ -419,7 +434,7 @@ class PromptsDatabase:
         except sqlite3.Error as e:
             logger.error(f"SQLite error during database backup: {e}", exc_info=True)
             return False
-        except Exception as e:
+        except _PROMPTS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error during database backup: {e}", exc_info=True)
             return False
         finally:
@@ -1444,7 +1459,7 @@ class PromptsDatabase:
                     for it in results_data:
                         try:
                             it['author'] = (it.get('author') or '').strip()
-                        except Exception:
+                        except _PROMPTS_NONCRITICAL_EXCEPTIONS:
                             pass
 
                 # Enrich each prompt with keywords for downstream filtering/searching that rely on list output
@@ -1455,7 +1470,7 @@ class PromptsDatabase:
                             pid = item.get('id')
                             if pid is not None:
                                 item['keywords'] = self.fetch_keywords_for_prompt(int(pid), include_deleted=False)
-                    except Exception as e:
+                    except _PROMPTS_NONCRITICAL_EXCEPTIONS as e:
                         logging.debug(f"Could not enrich prompts with keywords: {e}")
                 # Do not mutate keywords in list results; preserve exact values for export/roundtrip
 
@@ -1627,7 +1642,7 @@ class PromptsDatabase:
                         for r in all_kw_cur.fetchall():
                             if self._normalize_keyword(r['keyword']).casefold() == target_norm:
                                 kw_ids.append(r['id'])
-                    except Exception:
+                    except _PROMPTS_NONCRITICAL_EXCEPTIONS:
                         pass
                 if not kw_ids:
                     return [], 0
@@ -1777,7 +1792,7 @@ class PromptsDatabase:
                     total_matches = len(combined)
                     results_list = combined[offset:offset + results_per_page]
                     return results_list, total_matches
-                except Exception as fe:
+                except _PROMPTS_NONCRITICAL_EXCEPTIONS as fe:
                     logging.warning(f"Naive fallback search failed: {fe}")
             return results_list, total_matches
         except (DatabaseError, sqlite3.Error) as e:
@@ -1923,7 +1938,7 @@ def export_prompt_keywords_to_csv(db_instance: PromptsDatabase) -> tuple[str, st
         error_msg = f"Database error exporting keywords: {e}"
         logging.error(error_msg, exc_info=True)
         return error_msg, "None"
-    except Exception as e:
+    except _PROMPTS_NONCRITICAL_EXCEPTIONS as e:
         error_msg = f"Error exporting keywords: {e}"
         logging.error(error_msg, exc_info=True)
         return error_msg, "None"
@@ -2121,7 +2136,7 @@ def export_prompts_formatted(db_instance: PromptsDatabase,
         error_msg = f"Error exporting prompts: {e}"
         logging.error(error_msg, exc_info=True)
         return error_msg, "None"
-    except Exception as e: # Catch any other unexpected error
+    except _PROMPTS_NONCRITICAL_EXCEPTIONS as e: # Catch any other unexpected error
         error_msg = f"Unexpected error exporting prompts: {e}"
         logging.error(error_msg, exc_info=True)
         return error_msg, "None"

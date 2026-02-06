@@ -63,7 +63,7 @@ async def run_kanban_adapter(config: dict[str, Any], context: dict[str, Any]) ->
     if not user_id:
         try:
             user_id = str(DatabasePaths.get_single_user_id())
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             return {"error": "missing_user_id"}
     user_id = str(user_id)
 
@@ -116,7 +116,7 @@ async def run_kanban_adapter(config: dict[str, Any], context: dict[str, Any]) ->
         elif isinstance(raw_value, str):
             try:
                 parsed = json.loads(raw_value)
-            except Exception:
+            except json.JSONDecodeError:
                 parsed = None
             if isinstance(parsed, list):
                 items = parsed
@@ -147,13 +147,13 @@ async def run_kanban_adapter(config: dict[str, Any], context: dict[str, Any]) ->
             return cleaned or None
         try:
             rendered = str(value)
-        except Exception:
+        except (TypeError, ValueError):
             return None
         return rendered.strip() or None
 
     try:
         user_id_int: Any = int(user_id) if str(user_id).isdigit() else user_id
-    except Exception:
+    except (OverflowError, TypeError, ValueError):
         user_id_int = user_id
 
     db_path = DatabasePaths.get_kanban_db_path(user_id_int)
@@ -527,7 +527,7 @@ async def run_kanban_adapter(config: dict[str, Any], context: dict[str, Any]) ->
     finally:
         try:
             db.close()
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
 
 
@@ -560,7 +560,7 @@ async def run_chatbooks_adapter(config: dict[str, Any], context: dict[str, Any])
     if not user_id:
         try:
             user_id = str(DatabasePaths.get_single_user_id())
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             return {"error": "missing_user_id"}
     user_id = str(user_id)
 
@@ -600,7 +600,7 @@ async def run_chatbooks_adapter(config: dict[str, Any], context: dict[str, Any])
         try:
             user_id_int = int(user_id)
             notes_db_path = DatabasePaths.get_chachanotes_db_path(user_id_int)
-        except Exception:
+        except (OverflowError, TypeError, ValueError):
             user_id_int = None
             notes_db_path = Path("Databases") / "user_databases" / user_id / "ChaChaNotes.db"
 
@@ -670,7 +670,7 @@ async def run_chatbooks_adapter(config: dict[str, Any], context: dict[str, Any])
 
         return {"error": f"unknown_action:{action}"}
 
-    except Exception as e:
+    except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         logger.exception(f"Chatbooks adapter error: {e}")
         return {"error": f"chatbooks_error:{e}"}
 
@@ -705,7 +705,7 @@ async def run_character_chat_adapter(config: dict[str, Any], context: dict[str, 
     if not user_id:
         try:
             user_id = str(DatabasePaths.get_single_user_id())
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             return {"error": "missing_user_id"}
     user_id = str(user_id)
 
@@ -758,7 +758,7 @@ async def run_character_chat_adapter(config: dict[str, Any], context: dict[str, 
         try:
             user_id_int = int(user_id)
             db_path = DatabasePaths.get_chachanotes_db_path(user_id_int)
-        except Exception:
+        except (OverflowError, TypeError, ValueError):
             db_path = Path("Databases") / "user_databases" / user_id / "ChaChaNotes.db"
 
         db = CharactersRAGDB(db_path=db_path, client_id="workflow_engine")
@@ -863,6 +863,6 @@ async def run_character_chat_adapter(config: dict[str, Any], context: dict[str, 
 
         return {"error": f"unknown_action:{action}"}
 
-    except Exception as e:
+    except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         logger.exception(f"Character chat adapter error: {e}")
         return {"error": f"character_chat_error:{e}"}

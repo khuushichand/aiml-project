@@ -55,6 +55,8 @@ from tldw_Server_API.app.api.v1.utils.profile_errors import (
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
+    DatabaseError,
+    StorageError,
     WeakPasswordError,
 )
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
@@ -66,13 +68,42 @@ from tldw_Server_API.app.core.UserProfiles.user_profile_catalog import load_user
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
 
 
+_USERS_AUDIT_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    DatabaseError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    StorageError,
+    TypeError,
+    ValueError,
+)
+_USERS_ENDPOINT_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    DatabaseError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    StorageError,
+    TypeError,
+    ValueError,
+)
+_USERS_HEADER_EXCEPTIONS = (AttributeError, TypeError, ValueError)
+_DEPRECATION_SUNSET_EXCEPTIONS = (TypeError, ValueError, OverflowError)
+
+
 def _build_deprecation_headers(successor: str) -> dict[str, str]:
     try:
         sunset_days = int(os.getenv("DEPRECATION_SUNSET_DAYS", "120"))
         sunset = (datetime.now(timezone.utc) + timedelta(days=sunset_days)).strftime(
             "%a, %d %b %Y %H:%M:%S GMT"
         )
-    except Exception:
+    except _DEPRECATION_SUNSET_EXCEPTIONS:
         sunset = "Tue, 31 Dec 2025 00:00:00 GMT"
     return {
         "Deprecation": "true",
@@ -157,7 +188,7 @@ async def _emit_user_profile_audit_event(
                 "skipped_count": skipped_count,
             },
         )
-    except Exception as exc:
+    except _USERS_AUDIT_EXCEPTIONS as exc:
         logger.debug("User profile audit emission skipped: {}", exc)
 
 #######################################################################################################################
@@ -334,7 +365,7 @@ async def update_current_user_profile(
             skipped_count=len(result.skipped),
             dry_run=False,
         )
-    except Exception:
+    except _USERS_AUDIT_EXCEPTIONS:
         pass
     return response
 
@@ -361,7 +392,7 @@ async def get_current_user_profile(
     try:
         if response is not None:
             response.headers.update(_build_deprecation_headers(successor))
-    except Exception:
+    except _USERS_HEADER_EXCEPTIONS:
         pass
     return DeprecatedUserResponse(
         warning="deprecated_endpoint",
@@ -408,7 +439,7 @@ async def update_user_profile(
     try:
         if response is not None:
             response.headers.update(_build_deprecation_headers(successor))
-    except Exception:
+    except _USERS_HEADER_EXCEPTIONS:
         pass
     try:
         updates_made = False
@@ -452,7 +483,7 @@ async def update_user_profile(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _USERS_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to update user profile: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -560,7 +591,7 @@ async def change_password(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _USERS_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to change password: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -800,7 +831,7 @@ async def get_storage_quota(
             usage_percentage=storage_info['usage_percentage']
         )
 
-    except Exception as e:
+    except _USERS_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to get storage quota: {e}")
         # Return from database values if calculation fails
         return StorageQuotaResponse(
@@ -842,7 +873,7 @@ async def recalculate_storage(
             usage_percentage=storage_info['usage_percentage']
         )
 
-    except Exception as e:
+    except _USERS_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to recalculate storage: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

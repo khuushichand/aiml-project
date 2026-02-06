@@ -42,6 +42,17 @@ DEPRECATION_MSG = (
     "DEPRECATION: This CLI is deprecated. Use 'tldw-evals' or 'python -m tldw_Server_API.cli.evals_cli' instead.\n"
 )
 
+_EVALS_CLI_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ChatConfigurationError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
 
 def _call_adapter_text(
     *,
@@ -91,7 +102,7 @@ def cli(ctx, config, log_level):
             DeprecationWarning,
             stacklevel=2,
         )
-    except Exception:
+    except (RuntimeError, ValueError, Warning):
         pass
     click.secho(DEPRECATION_MSG, fg='yellow', err=True)
     # Configure logging
@@ -233,7 +244,7 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
     try:
         dataset = load_benchmark_dataset(benchmark, limit=limit)
         click.echo(f"Loaded {len(dataset)} samples")
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"Error loading dataset: {e}", err=True)
         sys.exit(1)
 
@@ -303,7 +314,7 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
                     score_match = re.search(r'([0-9]*\.?[0-9]+)', response_text)
                     score = float(score_match.group(1)) if score_match else 0.5
                     score = max(0.0, min(1.0, score))  # Clamp to [0, 1]
-                except Exception as e:
+                except (AttributeError, TypeError, ValueError) as e:
                     logger.debug(f"Failed to parse score from LLM response; defaulting to 0.5. error={e}")
                     score = 0.5  # Default score if parsing fails
 
@@ -319,7 +330,7 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
                 }
                 results.append(result)
 
-            except Exception as e:
+            except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error evaluating sample {i}: {e}")
                 results.append({
                     "sample_id": sample.get("id", i),
@@ -394,7 +405,7 @@ def register(name, config_file):
         registry.register(config)
         click.echo(f"Registered benchmark: {name}")
 
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"Error registering benchmark: {e}", err=True)
         sys.exit(1)
 
@@ -442,12 +453,12 @@ def validate(benchmark, samples):
                 try:
                     formatted = evaluator.format_for_custom_metric(dataset[0])
                     click.echo("Sample formatted successfully for evaluation")
-                except Exception as e:
+                except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
                     click.echo(f"Warning: Could not format sample: {e}", err=True)
         else:
             click.echo("Warning: Evaluator not available for this type", err=True)
 
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
@@ -510,7 +521,7 @@ def test_api(api_name, test_prompt, model, system_prompt):
         click.echo("✓ API responded successfully")
         click.echo(f"Response: {response_text[:500]}..." if len(response_text) > 500 else f"Response: {response_text}")
 
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"✗ API test failed: {e}", err=True)
         sys.exit(1)
 
@@ -549,7 +560,7 @@ def health():
 
         click.echo("\nSystem health: OK")
 
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 

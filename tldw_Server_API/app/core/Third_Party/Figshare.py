@@ -14,10 +14,30 @@ from __future__ import annotations
 
 from typing import Any
 
+from tldw_Server_API.app.core.exceptions import (
+    EgressPolicyError,
+    JSONDecodeError,
+    NetworkError,
+    RetryExhaustedError,
+)
 from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 BASE_URL = "https://api.figshare.com/v2"
 OAI_BASE = f"{BASE_URL}/oai"
+_FIGSHARE_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    EgressPolicyError,
+    JSONDecodeError,
+    LookupError,
+    NetworkError,
+    OSError,
+    RetryExhaustedError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 def _join_authors(item: dict[str, Any]) -> str | None:
@@ -29,7 +49,7 @@ def _join_authors(item: dict[str, Any]) -> str | None:
             if nm:
                 names.append(nm)
         return ", ".join(names) if names else None
-    except Exception:
+    except _FIGSHARE_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -47,7 +67,7 @@ def _pick_pdf_from_files(files: list[dict[str, Any]]) -> str | None:
             if fid and name.lower().endswith(".pdf"):
                 return f"https://ndownloader.figshare.com/files/{fid}"
         return None
-    except Exception:
+    except _FIGSHARE_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -118,7 +138,7 @@ def search_articles(
         # Figshare search response does not return a total count directly; approximate from length
         total = len(items)
         return items, total, None
-    except Exception as e:
+    except _FIGSHARE_NONCRITICAL_EXCEPTIONS as e:
         return None, 0, f"Figshare error: {str(e)}"
 
 
@@ -128,12 +148,12 @@ def get_article_by_id(article_id: str) -> tuple[dict[str, Any] | None, str | Non
         if r.status_code == 404:
             try:
                 r.close()
-            except Exception:
+            except _FIGSHARE_NONCRITICAL_EXCEPTIONS:
                 pass
             return None, None
         data = r.json() or {}
         return _normalize_article(data), None
-    except Exception as e:
+    except _FIGSHARE_NONCRITICAL_EXCEPTIONS as e:
         return None, f"Figshare error: {str(e)}"
 
 
@@ -142,7 +162,7 @@ def get_article_raw(article_id: str) -> tuple[dict[str, Any] | None, str | None]
     try:
         data = fetch_json(method="GET", url=f"{BASE_URL}/articles/{article_id}", headers={"Accept": "application/json"}, timeout=20)
         return data or {}, None
-    except Exception as e:
+    except _FIGSHARE_NONCRITICAL_EXCEPTIONS as e:
         return None, f"Figshare error: {str(e)}"
 
 
@@ -152,7 +172,7 @@ def get_article_files(article_id: str) -> tuple[list[dict[str, Any]] | None, str
         if not isinstance(data, list):
             return [], None
         return data, None
-    except Exception as e:
+    except _FIGSHARE_NONCRITICAL_EXCEPTIONS as e:
         return None, f"Figshare error: {str(e)}"
 
 
@@ -165,7 +185,7 @@ def get_article_by_doi(doi: str) -> tuple[dict[str, Any] | None, str | None]:
         if items:
             return items[0], None
         return None, None
-    except Exception as e:
+    except _FIGSHARE_NONCRITICAL_EXCEPTIONS as e:
         return None, f"Figshare error: {str(e)}"
 
 
@@ -177,7 +197,7 @@ def oai_raw(params: dict[str, Any]) -> tuple[bytes | None, str | None, str | Non
             return None, None, f"Figshare OAI-PMH HTTP error: {r.status_code}"
         ct = r.headers.get("content-type") or "application/xml"
         return r.content, ct.split(";")[0], None
-    except Exception as e:
+    except _FIGSHARE_NONCRITICAL_EXCEPTIONS as e:
         return None, None, f"Figshare OAI-PMH error: {str(e)}"
 
 
@@ -196,5 +216,5 @@ def extract_pdf_download_url(article: dict[str, Any]) -> str | None:
         if files2:
             return _pick_pdf_from_files(files2)
         return None
-    except Exception:
+    except _FIGSHARE_NONCRITICAL_EXCEPTIONS:
         return None

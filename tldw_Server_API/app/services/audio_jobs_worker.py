@@ -132,7 +132,7 @@ async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None
                     for cand in owners:
                         try:
                             limits = await get_limits_for_user(int(cand))
-                        except Exception as e:
+                        except (OSError, RuntimeError, TypeError, ValueError) as e:
                             logger.warning(
                                 f"Failed to get limits for owner candidate {cand}; assuming unlimited concurrent_jobs: {e}"
                             )
@@ -164,7 +164,7 @@ async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None
                                     (DOMAIN, str(cand)),
                                 ).fetchone()
                                 cur_count = int(rowp[0]) if rowp else 0
-                        except Exception as e:
+                        except (OSError, RuntimeError, TypeError, ValueError) as e:
                             logger.warning(
                                 f"Failed to count processing jobs for owner candidate {cand}; assuming 0: {e}"
                             )
@@ -172,14 +172,14 @@ async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None
                         finally:
                             try:
                                 conn2.close()
-                            except Exception:
+                            except (OSError, RuntimeError):
                                 pass
                         if cur_count < max_jobs:
                             owner_candidate = cand
                             break
                     if owner_candidate is not None:
                         job = jm.acquire_next_job(domain=DOMAIN, queue="default", lease_seconds=lease_seconds, worker_id=worker_id, owner_user_id=str(owner_candidate))
-            except Exception as e:
+            except (OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(f"Owner-aware acquisition failed; falling back to default acquisition: {e}")
                 job = None
             if not job:
@@ -195,7 +195,7 @@ async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None
             # Cross-process fairness: enforce concurrent processing cap across all workers
             try:
                 limits_owner = await get_limits_for_user(int(owner))
-            except Exception as e:
+            except (OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(
                     f"Failed to get limits for owner {owner}; assuming unlimited concurrent_jobs: {e}"
                 )
@@ -229,7 +229,7 @@ async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None
                             ).fetchone()
                             count = int(row[0]) if row else 0
                     conn.close()
-                except Exception as e:
+                except (OSError, RuntimeError, TypeError, ValueError) as e:
                     logger.warning(
                         f"Failed to count processing jobs for owner {owner}; assuming 0: {e}"
                     )
@@ -265,7 +265,7 @@ async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None
                 continue
             try:
                 await increment_jobs_started(int(owner))
-            except Exception as e:
+            except (OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(
                     f"Failed to increment jobs started for owner {owner}: {e}"
                 )
@@ -334,7 +334,7 @@ async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None
                 else:
                     ok = False
                     msg_err = f"Unknown job_type: {jtype}"
-            except Exception as e:
+            except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
                 ok = False
                 msg_err = str(e)
 
@@ -355,13 +355,13 @@ async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None
             else:
                 jm.fail_job(int(job["id"]), error=msg_err, retryable=True, worker_id=worker_id, lease_id=str(job.get("lease_id")), completion_token=str(job.get("lease_id")))
 
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Audio worker loop error: {e}")
         finally:
             try:
                 if acquired_slot and owner is not None:
                     await finish_job(int(owner))  # type: ignore[arg-type]
-            except Exception as e:
+            except (OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(f"Failed to release job slot: {e}")
 
 

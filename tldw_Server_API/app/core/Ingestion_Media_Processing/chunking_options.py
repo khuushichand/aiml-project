@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -37,6 +38,28 @@ _ALLOWED_MEDIA_CHUNKING_KEYS = (
     "proposition_prompt_profile",
 )
 
+_CHUNKING_OPTIONS_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
+_CHUNKING_OPTIONS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
 
 def _get_raw_form_value(form_data: Any, key: str) -> Any:
     if isinstance(form_data, Mapping):
@@ -44,7 +67,7 @@ def _get_raw_form_value(form_data: Any, key: str) -> Any:
     if hasattr(form_data, "model_dump"):
         try:
             dumped = form_data.model_dump()
-        except Exception:
+        except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
             dumped = {}
         if isinstance(dumped, Mapping):
             return dumped.get(key)
@@ -106,14 +129,14 @@ def prepare_chunking_options_dict(form_data: Any) -> dict[str, Any] | None:
         try:
             if chunk_size_used is None or int(chunk_size_used) == 500:
                 chunk_size_used = 1000
-        except Exception:
+        except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
             chunk_size_used = 1000
 
     if media_type == "email":
         try:
             if chunk_overlap_used is None or int(chunk_overlap_used) == 200:
                 chunk_overlap_used = 150
-        except Exception:
+        except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
             chunk_overlap_used = 150
 
     if media_type == "ebook":
@@ -171,7 +194,7 @@ def prepare_chunking_options_dict(form_data: Any) -> dict[str, Any] | None:
             if isinstance(hier_template, dict):
                 chunk_options["hierarchical_template"] = hier_template
             chunk_options.setdefault("method", "sentences")
-    except Exception:
+    except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
         pass
 
     if final_chunk_method == "propositions":
@@ -194,7 +217,7 @@ def prepare_chunking_options_dict(form_data: Any) -> dict[str, Any] | None:
                         chunk_options["proposition_aggressiveness"] = int(
                             c.get("proposition_aggressiveness")
                         )
-                except Exception:
+                except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
                     pass
             if "proposition_min_proposition_length" in c:
                 try:
@@ -202,9 +225,9 @@ def prepare_chunking_options_dict(form_data: Any) -> dict[str, Any] | None:
                         chunk_options["proposition_min_proposition_length"] = int(
                             c.get("proposition_min_proposition_length")
                         )
-                except Exception:
+                except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
                     pass
-        except Exception as cfg_err:
+        except _CHUNKING_OPTIONS_NONCRITICAL_EXCEPTIONS as cfg_err:
             logging.debug(f"Proposition config defaults not loaded: {cfg_err}")
 
     logging.info("Chunking enabled with options: {}", chunk_options)
@@ -239,7 +262,7 @@ def apply_chunking_template_if_any(
         if template_name:
             try:
                 tpl = db.get_chunking_template(name=template_name)
-            except Exception as db_err:
+            except _CHUNKING_OPTIONS_NONCRITICAL_EXCEPTIONS as db_err:
                 logging.warning("Failed to load chunking template '%s': %s", template_name, db_err)
                 return opts
 
@@ -249,7 +272,7 @@ def apply_chunking_template_if_any(
                 raw_cfg = tpl["template_json"]
                 try:
                     cfg = _json.loads(raw_cfg) if isinstance(raw_cfg, str) else raw_cfg
-                except Exception:
+                except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
                     cfg = {}
                 cfg = cfg or {}
                 hier_cfg = (cfg.get("chunking") or {}).get("config", {}) or {}
@@ -293,7 +316,7 @@ def apply_chunking_template_if_any(
                     user_id=None,
                     include_deleted=False,
                 )
-            except Exception as list_err:
+            except _CHUNKING_OPTIONS_NONCRITICAL_EXCEPTIONS as list_err:
                 logging.warning("Failed to list chunking templates for auto-apply: {}", list_err)
                 return opts
 
@@ -307,7 +330,7 @@ def apply_chunking_template_if_any(
                     cfg = _json.loads(t.get("template_json") or "{}")
                     if not isinstance(cfg, dict):
                         cfg = {}
-                except Exception:
+                except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
                     cfg = {}
 
                 try:
@@ -318,7 +341,7 @@ def apply_chunking_template_if_any(
                         url=first_url,
                         filename=first_filename,
                     )
-                except Exception:
+                except _CHUNKING_OPTIONS_NONCRITICAL_EXCEPTIONS:
                     score = 0.0
 
                 if score <= 0:
@@ -350,7 +373,7 @@ def apply_chunking_template_if_any(
                     opts["hierarchical_template"] = tpl
 
         return opts
-    except Exception as auto_err:  # Defensive: never break callers
+    except _CHUNKING_OPTIONS_NONCRITICAL_EXCEPTIONS as auto_err:  # Defensive: never break callers
         logging.warning("Auto-apply chunking template helper failed: {}", auto_err)
         return chunking_options_dict
 

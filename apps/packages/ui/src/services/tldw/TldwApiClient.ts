@@ -2425,6 +2425,19 @@ export class TldwApiClient {
     })
   }
 
+  async getCharacterPromptPreview(
+    chat_id: string | number,
+    payload?: Record<string, any>
+  ): Promise<any> {
+    const cid = String(chat_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chats/${cid}/prompt-preview`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload || {}
+    })
+  }
+
   async persistCharacterCompletion(
     chat_id: string | number,
     payload: Record<string, any>

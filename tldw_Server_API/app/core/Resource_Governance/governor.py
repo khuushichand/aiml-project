@@ -31,7 +31,7 @@ from .tenant import hash_entity
 try:
     # Metrics are optional during early startup
     from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
-except Exception:  # pragma: no cover - metrics optional
+except (ImportError, ModuleNotFoundError):  # pragma: no cover - metrics optional
     get_metrics_registry = None  # type: ignore
 
 
@@ -202,7 +202,7 @@ class MemoryResourceGovernor(ResourceGovernor):
                 pol = self._policy_loader.get_policy(policy_id)  # type: ignore[attr-defined]
                 if pol:
                     return pol
-            except Exception as e:
+            except (AttributeError, RuntimeError, TypeError, ValueError) as e:
                 logger.debug(f"Policy loader failed; falling back to static policies: {e}")
         return self._policies.get(policy_id, {})
 
@@ -258,7 +258,7 @@ class MemoryResourceGovernor(ResourceGovernor):
                     continue
                 if (now - float(created_at)) > float(ttl):
                     expired.append(op_id)
-            except Exception:
+            except (OverflowError, TypeError, ValueError):
                 continue
         for op_id in expired:
             try:
@@ -429,7 +429,7 @@ class MemoryResourceGovernor(ResourceGovernor):
             try:
                 cat_cfg = self._category_limits(pol, category)
                 daily_cap = int(cat_cfg.get("daily_cap") or 0)
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 daily_cap = 0
             if daily_cap > 0:
                 daily_allowed, daily_ra, daily_details = await check_daily_cap(
@@ -444,22 +444,22 @@ class MemoryResourceGovernor(ResourceGovernor):
                 retry_after = max(int(retry_after or 0), int(daily_ra or 0))
                 try:
                     details.update(daily_details or {})
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     pass
                 # Provide limit/remaining for daily-only categories
                 try:
                     if not int(details.get("limit") or 0):
                         details["limit"] = int(daily_cap)
-                except Exception:
+                except (TypeError, ValueError):
                     details["limit"] = int(daily_cap)
                 try:
                     if details.get("remaining") is None:
                         details["remaining"] = int((daily_details or {}).get("daily_remaining") or 0)
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     pass
                 try:
                     details["retry_after"] = int(retry_after or 0)
-                except Exception:
+                except (TypeError, ValueError):
                     pass
 
             per_category[category] = {"allowed": bool(allowed), **details}
@@ -494,7 +494,7 @@ class MemoryResourceGovernor(ResourceGovernor):
                                 1,
                                 {"category": category, "scope": entity_scope, "reason": "insufficient_capacity", "policy_id": policy_id, "entity": ent_h},
                             )
-                except Exception:
+                except (AttributeError, RuntimeError, TypeError, ValueError):
                     pass
 
         return RGDecision(allowed=overall_allowed, retry_after=(retry_after_overall or None), details={"policy_id": policy_id, "categories": per_category})
@@ -652,7 +652,7 @@ class MemoryResourceGovernor(ResourceGovernor):
                                     1,
                                     {"category": category, "scope": entity_scope, "reason": "commit_diff", "policy_id": h.policy_id, "entity": ent_h},
                                 )
-                        except Exception:
+                        except (AttributeError, RuntimeError, TypeError, ValueError):
                             pass
                 # concurrency: nothing to refund here
 
@@ -738,7 +738,7 @@ class MemoryResourceGovernor(ResourceGovernor):
                                 1,
                                 {"category": category, "scope": entity_scope, "reason": "explicit_refund", "policy_id": h.policy_id, "entity": ent_h},
                             )
-                    except Exception:
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         pass
 
         if op_id:

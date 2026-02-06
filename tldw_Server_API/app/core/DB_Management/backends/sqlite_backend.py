@@ -53,7 +53,7 @@ def _sqlite_file_path_from_uri(db_uri: str) -> Optional[Path]:
     """Extract a filesystem path from a file: URI, if present."""
     try:
         parsed = _url.urlparse(db_uri)
-    except Exception:
+    except (TypeError, ValueError):
         return None
     if parsed.scheme != "file":
         return None
@@ -65,7 +65,7 @@ def _sqlite_file_path_from_uri(db_uri: str) -> Optional[Path]:
         if not candidate.is_absolute():
             return (Path.cwd() / candidate).resolve()
         return candidate.resolve()
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
         return candidate
 
 class SQLiteConnectionPool(ConnectionPool):
@@ -87,7 +87,7 @@ class SQLiteConnectionPool(ConnectionPool):
                 self.db_path = db_path
             else:
                 self.db_path = str(Path(db_path).resolve())
-        except Exception:
+        except (OSError, RuntimeError, ValueError):
             self.db_path = db_path
         self.config = config
         self._local = threading.local()
@@ -109,7 +109,7 @@ class SQLiteConnectionPool(ConnectionPool):
                 if conn:
                     try:
                         conn.close()
-                    except Exception:
+                    except (OSError, RuntimeError, sqlite3.Error):
                         pass
                 self._thread_refs.pop(tid, None)
 
@@ -144,7 +144,7 @@ class SQLiteConnectionPool(ConnectionPool):
                     dbp = Path(self.db_path)
                 if dbp and dbp.parent and not dbp.parent.exists():
                     dbp.parent.mkdir(parents=True, exist_ok=True)
-            except Exception:
+            except OSError:
                 pass
 
         conn = sqlite3.connect(
@@ -191,26 +191,26 @@ class SQLiteConnectionPool(ConnectionPool):
                 if conn:
                     try:
                         conn.close()
-                    except Exception:
+                    except (OSError, RuntimeError, sqlite3.Error):
                         pass
                 self._connections[thread_id] = None
-            except Exception:
+            except (AttributeError, KeyError, RuntimeError, TypeError):
                 pass
             try:
                 self._thread_refs.pop(thread_id, None)
-            except Exception:
+            except (AttributeError, KeyError, RuntimeError, TypeError):
                 pass
             try:
                 if hasattr(self._local, 'connection'):
                     self._local.connection = None
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError):
                 pass
             # Prune stale entries to avoid unbounded growth
             try:
                 stale_keys = [tid for tid, conn in self._connections.items() if conn is None]
                 for tid in stale_keys:
                     self._connections.pop(tid, None)
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError):
                 pass
 
     @contextmanager
@@ -231,7 +231,7 @@ class SQLiteConnectionPool(ConnectionPool):
                 if conn:
                     try:
                         conn.close()
-                    except Exception as e:
+                    except (OSError, RuntimeError, sqlite3.Error) as e:
                         logger.error(f"Error closing connection: {e}")
             self._connections.clear()
             self._thread_refs.clear()

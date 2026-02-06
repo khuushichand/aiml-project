@@ -31,6 +31,19 @@ from .utils import parse_bool
 #
 # TTS Adapter Registry and Factory
 
+_TTS_REGISTRY_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_TTS_REGISTRY_ADAPTER_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    TTSError,
+) + _TTS_REGISTRY_NONCRITICAL_EXCEPTIONS
+
 class TTSProvider(Enum):
     """
     Enumeration of TTS providers known to the service.
@@ -141,7 +154,7 @@ class TTSAdapterRegistry:
                 retry_seconds = _extract_retry_seconds(
                     getattr(perf_cfg, "adapter_failure_retry_seconds", None)
                 )
-            except Exception:
+            except _TTS_REGISTRY_NONCRITICAL_EXCEPTIONS:
                 pass
 
         if retry_seconds is not None and retry_seconds <= 0:
@@ -160,7 +173,7 @@ class TTSAdapterRegistry:
         self._adapter_specs[provider] = adapter
         try:
             name = adapter.__name__  # type: ignore[attr-defined]
-        except Exception:
+        except (AttributeError, TypeError):
             name = str(adapter)
         logger.info(f"Registered adapter {name} for provider {provider.value}")
 
@@ -270,7 +283,7 @@ class TTSAdapterRegistry:
                 if not self.config_manager.is_provider_enabled(provider.value):
                     logger.info(f"Provider {provider.value} is disabled in configuration")
                     return None
-            except Exception:
+            except _TTS_REGISTRY_NONCRITICAL_EXCEPTIONS:
                 pass
         else:
             enabled_key = f"{provider.value}_enabled"
@@ -306,7 +319,7 @@ class TTSAdapterRegistry:
         adapter = adapter_class(config=provider_cfg)
         try:
             success = await adapter.ensure_initialized()
-        except Exception as exc:
+        except _TTS_REGISTRY_ADAPTER_EXCEPTIONS as exc:
             logger.error(f"Error initializing {provider.value} adapter with overrides: {exc}")
             return None
         if not success:
@@ -619,7 +632,7 @@ class TTSAdapterRegistry:
                 logger.warning(f"Timeout getting capabilities for {provider.value}")
                 if self._failure_retry_seconds is not None:
                     self._schedule_retry(provider)
-            except Exception as e:
+            except _TTS_REGISTRY_ADAPTER_EXCEPTIONS as e:
                 logger.debug(f"Error getting capabilities for {provider.value}: {e}")
                 if self._failure_retry_seconds is not None:
                     self._schedule_retry(provider)
@@ -716,7 +729,7 @@ class TTSAdapterRegistry:
         # Get resource manager for cleanup
         try:
             resource_manager = await get_resource_manager()
-        except Exception as e:
+        except _TTS_REGISTRY_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Could not get resource manager for cleanup: {e}")
             resource_manager = None
 
@@ -729,7 +742,7 @@ class TTSAdapterRegistry:
             if resource_manager:
                 try:
                     await resource_manager.unregister_model(provider.value)
-                except Exception as e:
+                except _TTS_REGISTRY_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Error unregistering {provider.value} from resource manager: {e}")
 
         if tasks:
@@ -742,7 +755,7 @@ class TTSAdapterRegistry:
         if resource_manager:
             try:
                 await resource_manager.cleanup_all()
-            except Exception as e:
+            except _TTS_REGISTRY_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Error during resource manager cleanup: {e}")
 
         logger.info("All TTS adapters closed")
@@ -781,7 +794,7 @@ class TTSAdapterRegistry:
                         provider_info["supports_streaming"] = adapter.capabilities.supports_streaming
                         provider_info["supported_formats"] = sorted(fmt.value for fmt in adapter.capabilities.supported_formats)
                         provider_info["sample_rate"] = adapter.capabilities.sample_rate
-                except Exception:
+                except _TTS_REGISTRY_NONCRITICAL_EXCEPTIONS:
                     pass
             else:
                 status_value = "not_initialized"

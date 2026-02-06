@@ -51,6 +51,47 @@ from tldw_Server_API.app.core.exceptions import (
 from tldw_Server_API.app.core.LLM_Calls.deprecation import log_legacy_once
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 
+_CHAT_ORCHESTRATOR_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+)
+
+_CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+)
+
+try:
+    from requests.exceptions import RequestException as _REQUESTS_REQUEST_EXCEPTION
+except ImportError:
+    _REQUESTS_REQUEST_EXCEPTION = None
+
+try:
+    from httpx import HTTPError as _HTTPX_HTTP_ERROR
+    from httpx import RequestError as _HTTPX_REQUEST_ERROR
+except ImportError:
+    _HTTPX_HTTP_ERROR = None
+    _HTTPX_REQUEST_ERROR = None
+
+_CHAT_ORCHESTRATOR_PROVIDER_EXCEPTIONS = (
+    *_CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS,
+    *((_REQUESTS_REQUEST_EXCEPTION,) if _REQUESTS_REQUEST_EXCEPTION else ()),
+    *((_HTTPX_REQUEST_ERROR,) if _HTTPX_REQUEST_ERROR else ()),
+    *((_HTTPX_HTTP_ERROR,) if _HTTPX_HTTP_ERROR else ()),
+)
+
 #
 ####################################################################################################
 #
@@ -198,7 +239,7 @@ def _get_http_error_text(exc: Exception) -> str:
             if isinstance(text, (bytes, bytearray)):
                 try:
                     text = text.decode("utf-8", errors="replace")
-                except Exception:
+                except _CHAT_ORCHESTRATOR_COERCE_EXCEPTIONS:
                     text = None
         if text is not None:
             return str(text)
@@ -244,7 +285,7 @@ def approximate_token_count(history):
                 total_text += bot_msg + ' '
         total_tokens = len(total_text.split())
         return total_tokens
-    except Exception as e:
+    except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error calculating token count: {str(e)}")
         return 0
 
@@ -394,7 +435,7 @@ def chat_api_call(
                 _key_val[:4],
                 _key_val[-4:]
             )
-    except Exception as key_log_err:
+    except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as key_log_err:
         logging.debug(f"Could not log masked API key: {key_log_err}")
 
     try:
@@ -447,14 +488,14 @@ def chat_api_call(
     except (KeyboardInterrupt, SystemExit):
         # Don't catch system-level signals - let them propagate
         raise
-    except Exception as e:
+    except _CHAT_ORCHESTRATOR_PROVIDER_EXCEPTIONS as e:
         status_code = _get_http_status_from_exception(e)
         if status_code is not None:
             error_text = _get_http_error_text(e)
             log_message_base = f"{endpoint_lower} API call failed with status {status_code}"
             try:
                 logging.error("%s. Details: %s", log_message_base, error_text[:500], exc_info=False)
-            except Exception as log_e:
+            except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as log_e:
                 logging.error(f"Error during logging HTTP error details: {log_e}")
             sanitized_error = _sanitize_error_for_client(error_text)
             if status_code == 401:
@@ -813,7 +854,7 @@ def _chat_sync_impl(
                 try:
                     if llm_user_identifier is not None:
                         auth_user_int = int(llm_user_identifier)  # best-effort parse for RBAC
-                except Exception:
+                except _CHAT_ORCHESTRATOR_COERCE_EXCEPTIONS:
                     auth_user_int = None
                 ctx = command_router.CommandContext(user_id=llm_user_identifier or "anonymous", auth_user_id=auth_user_int)
                 cmd_res = _run_coro_sync(
@@ -885,7 +926,7 @@ def _chat_sync_impl(
                             if image_url_data.startswith("data:image/") and ";base64," in image_url_data:
                                 try:
                                     mime_type_part = image_url_data.split(';base64,')[0].split('/')[-1]
-                                except Exception as e:
+                                except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as e:
                                     logging.debug(f"Failed to extract MIME type from data URI: {e}")
                                     mime_type_part = "image"
                             processed_hist_content_parts.append({"type": "text", "text": f"<image: prior_history.{mime_type_part}>"})
@@ -987,7 +1028,7 @@ def _chat_sync_impl(
         try:
             if api_key and os.getenv("ALLOW_MASKED_KEY_LOG", "").lower() in {"1", "true", "yes", "on"}:
                 logging.debug("Debug - Chat Function - API Key (masked): %s...%s", api_key[:4], api_key[-4:])
-        except Exception as key_log_err:
+        except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as key_log_err:
             logging.debug(f"Could not log masked API key: {key_log_err}")
         logging.debug(f"Debug - Chat Function - Prompt: {custom_prompt}")
 
@@ -1045,7 +1086,7 @@ def _chat_sync_impl(
                             )
                         else:
                             logging.debug("Post-gen dictionary parsed but resulted in no ChatDictionary objects.")
-                    except Exception as e_post_gen:
+                    except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as e_post_gen:
                         logging.error(f"Error during post-generation replacement: {e_post_gen}", exc_info=True)
                 else:
                     logging.warning("Post-gen replacement enabled but dict file not found/configured.")
@@ -1054,7 +1095,7 @@ def _chat_sync_impl(
     except ChatAPIError:
         # Re-raise ChatAPIError subclasses as-is for proper upstream handling
         raise
-    except Exception as e:
+    except _CHAT_ORCHESTRATOR_PROVIDER_EXCEPTIONS as e:
         log_counter("chat_error_multimodal", labels={"api_endpoint": api_endpoint, "error": str(e)})
         logging.error(f"Error in multimodal chat function: {str(e)}", exc_info=True)
         # Raise a proper exception instead of returning an error string
@@ -1318,7 +1359,7 @@ async def achat(
                 try:
                     if llm_user_identifier is not None:
                         auth_user_int = int(llm_user_identifier)
-                except Exception:
+                except _CHAT_ORCHESTRATOR_COERCE_EXCEPTIONS:
                     auth_user_int = None
                 ctx = command_router.CommandContext(user_id=llm_user_identifier or "anonymous", auth_user_id=auth_user_int)
                 cmd_res = await command_router.async_dispatch_command(ctx, cmd_name, cmd_args)
@@ -1372,7 +1413,7 @@ async def achat(
                             if image_url_data.startswith("data:image/") and ";base64," in image_url_data:
                                 try:
                                     mime_type_part = image_url_data.split(";base64,")[0].split("/")[-1]
-                                except Exception as e:
+                                except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as e:
                                     logging.debug(f"Failed to extract MIME type from data URI: {e}")
                                     mime_type_part = "image"
                             processed_hist_content_parts.append(
@@ -1422,7 +1463,7 @@ async def achat(
                 ).strip()
                 if rag_text_prefix:
                     rag_text_prefix += "\n\n---\n\n"
-            except Exception:
+            except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS:
                 rag_text_prefix = ""
 
         current_user_content_parts: list[dict[str, Any]] = []
@@ -1518,7 +1559,7 @@ async def achat(
                             )
                         else:
                             logging.debug("Post-gen dictionary parsed but resulted in no ChatDictionary objects.")
-                    except Exception as e_post_gen:
+                    except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as e_post_gen:
                         logging.error(f"Error during post-generation replacement: {e_post_gen}", exc_info=True)
                 else:
                     logging.warning("Post-gen replacement enabled but dict file not found/configured.")
@@ -1527,7 +1568,7 @@ async def achat(
     except ChatAPIError:
         # Re-raise ChatAPIError subclasses as-is for proper upstream handling
         raise
-    except Exception as e:
+    except _CHAT_ORCHESTRATOR_PROVIDER_EXCEPTIONS as e:
         log_counter("chat_error_multimodal", labels={"api_endpoint": api_endpoint, "error": str(e)})
         logging.error(f"Error in async multimodal chat function: {str(e)}", exc_info=True)
         # Raise a proper exception instead of returning an error string

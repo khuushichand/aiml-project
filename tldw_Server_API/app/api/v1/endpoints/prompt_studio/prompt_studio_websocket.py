@@ -28,6 +28,34 @@ router = APIRouter(
     tags=["prompt-studio"]
 )
 
+_WS_SEND_EXCEPTIONS = (
+    ConnectionError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    WebSocketDisconnect,
+)
+_SSE_STREAM_EXCEPTIONS = (
+    ConnectionError,
+    json.JSONDecodeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_TASK_CLEANUP_EXCEPTIONS = (
+    asyncio.CancelledError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_STREAM_ACTIVITY_EXCEPTIONS = (AttributeError, RuntimeError, TypeError, ValueError)
+
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
     PromptStudioDatabase,
     get_prompt_studio_db,
@@ -153,7 +181,7 @@ class ConnectionManager:
         """
         try:
             await websocket.send_text(message)
-        except Exception as e:
+        except _WS_SEND_EXCEPTIONS as e:
             logger.error(f"Failed to send message to WebSocket: {e}")
             self.disconnect(websocket)
 
@@ -171,7 +199,7 @@ class ConnectionManager:
             for websocket in self.active_connections[client_id]:
                 try:
                     await websocket.send_text(message)
-                except Exception as e:
+                except _WS_SEND_EXCEPTIONS as e:
                     logger.error(f"Failed to send to WebSocket: {e}")
                     disconnected.append(websocket)
 
@@ -256,7 +284,7 @@ async def sse_endpoint(
                     await stream.send_json({"type": "initial_state", "project_id": project_id, "jobs": jobs})
                 # Periodic heartbeats are handled by SSEStream; also emit a data heartbeat for clients that expect it
                 # (SSEStream will emit comment/data heartbeats per configuration.)
-            except Exception as e:
+            except _SSE_STREAM_EXCEPTIONS as e:
                 safe_error_msg = sanitize_error_message(e, "SSE streaming")
                 await stream.error("internal_error", safe_error_msg)
 
@@ -270,11 +298,11 @@ async def sse_endpoint(
                 if not prod.done():
                     try:
                         prod.cancel()
-                    except Exception:
+                    except _TASK_CLEANUP_EXCEPTIONS:
                         pass
                     try:
                         await prod
-                    except (asyncio.CancelledError, Exception):
+                    except _TASK_CLEANUP_EXCEPTIONS:
                         pass
                 raise
             else:
@@ -282,7 +310,7 @@ async def sse_endpoint(
                 if not prod.done():
                     try:
                         await prod
-                    except Exception:
+                    except _TASK_CLEANUP_EXCEPTIONS:
                         pass
 
         headers = {
@@ -318,7 +346,7 @@ async def sse_endpoint(
         except asyncio.CancelledError:
             logger.info(f"SSE connection closed for client {client_id}")
             raise
-        except Exception as e:
+        except _SSE_STREAM_EXCEPTIONS as e:
             logger.error(f"SSE error: {e}")
             safe_error_msg = sanitize_error_message(e, "SSE streaming")
             yield f"data: {json.dumps({'type': 'error', 'message': safe_error_msg})}\n\n"
@@ -396,7 +424,7 @@ async def websocket_endpoint_base(websocket: WebSocket):
             data = await websocket.receive_json()
             try:
                 stream.mark_activity()
-            except Exception:
+            except _STREAM_ACTIVITY_EXCEPTIONS:
                 pass
 
             # Handle subscription requests
@@ -453,7 +481,7 @@ async def websocket_endpoint(
             data = await websocket.receive_text()
             try:
                 stream.mark_activity()
-            except Exception:
+            except _STREAM_ACTIVITY_EXCEPTIONS:
                 pass
 
             # Handle ping/pong for keepalive

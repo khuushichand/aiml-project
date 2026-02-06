@@ -23,6 +23,15 @@ _TF_TOKENIZER = None
 _TF_DEVICE = None
 _TF_DTYPE = None
 _TF_LOCK = threading.Lock()
+_DOLPHIN_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _resolve_mode() -> str:
@@ -103,7 +112,7 @@ class DolphinOCRBackend(OCRBackend):
                 has_torch = importlib.util.find_spec("torch") is not None
                 has_pil = importlib.util.find_spec("PIL") is not None
                 return bool(has_tf and has_torch and has_pil)
-            except Exception:
+            except _DOLPHIN_NONCRITICAL_EXCEPTIONS:
                 return False
         return False
 
@@ -253,13 +262,13 @@ def _run_prompt(image_bytes: bytes, prompt: str) -> str:
                 raw_text = _ocr_via_openai(image_bytes, prompt)
             else:
                 raw_text = _ocr_via_generate(image_bytes, prompt, remote_mode)
-        except Exception as exc:
+        except _DOLPHIN_NONCRITICAL_EXCEPTIONS as exc:
             logging.error(f"Dolphin remote path failed: {exc}", exc_info=True)
 
     if not raw_text:
         try:
             raw_text = _ocr_via_transformers(image_bytes, prompt)
-        except Exception as exc:
+        except _DOLPHIN_NONCRITICAL_EXCEPTIONS as exc:
             logging.error(f"Dolphin transformers path failed: {exc}", exc_info=True)
             raw_text = ""
 
@@ -448,7 +457,7 @@ def _apply_generation_params(payload: dict[str, Any]) -> None:
 def _getf(env: str, cast, default):
     try:
         return cast(os.getenv(env, str(default)))
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -458,7 +467,7 @@ def _getf_optional(env: str, cast):
         return None
     try:
         return cast(val)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -474,7 +483,7 @@ def _is_local_url(url: str) -> bool:
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
         return host in ("localhost", "127.0.0.1", "::1")
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return False
 
 
@@ -487,7 +496,7 @@ def _try_parse_json(raw_text: str) -> Any | None:
 
     try:
         return json.loads(txt)
-    except Exception:
+    except (TypeError, ValueError, json.JSONDecodeError):
         pass
 
     obj_start = txt.find("{")
@@ -495,7 +504,7 @@ def _try_parse_json(raw_text: str) -> Any | None:
     if obj_start != -1 and obj_end != -1 and obj_end > obj_start:
         try:
             return json.loads(txt[obj_start : obj_end + 1])
-        except Exception:
+        except (TypeError, ValueError, json.JSONDecodeError):
             pass
 
     arr_start = txt.find("[")
@@ -503,7 +512,7 @@ def _try_parse_json(raw_text: str) -> Any | None:
     if arr_start != -1 and arr_end != -1 and arr_end > arr_start:
         try:
             return json.loads(txt[arr_start : arr_end + 1])
-        except Exception:
+        except (TypeError, ValueError, json.JSONDecodeError):
             pass
 
     return None

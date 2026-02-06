@@ -20,12 +20,12 @@ from loguru import logger
 
 try:
     import redis.asyncio as aioredis  # optional for distributed locks
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     aioredis = None  # type: ignore
 
 try:
     from chromadb.errors import ChromaError
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     ChromaError = None  # type: ignore
 
 from tldw_Server_API.app.core.DB_Management.backends.base import (
@@ -38,6 +38,17 @@ _DB_CLOSE_EXCEPTIONS = (BackendDatabaseError, sqlite3.Error, OSError, RuntimeErr
 _CHROMA_CLOSE_EXCEPTIONS = (RuntimeError, OSError)
 if ChromaError is not None:
     _CHROMA_CLOSE_EXCEPTIONS = (*_CHROMA_CLOSE_EXCEPTIONS, ChromaError)
+_COMPACTOR_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+if ChromaError is not None:
+    _COMPACTOR_NONCRITICAL_EXCEPTIONS = (*_COMPACTOR_NONCRITICAL_EXCEPTIONS, ChromaError)
 
 
 def _sanitize_media_db_path(user_id: str, db_path: str | None) -> str:
@@ -92,7 +103,7 @@ async def _get_media_ids_marked_deleted(db_path: str) -> list[int]:
             db.close_connection()
         except _DB_CLOSE_EXCEPTIONS as e:
             logger.debug(f"Compactor: failed to close media DB connection: {e}")
-        except Exception as e:
+        except _COMPACTOR_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Compactor: unexpected error closing media DB connection: {e}")
 
 
@@ -109,7 +120,7 @@ async def compact_once(user_id: str, db_path: str | None = None) -> int:
     try:
         from tldw_Server_API.app.core.config import settings
         from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
-    except Exception as e:  # pragma: no cover
+    except _COMPACTOR_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover
         logger.error(f"Compactor initialization failed: {e}")
         return 0
 
@@ -133,13 +144,13 @@ async def compact_once(user_id: str, db_path: str | None = None) -> int:
                 delete(where={"media_id": str(mid)})
                 touched += 1
                 logger.info(f"Compactor: removed vectors for media_id={mid} in collection={coll_name}")
-        except Exception as e:
+        except _COMPACTOR_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Compactor error removing vectors for media_id={mid}: {e}")
     try:
         mgr.close()
     except _CHROMA_CLOSE_EXCEPTIONS as e:
         logger.debug(f"Compactor: failed to close ChromaDB manager: {e}")
-    except Exception as e:
+    except _COMPACTOR_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Compactor: unexpected error closing ChromaDB manager: {e}")
     return touched
 
@@ -155,7 +166,7 @@ async def run(stop_event: asyncio.Event | None = None) -> None:
     try:
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import is_single_user_mode
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-    except Exception as e:  # pragma: no cover
+    except _COMPACTOR_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover
         logger.error(f"Compactor settings load failed: {e}")
         return
 
@@ -173,7 +184,7 @@ async def run(stop_event: asyncio.Event | None = None) -> None:
         try:
             touched = await compact_once(user_id)
             logger.debug(f"Compactor pass complete at {datetime.utcnow().isoformat()} - touched={touched}")
-        except Exception as e:
+        except _COMPACTOR_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Compactor pass error: {e}")
 
         if stop_event is not None and stop_event.is_set():

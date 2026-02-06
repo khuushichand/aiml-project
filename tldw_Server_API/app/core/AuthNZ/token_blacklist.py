@@ -161,7 +161,7 @@ class TokenBlacklist:
                 )
                 await self.redis_client.ping()
                 logger.debug("Redis connected for token blacklist")
-            except (RedisError, Exception) as e:
+            except (OSError, RedisError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(f"Redis unavailable for token blacklist: {e}")
                 self.redis_client = None
 
@@ -260,7 +260,7 @@ class TokenBlacklist:
             if altered:
                 await conn.commit()
             self._ensured_session_columns = True
-        except Exception as exc:
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
             logger.debug(f"TokenBlacklist: unable to harmonize session columns: {exc}")
 
     async def revoke_token(
@@ -326,7 +326,7 @@ class TokenBlacklist:
                     else:
                         logger.debug(f"Token {jti} added to Redis blacklist")
 
-            except (RedisError, Exception) as e:
+            except (OSError, RedisError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(f"Failed to add token to Redis blacklist: {e}")
 
         # Add to database for persistence
@@ -357,7 +357,7 @@ class TokenBlacklist:
                 )
             return True
 
-        except Exception as e:
+        except (DatabaseError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to blacklist token: {e}")
             return False
 
@@ -397,7 +397,7 @@ class TokenBlacklist:
                     # Add to local cache for next time if expiry known
                     self._cache_add(jti, expiry)
                     return True
-            except (RedisError, Exception) as e:
+            except (OSError, RedisError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(f"Redis error checking blacklist: {e}")
 
         # Check database
@@ -413,7 +413,7 @@ class TokenBlacklist:
 
             self._cache_remove(jti)
 
-        except Exception as e:
+        except (DatabaseError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Database error checking blacklist: {e}")
             # Fail closed - treat as blacklisted on error
             return True
@@ -518,13 +518,13 @@ class TokenBlacklist:
             # - multi_user: number of tokens revoked to preserve existing unit-test expectations
             try:
                 mode = getattr(self.settings, "AUTH_MODE", "single_user")
-            except Exception:
+            except (AttributeError, TypeError):
                 mode = "single_user"
             if mode == "single_user":
                 return sessions_count
             return tokens_revoked
 
-        except Exception as e:
+        except (DatabaseError, OSError, RedisError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to revoke user tokens: {e}")
             return 0
 
@@ -554,7 +554,7 @@ class TokenBlacklist:
 
             return count
 
-        except Exception as e:
+        except (DatabaseError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to cleanup expired tokens: {e}")
             return 0
 
@@ -576,7 +576,7 @@ class TokenBlacklist:
             repo = AuthnzTokenBlacklistRepo(db_pool)
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             return await repo.get_blacklist_stats(now=now, user_id=user_id)
-        except Exception as e:
+        except (DatabaseError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to get blacklist stats: {e}")
 
         return {
@@ -634,7 +634,7 @@ async def reset_token_blacklist():
         try:
             if _token_blacklist.redis_client:
                 await _token_blacklist.redis_client.close()
-        except Exception as e:
+        except (OSError, RedisError, RuntimeError, TypeError, ValueError) as e:
             logger.debug(f"TokenBlacklist reset ignored Redis shutdown error: {e}")
         finally:
             _token_blacklist = None

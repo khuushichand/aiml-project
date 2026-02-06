@@ -28,6 +28,40 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
 )
 from tldw_Server_API.app.core.testing import is_test_mode
 
+_DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+)
+
+try:
+    from requests.exceptions import RequestException as _REQUESTS_REQUEST_EXCEPTION
+except ImportError:
+    _REQUESTS_REQUEST_EXCEPTION = None
+
+try:
+    from httpx import HTTPError as _HTTPX_HTTP_ERROR
+    from httpx import RequestError as _HTTPX_REQUEST_ERROR
+except ImportError:
+    _HTTPX_HTTP_ERROR = None
+    _HTTPX_REQUEST_ERROR = None
+
+_DOWNLOAD_UTILS_DOWNLOAD_EXCEPTIONS = (
+    *_DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS,
+    *((_REQUESTS_REQUEST_EXCEPTION,) if _REQUESTS_REQUEST_EXCEPTION else ()),
+    *((_HTTPX_REQUEST_ERROR,) if _HTTPX_REQUEST_ERROR else ()),
+    *((_HTTPX_HTTP_ERROR,) if _HTTPX_HTTP_ERROR else ()),
+)
+
 
 def _validate_target_path(target_dir: Path, filename: str) -> Path:
     """
@@ -52,7 +86,7 @@ def _get_media_processing_config() -> dict[str, Any]:
     try:
         cfg = loaded_config_data.get("media_processing", {}) if loaded_config_data else {}
         return cfg or {}
-    except Exception:
+    except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
         return {}
 
 
@@ -84,7 +118,7 @@ def _resolve_media_type_from_content_type(content_type: str) -> str | None:
 def _extension_candidates_from_name(name: str) -> list[str]:
     try:
         return _extension_candidates(name)
-    except Exception:
+    except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
         suffixes = [s.lower() for s in Path(name).suffixes if s]
         candidates: list[str] = []
         for idx in range(len(suffixes)):
@@ -241,7 +275,7 @@ async def download_url_async(
     try:
         url_obj = urlparse(url)
         seed_segment = url_obj.path.split("/")[-1] or f"downloaded_{hash(url)}.tmp"
-    except Exception:
+    except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
         seed_segment = f"downloaded_{hash(url)}.tmp"
 
     test_mode_active = bool(is_test_mode()) or bool(__import__("os").getenv("PYTEST_CURRENT_TEST"))
@@ -296,7 +330,7 @@ async def download_url_async(
                         part = part.strip()
                         if part:
                             filename = part
-                    except Exception:
+                    except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
                         pass
                 # Basic sanitization; seed_segment fallback is validated via _validate_target_path below.
                 # nosec B108  # noqa: S108  # codeql[py/path-injection]: safe_name validated at line 353
@@ -314,7 +348,7 @@ async def download_url_async(
                             alt_seg = resp.url.path.split("/")[-1]
                             alt_candidates = _extension_candidates_from_name(alt_seg)
                             alt_suffix = _pick_allowed_candidate(alt_candidates, allowed_extensions) or ""
-                        except Exception:
+                        except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
                             alt_suffix = ""
                         if alt_suffix:
                             effective_suffix = alt_suffix
@@ -370,10 +404,10 @@ async def download_url_async(
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     await _write_response_to_path(url, resp, target_path, resolved_max_bytes)
-                except Exception:
+                except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
                     try:
                         target_path.unlink(missing_ok=True)
-                    except Exception:
+                    except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
                         pass
                     raise
                 logger.info("Downloaded {} to {}", url, target_path)
@@ -419,7 +453,7 @@ async def download_url_async(
                 part = part.strip()
                 if part:
                     filename = part
-            except Exception:
+            except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Basic sanitization; seed_segment fallback is validated via _validate_target_path below.
@@ -442,7 +476,7 @@ async def download_url_async(
                     alt_seg = resp.url.path.split("/")[-1]
                     alt_candidates = _extension_candidates_from_name(alt_seg)
                     alt_suffix = _pick_allowed_candidate(alt_candidates, allowed_extensions) or ""
-                except Exception:
+                except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
                     alt_suffix = ""
                 if alt_suffix:
                     effective_suffix = alt_suffix
@@ -502,16 +536,16 @@ async def download_url_async(
         target_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             await _write_response_to_path(url, resp, target_path, resolved_max_bytes)
-        except Exception:
+        except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
             try:
                 target_path.unlink(missing_ok=True)
-            except Exception:
+            except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
                 pass
             raise
 
         logger.info("Downloaded {} to {}", url, target_path)
         return target_path
-    except Exception as exc:
+    except _DOWNLOAD_UTILS_DOWNLOAD_EXCEPTIONS as exc:
         # In test mode, allow a graceful fallback to a tiny stub file so that
         # offline URL acceptance tests can proceed without external network.
         if test_mode_active and target_dir:
@@ -557,7 +591,7 @@ async def download_url_async(
                     sample_pdf = repo_root / "tests/Media_Ingestion_Modification/test_media/sample.pdf"
                     if sample_pdf.exists():
                         payload = sample_pdf.read_bytes()
-            except Exception:
+            except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
                 payload = b"TEST"
             async with aiofiles.open(target_path, "wb") as f:
                 await f.write(payload)
@@ -568,10 +602,10 @@ async def download_url_async(
         try:
             if resp is not None:
                 await resp.aclose()
-        except Exception:
+        except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
             pass
         if owns_client and client_for_afetch is not None:
             try:
                 await client_for_afetch.aclose()
-            except Exception:
+            except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
                 pass

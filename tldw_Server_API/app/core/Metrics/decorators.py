@@ -32,6 +32,16 @@ except ImportError:
 
 # Type variable for decorators
 F = TypeVar('F', bound=Callable[..., Any])
+_METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AssertionError,
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 @dataclass
@@ -121,7 +131,7 @@ def track_metrics(
                     description=f"Errors for {base_name}",
                     labels=list((labels or {}).keys()) + ["error_type"]
                 ))
-        except Exception:
+        except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS:
             # Metrics must never break the application flow
             pass
 
@@ -135,7 +145,7 @@ def track_metrics(
                         extracted = label_extractor(*args, **kwargs)
                         if isinstance(extracted, dict):
                             metric_labels.update(extracted)
-                    except Exception as e:
+                    except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"Label extraction failed: {e}")
 
                 # Track call count
@@ -183,7 +193,7 @@ def track_metrics(
                         extracted = label_extractor(*args, **kwargs)
                         if isinstance(extracted, dict):
                             metric_labels.update(extracted)
-                    except Exception as e:
+                    except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"Label extraction failed: {e}")
 
                 # Track call count
@@ -255,7 +265,7 @@ def measure_latency(
                     unit="s",
                     buckets=resolved_buckets
                 ))
-        except Exception:
+        except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS:
             pass
 
         if asyncio.iscoroutinefunction(func):
@@ -312,7 +322,7 @@ def count_calls(
                     type=MetricType.COUNTER,
                     description=f"Total calls to {func.__module__}.{func.__name__}"
                 ))
-        except Exception:
+        except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS:
             pass
 
         if asyncio.iscoroutinefunction(func):
@@ -324,7 +334,7 @@ def count_calls(
                         extracted = label_extractor(*args, **kwargs)
                         if isinstance(extracted, dict):
                             metric_labels.update(extracted)
-                    except Exception as e:
+                    except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"label_extractor failed (async): error={e}")
 
                 increment_counter(counter_name, labels=metric_labels)
@@ -340,7 +350,7 @@ def count_calls(
                         extracted = label_extractor(*args, **kwargs)
                         if isinstance(extracted, dict):
                             metric_labels.update(extracted)
-                    except Exception as e:
+                    except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"label_extractor failed (sync): error={e}")
 
                 increment_counter(counter_name, labels=metric_labels)
@@ -380,7 +390,7 @@ def track_errors(
                     description=f"Errors for {func.__module__}.{func.__name__}",
                     labels=["function", "error_type"]
                 ))
-        except Exception:
+        except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS:
             pass
 
         if asyncio.iscoroutinefunction(func):
@@ -470,7 +480,7 @@ def monitor_resource(
                         labels=["resource"],
                     )
                 )
-        except Exception:
+        except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS:
             # Never break call paths due to metrics
             pass
 
@@ -706,7 +716,7 @@ def cache_metrics(
                     description="Cache hit ratio",
                     labels=["cache"]
                 ))
-        except Exception:
+        except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS:
             pass
 
         if asyncio.iscoroutinefunction(func):
