@@ -509,7 +509,6 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
           <Form.Item name="action" label={t("guardian.rules.fields.action", "Action")}>
             <Select>
               <Select.Option value="notify">Notify</Select.Option>
-              <Select.Option value="warn">Warn</Select.Option>
               <Select.Option value="redact">Redact</Select.Option>
               <Select.Option value="block">Block</Select.Option>
             </Select>

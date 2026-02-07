@@ -20,7 +20,7 @@
 **Tests**:
 - Component test: self-monitoring action dropdown excludes `warn`.
 - Manual smoke: create/update self-monitoring rule succeeds for each allowed action.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Guardian Relationship Lifecycle Correctness
 **Goal**: Make relationship actions consistent with backend role rules and keep selected relationship state current.
